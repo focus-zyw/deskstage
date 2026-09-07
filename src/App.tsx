@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import type { PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { CharacterSprite } from './stage/CharacterSprite'
 import { Bubble } from './stage/Bubble'
@@ -25,6 +26,8 @@ import {
   saveConfig,
   DEFAULT_CONFIG,
   type AppConfig,
+  type CharactersConfig,
+  type CharPos,
 } from './storage/configStore'
 import './App.css'
 
@@ -71,6 +74,13 @@ function App() {
   const [autoReplayMin, setAutoReplayMin] = useState(DEFAULT_CONFIG.autoReplayMin)
   const [activeTick, setActiveTick] = useState(0)
   const [episodes, setEpisodes] = useState<Episode[]>([])
+  // 角色布局(位置各自独立/缩放共享)与隐藏开关;ref 供拖动/滚轮事件读最新值
+  const [charCfg, setCharCfg] = useState<CharactersConfig>(DEFAULT_CONFIG.characters)
+  const charCfgRef = useRef(charCfg)
+  const [charHidden, setCharHidden] = useState(DEFAULT_CONFIG.charactersHidden)
+  const charSaveTimer = useRef(0)
+  const dragRef = useRef<{ who: Speaker; startX: number; startY: number; orig: CharPos; moved: boolean } | null>(null)
+  const draggingWho = useRef<Speaker | null>(null)
 
   const charA = useRef<HTMLDivElement>(null)
   const charB = useRef<HTMLDivElement>(null)
@@ -108,7 +118,11 @@ function App() {
   useEffect(() => {
     void initPointerManager()
     preloadSprites(Object.values(SPRITE_SETS)) // 预热立绘,演出中切换动作零延迟
-    void getConfig().then((c) => setAutoReplayMin(c.autoReplayMin))
+    void getConfig().then((c) => {
+      setAutoReplayMin(c.autoReplayMin)
+      applyChars(c.characters)
+      setCharHidden(c.charactersHidden)
+    })
     // 启动恢复：读最近历史，续集生成时衔接上次聊到的内容
     void loadRecentHistory(20).then((entries) => {
       if (entries.length > 0) {
@@ -117,11 +131,19 @@ function App() {
     })
     const unsubs = [
       onHoverChange(setHovered),
+      // 拖动中的角色命中区膨胀为全窗口:快速拖动时光标冲出角色矩形,
+      // 否则穿透窗口会立刻恢复 ignoreCursorEvents,拖拽被中断
       registerHitRegion('charA', {
-        getRect: () => charA.current!.getBoundingClientRect(),
+        getRect: () =>
+          draggingWho.current === 'A'
+            ? new DOMRect(0, 0, window.innerWidth, window.innerHeight)
+            : charA.current!.getBoundingClientRect(),
       }),
       registerHitRegion('charB', {
-        getRect: () => charB.current!.getBoundingClientRect(),
+        getRect: () =>
+          draggingWho.current === 'B'
+            ? new DOMRect(0, 0, window.innerWidth, window.innerHeight)
+            : charB.current!.getBoundingClientRect(),
       }),
       registerHitRegion('close', {
         getRect: () => closeBtn.current!.getBoundingClientRect(),
@@ -181,12 +203,12 @@ function App() {
     player.current!.play(ep.lines, { gap: modeOf(ep.mode).gap })
   }
 
-  /** 空闲自动重放:仅在没有生成/演出、没开设置面板时计时;任何依赖变化都会重置计时 */
+  /** 空闲自动重放:仅在没有生成/演出、没开设置面板、角色未隐藏时计时;任何依赖变化都会重置计时 */
   useEffect(() => {
-    if (phase !== 'idle' || settingsOpen || autoReplayMin <= 0) return
+    if (phase !== 'idle' || settingsOpen || charHidden || autoReplayMin <= 0) return
     const t = window.setTimeout(() => void autoReplay(), autoReplayMin * 60_000)
     return () => window.clearTimeout(t)
-  }, [phase, settingsOpen, autoReplayMin, activeTick])
+  }, [phase, settingsOpen, charHidden, autoReplayMin, activeTick])
 
   /** 单次点播：优先消费预生成(秒开,使用后移入 history);
    *  未命中则生成当前轮,开播后后台再静默预生成下一轮(共两轮) */
@@ -274,6 +296,87 @@ function App() {
   async function onClearUnfavorited() {
     await deleteEpisodes(new Set(episodes.filter((e) => !e.fav).map((e) => e.ts)))
     setEpisodes(await listEpisodes())
+  }
+
+  // ---------- 角色布局:拖动移动(各自独立)/ 滚轮缩放(全局一致) ----------
+
+  /** 更新布局;persist='now' 立即落盘,'debounced' 防抖落盘(滚轮连续滚动只写一次) */
+  function applyChars(next: CharactersConfig, persist: 'now' | 'debounced' | 'no' = 'no') {
+    charCfgRef.current = next
+    setCharCfg(next)
+    if (persist === 'no') return
+    window.clearTimeout(charSaveTimer.current)
+    const write = () =>
+      saveConfig({ characters: next }).catch((e) => console.warn('布局保存失败(静默)', e))
+    if (persist === 'now') void write()
+    else charSaveTimer.current = window.setTimeout(write, 500)
+  }
+
+  function onCharPointerDown(e: ReactPointerEvent, who: Speaker) {
+    dragRef.current = {
+      who,
+      startX: e.clientX,
+      startY: e.clientY,
+      orig: { ...charCfgRef.current[who] },
+      moved: false,
+    }
+    try {
+      ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+    } catch {
+      // 合成事件/指针已释放时无活动指针可捕获,忽略
+    }
+  }
+
+  function onCharPointerMove(e: ReactPointerEvent, who: Speaker) {
+    const d = dragRef.current
+    if (!d || d.who !== who) return
+    const dx = e.clientX - d.startX
+    const dy = e.clientY - d.startY
+    if (!d.moved) {
+      if (Math.hypot(dx, dy) < 6) return // 小位移视为点击,留给戳一戳
+      d.moved = true
+      draggingWho.current = who
+    }
+    const cur = charCfgRef.current
+    applyChars(
+      {
+        ...cur,
+        [who]: {
+          xPct: Math.min(97, Math.max(3, d.orig.xPct + (dx / window.innerWidth) * 100)),
+          bottom: Math.min(
+            Math.max(0, window.innerHeight - 80),
+            Math.max(0, d.orig.bottom - dy),
+          ),
+        },
+      },
+      'no',
+    )
+  }
+
+  function onCharPointerUp(who: Speaker) {
+    const d = dragRef.current
+    dragRef.current = null
+    if (!d || d.who !== who) return
+    if (d.moved) {
+      draggingWho.current = null
+      applyChars(charCfgRef.current, 'now')
+    } else {
+      poke(who) // 原地点一下 = 戳一戳
+    }
+  }
+
+  function onCharWheel(e: ReactWheelEvent) {
+    const cur = charCfgRef.current
+    const maxHeight = Math.max(240, window.innerHeight - 40)
+    const height = Math.min(maxHeight, Math.max(140, cur.height + (e.deltaY < 0 ? 12 : -12)))
+    if (height === cur.height) return
+    applyChars({ ...cur, height }, 'debounced') // 缩放全局一致:两个角色同步
+  }
+
+  /** 隐藏/显示角色(立即落盘) */
+  function setCharsHidden(v: boolean) {
+    setCharHidden(v)
+    saveConfig({ charactersHidden: v }).catch((e) => console.warn('显示开关保存失败(静默)', e))
   }
 
   function poke(who: Speaker) {
@@ -383,6 +486,24 @@ function App() {
             />
           </div>
           <div className="settings-row">
+            <label htmlFor="cfg-show">显示角色</label>
+            <input
+              id="cfg-show"
+              type="checkbox"
+              checked={!charHidden}
+              onChange={(e) => setCharsHidden(!e.target.checked)}
+            />
+          </div>
+          <div className="settings-row">
+            <div className="settings-hint">拖动角色可移动 · 悬停滚轮缩放(两角色同步)</div>
+            <button
+              className="panel-btn"
+              onClick={() => applyChars(DEFAULT_CONFIG.characters, 'now')}
+            >
+              恢复默认布局
+            </button>
+          </div>
+          <div className="settings-row">
             <label htmlFor="cfg-replay">空闲自动重放</label>
             <select
               id="cfg-replay"
@@ -464,27 +585,41 @@ function App() {
         </div>
       )}
 
-      <div className="actor actor-a">
+      <div
+        className="actor"
+        style={{ left: `${charCfg.A.xPct}%`, bottom: charCfg.A.bottom, display: charHidden ? 'none' : undefined }}
+        onPointerDown={(e) => onCharPointerDown(e, 'A')}
+        onPointerMove={(e) => onCharPointerMove(e, 'A')}
+        onPointerUp={() => onCharPointerUp('A')}
+        onWheel={(e) => onCharWheel(e)}
+      >
         {bubble.A && <Bubble text={bubble.A} />}
         <CharacterSprite
           ref={charA}
           sprite={SPRITE_SETS.A}
+          heightOverride={charCfg.height}
           action={action.A}
           hot={hovered === 'charA'}
           reacting={reacting.A}
-          onClick={() => poke('A')}
         />
       </div>
 
-      <div className="actor actor-b">
+      <div
+        className="actor"
+        style={{ left: `${charCfg.B.xPct}%`, bottom: charCfg.B.bottom, display: charHidden ? 'none' : undefined }}
+        onPointerDown={(e) => onCharPointerDown(e, 'B')}
+        onPointerMove={(e) => onCharPointerMove(e, 'B')}
+        onPointerUp={() => onCharPointerUp('B')}
+        onWheel={(e) => onCharWheel(e)}
+      >
         {bubble.B && <Bubble text={bubble.B} />}
         <CharacterSprite
           ref={charB}
           sprite={SPRITE_SETS.B}
+          heightOverride={charCfg.height}
           action={action.B}
           hot={hovered === 'charB'}
           reacting={reacting.B}
-          onClick={() => poke('B')}
         />
       </div>
 

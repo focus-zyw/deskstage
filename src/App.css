@@ -6,19 +6,14 @@
   overflow: hidden;
 }
 
-/* 角色锚点：贴屏幕底边 */
+/* 角色锚点：位置由配置驱动(left/bottom 内联),translateX 让 left 表示中心点 */
 .actor {
   position: absolute;
-  bottom: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
-}
-.actor-a {
-  left: 20vw;
-}
-.actor-b {
-  right: 20vw;
+  transform: translateX(-50%);
+  touch-action: none;
 }
 
 /* 贴图精灵：双 img 交叉淡入。基础位移走 translate 属性，act-* 动画走 transform，互不覆盖 */
@@ -431,6 +426,23 @@
   font-size: 13px;
   outline: none;
   transition: border-color 0.15s ease;
+}
+.settings-row input[type='checkbox'] {
+  padding: 0;
+  width: 18px;
+  height: 18px;
+  accent-color: #7c6cf0;
+  cursor: pointer;
+  justify-self: end;
+}
+.settings-row:has(input[type='checkbox']) {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+}
+.settings-hint {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.5);
 }
 .settings-row input:focus,
 .settings-row select:focus {

@@ -9,9 +9,10 @@ export default defineConfig({
   server: {
     port: 5173,
     strictPort: true,
-    // 忽略 src-tauri,否则 Windows 下 Vite 会 watch Rust 构建产物(被锁的 dll)导致 EBUSY
+    // 忽略 src-tauri,否则 Windows 下 Vite 会 watch Rust 构建产物(被锁的 dll)导致 EBUSY。
+    // 用函数而非 glob:chokidar v4(vite 8)已不再支持 glob 字符串
     watch: {
-      ignored: ['src-tauri/**'],
+      ignored: (path: string) => path.includes('src-tauri'),
     },
   },
 })

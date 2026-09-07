@@ -5,19 +5,23 @@ import { spriteSrc, type SpriteSet } from './spriteSets'
 export interface CharacterSpriteProps {
   /** 立绘配置(素材目录、强调色、显示高、基线微调) */
   sprite: SpriteSet
+  /** 覆盖 sprite.height 的显示高(角色缩放由外部配置驱动) */
+  heightOverride?: number
   /** 当前动作（idle|talk|happy|angry|sad|surprise|shake|jump），映射到 act-* 动画类 */
   action?: string
   /** 光标命中热区（窗口已恢复交互） */
   hot: boolean
   /** 点击反应动画进行中 */
   reacting: boolean
-  onClick: () => void
+  /** 点击反应（拖动判定在外层处理,这里只收纯点击） */
+  onClick?: () => void
   ref?: Ref<HTMLDivElement>
 }
 
 /** 贴图精灵：按动作切换立绘图（双 img 交叉淡入）+ act-* CSS 动画。缺图时回退胶囊占位体 */
 export function CharacterSprite({
   sprite,
+  heightOverride,
   action = 'idle',
   hot,
   reacting,
@@ -28,24 +32,26 @@ export function CharacterSprite({
   const artAction = sprite.actions.includes(action) ? action : 'idle'
   const src = spriteSrc(sprite, artAction)
 
-  // 渲染期检测动作切换：旧图挪到下层兜底，新图重新走加载→淡入流程
+  // 渲染期检测动作切换：旧图挪到下层兜底，新图重新走加载→淡入流程；
+  // 淡入结束后卸载旧图 —— 各形态姿态差异大,旧图宽出的部分会从新图边缘露出形成重影
   const [fade, setFade] = useState({
     prev: null as string | null,
     curr: src,
     ready: false,
     broken: false,
+    underGone: false,
   })
   if (src !== fade.curr) {
-    setFade({ prev: fade.curr, curr: src, ready: false, broken: false })
+    setFade({ prev: fade.curr, curr: src, ready: false, broken: false, underGone: false })
   }
-  const { prev, curr, ready, broken } = fade
+  const { prev, curr, ready, broken, underGone } = fade
 
   const cls = ['char', `act-${action}`, hot ? 'hot' : '', reacting ? 'reacting' : '']
     .filter(Boolean)
     .join(' ')
   const style = {
     '--char-color': sprite.accent,
-    '--char-h': `${sprite.height}px`,
+    '--char-h': `${heightOverride ?? sprite.height}px`,
     '--char-shift-x': `${sprite.offsetX ?? 0}px`,
     '--char-shift-y': `${sprite.offsetY ?? 0}px`,
   } as CSSProperties
@@ -70,7 +76,7 @@ export function CharacterSprite({
 
   return (
     <div ref={ref} className={cls} style={style} onClick={onClick}>
-      {prev && <img className="char-img under" src={prev} alt="" />}
+      {prev && !underGone && <img className="char-img under" src={prev} alt="" />}
       <img
         key={curr}
         className={`char-img main${ready ? ' ready' : ''}`}
@@ -79,6 +85,7 @@ export function CharacterSprite({
         draggable={false}
         onLoad={() => setFade((f) => ({ ...f, ready: true }))}
         onError={() => setFade((f) => ({ ...f, broken: true }))}
+        onAnimationEnd={() => setFade((f) => ({ ...f, underGone: true }))}
       />
       <div className="char-name">{sprite.name}</div>
     </div>
