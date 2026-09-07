@@ -1,0 +1,12 @@
+/* 全局：透明桌面覆盖层 */
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  background: transparent;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+  font-family: 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif;
+}

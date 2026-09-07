@@ -1,0 +1,183 @@
+/* 舞台与角色样式（M1 占位版） */
+
+.stage {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+}
+
+/* 角色锚点：贴屏幕底边 */
+.actor {
+  position: absolute;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.actor-a {
+  left: 20vw;
+}
+.actor-b {
+  right: 20vw;
+}
+
+/* 占位角色：胶囊体 + 五官，M2 换成贴图精灵 */
+.char {
+  position: relative;
+  width: 150px;
+  height: 210px;
+  border-radius: 75px 75px 12px 12px;
+  background: linear-gradient(
+    180deg,
+    var(--char-color),
+    color-mix(in srgb, var(--char-color) 55%, #1c1c2e)
+  );
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition:
+    filter 0.15s ease,
+    transform 0.15s ease;
+}
+
+/* 命中态：光标在角色热区内（此时窗口已恢复交互） */
+.char.hot {
+  filter: brightness(1.18) drop-shadow(0 0 12px rgba(255, 255, 255, 0.55));
+}
+
+/* 点击反应动画 */
+.char.reacting {
+  animation: boing 0.55s ease;
+}
+@keyframes boing {
+  0% {
+    transform: translateY(0) scale(1, 1);
+  }
+  30% {
+    transform: translateY(-26px) scale(0.94, 1.08);
+  }
+  55% {
+    transform: translateY(0) scale(1.06, 0.92);
+  }
+  75% {
+    transform: translateY(-8px) scale(0.98, 1.02);
+  }
+  100% {
+    transform: translateY(0) scale(1, 1);
+  }
+}
+
+.char-face {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+.char-eyes {
+  display: flex;
+  gap: 26px;
+}
+.char-eyes i {
+  width: 14px;
+  height: 20px;
+  border-radius: 50%;
+  background: #14141f;
+  animation: blink 4.2s infinite;
+}
+.char-eyes i:last-child {
+  animation-delay: 0.06s;
+}
+@keyframes blink {
+  0%,
+  92%,
+  100% {
+    transform: scaleY(1);
+  }
+  95% {
+    transform: scaleY(0.1);
+  }
+}
+.char-mouth {
+  width: 26px;
+  height: 10px;
+  border: 3px solid #14141f;
+  border-top: none;
+  border-radius: 0 0 20px 20px;
+}
+
+.char-name {
+  position: absolute;
+  bottom: -10px;
+  padding: 2px 14px;
+  border-radius: 10px;
+  background: rgba(20, 20, 31, 0.85);
+  color: #fff;
+  font-size: 13px;
+}
+
+/* 台词气泡 */
+.bubble {
+  position: relative;
+  margin-bottom: 14px;
+  padding: 10px 16px;
+  max-width: 280px;
+  background: rgba(255, 255, 255, 0.96);
+  color: #222;
+  border-radius: 14px;
+  font-size: 15px;
+  line-height: 1.5;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+  white-space: pre-wrap;
+  animation: bubble-in 0.18s ease;
+}
+.bubble::after {
+  content: '';
+  position: absolute;
+  bottom: -8px;
+  left: 50%;
+  margin-left: -8px;
+  border: 8px solid transparent;
+  border-top-color: rgba(255, 255, 255, 0.96);
+  border-bottom: none;
+}
+@keyframes bubble-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.92);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* 关闭按钮（同样注册为命中区域，命中才可点） */
+.close-btn {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  width: 34px;
+  height: 34px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.14);
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 16px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.close-btn.hot {
+  background: rgba(255, 90, 90, 0.85);
+  color: #fff;
+}
+
+.watermark {
+  position: absolute;
+  top: 12px;
+  left: 14px;
+  color: rgba(255, 255, 255, 0.35);
+  font-size: 12px;
+  pointer-events: none;
+}
