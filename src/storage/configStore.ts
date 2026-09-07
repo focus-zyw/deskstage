@@ -1,5 +1,5 @@
 // 配置外置：appData/data/config.json。首次运行写入默认值，之后读文件。
-// 改配置（换 key/模型/端点）只需编辑该文件并重启应用，无需改代码。
+// 改配置两条路：编辑该文件后重启，或在应用内设置面板保存（立即生效）。
 import { readTextFile, writeTextFile, exists, mkdir } from '@tauri-apps/plugin-fs'
 import { appDataDir, join } from '@tauri-apps/api/path'
 
@@ -42,4 +42,17 @@ export function getConfig(): Promise<AppConfig> {
     })()
   }
   return cache
+}
+
+/** 保存配置：先落盘，成功后刷新内存缓存。下一次生成即用新值，无需重启 */
+export async function saveConfig(update: Partial<AppConfig>): Promise<AppConfig> {
+  const current = await getConfig()
+  const next = { ...current, ...update }
+  const base = await appDataDir()
+  const dir = await join(base, 'data')
+  if (!(await exists(dir))) await mkdir(dir, { recursive: true })
+  const file = await join(dir, 'config.json')
+  await writeTextFile(file, JSON.stringify(next, null, 2))
+  cache = Promise.resolve(next)
+  return next
 }

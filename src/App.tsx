@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { CharacterSprite } from './stage/CharacterSprite'
 import { Bubble } from './stage/Bubble'
+import { PlayIcon, StopIcon, GearIcon } from './stage/icons'
 import { SPRITE_SETS, preloadSprites } from './stage/spriteSets'
 import {
   initPointerManager,
@@ -17,6 +18,12 @@ import { MODES, type Mode } from './performer/scripts'
 import { generateDialog } from './engine/llmClient'
 import { pickTopic } from './engine/topicSeeds'
 import { appendHistory, loadRecentHistory } from './storage/historyStore'
+import {
+  getConfig,
+  saveConfig,
+  DEFAULT_CONFIG,
+  type AppConfig,
+} from './storage/configStore'
 import './App.css'
 
 // 点击反应台词池（后续可改为 LLM 即兴生成）
@@ -30,6 +37,7 @@ const POKE_LINES = [
 ]
 
 type Phase = 'idle' | 'generating' | 'performing'
+type SaveState = 'idle' | 'saving' | 'saved' | 'error'
 
 function App() {
   const [hovered, setHovered] = useState<string | null>(null)
@@ -46,14 +54,20 @@ function App() {
     B: 'idle',
   })
   const [phase, setPhase] = useState<Phase>('idle')
-  const [genMode, setGenMode] = useState<Mode | null>(null)
+  // 分段选择器当前选中模式；生成按钮按它点播
+  const [mode, setMode] = useState<Mode>('daily')
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [form, setForm] = useState<AppConfig>(DEFAULT_CONFIG)
+  const [saveState, setSaveState] = useState<SaveState>('idle')
 
   const charA = useRef<HTMLDivElement>(null)
   const charB = useRef<HTMLDivElement>(null)
+  const segCtl = useRef<HTMLDivElement>(null)
   const closeBtn = useRef<HTMLButtonElement>(null)
-  const btnDaily = useRef<HTMLButtonElement>(null)
-  const btnCross = useRef<HTMLButtonElement>(null)
+  const btnGen = useRef<HTMLButtonElement>(null)
   const btnStop = useRef<HTMLButtonElement>(null)
+  const btnGear = useRef<HTMLButtonElement>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
   const timers = useRef<Record<Speaker, number>>({ A: 0, B: 0 })
 
   // 演出播放器：LLM 生成的 DialogLine[] 与硬编码脚本走同一条路
@@ -70,7 +84,6 @@ function App() {
       },
       onDone: () => {
         setPhase('idle')
-        setGenMode(null)
       },
     })
   }
@@ -98,24 +111,45 @@ function App() {
       registerHitRegion('close', {
         getRect: () => closeBtn.current!.getBoundingClientRect(),
       }),
-      registerHitRegion('daily', {
-        getRect: () => btnDaily.current!.getBoundingClientRect(),
+      registerHitRegion('modes', {
+        getRect: () => segCtl.current!.getBoundingClientRect(),
       }),
-      registerHitRegion('crosstalk', {
-        getRect: () => btnCross.current!.getBoundingClientRect(),
+      registerHitRegion('gen', {
+        getRect: () => btnGen.current!.getBoundingClientRect(),
       }),
       registerHitRegion('stop', {
         getRect: () => btnStop.current!.getBoundingClientRect(),
+      }),
+      registerHitRegion('settings', {
+        getRect: () => btnGear.current!.getBoundingClientRect(),
       }),
     ]
     return () => unsubs.forEach((u) => u())
   }, [])
 
+  // 设置面板打开期间整体可命中（否则穿透窗口里输入框点不进去）
+  useEffect(() => {
+    if (!settingsOpen) return
+    return registerHitRegion('panel', {
+      getRect: () =>
+        panelRef.current?.getBoundingClientRect() ?? new DOMRect(0, 0, 0, 0),
+    })
+  }, [settingsOpen])
+
+  // Escape 关闭面板（窗口持有焦点时生效）
+  useEffect(() => {
+    if (!settingsOpen) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setSettingsOpen(false)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [settingsOpen])
+
   /** 单次点播：生成一集 → 播放；失败兜底播硬编码脚本 */
-  async function playMode(mode: Mode) {
+  async function playMode(m: Mode) {
     generateAbort.current?.abort()
     player.current!.stop()
-    setGenMode(mode)
     setPhase('generating')
     setBubble({ A: null, B: null })
     setAction({ A: 'idle', B: 'idle' })
@@ -124,18 +158,18 @@ function App() {
     generateAbort.current = ctrl
     const topic = pickTopic()
     try {
-      const lines = await generateDialog(mode, topic, lastLines.current, ctrl.signal)
+      const lines = await generateDialog(m, topic, lastLines.current, ctrl.signal)
       if (ctrl.signal.aborted) return
       lastLines.current = lines
-      void appendHistory(lines, mode) // 落盘（fire-and-forget，失败不阻断演出）
+      void appendHistory(lines, m) // 落盘（fire-and-forget，失败不阻断演出）
       setPhase('performing')
-      player.current!.play(lines, { gap: MODES[mode].gap })
+      player.current!.play(lines, { gap: MODES[m].gap })
     } catch (e) {
       if (ctrl.signal.aborted) return
       console.error('LLM 生成失败，回退硬编码脚本', e)
-      lastLines.current = MODES[mode].script
+      lastLines.current = MODES[m].script
       setPhase('performing')
-      player.current!.play(MODES[mode].script, { gap: MODES[mode].gap })
+      player.current!.play(MODES[m].script, { gap: MODES[m].gap })
     }
   }
 
@@ -145,9 +179,28 @@ function App() {
     generateAbort.current = null
     player.current!.stop()
     setPhase('idle')
-    setGenMode(null)
     setBubble({ A: null, B: null })
     setAction({ A: 'idle', B: 'idle' })
+  }
+
+  /** 打开设置：读当前配置回填表单 */
+  async function openSettings() {
+    setSaveState('idle')
+    setSettingsOpen(true)
+    setForm(await getConfig())
+  }
+
+  /** 保存配置：落盘 + 刷新缓存，下一次生成即生效 */
+  async function saveSettings() {
+    setSaveState('saving')
+    try {
+      await saveConfig(form)
+      setSaveState('saved')
+      window.setTimeout(() => setSettingsOpen(false), 900)
+    } catch (e) {
+      console.error('配置保存失败', e)
+      setSaveState('error')
+    }
   }
 
   function poke(who: Speaker) {
@@ -163,15 +216,6 @@ function App() {
 
   const busy = phase === 'generating'
 
-  function modeBtnCls(mode: Mode): string {
-    const id = mode === 'daily' ? 'daily' : 'crosstalk'
-    return (
-      `ctrl-btn${hovered === id ? ' hot' : ''}` +
-      `${phase === 'performing' && genMode === mode ? ' on' : ''}` +
-      `${busy && genMode === mode ? ' loading' : ''}`
-    )
-  }
-
   return (
     <div className="stage">
       <button
@@ -184,31 +228,103 @@ function App() {
       </button>
 
       <div className="ctrl-bar">
+        <div ref={segCtl} className={`seg${hovered === 'modes' ? ' hot' : ''}`}>
+          <div className={`seg-thumb${mode === 'crosstalk' ? ' right' : ''}`} />
+          <button
+            className={`seg-btn${mode === 'daily' ? ' on' : ''}`}
+            onClick={() => setMode('daily')}
+          >
+            日常
+          </button>
+          <button
+            className={`seg-btn${mode === 'crosstalk' ? ' on' : ''}`}
+            onClick={() => setMode('crosstalk')}
+          >
+            相声
+          </button>
+        </div>
+
         <button
-          ref={btnDaily}
-          className={modeBtnCls('daily')}
+          ref={btnGen}
+          className={`ctrl-btn icon${hovered === 'gen' ? ' hot' : ''}${busy ? ' loading' : ''}`}
           disabled={busy}
-          onClick={() => void playMode('daily')}
+          title="生成"
+          onClick={() => void playMode(mode)}
         >
-          {busy && genMode === 'daily' ? '… 生成中' : '▶ 日常'}
+          <PlayIcon />
+          <span className="label">生成</span>
         </button>
-        <button
-          ref={btnCross}
-          className={modeBtnCls('crosstalk')}
-          disabled={busy}
-          onClick={() => void playMode('crosstalk')}
-        >
-          {busy && genMode === 'crosstalk' ? '… 生成中' : '▶ 相声'}
-        </button>
+
         <button
           ref={btnStop}
-          className={`ctrl-btn${hovered === 'stop' ? ' hot' : ''}`}
+          className={`ctrl-btn icon${hovered === 'stop' ? ' hot' : ''}`}
           disabled={phase === 'idle'}
+          title="停止"
           onClick={stopEverything}
         >
-          ⏹ 停止
+          <StopIcon />
+          <span className="label">停止</span>
+        </button>
+
+        <button
+          ref={btnGear}
+          className={`ctrl-btn icon gear${hovered === 'settings' ? ' hot' : ''}${settingsOpen ? ' on' : ''}`}
+          title="设置"
+          onClick={() => (settingsOpen ? setSettingsOpen(false) : void openSettings())}
+        >
+          <GearIcon />
         </button>
       </div>
+
+      {settingsOpen && (
+        <div ref={panelRef} className="settings-panel">
+          <div className="settings-row">
+            <label htmlFor="cfg-key">API Key</label>
+            <input
+              id="cfg-key"
+              type="password"
+              value={form.apiKey}
+              onChange={(e) => setForm({ ...form, apiKey: e.target.value })}
+            />
+          </div>
+          <div className="settings-row">
+            <label htmlFor="cfg-url">接口地址</label>
+            <input
+              id="cfg-url"
+              value={form.baseUrl}
+              placeholder="https://api.deepseek.com/v1"
+              onChange={(e) => setForm({ ...form, baseUrl: e.target.value })}
+            />
+          </div>
+          <div className="settings-row">
+            <label htmlFor="cfg-model">模型</label>
+            <input
+              id="cfg-model"
+              value={form.model}
+              placeholder="deepseek-chat"
+              onChange={(e) => setForm({ ...form, model: e.target.value })}
+            />
+          </div>
+          <div className="settings-actions">
+            <button className="panel-btn" onClick={() => setSettingsOpen(false)}>
+              取消
+            </button>
+            <button
+              className="panel-btn primary"
+              disabled={saveState === 'saving'}
+              onClick={() => void saveSettings()}
+            >
+              {saveState === 'saving' ? '保存中…' : '保存'}
+            </button>
+          </div>
+          {saveState === 'saved' && (
+            <div className="settings-tip ok">✓ 已保存，下次生成即生效</div>
+          )}
+          {saveState === 'error' && (
+            <div className="settings-tip err">保存失败，详见控制台日志</div>
+          )}
+        </div>
+      )}
 
       <div className="actor actor-a">
         {bubble.A && <Bubble text={bubble.A} />}
@@ -235,7 +351,7 @@ function App() {
       </div>
 
       <div className="watermark">
-        M3 · 立绘精灵 · 点模式按钮生成一集 · 播完再点可续集
+        M4 · 选模式点 ▶ 生成一集 · 播完再点可续集
       </div>
     </div>
   )
