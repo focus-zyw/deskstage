@@ -385,13 +385,15 @@
   }
 }
 
-/* 设置面板：控制栏正下方弹出 */
+/* 设置面板：控制栏正下方弹出（限高滚动,防止超出 420 高的悬浮条） */
 .settings-panel {
   position: absolute;
   top: 56px;
   left: 50%;
   transform: translateX(-50%);
-  width: 320px;
+  width: 340px;
+  max-height: calc(100% - 66px);
+  overflow-y: auto;
   padding: 16px;
   display: flex;
   flex-direction: column;
@@ -423,7 +425,8 @@
   font-size: 12px;
   color: rgba(255, 255, 255, 0.65);
 }
-.settings-row input {
+.settings-row input,
+.settings-row select {
   padding: 7px 10px;
   border: 1px solid rgba(255, 255, 255, 0.18);
   border-radius: 8px;
@@ -433,8 +436,125 @@
   outline: none;
   transition: border-color 0.15s ease;
 }
-.settings-row input:focus {
+.settings-row input:focus,
+.settings-row select:focus {
   border-color: rgba(124, 108, 240, 0.9);
+}
+.settings-row select option {
+  background: #1c1c2e;
+  color: #fff;
+}
+
+/* 历史记录分区 */
+.settings-sep {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 2px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.65);
+}
+.hist-clear {
+  border: none;
+  background: transparent;
+  padding: 2px 6px;
+  border-radius: 6px;
+  color: rgba(255, 150, 150, 0.85);
+  font-size: 12px;
+  cursor: pointer;
+  transition:
+    color 0.15s ease,
+    background 0.15s ease;
+}
+.hist-clear:hover:not(:disabled) {
+  color: #ff7a7a;
+  background: rgba(255, 90, 90, 0.15);
+}
+.hist-clear:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.hist-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 150px;
+  overflow-y: auto;
+}
+.hist-empty {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.4);
+  text-align: center;
+  padding: 8px 0;
+}
+.hist-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+}
+.hist-mode {
+  flex: none;
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 6px;
+  color: #fff;
+}
+.hist-mode.m-d {
+  background: rgba(124, 108, 240, 0.4);
+}
+.hist-mode.m-x {
+  background: rgba(240, 140, 90, 0.4);
+}
+.hist-main {
+  flex: 1;
+  min-width: 0;
+}
+.hist-preview {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.9);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.hist-meta {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.4);
+  margin-top: 1px;
+}
+.hist-fav,
+.hist-del {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    color 0.15s ease,
+    background 0.15s ease;
+}
+.hist-fav:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+.hist-fav.on {
+  color: #f5c542;
+}
+.hist-del:hover:not(:disabled) {
+  background: rgba(255, 90, 90, 0.25);
+  color: #ff9a9a;
+}
+.hist-del:disabled {
+  opacity: 0.25;
+  cursor: default;
 }
 .settings-actions {
   display: flex;

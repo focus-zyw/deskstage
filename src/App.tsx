@@ -17,7 +17,7 @@ import {
 import { MODES, type Mode } from './performer/scripts'
 import { generateDialog } from './engine/llmClient'
 import { pickTopic } from './engine/topicSeeds'
-import { appendHistory, loadRecentHistory } from './storage/historyStore'
+import { appendHistory, loadRecentHistory, listEpisodes, deleteEpisodes, toggleFavorite, type Episode } from './storage/historyStore'
 import {
   getConfig,
   saveConfig,
@@ -39,6 +39,12 @@ const POKE_LINES = [
 type Phase = 'idle' | 'generating' | 'performing'
 type SaveState = 'idle' | 'saving' | 'saved' | 'error'
 
+function fmtTime(ts: number): string {
+  const d = new Date(ts)
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getMonth() + 1}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+}
+
 function App() {
   const [hovered, setHovered] = useState<string | null>(null)
   const [reacting, setReacting] = useState<Record<Speaker, boolean>>({
@@ -59,6 +65,10 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [form, setForm] = useState<AppConfig>(DEFAULT_CONFIG)
   const [saveState, setSaveState] = useState<SaveState>('idle')
+  // 空闲自动重放:频率来自配置,activeTick 用于用户互动后重置计时
+  const [autoReplayMin, setAutoReplayMin] = useState(DEFAULT_CONFIG.autoReplayMin)
+  const [activeTick, setActiveTick] = useState(0)
+  const [episodes, setEpisodes] = useState<Episode[]>([])
 
   const charA = useRef<HTMLDivElement>(null)
   const charB = useRef<HTMLDivElement>(null)
@@ -90,10 +100,13 @@ function App() {
   const generateAbort = useRef<AbortController | null>(null)
   // 上一段台词（内存中），续播时喂给 LLM 做衔接
   const lastLines = useRef<DialogLine[]>([])
+  // 上一次自动重放的集,连续重放时避开
+  const lastReplayTs = useRef(0)
 
   useEffect(() => {
     void initPointerManager()
     preloadSprites(Object.values(SPRITE_SETS)) // 预热立绘,演出中切换动作零延迟
+    void getConfig().then((c) => setAutoReplayMin(c.autoReplayMin))
     // 启动恢复：读最近历史，续集生成时衔接上次聊到的内容
     void loadRecentHistory(20).then((entries) => {
       if (entries.length > 0) {
@@ -146,6 +159,34 @@ function App() {
     return () => window.removeEventListener('keydown', onKey)
   }, [settingsOpen])
 
+  /** 加权随机抽一集历史重放(收藏权重 5):不调 LLM、不写历史 */
+  async function autoReplay() {
+    if (player.current!.playing) return
+    const eps = await listEpisodes(100)
+    if (eps.length === 0) return
+    const pool = eps.length > 1 ? eps.filter((e) => e.ts !== lastReplayTs.current) : eps
+    const bag: Episode[] = []
+    for (const e of pool) {
+      for (let i = 0; i < (e.fav ? 5 : 1); i++) bag.push(e)
+    }
+    const ep = bag[Math.floor(Math.random() * bag.length)]
+    lastReplayTs.current = ep.ts
+    lastLines.current = ep.lines // 重放也算"最近内容",衔接后续手动生成
+    setBubble({ A: null, B: null })
+    setAction({ A: 'idle', B: 'idle' })
+    setPhase('performing')
+    // 历史里的 mode 是 string,不认识的值回退日常节奏
+    const gap = ep.mode === 'crosstalk' ? MODES.crosstalk.gap : MODES.daily.gap
+    player.current!.play(ep.lines, { gap })
+  }
+
+  /** 空闲自动重放:仅在没有生成/演出、没开设置面板时计时;任何依赖变化都会重置计时 */
+  useEffect(() => {
+    if (phase !== 'idle' || settingsOpen || autoReplayMin <= 0) return
+    const t = window.setTimeout(() => void autoReplay(), autoReplayMin * 60_000)
+    return () => window.clearTimeout(t)
+  }, [phase, settingsOpen, autoReplayMin, activeTick])
+
   /** 单次点播：生成一集 → 播放；失败兜底播硬编码脚本 */
   async function playMode(m: Mode) {
     generateAbort.current?.abort()
@@ -183,18 +224,20 @@ function App() {
     setAction({ A: 'idle', B: 'idle' })
   }
 
-  /** 打开设置：读当前配置回填表单 */
+  /** 打开设置：读当前配置回填表单，加载历史分集 */
   async function openSettings() {
     setSaveState('idle')
     setSettingsOpen(true)
     setForm(await getConfig())
+    setEpisodes(await listEpisodes())
   }
 
   /** 保存配置：落盘 + 刷新缓存，下一次生成即生效 */
   async function saveSettings() {
     setSaveState('saving')
     try {
-      await saveConfig(form)
+      const next = await saveConfig(form)
+      setAutoReplayMin(next.autoReplayMin) // 空闲计时按新频率重新武装
       setSaveState('saved')
       window.setTimeout(() => setSettingsOpen(false), 900)
     } catch (e) {
@@ -203,7 +246,23 @@ function App() {
     }
   }
 
+  async function onToggleFav(ep: Episode) {
+    await toggleFavorite(ep)
+    setEpisodes(await listEpisodes())
+  }
+
+  async function onDeleteEpisode(ep: Episode) {
+    await deleteEpisodes(new Set([ep.ts]))
+    setEpisodes(await listEpisodes())
+  }
+
+  async function onClearUnfavorited() {
+    await deleteEpisodes(new Set(episodes.filter((e) => !e.fav).map((e) => e.ts)))
+    setEpisodes(await listEpisodes())
+  }
+
   function poke(who: Speaker) {
+    setActiveTick((t) => t + 1) // 用户互动,重置自动重放计时
     const line = POKE_LINES[Math.floor(Math.random() * POKE_LINES.length)]
     setBubble((b) => ({ ...b, [who]: line }))
     setReacting((r) => ({ ...r, [who]: true }))
@@ -305,6 +364,20 @@ function App() {
               onChange={(e) => setForm({ ...form, model: e.target.value })}
             />
           </div>
+          <div className="settings-row">
+            <label htmlFor="cfg-replay">空闲自动重放</label>
+            <select
+              id="cfg-replay"
+              value={form.autoReplayMin}
+              onChange={(e) => setForm({ ...form, autoReplayMin: Number(e.target.value) })}
+            >
+              <option value={0}>关闭</option>
+              <option value={5}>每 5 分钟</option>
+              <option value={10}>每 10 分钟</option>
+              <option value={30}>每 30 分钟</option>
+              <option value={60}>每 60 分钟</option>
+            </select>
+          </div>
           <div className="settings-actions">
             <button className="panel-btn" onClick={() => setSettingsOpen(false)}>
               取消
@@ -323,6 +396,50 @@ function App() {
           {saveState === 'error' && (
             <div className="settings-tip err">保存失败，详见控制台日志</div>
           )}
+
+          <div className="settings-sep">
+            <span>历史记录（{episodes.length}）</span>
+            <button
+              className="hist-clear"
+              disabled={episodes.every((e) => e.fav) || episodes.length === 0}
+              onClick={() => void onClearUnfavorited()}
+            >
+              清空未收藏
+            </button>
+          </div>
+          <div className="hist-list">
+            {episodes.length === 0 && (
+              <div className="hist-empty">还没有历史对话，点 ▶ 生成一集试试</div>
+            )}
+            {episodes.map((ep) => (
+              <div className="hist-row" key={ep.ts}>
+                <span className={`hist-mode m-${ep.mode === 'crosstalk' ? 'x' : 'd'}`}>
+                  {ep.mode === 'crosstalk' ? '相声' : '日常'}
+                </span>
+                <div className="hist-main">
+                  <div className="hist-preview">{ep.lines[0]?.text ?? ''}</div>
+                  <div className="hist-meta">
+                    {fmtTime(ep.ts)} · {ep.lines.length} 句
+                  </div>
+                </div>
+                <button
+                  className={`hist-fav${ep.fav ? ' on' : ''}`}
+                  title={ep.fav ? '取消收藏' : '收藏（不会被删除，重放权重更高）'}
+                  onClick={() => void onToggleFav(ep)}
+                >
+                  {ep.fav ? '★' : '☆'}
+                </button>
+                <button
+                  className="hist-del"
+                  title={ep.fav ? '收藏对话不可删除' : '删除此段'}
+                  disabled={ep.fav}
+                  onClick={() => void onDeleteEpisode(ep)}
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
@@ -351,7 +468,7 @@ function App() {
       </div>
 
       <div className="watermark">
-        M4 · 选模式点 ▶ 生成一集 · 播完再点可续集
+        M5 · 空闲自动重放历史 · 选模式点 ▶ 生成一集
       </div>
     </div>
   )

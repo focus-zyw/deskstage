@@ -7,6 +7,8 @@ export interface AppConfig {
   apiKey: string
   baseUrl: string
   model: string
+  /** 空闲多少分钟后自动重放历史对话;0 = 关闭 */
+  autoReplayMin: number
 }
 
 // 默认值（首启写入）。想换端点：改 appData/data/config.json 后重启
@@ -14,6 +16,13 @@ export const DEFAULT_CONFIG: AppConfig = {
   apiKey: '',
   baseUrl: 'https://api.deepseek.com/v1',
   model: 'deepseek-chat',
+  autoReplayMin: 10,
+}
+
+/** 清洗自动重放频率:非法值回退默认 */
+function sanitizeReplayMin(v: unknown): number {
+  const n = Number(v)
+  return Number.isFinite(n) && n >= 0 ? n : DEFAULT_CONFIG.autoReplayMin
 }
 
 let cache: Promise<AppConfig> | null = null
@@ -32,6 +41,7 @@ export function getConfig(): Promise<AppConfig> {
             apiKey: String(obj.apiKey || DEFAULT_CONFIG.apiKey),
             baseUrl: String(obj.baseUrl || DEFAULT_CONFIG.baseUrl),
             model: String(obj.model || DEFAULT_CONFIG.model),
+            autoReplayMin: sanitizeReplayMin(obj.autoReplayMin),
           }
         }
         await writeTextFile(file, JSON.stringify(DEFAULT_CONFIG, null, 2))
