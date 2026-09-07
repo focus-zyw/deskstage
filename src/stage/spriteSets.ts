@@ -24,14 +24,14 @@ export const SPRITE_SETS: Record<'A' | 'B', SpriteSet> = {
   A: {
     dir: 'sprites/a',
     name: '甲',
-    accent: '#7c6cf0',
+    accent: '#3d8bd4', // 便利店店员:蓝黄制服主色
     height: 320,
     actions: [...ART_ACTIONS],
   },
   B: {
     dir: 'sprites/b',
     name: '乙',
-    accent: '#f08c5a',
+    accent: '#5a6472', // 程序员:深灰蓝主色
     height: 320,
     actions: [...ART_ACTIONS],
   },
