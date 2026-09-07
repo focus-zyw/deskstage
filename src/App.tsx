@@ -9,12 +9,16 @@ import {
 } from './input/pointerManager'
 import {
   PerformancePlayer,
+  type DialogLine,
   type Speaker,
 } from './performer/player'
 import { MODES, type Mode } from './performer/scripts'
+import { generateDialog } from './engine/llmClient'
+import { pickTopic } from './engine/topicSeeds'
+import { appendHistory, loadRecentHistory } from './storage/historyStore'
 import './App.css'
 
-// 点击反应台词池（M2 起由 LLM 生成替代）
+// 点击反应台词池（后续可改为 LLM 即兴生成）
 const POKE_LINES = [
   '干嘛点我！',
   '再点要收费了！',
@@ -23,6 +27,8 @@ const POKE_LINES = [
   '摸鱼被发现了？！',
   '（默默挪开半步）',
 ]
+
+type Phase = 'idle' | 'generating' | 'performing'
 
 function App() {
   const [hovered, setHovered] = useState<string | null>(null)
@@ -38,7 +44,8 @@ function App() {
     A: 'idle',
     B: 'idle',
   })
-  const [playing, setPlaying] = useState<Mode | null>(null)
+  const [phase, setPhase] = useState<Phase>('idle')
+  const [genMode, setGenMode] = useState<Mode | null>(null)
 
   const charA = useRef<HTMLDivElement>(null)
   const charB = useRef<HTMLDivElement>(null)
@@ -48,7 +55,7 @@ function App() {
   const btnStop = useRef<HTMLButtonElement>(null)
   const timers = useRef<Record<Speaker, number>>({ A: 0, B: 0 })
 
-  // 演出播放器：消费 DialogLine[]，驱动气泡与动作（M2 换 LLM 数据源）
+  // 演出播放器：LLM 生成的 DialogLine[] 与硬编码脚本走同一条路
   const player = useRef<PerformancePlayer | null>(null)
   if (!player.current) {
     player.current = new PerformancePlayer({
@@ -60,12 +67,24 @@ function App() {
         setBubble((b) => ({ ...b, [speaker]: null }))
         setAction((a) => ({ ...a, [speaker]: 'idle' }))
       },
-      onDone: () => setPlaying(null),
+      onDone: () => {
+        setPhase('idle')
+        setGenMode(null)
+      },
     })
   }
+  const generateAbort = useRef<AbortController | null>(null)
+  // 上一段台词（内存中），续播时喂给 LLM 做衔接
+  const lastLines = useRef<DialogLine[]>([])
 
   useEffect(() => {
     void initPointerManager()
+    // 启动恢复：读最近历史，续集生成时衔接上次聊到的内容
+    void loadRecentHistory(20).then((entries) => {
+      if (entries.length > 0) {
+        lastLines.current = entries.map(({ ts: _ts, mode: _m, ...l }) => l)
+      }
+    })
     const unsubs = [
       onHoverChange(setHovered),
       registerHitRegion('charA', {
@@ -90,14 +109,41 @@ function App() {
     return () => unsubs.forEach((u) => u())
   }, [])
 
-  function playMode(mode: Mode) {
-    setPlaying(mode)
-    player.current!.play(MODES[mode].script, { gap: MODES[mode].gap })
+  /** 单次点播：生成一集 → 播放；失败兜底播硬编码脚本 */
+  async function playMode(mode: Mode) {
+    generateAbort.current?.abort()
+    player.current!.stop()
+    setGenMode(mode)
+    setPhase('generating')
+    setBubble({ A: null, B: null })
+    setAction({ A: 'idle', B: 'idle' })
+
+    const ctrl = new AbortController()
+    generateAbort.current = ctrl
+    const topic = pickTopic()
+    try {
+      const lines = await generateDialog(mode, topic, lastLines.current, ctrl.signal)
+      if (ctrl.signal.aborted) return
+      lastLines.current = lines
+      void appendHistory(lines, mode) // 落盘（fire-and-forget，失败不阻断演出）
+      setPhase('performing')
+      player.current!.play(lines, { gap: MODES[mode].gap })
+    } catch (e) {
+      if (ctrl.signal.aborted) return
+      console.error('LLM 生成失败，回退硬编码脚本', e)
+      lastLines.current = MODES[mode].script
+      setPhase('performing')
+      player.current!.play(MODES[mode].script, { gap: MODES[mode].gap })
+    }
   }
 
-  function stopPlaying() {
+  /** 停止一切：中止生成 + 停止演出 + 复位 */
+  function stopEverything() {
+    generateAbort.current?.abort()
+    generateAbort.current = null
     player.current!.stop()
-    setPlaying(null)
+    setPhase('idle')
+    setGenMode(null)
     setBubble({ A: null, B: null })
     setAction({ A: 'idle', B: 'idle' })
   }
@@ -111,6 +157,17 @@ function App() {
       setBubble((b) => ({ ...b, [who]: null }))
       setReacting((r) => ({ ...r, [who]: false }))
     }, 1600)
+  }
+
+  const busy = phase === 'generating'
+
+  function modeBtnCls(mode: Mode): string {
+    const id = mode === 'daily' ? 'daily' : 'crosstalk'
+    return (
+      `ctrl-btn${hovered === id ? ' hot' : ''}` +
+      `${phase === 'performing' && genMode === mode ? ' on' : ''}` +
+      `${busy && genMode === mode ? ' loading' : ''}`
+    )
   }
 
   return (
@@ -127,27 +184,25 @@ function App() {
       <div className="ctrl-bar">
         <button
           ref={btnDaily}
-          className={`ctrl-btn${hovered === 'daily' ? ' hot' : ''}${
-            playing === 'daily' ? ' on' : ''
-          }`}
-          onClick={() => playMode('daily')}
+          className={modeBtnCls('daily')}
+          disabled={busy}
+          onClick={() => void playMode('daily')}
         >
-          ▶ 日常
+          {busy && genMode === 'daily' ? '… 生成中' : '▶ 日常'}
         </button>
         <button
           ref={btnCross}
-          className={`ctrl-btn${hovered === 'crosstalk' ? ' hot' : ''}${
-            playing === 'crosstalk' ? ' on' : ''
-          }`}
-          onClick={() => playMode('crosstalk')}
+          className={modeBtnCls('crosstalk')}
+          disabled={busy}
+          onClick={() => void playMode('crosstalk')}
         >
-          ▶ 相声
+          {busy && genMode === 'crosstalk' ? '… 生成中' : '▶ 相声'}
         </button>
         <button
           ref={btnStop}
           className={`ctrl-btn${hovered === 'stop' ? ' hot' : ''}`}
-          disabled={!playing}
-          onClick={stopPlaying}
+          disabled={phase === 'idle'}
+          onClick={stopEverything}
         >
           ⏹ 停止
         </button>
@@ -180,7 +235,7 @@ function App() {
       </div>
 
       <div className="watermark">
-        M1 演出队列 · 顶部按钮播放脚本 · 点击角色互动 · 空白区域点击穿透
+        M2 · LLM 单次点播 · 点模式按钮生成一集 · 播完再点可续集
       </div>
     </div>
   )

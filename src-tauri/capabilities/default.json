@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "穿透管理所需的窗口权限",
+  "description": "窗口控制与数据目录读写权限",
   "windows": [
     "main"
   ],
@@ -13,6 +13,13 @@
     "core:window:allow-outer-position",
     "core:window:allow-current-monitor",
     "core:window:allow-close",
-    "core:window:allow-show"
+    "core:window:allow-show",
+    "fs:allow-read-text-file",
+    "fs:allow-write-text-file",
+    "fs:allow-mkdir",
+    "fs:allow-exists",
+    "fs:allow-read-dir",
+    "fs:allow-appdata-read-recursive",
+    "fs:allow-appdata-write-recursive"
   ]
 }
