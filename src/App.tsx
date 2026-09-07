@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { CharacterSprite } from './stage/CharacterSprite'
 import { Bubble } from './stage/Bubble'
+import { SPRITE_SETS, preloadSprites } from './stage/spriteSets'
 import {
   initPointerManager,
   registerHitRegion,
@@ -79,6 +80,7 @@ function App() {
 
   useEffect(() => {
     void initPointerManager()
+    preloadSprites(Object.values(SPRITE_SETS)) // 预热立绘,演出中切换动作零延迟
     // 启动恢复：读最近历史，续集生成时衔接上次聊到的内容
     void loadRecentHistory(20).then((entries) => {
       if (entries.length > 0) {
@@ -212,8 +214,7 @@ function App() {
         {bubble.A && <Bubble text={bubble.A} />}
         <CharacterSprite
           ref={charA}
-          name="甲"
-          color="#7c6cf0"
+          sprite={SPRITE_SETS.A}
           action={action.A}
           hot={hovered === 'charA'}
           reacting={reacting.A}
@@ -225,8 +226,7 @@ function App() {
         {bubble.B && <Bubble text={bubble.B} />}
         <CharacterSprite
           ref={charB}
-          name="乙"
-          color="#f08c5a"
+          sprite={SPRITE_SETS.B}
           action={action.B}
           hot={hovered === 'charB'}
           reacting={reacting.B}
@@ -235,7 +235,7 @@ function App() {
       </div>
 
       <div className="watermark">
-        M2 · LLM 单次点播 · 点模式按钮生成一集 · 播完再点可续集
+        M3 · 立绘精灵 · 点模式按钮生成一集 · 播完再点可续集
       </div>
     </div>
   )

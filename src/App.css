@@ -1,4 +1,4 @@
-/* 舞台与角色样式（M1 占位版） */
+/* 舞台与角色样式（立绘精灵版） */
 
 .stage {
   position: fixed;
@@ -21,25 +21,98 @@
   right: 20vw;
 }
 
-/* 占位角色：胶囊体 + 五官，M2 换成贴图精灵 */
+/* 贴图精灵：双 img 交叉淡入。基础位移走 translate 属性，act-* 动画走 transform，互不覆盖 */
 .char {
   position: relative;
-  width: 150px;
-  height: 210px;
-  border-radius: 75px 75px 12px 12px;
-  background: linear-gradient(
-    180deg,
-    var(--char-color),
-    color-mix(in srgb, var(--char-color) 55%, #1c1c2e)
-  );
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
-  cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition:
-    filter 0.15s ease,
-    transform 0.15s ease;
+  cursor: pointer;
+  /* 底部留 12px,让 bottom:-10px 的名牌完整落在窗口内 */
+  margin-bottom: 12px;
+  translate: var(--char-shift-x, 0px) var(--char-shift-y, 0px);
+  transition: filter 0.15s ease;
+}
+
+.char-img {
+  display: block;
+  height: var(--char-h, 320px);
+  width: auto;
+}
+/* 上层：动作切换时淡入盖住旧图 */
+.char-img.main {
+  opacity: 0;
+}
+.char-img.main.ready {
+  animation: sprite-in 0.14s ease forwards;
+}
+/* 下层：旧立绘，新图淡入完成前兜底显示 */
+.char-img.under {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+}
+@keyframes sprite-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* 动作动画：表情由贴图切换承担，节奏与幅度由位移动画承担 */
+.char.act-idle {
+  animation: act-breathe 4s ease-in-out infinite;
+}
+.char.act-talk {
+  animation: act-bob 0.6s ease-in-out infinite;
+}
+.char.act-shake {
+  animation: act-shake 0.4s ease-in-out 2;
+}
+.char.act-jump {
+  animation: act-jump 0.5s ease;
+}
+@keyframes act-breathe {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-3px);
+  }
+}
+@keyframes act-bob {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-6px);
+  }
+}
+@keyframes act-shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  25% {
+    transform: translateX(-4px);
+  }
+  75% {
+    transform: translateX(4px);
+  }
+}
+@keyframes act-jump {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  40% {
+    transform: translateY(-26px);
+  }
 }
 
 /* 命中态：光标在角色热区内（此时窗口已恢复交互） */
@@ -47,7 +120,7 @@
   filter: brightness(1.18) drop-shadow(0 0 12px rgba(255, 255, 255, 0.55));
 }
 
-/* 点击反应动画 */
+/* 点击反应动画（置于 act-* 之后，与动作动画同时存在时覆盖之） */
 .char.reacting {
   animation: boing 0.55s ease;
 }
@@ -67,6 +140,22 @@
   100% {
     transform: translateY(0) scale(1, 1);
   }
+}
+
+/* 兜底占位：贴图缺失时显示（原 M1 胶囊体） */
+.char-capsule {
+  width: 150px;
+  height: 210px;
+  border-radius: 75px 75px 12px 12px;
+  background: linear-gradient(
+    180deg,
+    var(--char-color),
+    color-mix(in srgb, var(--char-color) 55%, #1c1c2e)
+  );
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .char-face {

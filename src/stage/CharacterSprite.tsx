@@ -1,8 +1,10 @@
-import { type CSSProperties, type Ref } from 'react'
+import { useState } from 'react'
+import type { CSSProperties, Ref } from 'react'
+import { spriteSrc, type SpriteSet } from './spriteSets'
 
 export interface CharacterSpriteProps {
-  name: string
-  color: string
+  /** 立绘配置(素材目录、强调色、显示高、基线微调) */
+  sprite: SpriteSet
   /** 当前动作（idle|talk|happy|angry|sad|surprise|shake|jump），映射到 act-* 动画类 */
   action?: string
   /** 光标命中热区（窗口已恢复交互） */
@@ -13,34 +15,72 @@ export interface CharacterSpriteProps {
   ref?: Ref<HTMLDivElement>
 }
 
-/** 占位角色：胶囊体 + 五官。M2 换贴图精灵后本组件仍负责挂图与动画类名 */
+/** 贴图精灵：按动作切换立绘图（双 img 交叉淡入）+ act-* CSS 动画。缺图时回退胶囊占位体 */
 export function CharacterSprite({
-  name,
-  color,
+  sprite,
   action = 'idle',
   hot,
   reacting,
   onClick,
   ref,
 }: CharacterSpriteProps) {
+  // shake/jump 等无独立贴图的动作复用 idle 图，表现由 CSS 动画承担
+  const artAction = sprite.actions.includes(action) ? action : 'idle'
+  const src = spriteSrc(sprite, artAction)
+
+  // 渲染期检测动作切换：旧图挪到下层兜底，新图重新走加载→淡入流程
+  const [fade, setFade] = useState({
+    prev: null as string | null,
+    curr: src,
+    ready: false,
+    broken: false,
+  })
+  if (src !== fade.curr) {
+    setFade({ prev: fade.curr, curr: src, ready: false, broken: false })
+  }
+  const { prev, curr, ready, broken } = fade
+
   const cls = ['char', `act-${action}`, hot ? 'hot' : '', reacting ? 'reacting' : '']
     .filter(Boolean)
     .join(' ')
-  return (
-    <div
-      ref={ref}
-      className={cls}
-      style={{ '--char-color': color } as CSSProperties}
-      onClick={onClick}
-    >
-      <div className="char-face">
-        <div className="char-eyes">
-          <i />
-          <i />
+  const style = {
+    '--char-color': sprite.accent,
+    '--char-h': `${sprite.height}px`,
+    '--char-shift-x': `${sprite.offsetX ?? 0}px`,
+    '--char-shift-y': `${sprite.offsetY ?? 0}px`,
+  } as CSSProperties
+
+  if (broken) {
+    // 兜底：素材缺失时渲染原占位胶囊，演出不中断
+    return (
+      <div ref={ref} className={cls} style={style} onClick={onClick}>
+        <div className="char-capsule">
+          <div className="char-face">
+            <div className="char-eyes">
+              <i />
+              <i />
+            </div>
+            <div className="char-mouth" />
+          </div>
         </div>
-        <div className="char-mouth" />
+        <div className="char-name">{sprite.name}</div>
       </div>
-      <div className="char-name">{name}</div>
+    )
+  }
+
+  return (
+    <div ref={ref} className={cls} style={style} onClick={onClick}>
+      {prev && <img className="char-img under" src={prev} alt="" />}
+      <img
+        key={curr}
+        className={`char-img main${ready ? ' ready' : ''}`}
+        src={curr}
+        alt={sprite.name}
+        draggable={false}
+        onLoad={() => setFade((f) => ({ ...f, ready: true }))}
+        onError={() => setFade((f) => ({ ...f, broken: true }))}
+      />
+      <div className="char-name">{sprite.name}</div>
     </div>
   )
 }
