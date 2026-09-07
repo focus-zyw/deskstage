@@ -23,3 +23,13 @@ dist-ssr
 *.sln
 *.sw?
 .zcode
+
+# 本地素材暂存与立绘管线中间产物(可用脚本重新生成)
+temp/
+scripts/__pycache__/
+scripts/ai_raw/
+scripts/ai_edit/
+scripts/ai_candidates.png
+scripts/ai_probe_*.png
+scripts/user_*.png
+scripts/preview_ai_sprites.png
