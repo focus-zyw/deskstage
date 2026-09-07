@@ -1,4 +1,7 @@
-// 话题种子池：每次生成注入一个随机话题，防尬聊/车轱辘话
+// 话题种子池：每次生成注入一个随机话题，防尬聊/车轱辘话。
+// 模式可带专属池（DialogMode.topics），缺省用全局池。
+import type { DialogMode } from '../performer/modes'
+
 export const TOPIC_SEEDS = [
   '减肥永远从明天开始',
   '外卖满减红包的极限操作',
@@ -32,12 +35,15 @@ export const TOPIC_SEEDS = [
   '深夜网购的冲动与后悔',
 ]
 
-let lastIdx = -1
+// 每个话题池单独记上一次的下标，避免连续重复
+const lastIdx = new Map<string, number>()
 
 /** 随机取一个话题，避免连续重复 */
-export function pickTopic(): string {
-  let i = Math.floor(Math.random() * TOPIC_SEEDS.length)
-  if (i === lastIdx) i = (i + 1) % TOPIC_SEEDS.length
-  lastIdx = i
-  return TOPIC_SEEDS[i]
+export function pickTopic(mode?: DialogMode): string {
+  const pool = mode?.topics ?? TOPIC_SEEDS
+  const key = mode?.id ?? '__global__'
+  let i = Math.floor(Math.random() * pool.length)
+  if (i === lastIdx.get(key)) i = (i + 1) % pool.length
+  lastIdx.set(key, i)
+  return pool[i]!
 }

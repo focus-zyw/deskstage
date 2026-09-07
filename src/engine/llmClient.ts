@@ -1,7 +1,7 @@
 import { getConfig } from '../storage/configStore'
 import { buildMessages } from './promptBuilder'
 import type { DialogLine, Speaker } from '../performer/player'
-import type { Mode } from '../performer/scripts'
+import type { Mode } from '../performer/modes'
 
 const VALID_ACTIONS = new Set([
   'idle',

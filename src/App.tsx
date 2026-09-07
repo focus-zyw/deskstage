@@ -14,7 +14,7 @@ import {
   type DialogLine,
   type Speaker,
 } from './performer/player'
-import { MODES, type Mode } from './performer/scripts'
+import { MODES, modeList, modeOf, type Mode } from './performer/modes'
 import { generateDialog } from './engine/llmClient'
 import { pickTopic } from './engine/topicSeeds'
 import { appendHistory, loadRecentHistory, listEpisodes, deleteEpisodes, toggleFavorite, type Episode } from './storage/historyStore'
@@ -175,9 +175,8 @@ function App() {
     setBubble({ A: null, B: null })
     setAction({ A: 'idle', B: 'idle' })
     setPhase('performing')
-    // 历史里的 mode 是 string,不认识的值回退日常节奏
-    const gap = ep.mode === 'crosstalk' ? MODES.crosstalk.gap : MODES.daily.gap
-    player.current!.play(ep.lines, { gap })
+    // 历史里的 mode 是任意字符串,未知 id 由 modeOf 回退日常节奏
+    player.current!.play(ep.lines, { gap: modeOf(ep.mode).gap })
   }
 
   /** 空闲自动重放:仅在没有生成/演出、没开设置面板时计时;任何依赖变化都会重置计时 */
@@ -197,7 +196,7 @@ function App() {
 
     const ctrl = new AbortController()
     generateAbort.current = ctrl
-    const topic = pickTopic()
+    const topic = pickTopic(modeOf(m))
     try {
       const lines = await generateDialog(m, topic, lastLines.current, ctrl.signal)
       if (ctrl.signal.aborted) return
@@ -288,19 +287,22 @@ function App() {
 
       <div className="ctrl-bar">
         <div ref={segCtl} className={`seg${hovered === 'modes' ? ' hot' : ''}`}>
-          <div className={`seg-thumb${mode === 'crosstalk' ? ' right' : ''}`} />
-          <button
-            className={`seg-btn${mode === 'daily' ? ' on' : ''}`}
-            onClick={() => setMode('daily')}
-          >
-            日常
-          </button>
-          <button
-            className={`seg-btn${mode === 'crosstalk' ? ' on' : ''}`}
-            onClick={() => setMode('crosstalk')}
-          >
-            相声
-          </button>
+          <div
+            className="seg-thumb"
+            style={{
+              width: `calc(${100 / modeList.length}% - 3px)`,
+              transform: `translateX(${modeList.findIndex((m) => m.id === mode) * 100}%)`,
+            }}
+          />
+          {modeList.map((m) => (
+            <button
+              key={m.id}
+              className={`seg-btn${mode === m.id ? ' on' : ''}`}
+              onClick={() => setMode(m.id)}
+            >
+              {m.label}
+            </button>
+          ))}
         </div>
 
         <button
@@ -411,34 +413,37 @@ function App() {
             {episodes.length === 0 && (
               <div className="hist-empty">还没有历史对话，点 ▶ 生成一集试试</div>
             )}
-            {episodes.map((ep) => (
-              <div className="hist-row" key={ep.ts}>
-                <span className={`hist-mode m-${ep.mode === 'crosstalk' ? 'x' : 'd'}`}>
-                  {ep.mode === 'crosstalk' ? '相声' : '日常'}
-                </span>
-                <div className="hist-main">
-                  <div className="hist-preview">{ep.lines[0]?.text ?? ''}</div>
-                  <div className="hist-meta">
-                    {fmtTime(ep.ts)} · {ep.lines.length} 句
+            {episodes.map((ep) => {
+              const bm = modeOf(ep.mode)
+              return (
+                <div className="hist-row" key={ep.ts}>
+                  <span className="hist-mode" style={{ background: bm.accent }}>
+                    {bm.label}
+                  </span>
+                  <div className="hist-main">
+                    <div className="hist-preview">{ep.lines[0]?.text ?? ''}</div>
+                    <div className="hist-meta">
+                      {fmtTime(ep.ts)} · {ep.lines.length} 句
+                    </div>
                   </div>
+                  <button
+                    className={`hist-fav${ep.fav ? ' on' : ''}`}
+                    title={ep.fav ? '取消收藏' : '收藏（不会被删除，重放权重更高）'}
+                    onClick={() => void onToggleFav(ep)}
+                  >
+                    {ep.fav ? '★' : '☆'}
+                  </button>
+                  <button
+                    className="hist-del"
+                    title={ep.fav ? '收藏对话不可删除' : '删除此段'}
+                    disabled={ep.fav}
+                    onClick={() => void onDeleteEpisode(ep)}
+                  >
+                    ✕
+                  </button>
                 </div>
-                <button
-                  className={`hist-fav${ep.fav ? ' on' : ''}`}
-                  title={ep.fav ? '取消收藏' : '收藏（不会被删除，重放权重更高）'}
-                  onClick={() => void onToggleFav(ep)}
-                >
-                  {ep.fav ? '★' : '☆'}
-                </button>
-                <button
-                  className="hist-del"
-                  title={ep.fav ? '收藏对话不可删除' : '删除此段'}
-                  disabled={ep.fav}
-                  onClick={() => void onDeleteEpisode(ep)}
-                >
-                  ✕
-                </button>
-              </div>
-            ))}
+              )
+            })}
           </div>
         </div>
       )}
