@@ -16,7 +16,9 @@ import {
 } from './performer/player'
 import { MODES, modeList, modeOf, type Mode } from './performer/modes'
 import { generateDialog } from './engine/llmClient'
+import { prefetchNext } from './engine/dialogPrefetch'
 import { pickTopic } from './engine/topicSeeds'
+import { takePrefetch } from './storage/prefetchStore'
 import { appendHistory, loadRecentHistory, listEpisodes, deleteEpisodes, toggleFavorite, type Episode } from './storage/historyStore'
 import {
   getConfig,
@@ -186,14 +188,27 @@ function App() {
     return () => window.clearTimeout(t)
   }, [phase, settingsOpen, autoReplayMin, activeTick])
 
-  /** 单次点播：生成一集 → 播放；失败兜底播硬编码脚本 */
+  /** 单次点播：优先消费预生成(秒开,使用后移入 history);
+   *  未命中则生成当前轮,开播后后台再静默预生成下一轮(共两轮) */
   async function playMode(m: Mode) {
     generateAbort.current?.abort()
     player.current!.stop()
-    setPhase('generating')
     setBubble({ A: null, B: null })
     setAction({ A: 'idle', B: 'idle' })
 
+    // 预生成命中：跳过 generating 直接开播
+    const hit = await takePrefetch(m)
+    if (hit) {
+      lastLines.current = hit.lines
+      void appendHistory(hit.lines, hit.mode) // 使用后移入 history(fire-and-forget)
+      setPhase('performing')
+      player.current!.play(hit.lines, { gap: modeOf(hit.mode).gap })
+      void prefetchNext(m, hit.lines) // 补货下一轮(静默)
+      return
+    }
+
+    // 未命中：生成当前轮
+    setPhase('generating')
     const ctrl = new AbortController()
     generateAbort.current = ctrl
     const topic = pickTopic(modeOf(m))
@@ -204,6 +219,7 @@ function App() {
       void appendHistory(lines, m) // 落盘（fire-and-forget，失败不阻断演出）
       setPhase('performing')
       player.current!.play(lines, { gap: MODES[m].gap })
+      void prefetchNext(m, lines) // 请求生成两轮：当前轮 + 后台预生成
     } catch (e) {
       if (ctrl.signal.aborted) return
       console.error('LLM 生成失败，回退硬编码脚本', e)
