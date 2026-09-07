@@ -173,6 +173,42 @@
   color: #fff;
 }
 
+/* 控制栏（同样注册为命中区域，命中才可点） */
+.ctrl-bar {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 10px;
+}
+.ctrl-btn {
+  padding: 6px 16px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 16px;
+  background: rgba(30, 30, 45, 0.55);
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 13px;
+  cursor: pointer;
+  backdrop-filter: blur(6px);
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
+}
+.ctrl-btn.hot {
+  background: rgba(124, 108, 240, 0.92);
+  border-color: rgba(124, 108, 240, 0.92);
+  color: #fff;
+}
+.ctrl-btn.on {
+  border-color: rgba(124, 108, 240, 0.85);
+  color: #fff;
+}
+.ctrl-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
 .watermark {
   position: absolute;
   top: 12px;
