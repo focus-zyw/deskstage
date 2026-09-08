@@ -21,4 +21,6 @@ export const crosstalkMode: DialogMode<'crosstalk'> = {
   script: CROSSTALK_SCRIPT,
   prompt:
     '当前是【相声】模式：甲是逗哏（负责铺陈和抖包袱），乙是捧哏（用"哦？""好家伙""嗐！"这类短句接话、拆台）。结构：开头垫话 1~2 句，中间正活层层展开，最后 1 句必须是收底的包袱。',
+  // 相声结构化强,兴趣只作偶尔点缀,不构成话题约束
+  interestTopicChance: 0.12,
 }

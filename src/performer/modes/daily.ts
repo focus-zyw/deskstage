@@ -19,4 +19,6 @@ export const dailyMode: DialogMode<'daily'> = {
   script: DAILY_SCRIPT,
   prompt:
     '当前是【日常】模式：两个朋友自然闲聊，有来有回，情绪有起伏（好奇、吐槽、小争执、和解），像真人聊天一样。',
+  // 闲聊里较常聊到使用者的兴趣爱好
+  interestTopicChance: 0.35,
 }

@@ -20,7 +20,8 @@
   flex-direction: column-reverse;
 }
 
-/* 贴图精灵：双 img 交叉淡入。基础位移走 translate 属性，act-* 动画走 transform，互不覆盖 */
+/* 贴图精灵：双 img 交叉淡入。基础位移走 translate 属性，act-* 动画走 transform，互不覆盖；
+   倾斜(rotate)/缩放(scale)用独立属性,可与 transform 动画叠加 */
 .char {
   position: relative;
   display: flex;
@@ -30,7 +31,15 @@
   /* 底部留 12px,让 bottom:-10px 的名牌完整落在窗口内 */
   margin-bottom: 12px;
   translate: var(--char-shift-x, 0px) var(--char-shift-y, 0px);
-  transition: filter 0.15s ease;
+  transition:
+    filter 0.15s ease,
+    rotate 0.5s ease,
+    scale 0.2s ease;
+}
+/* 次级动画载体:点头/惊讶/落地/小动作同一时刻只播一个 */
+.char-body {
+  position: relative;
+  display: flex;
 }
 
 .char-img {
@@ -66,7 +75,7 @@
   animation: act-breathe 4s ease-in-out infinite;
 }
 .char.act-talk {
-  animation: act-bob 0.6s ease-in-out infinite;
+  animation: act-bob var(--talk-dur, 0.6s) ease-in-out infinite;
 }
 .char.act-shake {
   animation: act-shake 0.4s ease-in-out 2;
@@ -117,6 +126,108 @@
 /* 命中态：光标在角色热区内（此时窗口已恢复交互） */
 .char.hot {
   filter: brightness(1.18) drop-shadow(0 0 12px rgba(255, 255, 255, 0.55));
+}
+
+/* 倾听反应：朝说话者方向微倾 */
+.char.lean-left {
+  rotate: -2.2deg;
+}
+.char.lean-right {
+  rotate: 2.2deg;
+}
+
+/* 拖动中：轻微缩小提亮,像被拎起 */
+.char.dragging {
+  scale: 0.985;
+  filter: brightness(1.1);
+}
+
+/* 拖动落地:squash 回弹 */
+.char.dropped .char-body {
+  animation: drop-squash 0.45s ease;
+}
+@keyframes drop-squash {
+  0% {
+    transform: translateY(-2px) scale(1, 1);
+  }
+  35% {
+    transform: translateY(1px) scale(1.04, 0.92);
+  }
+  70% {
+    transform: translateY(0) scale(0.98, 1.04);
+  }
+  100% {
+    transform: translateY(0) scale(1, 1);
+  }
+}
+
+
+/* 倾听随机小点头(char-body 周期动画,周期由 --nod-dur 注入) */
+.char.listening .char-body {
+  animation: listen-nod var(--nod-dur, 5s) ease-in-out infinite;
+}
+@keyframes listen-nod {
+  0%,
+  78%,
+  100% {
+    transform: translateY(0);
+  }
+  84% {
+    transform: translateY(3px);
+  }
+  90% {
+    transform: translateY(0);
+  }
+  95% {
+    transform: translateY(2px);
+  }
+}
+
+/* 惊讶脉冲优先于点头:规则顺序在 listen-nod 之后,两态并存时脉冲生效 */
+/* 听者惊讶脉冲:台词带感叹/问号 */
+.char.pulse .char-body {
+  animation: pulse-pop 0.55s ease;
+}
+@keyframes pulse-pop {
+  0% {
+    transform: translateY(0) scale(1, 1);
+  }
+  35% {
+    transform: translateY(-8px) scale(1.05, 1.03);
+  }
+  100% {
+    transform: translateY(0) scale(1, 1);
+  }
+}
+
+
+/* 待机随机小动作:重心转移 / 微歪头 */
+.char-body.fidget-shift {
+  animation: fidget-shift 2.2s ease;
+}
+@keyframes fidget-shift {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  40% {
+    transform: translateX(4px) rotate(0.8deg);
+  }
+  70% {
+    transform: translateX(2px) rotate(0.4deg);
+  }
+}
+.char-body.fidget-tilt {
+  animation: fidget-tilt 2s ease;
+}
+@keyframes fidget-tilt {
+  0%,
+  100% {
+    transform: rotate(0deg);
+  }
+  45% {
+    transform: rotate(-1.4deg) translateY(1px);
+  }
 }
 
 /* 点击反应动画（置于 act-* 之后，与动作动画同时存在时覆盖之） */
@@ -203,6 +314,12 @@
   background: rgba(20, 20, 31, 0.85);
   color: #fff;
   font-size: 13px;
+  /* 仅鼠标悬停角色时显示 */
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+.char.hot .char-name {
+  opacity: 1;
 }
 
 /* 台词气泡 */
@@ -247,14 +364,18 @@
   }
 }
 
-/* 控制栏:位置由配置驱动(left/top 内联),可拖动 */
+/* 控制栏:位置由配置驱动(left/top 内联),可拖动;collapsed = 收起只剩把手。
+   锚定把手中心(固定偏移半个把手宽 11px)而非栏中心——展开/收起时把手位置不变 */
 .ctrl-bar {
   position: absolute;
-  transform: translateX(-50%);
+  transform: translateX(-11px);
   display: flex;
   align-items: center;
   gap: 8px;
   z-index: 30;
+}
+.ctrl-bar.collapsed > :not(.bar-grip) {
+  display: none;
 }
 
 /* 拖动把手:按住移动整条工具栏 */
@@ -467,6 +588,23 @@
 .settings-row label {
   font-size: 12px;
   color: rgba(255, 255, 255, 0.65);
+}
+.settings-row textarea {
+  padding: 7px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  font-size: 13px;
+  outline: none;
+  resize: vertical;
+  min-height: 44px;
+  font-family: inherit;
+  line-height: 1.5;
+  transition: border-color 0.15s ease;
+}
+.settings-row textarea:focus {
+  border-color: rgba(124, 108, 240, 0.9);
 }
 .settings-row input,
 .settings-row select {

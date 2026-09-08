@@ -20,6 +20,9 @@ export interface DialogMode<ID extends string = string> {
   prompt: string
   /** 可选：专属话题池，缺省用全局池（topicSeeds） */
   topics?: string[]
+  /** 可选：随机话题时改用"使用者兴趣"作主题的概率(0~1,缺省 0)。
+   *  日常闲聊适合高些,相声等结构化模式只宜点缀 */
+  interestTopicChance?: number
 }
 
 export const MODES = {

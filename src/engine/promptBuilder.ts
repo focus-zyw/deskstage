@@ -8,7 +8,7 @@ export interface ChatMessage {
   content: string
 }
 
-/** 组装 prompt：人设 + 输出协议 + 模式指令 + 上段结尾衔接 + 话题。
+/** 组装 prompt：人设 + 使用者画像 + 输出协议 + 模式指令 + 上段结尾衔接 + 话题。
  *  人设/协议是所有模式共享的"父类公共代码"，模式差异来自 DialogMode.prompt。
  *  topicFixed = 用户手动锁定的主题:措辞升级为硬约束,防跑题 */
 export function buildMessages(
@@ -16,10 +16,22 @@ export function buildMessages(
   topic: string,
   recentLines: DialogLine[],
   topicFixed?: boolean,
+  userInterests?: string,
 ): ChatMessage[] {
   const persona = `角色设定：
-- 甲（speaker 用 "A"）：精力充沛、爱吹牛、脑洞大、说话夸张
-- 乙（speaker 用 "B"）：冷静毒舌、专拆台、话少但一针见血`
+- 甲（speaker 用 "A"）：精力充沛、爱吹牛、脑洞大、说话夸张，满嘴跑火车还特别得意，常用"我跟你说""好家伙"当口头禅
+- 乙（speaker 用 "B"）：冷静毒舌、专拆台、话少但一针见血，惯用反问和吐槽拆穿甲的牛皮，偶尔冷幽默
+- 两人是老搭档，互怼但有默契，节奏像传统相声里的逗哏和捧哏`
+
+  const craft = `创作要求（这是喜剧，好笑比什么都重要）：
+- 结构：开场两人快速入活 → 中段围绕话题至少抖出 2~3 个包袱 → 结尾留一个响底的包袱收束
+- 包袱手法：三翻四抖（连续铺垫两次，第三次意外反转）、谐音梗、故意曲解、一本正经地胡说八道
+- 甲负责铺和吹，乙负责戳破和翻包袱；反转要出人意料但回头看又合理
+- 台词全部口语化，像真说话，不要书面语；允许"哎""嚯""好家伙""就这？"这类语气词`
+
+  const profile = userInterests?.trim()
+    ? `\n\n使用者画像：我们的观众朋友有以下兴趣爱好：${userInterests.trim()}。聊天中可以自然地偶尔聊到这些（不要刻意每句都提）。`
+    : ''
 
   const protocol = `输出协议（严格遵守）：
 - 只输出一个 JSON 对象，不要输出任何其他文字
@@ -43,7 +55,7 @@ export function buildMessages(
   return [
     {
       role: 'system',
-      content: `你是一个桌面双人情景剧的编剧。${persona}\n\n${protocol}\n\n${modeOf(mode).prompt}`,
+      content: `你是一位擅长传统相声和网络脱口秀的资深喜剧编剧,给桌面双人情景剧写段子。${persona}${profile}\n\n${craft}\n\n${protocol}\n\n${modeOf(mode).prompt}`,
     },
     {
       role: 'user',

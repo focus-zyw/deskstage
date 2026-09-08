@@ -16,7 +16,8 @@ import {
   type Speaker,
 } from './performer/player'
 import { MODES, modeList, modeOf, type Mode } from './performer/modes'
-import { generateDialog } from './engine/llmClient'
+import { generateDialog, describeLlmError } from './engine/llmClient'
+import { speak, prefetchVoice, stopSpeaking, VOICES } from './engine/tts'
 import { prefetchNext } from './engine/dialogPrefetch'
 import { TOPIC_SEEDS, pickTopic } from './engine/topicSeeds'
 import { VENDORS, CUSTOM_VENDOR_ID, vendorIdOfBaseUrl } from './engine/vendors'
@@ -103,11 +104,22 @@ function App() {
   const [ctrlBar, setCtrlBar] = useState<CtrlBarPos>(DEFAULT_CONFIG.ctrlBar)
   const ctrlBarRef = useRef(ctrlBar)
   const ctrlBarTimer = useRef(0)
-  const ctrlDragRef = useRef<{ startX: number; startY: number; orig: CtrlBarPos } | null>(null)
+  const ctrlDragRef = useRef<{ startX: number; startY: number; orig: CtrlBarPos; moved: boolean } | null>(null)
   // 左上角水印开关
   const [showWatermark, setShowWatermark] = useState(DEFAULT_CONFIG.showWatermark)
+  // 角色语音配置(开关 + 双角色音色,改即落盘)
+  const [voice, setVoice] = useState(DEFAULT_CONFIG.voice)
+  // 使用者的兴趣爱好(设置面板填写,随机话题时按模式概率介入)
+  const [userInterests, setUserInterests] = useState(DEFAULT_CONFIG.userInterests)
   // 最近交互的角色显示在上层(z-order)
   const [topActor, setTopActor] = useState<Speaker>('A')
+  // 活人感:当前说话者/听者惊讶脉冲/拖动落地回弹/拖动中的角色
+  const [speaking, setSpeaking] = useState<Speaker | null>(null)
+  const [pulseFor, setPulseFor] = useState<Speaker | null>(null)
+  const pulseTimer = useRef(0)
+  const [dropFor, setDropFor] = useState<Speaker | null>(null)
+  const dropTimer = useRef(0)
+  const [dragUi, setDragUi] = useState<Speaker | null>(null)
   const dragRef = useRef<{ who: Speaker; startX: number; startY: number; orig: CharPos; moved: boolean } | null>(null)
   const draggingWho = useRef<Speaker | null>(null)
 
@@ -126,18 +138,33 @@ function App() {
 
   // 演出播放器：LLM 生成的 DialogLine[] 与硬编码脚本走同一条路
   const player = useRef<PerformancePlayer | null>(null)
+  // 当前正在播放的台词数组,供 onLine 回调预合成下一句语音
+  const playingLines = useRef<DialogLine[]>([])
   if (!player.current) {
     player.current = new PerformancePlayer({
-      onLine: (line) => {
+      onLine: (line, index) => {
         setBubble((b) => ({ ...b, [line.speaker]: line.text }))
         setAction((a) => ({ ...a, [line.speaker]: line.action || 'talk' }))
+        setSpeaking(line.speaker)
+        speak(line.speaker, line.text) // 语音失败静默,不影响气泡
+        const next = playingLines.current[index + 1]
+        if (next) prefetchVoice(next.speaker, next.text)
+        // 台词带感叹/问号 → 听者惊讶脉冲
+        const listener: Speaker = line.speaker === 'A' ? 'B' : 'A'
+        if (/[!?！？]/.test(line.text)) {
+          setPulseFor(listener)
+          window.clearTimeout(pulseTimer.current)
+          pulseTimer.current = window.setTimeout(() => setPulseFor(null), 600)
+        }
       },
       onLineEnd: (speaker) => {
         setBubble((b) => ({ ...b, [speaker]: null }))
         setAction((a) => ({ ...a, [speaker]: 'idle' }))
+        setSpeaking(null)
       },
       onDone: () => {
         setPhase('idle')
+        setSpeaking(null)
       },
     })
   }
@@ -157,6 +184,8 @@ function App() {
       setTopicOverride(c.topicOverride)
       applyCtrlBar(c.ctrlBar)
       setShowWatermark(c.showWatermark)
+      setVoice(c.voice)
+      setUserInterests(c.userInterests)
     })
     // 启动恢复：读最近历史，续集生成时衔接上次聊到的内容
     void loadRecentHistory(20).then((entries) => {
@@ -240,11 +269,13 @@ function App() {
   function playEpisode(ep: Episode) {
     generateAbort.current?.abort() // 若有生成在途,直接作废
     player.current!.stop()
+    stopSpeaking()
     lastReplayTs.current = ep.ts
     lastLines.current = ep.lines // 衔接后续手动生成
     setBubble({ A: null, B: null })
     setAction({ A: 'idle', B: 'idle' })
     setPhase('performing')
+    playingLines.current = ep.lines
     player.current!.play(ep.lines, { gap: modeOf(ep.mode).gap })
   }
 
@@ -292,12 +323,18 @@ function App() {
 
     generateAbort.current?.abort()
     player.current!.stop()
+    stopSpeaking()
     setBubble({ A: null, B: null })
     setAction({ A: 'idle', B: 'idle' })
 
-    // 主题:手动锁定则用固定主题(强约束),否则随机挑
+    // 主题:手动锁定 > 按模式概率聊使用者兴趣 > 话题池随机
     const fixedTopic = topicOverride
-    const actualTopic = fixedTopic ?? pickTopic(modeOf(m))
+    const interests = userInterests.split(/[,，、;；\n]/).map((x) => x.trim()).filter(Boolean)
+    const actualTopic =
+      fixedTopic ??
+      (interests.length > 0 && Math.random() < (modeOf(m).interestTopicChance ?? 0)
+        ? `使用者感兴趣的事:${interests[Math.floor(Math.random() * interests.length)]}`
+        : pickTopic(modeOf(m)))
 
     // 预生成命中:有主题时只取同主题条目,无主题时 FIFO 任意条目
     const hit = await takePrefetch(m, fixedTopic ?? undefined)
@@ -305,6 +342,7 @@ function App() {
       lastLines.current = hit.lines
       void appendHistory(hit.lines, hit.mode, hit.topic) // 使用后移入 history(fire-and-forget)
       setPhase('performing')
+      playingLines.current = hit.lines
       player.current!.play(hit.lines, { gap: modeOf(hit.mode).gap })
       void prefetchNext(m, hit.lines, fixedTopic ?? undefined) // 补货下一轮(静默)
       return
@@ -321,6 +359,7 @@ function App() {
       lastLines.current = lines
       void appendHistory(lines, m, topic) // 落盘（fire-and-forget，失败不阻断演出）
       setPhase('performing')
+      playingLines.current = lines
       player.current!.play(lines, { gap: MODES[m].gap })
       void prefetchNext(m, lines, fixedTopic ?? undefined) // 请求生成两轮：当前轮 + 后台预生成
     } catch (e) {
@@ -328,22 +367,27 @@ function App() {
       console.error('LLM 生成失败，回退硬编码脚本', e)
       lastLines.current = MODES[m].script
       setPhase('performing')
-      // 先出提示气泡,短暂停留后再开播,避免被第一句台词立即覆盖
-      setBubble({ A: '网络不佳,先来段内置的~', B: null })
+      // 先出提示气泡(带具体原因),短暂停留后再开播,避免被第一句台词立即覆盖
+      const reason = await describeLlmError(e)
+      if (ctrl.signal.aborted) return
+      setBubble({ A: `${reason},先来段内置的~`, B: null })
       window.setTimeout(() => {
         if (ctrl.signal.aborted) return // 停止/切换期间不续播
         setBubble({ A: null, B: null })
+        playingLines.current = MODES[m].script
         player.current!.play(MODES[m].script, { gap: MODES[m].gap })
-      }, 1400)
+      }, 1800)
     }
   }
 
-  /** 停止一切：中止生成 + 停止演出 + 复位 */
+  /** 停止一切：中止生成 + 停止演出 + 停语音 + 复位 */
   function stopEverything() {
     generateAbort.current?.abort()
     generateAbort.current = null
     player.current!.stop()
+    stopSpeaking()
     setPhase('idle')
+    setSpeaking(null)
     setBubble({ A: null, B: null })
     setAction({ A: 'idle', B: 'idle' })
   }
@@ -359,6 +403,7 @@ function App() {
     setVendorId(id)
     // 各厂商 key 草稿 = 已保存的 apiKeys + 当前生效 key 归位到它的键
     setKeyDrafts({ ...cfg.apiKeys, [vendorKeyOf(id, cfg.baseUrl)]: cfg.apiKey })
+    setVoice(cfg.voice)
     setEpisodes(await listEpisodes())
   }
 
@@ -374,6 +419,7 @@ function App() {
           ...keyDrafts,
           [vendorKeyOf(vendorId, form.baseUrl)]: form.apiKey,
         },
+        voice, // 语音配置(key/音色/开关)与表单一起整体落盘
       })
       setAutoReplayMin(next.autoReplayMin) // 空闲计时按新频率重新武装
       setSaveState('saved')
@@ -415,6 +461,7 @@ function App() {
 
   function onCharPointerDown(e: ReactPointerEvent, who: Speaker) {
     setTopActor(who) // 最近交互的角色置顶
+    setDragUi(who) // 拎起态(轻微缩小提亮)
     dragRef.current = {
       who,
       startX: e.clientX,
@@ -458,10 +505,14 @@ function App() {
   function onCharPointerUp(who: Speaker) {
     const d = dragRef.current
     dragRef.current = null
+    setDragUi(null)
     if (!d || d.who !== who) return
     if (d.moved) {
       draggingWho.current = null
       applyChars(charCfgRef.current, 'now')
+      setDropFor(who) // 落地 squash 回弹
+      window.clearTimeout(dropTimer.current)
+      dropTimer.current = window.setTimeout(() => setDropFor(null), 500)
     } else {
       poke(who) // 原地点一下 = 戳一戳
     }
@@ -495,9 +546,14 @@ function App() {
   }
 
   function onBarPointerDown(e: ReactPointerEvent<HTMLDivElement>) {
-    // 只响应栏本身的空白处,按钮/分段控件不受影响
+    // 只响应把手,按钮/分段控件不受影响
     if (e.target !== e.currentTarget) return
-    ctrlDragRef.current = { startX: e.clientX, startY: e.clientY, orig: { ...ctrlBarRef.current } }
+    ctrlDragRef.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      orig: { ...ctrlBarRef.current },
+      moved: false,
+    }
     try {
       ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
     } catch {
@@ -508,19 +564,32 @@ function App() {
   function onBarPointerMove(e: ReactPointerEvent<HTMLDivElement>) {
     const d = ctrlDragRef.current
     if (!d) return
+    const dx = e.clientX - d.startX
+    const dy = e.clientY - d.startY
+    if (!d.moved) {
+      if (Math.hypot(dx, dy) < 6) return // 小位移视为点击,留给收起/展开
+      d.moved = true
+    }
     applyCtrlBar(
       {
-        xPct: Math.min(98, Math.max(2, d.orig.xPct + ((e.clientX - d.startX) / window.innerWidth) * 100)),
-        top: Math.min(Math.max(0, window.innerHeight - 60), Math.max(0, d.orig.top + (e.clientY - d.startY))),
+        ...d.orig,
+        xPct: Math.min(98, Math.max(2, d.orig.xPct + (dx / window.innerWidth) * 100)),
+        top: Math.min(Math.max(0, window.innerHeight - 60), Math.max(0, d.orig.top + dy)),
       },
       'no',
     )
   }
 
   function onBarPointerUp() {
-    if (!ctrlDragRef.current) return
+    const d = ctrlDragRef.current
     ctrlDragRef.current = null
-    applyCtrlBar(ctrlBarRef.current, 'now')
+    if (!d) return
+    if (d.moved) {
+      applyCtrlBar(ctrlBarRef.current, 'now') // 拖动结束:保存位置
+    } else {
+      // 纯点击:切换收起/展开
+      applyCtrlBar({ ...ctrlBarRef.current, collapsed: !ctrlBarRef.current.collapsed }, 'now')
+    }
   }
 
   /** 手动锁定主题:立即落盘 + 按新主题预生成一单(旧缓冲保留,无主题时照常消费) */
@@ -568,11 +637,14 @@ function App() {
 
   return (
     <div className="stage">
-      <div className="ctrl-bar" style={{ left: `${ctrlBar.xPct}%`, top: ctrlBar.top }}>
+      <div
+        className={`ctrl-bar${ctrlBar.collapsed ? ' collapsed' : ''}`}
+        style={{ left: `${ctrlBar.xPct}%`, top: ctrlBar.top }}
+      >
         <span
           ref={gripRef}
           className={`bar-grip${hovered === 'grip' ? ' hot' : ''}`}
-          title="拖动移动工具栏"
+          title={ctrlBar.collapsed ? '展开工具栏(点击)/拖动移动' : '收起工具栏(点击)/拖动移动'}
           onPointerDown={onBarPointerDown}
           onPointerMove={onBarPointerMove}
           onPointerUp={onBarPointerUp}
@@ -794,6 +866,16 @@ function App() {
             />
           </div>
           <div className="settings-row">
+            <label htmlFor="cfg-interests">使用者的兴趣爱好(选填,逗号分隔)</label>
+            <textarea
+              id="cfg-interests"
+              rows={2}
+              value={form.userInterests}
+              placeholder="如:摄影,健身,玩unity,听周杰伦 — 日常闲聊会偶尔聊到"
+              onChange={(e) => setForm({ ...form, userInterests: e.target.value })}
+            />
+          </div>
+          <div className="settings-row">
             <label htmlFor="cfg-mark">显示左上角水印</label>
             <input
               id="cfg-mark"
@@ -807,6 +889,83 @@ function App() {
               }}
             />
           </div>
+          <div className="settings-row">
+            <label htmlFor="cfg-voice">角色语音(硅基流动)</label>
+            <input
+              id="cfg-voice"
+              type="checkbox"
+              checked={voice.enabled}
+              onChange={(e) => {
+                const next = { ...voice, enabled: e.target.checked }
+                setVoice(next)
+                saveConfig({ voice: next }).catch((err) =>
+                  console.warn('语音开关保存失败(静默)', err),
+                )
+              }}
+            />
+          </div>
+          {voice.enabled && (
+            <>
+              <div className="settings-row">
+                <label htmlFor="cfg-voice-key" title="siliconflow.cn 的 API Key,与上方 LLM 的 key 相互独立">
+                  语音 API Key
+                </label>
+                <input
+                  id="cfg-voice-key"
+                  type="password"
+                  placeholder="sk-...(siliconflow.cn)"
+                  value={voice.apiKey}
+                  onChange={(e) => setVoice({ ...voice, apiKey: e.target.value })}
+                  onBlur={(e) => {
+                    const next = { ...voice, apiKey: e.target.value }
+                    saveConfig({ voice: next }).catch((err) =>
+                      console.warn('语音 key 保存失败(静默)', err),
+                    )
+                  }}
+                />
+              </div>
+              <div className="settings-row">
+                <label htmlFor="cfg-voice-a">角色甲音色</label>
+                <select
+                  id="cfg-voice-a"
+                  value={voice.A}
+                  onChange={(e) => {
+                    const next = { ...voice, A: e.target.value }
+                    setVoice(next)
+                    saveConfig({ voice: next }).catch((err) =>
+                      console.warn('音色保存失败(静默)', err),
+                    )
+                  }}
+                >
+                  {VOICES.map((v) => (
+                    <option key={v.id} value={v.id}>
+                      {v.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="settings-row">
+                <label htmlFor="cfg-voice-b">角色乙音色</label>
+                <select
+                  id="cfg-voice-b"
+                  value={voice.B}
+                  onChange={(e) => {
+                    const next = { ...voice, B: e.target.value }
+                    setVoice(next)
+                    saveConfig({ voice: next }).catch((err) =>
+                      console.warn('音色保存失败(静默)', err),
+                    )
+                  }}
+                >
+                  {VOICES.map((v) => (
+                    <option key={v.id} value={v.id}>
+                      {v.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </>
+          )}
           <div className="settings-actions">
             <button className="panel-btn" onClick={() => setSettingsOpen(false)}>
               取消
@@ -955,6 +1114,12 @@ function App() {
           sprite={SPRITE_SETS.A}
           heightOverride={charCfg.height}
           action={action.A}
+          talkDuration={bubble.A ? 0.3 + Math.min(0.7, bubble.A.length * 0.04) : undefined}
+          lean={speaking === 'B' ? (charCfg.A.xPct <= charCfg.B.xPct ? 'right' : 'left') : undefined}
+          listening={speaking === 'B'}
+          pulsing={pulseFor === 'A'}
+          dropped={dropFor === 'A'}
+          dragging={dragUi === 'A'}
           hot={hovered === 'charA'}
           reacting={reacting.A}
         />
@@ -979,6 +1144,12 @@ function App() {
           sprite={SPRITE_SETS.B}
           heightOverride={charCfg.height}
           action={action.B}
+          talkDuration={bubble.B ? 0.3 + Math.min(0.7, bubble.B.length * 0.04) : undefined}
+          lean={speaking === 'A' ? (charCfg.B.xPct <= charCfg.A.xPct ? 'right' : 'left') : undefined}
+          listening={speaking === 'A'}
+          pulsing={pulseFor === 'B'}
+          dropped={dropFor === 'B'}
+          dragging={dragUi === 'B'}
           hot={hovered === 'charB'}
           reacting={reacting.B}
         />
