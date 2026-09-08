@@ -19,6 +19,7 @@ import { MODES, modeList, modeOf, type Mode } from './performer/modes'
 import { generateDialog } from './engine/llmClient'
 import { prefetchNext } from './engine/dialogPrefetch'
 import { TOPIC_SEEDS, pickTopic } from './engine/topicSeeds'
+import { VENDORS, CUSTOM_VENDOR_ID, vendorIdOfBaseUrl } from './engine/vendors'
 import { takePrefetch } from './storage/prefetchStore'
 import { appendHistory, loadRecentHistory, listEpisodes, deleteEpisodes, toggleFavorite, type Episode } from './storage/historyStore'
 import {
@@ -70,6 +71,8 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [form, setForm] = useState<AppConfig>(DEFAULT_CONFIG)
   const [saveState, setSaveState] = useState<SaveState>('idle')
+  // 设置面板当前选中的厂商(custom = 本地/自定义,baseUrl/model 自由输入)
+  const [vendorId, setVendorId] = useState(CUSTOM_VENDOR_ID)
   // 手动锁定主题;null = 随机。主题面板弹/收与搜索词
   const [topicOverride, setTopicOverride] = useState<string | null>(null)
   const [topicOpen, setTopicOpen] = useState(false)
@@ -306,7 +309,10 @@ function App() {
   async function openSettings() {
     setSaveState('idle')
     setSettingsOpen(true)
-    setForm(await getConfig())
+    setTopicOpen(false)
+    const cfg = await getConfig()
+    setForm(cfg)
+    setVendorId(vendorIdOfBaseUrl(cfg.baseUrl))
     setEpisodes(await listEpisodes())
   }
 
@@ -547,7 +553,28 @@ function App() {
             </button>
           </div>
           <div className="settings-row">
-            <label htmlFor="cfg-key">API Key</label>
+            <label htmlFor="cfg-vendor">厂商</label>
+            <select
+              id="cfg-vendor"
+              value={vendorId}
+              onChange={(e) => {
+                const id = e.target.value
+                setVendorId(id)
+                if (id === CUSTOM_VENDOR_ID) return // 保留当前输入,自由填写
+                const v = VENDORS.find((x) => x.id === id)!
+                setForm({ ...form, baseUrl: v.baseUrl, model: v.models[0] ?? '' })
+              }}
+            >
+              {VENDORS.map((v) => (
+                <option key={v.id} value={v.id}>
+                  {v.label}
+                </option>
+              ))}
+              <option value={CUSTOM_VENDOR_ID}>本地 / 自定义</option>
+            </select>
+          </div>
+          <div className="settings-row">
+            <label htmlFor="cfg-key">API Key{vendorId === CUSTOM_VENDOR_ID ? '(本地服务可为空)' : ''}</label>
             <input
               id="cfg-key"
               type="password"
@@ -560,18 +587,34 @@ function App() {
             <input
               id="cfg-url"
               value={form.baseUrl}
-              placeholder="https://api.deepseek.com/v1"
+              placeholder={
+                vendorId === CUSTOM_VENDOR_ID ? 'http://localhost:11434/v1' : 'https://api.deepseek.com/v1'
+              }
               onChange={(e) => setForm({ ...form, baseUrl: e.target.value })}
             />
           </div>
           <div className="settings-row">
             <label htmlFor="cfg-model">模型</label>
-            <input
-              id="cfg-model"
-              value={form.model}
-              placeholder="deepseek-chat"
-              onChange={(e) => setForm({ ...form, model: e.target.value })}
-            />
+            {vendorId === CUSTOM_VENDOR_ID ? (
+              <input
+                id="cfg-model"
+                value={form.model}
+                placeholder="如 qwen2.5:7b(Ollama 模型名)"
+                onChange={(e) => setForm({ ...form, model: e.target.value })}
+              />
+            ) : (
+              <select
+                id="cfg-model"
+                value={form.model}
+                onChange={(e) => setForm({ ...form, model: e.target.value })}
+              >
+                {(VENDORS.find((v) => v.id === vendorId)?.models ?? []).map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))}
+              </select>
+            )}
           </div>
           <div className="settings-row">
             <label htmlFor="cfg-show">显示角色</label>
