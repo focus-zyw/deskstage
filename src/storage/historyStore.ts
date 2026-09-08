@@ -6,6 +6,7 @@
 import { readTextFile, writeTextFile, exists, mkdir, readDir, remove } from '@tauri-apps/plugin-fs'
 import { appDataDir, join } from '@tauri-apps/api/path'
 import type { DialogLine, Speaker } from '../performer/player'
+import { withFileLock } from './writeLock'
 
 export interface HistoryEntry extends DialogLine {
   ts: number
@@ -97,19 +98,22 @@ async function listHistoryFiles(dir: string): Promise<string[]> {
     .sort()
 }
 
-/** 一集生成成功后整段落盘;topic 可选(手动锁定主题时记录) */
+/** 一集生成成功后整段落盘;topic 可选(手动锁定主题时记录)。
+ *  与 deleteEpisodes 的"读-重写"互斥,避免追加的行被重写吞掉 */
 export async function appendHistory(lines: DialogLine[], mode: string, topic?: string): Promise<void> {
   try {
-    const dir = await getHistoryDir()
-    const file = await join(dir, `${todayFileId()}.jsonl`)
-    const ts = Date.now()
-    const chunk =
-      lines
-        .map((l) =>
-          entryToLine({ ts, mode, speaker: l.speaker, text: l.text, action: l.action, topic }),
-        )
-        .join('\n') + '\n'
-    await writeTextFile(file, chunk, { append: true })
+    await withFileLock('history', async () => {
+      const dir = await getHistoryDir()
+      const file = await join(dir, `${todayFileId()}.jsonl`)
+      const ts = Date.now()
+      const chunk =
+        lines
+          .map((l) =>
+            entryToLine({ ts, mode, speaker: l.speaker, text: l.text, action: l.action, topic }),
+          )
+          .join('\n') + '\n'
+      await writeTextFile(file, chunk, { append: true })
+    })
   } catch (e) {
     console.warn('历史落盘失败（不影响演出）', e)
   }
@@ -166,19 +170,22 @@ async function writeFavorites(favs: FavRecord[]): Promise<void> {
   await writeTextFile(file, JSON.stringify(favs, null, 2))
 }
 
-/** 切换某集收藏状态，返回切换后是否已收藏 */
+/** 切换某集收藏状态,返回切换后是否已收藏。
+ *  读-改-写整体进锁:快速连点时不会互相覆盖 */
 export async function toggleFavorite(ep: FavRecord): Promise<boolean> {
   try {
-    const favs = await readFavorites()
-    const idx = favs.findIndex((f) => f.ts === ep.ts)
-    if (idx >= 0) {
-      favs.splice(idx, 1)
+    return await withFileLock('favorites', async () => {
+      const favs = await readFavorites()
+      const idx = favs.findIndex((f) => f.ts === ep.ts)
+      if (idx >= 0) {
+        favs.splice(idx, 1)
+        await writeFavorites(favs)
+        return false
+      }
+      favs.push({ ts: ep.ts, mode: ep.mode, lines: ep.lines, topic: ep.topic })
       await writeFavorites(favs)
-      return false
-    }
-    favs.push({ ts: ep.ts, mode: ep.mode, lines: ep.lines, topic: ep.topic })
-    await writeFavorites(favs)
-    return true
+      return true
+    })
   } catch (e) {
     console.warn('收藏切换失败', e)
     return false
@@ -225,18 +232,20 @@ export async function listEpisodes(limit = 50): Promise<Episode[]> {
 export async function deleteEpisodes(tsSet: Set<number>): Promise<void> {
   if (tsSet.size === 0) return
   try {
-    const dir = await getHistoryDir()
-    for (const name of await listHistoryFiles(dir)) {
-      const file = await join(dir, name)
-      const entries = parseEntries(await readTextFile(file))
-      const kept = entries.filter((e) => !tsSet.has(e.ts))
-      if (kept.length === entries.length) continue
-      if (kept.length === 0) {
-        await remove(file)
-      } else {
-        await writeTextFile(file, kept.map(entryToLine).join('\n') + '\n')
+    await withFileLock('history', async () => {
+      const dir = await getHistoryDir()
+      for (const name of await listHistoryFiles(dir)) {
+        const file = await join(dir, name)
+        const entries = parseEntries(await readTextFile(file))
+        const kept = entries.filter((e) => !tsSet.has(e.ts))
+        if (kept.length === entries.length) continue
+        if (kept.length === 0) {
+          await remove(file)
+        } else {
+          await writeTextFile(file, kept.map(entryToLine).join('\n') + '\n')
+        }
       }
-    }
+    })
   } catch (e) {
     console.warn('历史删除失败', e)
   }

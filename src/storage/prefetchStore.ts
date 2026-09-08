@@ -5,6 +5,7 @@
 import { readTextFile, writeTextFile, exists, mkdir } from '@tauri-apps/plugin-fs'
 import { appDataDir, join } from '@tauri-apps/api/path'
 import type { DialogLine, Speaker } from '../performer/player'
+import { withFileLock } from './writeLock'
 
 export interface PrefetchEntry {
   mode: string
@@ -63,13 +64,16 @@ async function writeAll(entries: PrefetchEntry[]): Promise<void> {
 
 const entryKey = (e: PrefetchEntry) => `${e.mode}\n${e.topic}`
 
-/** 保存一条预生成:按 模式+主题 去重(同主题只留最新),超出上限丢最旧 */
+/** 保存一条预生成:按 模式+主题 去重(同主题只留最新),超出上限丢最旧。
+ *  读-改-写进锁,与 takePrefetch(同为读-改-写)互斥 */
 export async function savePrefetchEntry(entry: PrefetchEntry): Promise<void> {
   try {
-    const entries = (await readAll()).filter((e) => entryKey(e) !== entryKey(entry))
-    entries.push(entry)
-    while (entries.length > MAX_ENTRIES) entries.shift()
-    await writeAll(entries)
+    await withFileLock('prefetch', async () => {
+      const entries = (await readAll()).filter((e) => entryKey(e) !== entryKey(entry))
+      entries.push(entry)
+      while (entries.length > MAX_ENTRIES) entries.shift()
+      await writeAll(entries)
+    })
   } catch (e) {
     console.warn('预生成落盘失败(静默)', e)
   }
@@ -80,12 +84,14 @@ export async function savePrefetchEntry(entry: PrefetchEntry): Promise<void> {
  *  不传时维持 FIFO,任意条目都合法(随机主题) */
 export async function takePrefetch(mode: string, topic?: string): Promise<PrefetchEntry | null> {
   try {
-    const entries = await readAll()
-    const idx = topic ? entries.findIndex((e) => e.mode === mode && e.topic === topic) : entries.findIndex((e) => e.mode === mode)
-    if (idx < 0) return null
-    const [hit] = entries.splice(idx, 1)
-    await writeAll(entries)
-    return hit ?? null
+    return await withFileLock('prefetch', async () => {
+      const entries = await readAll()
+      const idx = topic ? entries.findIndex((e) => e.mode === mode && e.topic === topic) : entries.findIndex((e) => e.mode === mode)
+      if (idx < 0) return null
+      const [hit] = entries.splice(idx, 1)
+      await writeAll(entries)
+      return hit ?? null
+    })
   } catch (e) {
     console.warn('预生成取出失败(静默)', e)
     return null

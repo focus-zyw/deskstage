@@ -2,6 +2,7 @@
 // 改配置两条路：编辑该文件后重启，或在应用内设置面板保存（立即生效）。
 import { readTextFile, writeTextFile, exists, mkdir } from '@tauri-apps/plugin-fs'
 import { appDataDir, join } from '@tauri-apps/api/path'
+import { withFileLock } from './writeLock'
 
 export interface CharPos {
   /** 角色中心点横向位置(屏宽百分比) */
@@ -29,9 +30,14 @@ export interface AppConfig {
   charactersHidden: boolean
   /** 手动锁定的聊天主题;null = 从话题池随机 */
   topicOverride: string | null
+  /** 控制栏位置(可拖动) */
+  ctrlBar: CtrlBarPos
+  /** 左上角水印开关 */
+  showWatermark: boolean
 }
 
-// 默认值（首启写入）。想换端点：改 appData/data/config.json 后重启
+// 默认值（首启写入）。想换端点：改 appData/data/config.json 后重启。
+// apiKey 默认空,在设置面板填写;勿将真实 key 提交进仓库
 export const DEFAULT_CONFIG: AppConfig = {
   apiKey: '',
   baseUrl: 'https://api.deepseek.com/v1',
@@ -44,12 +50,31 @@ export const DEFAULT_CONFIG: AppConfig = {
   },
   charactersHidden: false,
   topicOverride: null,
+  ctrlBar: { xPct: 50, top: 10 },
+  showWatermark: false,
 }
 
-/** 清洗自动重放频率:非法值回退默认 */
+/** 清洗自动重放频率:非法值回退默认,钳位 0~1440 分钟(0=关闭) */
 function sanitizeReplayMin(v: unknown): number {
   const n = Number(v)
-  return Number.isFinite(n) && n >= 0 ? n : DEFAULT_CONFIG.autoReplayMin
+  if (!Number.isFinite(n) || n < 0) return DEFAULT_CONFIG.autoReplayMin
+  return Math.min(1440, n)
+}
+
+/** 控制栏位置:横向屏宽百分比 + 距顶部逻辑像素 */
+export interface CtrlBarPos {
+  xPct: number
+  top: number
+}
+
+/** 清洗控制栏位置:非法/缺字段回默认并钳位 */
+function sanitizeCtrlBar(v: unknown): CtrlBarPos {
+  const d = DEFAULT_CONFIG.ctrlBar
+  const o = (v ?? {}) as Record<string, unknown>
+  return {
+    xPct: clampNum(o.xPct, 2, 98, d.xPct),
+    top: clampNum(o.top, 0, 400, d.top),
+  }
 }
 
 function clampNum(v: unknown, lo: number, hi: number, fallback: number): number {
@@ -99,6 +124,8 @@ export function getConfig(): Promise<AppConfig> {
               typeof obj.topicOverride === 'string' && obj.topicOverride.trim()
                 ? obj.topicOverride.trim()
                 : null,
+            ctrlBar: sanitizeCtrlBar(obj.ctrlBar),
+            showWatermark: obj.showWatermark === true,
           }
         }
         await writeTextFile(file, JSON.stringify(DEFAULT_CONFIG, null, 2))
@@ -111,15 +138,19 @@ export function getConfig(): Promise<AppConfig> {
   return cache
 }
 
-/** 保存配置：先落盘，成功后刷新内存缓存。下一次生成即用新值，无需重启 */
+/** 保存配置：先落盘，成功后刷新内存缓存。下一次生成即用新值，无需重启。
+ *  读-改-写进锁:布局保存与设置保存并发时不会互相覆盖 */
 export async function saveConfig(update: Partial<AppConfig>): Promise<AppConfig> {
-  const current = await getConfig()
-  const next = { ...current, ...update }
-  const base = await appDataDir()
-  const dir = await join(base, 'data')
-  if (!(await exists(dir))) await mkdir(dir, { recursive: true })
-  const file = await join(dir, 'config.json')
-  await writeTextFile(file, JSON.stringify(next, null, 2))
+  const next = await withFileLock('config', async () => {
+    const current = await getConfig()
+    const merged = { ...current, ...update }
+    const base = await appDataDir()
+    const dir = await join(base, 'data')
+    if (!(await exists(dir))) await mkdir(dir, { recursive: true })
+    const file = await join(dir, 'config.json')
+    await writeTextFile(file, JSON.stringify(merged, null, 2))
+    return merged
+  })
   cache = Promise.resolve(next)
   return next
 }

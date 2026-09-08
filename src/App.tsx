@@ -29,6 +29,7 @@ import {
   type AppConfig,
   type CharactersConfig,
   type CharPos,
+  type CtrlBarPos,
 } from './storage/configStore'
 import './App.css'
 
@@ -71,6 +72,8 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [form, setForm] = useState<AppConfig>(DEFAULT_CONFIG)
   const [saveState, setSaveState] = useState<SaveState>('idle')
+  // 设置面板分页:常规 / 历史
+  const [settingsTab, setSettingsTab] = useState<'general' | 'history'>('general')
   // 设置面板当前选中的厂商(custom = 本地/自定义,baseUrl/model 自由输入)
   const [vendorId, setVendorId] = useState(CUSTOM_VENDOR_ID)
   // 手动锁定主题;null = 随机。主题面板弹/收与搜索词
@@ -89,6 +92,15 @@ function App() {
   // 退出两段确认:第一次点亮,3 秒内再点才真正退出
   const [exitArmed, setExitArmed] = useState(false)
   const exitTimer = useRef(0)
+  // 控制栏位置(可拖动);ref 供拖动事件读最新值
+  const [ctrlBar, setCtrlBar] = useState<CtrlBarPos>(DEFAULT_CONFIG.ctrlBar)
+  const ctrlBarRef = useRef(ctrlBar)
+  const ctrlBarTimer = useRef(0)
+  const ctrlDragRef = useRef<{ startX: number; startY: number; orig: CtrlBarPos } | null>(null)
+  // 左上角水印开关
+  const [showWatermark, setShowWatermark] = useState(DEFAULT_CONFIG.showWatermark)
+  // 最近交互的角色显示在上层(z-order)
+  const [topActor, setTopActor] = useState<Speaker>('A')
   const dragRef = useRef<{ who: Speaker; startX: number; startY: number; orig: CharPos; moved: boolean } | null>(null)
   const draggingWho = useRef<Speaker | null>(null)
 
@@ -100,6 +112,7 @@ function App() {
   const btnGear = useRef<HTMLButtonElement>(null)
   const btnEye = useRef<HTMLButtonElement>(null)
   const btnTopic = useRef<HTMLButtonElement>(null)
+  const gripRef = useRef<HTMLSpanElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
   const topicPanelRef = useRef<HTMLDivElement>(null)
   const timers = useRef<Record<Speaker, number>>({ A: 0, B: 0 })
@@ -135,6 +148,8 @@ function App() {
       applyChars(c.characters)
       setCharHidden(c.charactersHidden)
       setTopicOverride(c.topicOverride)
+      applyCtrlBar(c.ctrlBar)
+      setShowWatermark(c.showWatermark)
     })
     // 启动恢复：读最近历史，续集生成时衔接上次聊到的内容
     void loadRecentHistory(20).then((entries) => {
@@ -175,6 +190,9 @@ function App() {
       }),
       registerHitRegion('topic', {
         getRect: () => btnTopic.current!.getBoundingClientRect(),
+      }),
+      registerHitRegion('grip', {
+        getRect: () => gripRef.current!.getBoundingClientRect(),
       }),
     ]
     return () => unsubs.forEach((u) => u())
@@ -253,6 +271,18 @@ function App() {
   /** 单次点播：优先消费预生成(秒开,使用后移入 history);
    *  未命中则生成当前轮,开播后后台再静默预生成下一轮(共两轮) */
   async function playMode(m: Mode) {
+    // 未配置 API Key:不进生成流程,气泡引导去设置
+    const { apiKey } = await getConfig()
+    if (!apiKey.trim()) {
+      setBubble({ A: '还没填 API Key,点 ⚙ 去设置里填一下~', B: null })
+      setAction({ A: 'surprise', B: 'idle' })
+      window.setTimeout(() => {
+        setBubble((b) => (b.A?.startsWith('还没填') ? { A: null, B: null } : b))
+        setAction((a) => ({ ...a, A: 'idle' }))
+      }, 2600)
+      return
+    }
+
     generateAbort.current?.abort()
     player.current!.stop()
     setBubble({ A: null, B: null })
@@ -291,7 +321,13 @@ function App() {
       console.error('LLM 生成失败，回退硬编码脚本', e)
       lastLines.current = MODES[m].script
       setPhase('performing')
-      player.current!.play(MODES[m].script, { gap: MODES[m].gap })
+      // 先出提示气泡,短暂停留后再开播,避免被第一句台词立即覆盖
+      setBubble({ A: '网络不佳,先来段内置的~', B: null })
+      window.setTimeout(() => {
+        if (ctrl.signal.aborted) return // 停止/切换期间不续播
+        setBubble({ A: null, B: null })
+        player.current!.play(MODES[m].script, { gap: MODES[m].gap })
+      }, 1400)
     }
   }
 
@@ -360,6 +396,7 @@ function App() {
   }
 
   function onCharPointerDown(e: ReactPointerEvent, who: Speaker) {
+    setTopActor(who) // 最近交互的角色置顶
     dragRef.current = {
       who,
       startX: e.clientX,
@@ -426,6 +463,48 @@ function App() {
     saveConfig({ charactersHidden: v }).catch((e) => console.warn('显示开关保存失败(静默)', e))
   }
 
+  // ---------- 控制栏位置:按住栏空白处拖动 ----------
+
+  function applyCtrlBar(next: CtrlBarPos, persist: 'now' | 'debounced' | 'no' = 'no') {
+    ctrlBarRef.current = next
+    setCtrlBar(next)
+    if (persist === 'no') return
+    window.clearTimeout(ctrlBarTimer.current)
+    const write = () =>
+      saveConfig({ ctrlBar: next }).catch((e) => console.warn('控制栏位置保存失败(静默)', e))
+    if (persist === 'now') void write()
+    else ctrlBarTimer.current = window.setTimeout(write, 500)
+  }
+
+  function onBarPointerDown(e: ReactPointerEvent<HTMLDivElement>) {
+    // 只响应栏本身的空白处,按钮/分段控件不受影响
+    if (e.target !== e.currentTarget) return
+    ctrlDragRef.current = { startX: e.clientX, startY: e.clientY, orig: { ...ctrlBarRef.current } }
+    try {
+      ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+    } catch {
+      // 无活动指针可捕获时忽略
+    }
+  }
+
+  function onBarPointerMove(e: ReactPointerEvent<HTMLDivElement>) {
+    const d = ctrlDragRef.current
+    if (!d) return
+    applyCtrlBar(
+      {
+        xPct: Math.min(98, Math.max(2, d.orig.xPct + ((e.clientX - d.startX) / window.innerWidth) * 100)),
+        top: Math.min(Math.max(0, window.innerHeight - 60), Math.max(0, d.orig.top + (e.clientY - d.startY))),
+      },
+      'no',
+    )
+  }
+
+  function onBarPointerUp() {
+    if (!ctrlDragRef.current) return
+    ctrlDragRef.current = null
+    applyCtrlBar(ctrlBarRef.current, 'now')
+  }
+
   /** 手动锁定主题:立即落盘 + 按新主题预生成一单(旧缓冲保留,无主题时照常消费) */
   function applyTopic(topic: string) {
     const norm = topic.trim()
@@ -456,6 +535,7 @@ function App() {
 
   function poke(who: Speaker) {
     setActiveTick((t) => t + 1) // 用户互动,重置自动重放计时
+    setTopActor(who)
     const line = POKE_LINES[Math.floor(Math.random() * POKE_LINES.length)]
     setBubble((b) => ({ ...b, [who]: line }))
     setReacting((r) => ({ ...r, [who]: true }))
@@ -470,7 +550,17 @@ function App() {
 
   return (
     <div className="stage">
-      <div className="ctrl-bar">
+      <div className="ctrl-bar" style={{ left: `${ctrlBar.xPct}%`, top: ctrlBar.top }}>
+        <span
+          ref={gripRef}
+          className={`bar-grip${hovered === 'grip' ? ' hot' : ''}`}
+          title="拖动移动工具栏"
+          onPointerDown={onBarPointerDown}
+          onPointerMove={onBarPointerMove}
+          onPointerUp={onBarPointerUp}
+        >
+          ⠿
+        </span>
         <div ref={segCtl} className={`seg${hovered === 'modes' ? ' hot' : ''}`}>
           <div
             className="seg-thumb"
@@ -498,18 +588,16 @@ function App() {
           onClick={() => void playMode(mode)}
         >
           <PlayIcon />
-          <span className="label">生成</span>
         </button>
 
         <button
           ref={btnStop}
-          className={`ctrl-btn icon${hovered === 'stop' ? ' hot' : ''}`}
+          className={`ctrl-btn icon${hovered === 'stop' ? ' hot' : ''}${phase !== 'idle' ? ' danger' : ''}`}
           disabled={phase === 'idle'}
           title="停止"
           onClick={stopEverything}
         >
           <StopIcon />
-          <span className="label">停止</span>
         </button>
 
         <button
@@ -543,7 +631,20 @@ function App() {
       {settingsOpen && (
         <div ref={panelRef} className="settings-panel">
           <div className="panel-head">
-            <span>设置</span>
+            <div className="panel-tabs">
+              <button
+                className={`panel-tab${settingsTab === 'general' ? ' on' : ''}`}
+                onClick={() => setSettingsTab('general')}
+              >
+                常规
+              </button>
+              <button
+                className={`panel-tab${settingsTab === 'history' ? ' on' : ''}`}
+                onClick={() => setSettingsTab('history')}
+              >
+                历史
+              </button>
+            </div>
             <button
               className={`panel-btn danger${exitArmed ? ' armed' : ''}`}
               title={exitArmed ? '再点一次确认退出' : '退出程序'}
@@ -552,6 +653,8 @@ function App() {
               {exitArmed ? '确认退出?' : <PowerIcon />}
             </button>
           </div>
+          {settingsTab === 'general' && (
+            <>
           <div className="settings-row">
             <label htmlFor="cfg-vendor">厂商</label>
             <select
@@ -629,24 +732,39 @@ function App() {
             <div className="settings-hint">拖动角色可移动 · 悬停滚轮缩放(两角色同步)</div>
             <button
               className="panel-btn"
-              onClick={() => applyChars(DEFAULT_CONFIG.characters, 'now')}
+              onClick={() => {
+                applyChars(DEFAULT_CONFIG.characters, 'now')
+                applyCtrlBar(DEFAULT_CONFIG.ctrlBar, 'now')
+              }}
             >
               恢复默认布局
             </button>
           </div>
           <div className="settings-row">
-            <label htmlFor="cfg-replay">空闲自动重放</label>
-            <select
+            <label htmlFor="cfg-replay">空闲自动重放(分钟,0 = 关闭)</label>
+            <input
               id="cfg-replay"
+              type="number"
+              min={0}
+              max={1440}
+              step={1}
               value={form.autoReplayMin}
               onChange={(e) => setForm({ ...form, autoReplayMin: Number(e.target.value) })}
-            >
-              <option value={0}>关闭</option>
-              <option value={5}>每 5 分钟</option>
-              <option value={10}>每 10 分钟</option>
-              <option value={30}>每 30 分钟</option>
-              <option value={60}>每 60 分钟</option>
-            </select>
+            />
+          </div>
+          <div className="settings-row">
+            <label htmlFor="cfg-mark">显示左上角水印</label>
+            <input
+              id="cfg-mark"
+              type="checkbox"
+              checked={showWatermark}
+              onChange={(e) => {
+                setShowWatermark(e.target.checked)
+                saveConfig({ showWatermark: e.target.checked }).catch((err) =>
+                  console.warn('水印开关保存失败(静默)', err),
+                )
+              }}
+            />
           </div>
           <div className="settings-actions">
             <button className="panel-btn" onClick={() => setSettingsOpen(false)}>
@@ -666,7 +784,11 @@ function App() {
           {saveState === 'error' && (
             <div className="settings-tip err">保存失败，详见控制台日志</div>
           )}
+            </>
+          )}
 
+          {settingsTab === 'history' && (
+            <>
           <div className="settings-sep">
             <span>历史记录（{episodes.length}）</span>
             <button
@@ -725,6 +847,8 @@ function App() {
               )
             })}
           </div>
+            </>
+          )}
         </div>
       )}
 
@@ -772,14 +896,19 @@ function App() {
       )}
 
       <div
-        className="actor"
-        style={{ left: `${charCfg.A.xPct}%`, bottom: charCfg.A.bottom, display: charHidden ? 'none' : undefined }}
+        className={`actor${charCfg.A.bottom + charCfg.height > window.innerHeight - 110 ? ' flip' : ''}`}
+        style={{
+          left: `${charCfg.A.xPct}%`,
+          bottom: charCfg.A.bottom,
+          zIndex: topActor === 'A' ? 2 : 1,
+          display: charHidden ? 'none' : undefined,
+        }}
         onPointerDown={(e) => onCharPointerDown(e, 'A')}
         onPointerMove={(e) => onCharPointerMove(e, 'A')}
         onPointerUp={() => onCharPointerUp('A')}
         onWheel={(e) => onCharWheel(e)}
       >
-        {bubble.A && <Bubble text={bubble.A} />}
+        {bubble.A && <Bubble text={bubble.A} below={charCfg.A.bottom + charCfg.height > window.innerHeight - 110} />}
         <CharacterSprite
           ref={charA}
           sprite={SPRITE_SETS.A}
@@ -791,14 +920,19 @@ function App() {
       </div>
 
       <div
-        className="actor"
-        style={{ left: `${charCfg.B.xPct}%`, bottom: charCfg.B.bottom, display: charHidden ? 'none' : undefined }}
+        className={`actor${charCfg.B.bottom + charCfg.height > window.innerHeight - 110 ? ' flip' : ''}`}
+        style={{
+          left: `${charCfg.B.xPct}%`,
+          bottom: charCfg.B.bottom,
+          zIndex: topActor === 'B' ? 2 : 1,
+          display: charHidden ? 'none' : undefined,
+        }}
         onPointerDown={(e) => onCharPointerDown(e, 'B')}
         onPointerMove={(e) => onCharPointerMove(e, 'B')}
         onPointerUp={() => onCharPointerUp('B')}
         onWheel={(e) => onCharWheel(e)}
       >
-        {bubble.B && <Bubble text={bubble.B} />}
+        {bubble.B && <Bubble text={bubble.B} below={charCfg.B.bottom + charCfg.height > window.innerHeight - 110} />}
         <CharacterSprite
           ref={charB}
           sprite={SPRITE_SETS.B}
@@ -809,9 +943,11 @@ function App() {
         />
       </div>
 
-      <div className="watermark">
-        M5 · 空闲自动重放历史 · 选模式点 ▶ 生成一集
-      </div>
+      {showWatermark && (
+        <div className="watermark">
+          M5 · 空闲自动重放历史 · 选模式点 ▶ 生成一集
+        </div>
+      )}
     </div>
   )
 }

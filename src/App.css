@@ -15,6 +15,10 @@
   transform: translateX(-50%);
   touch-action: none;
 }
+/* 角色贴近顶部时翻转:气泡移到角色下方 */
+.actor.flip {
+  flex-direction: column-reverse;
+}
 
 /* 贴图精灵：双 img 交叉淡入。基础位移走 translate 属性，act-* 动画走 transform，互不覆盖 */
 .char {
@@ -226,6 +230,12 @@
   border-top-color: rgba(255, 255, 255, 0.96);
   border-bottom: none;
 }
+.bubble.below::after {
+  bottom: auto;
+  top: -8px;
+  border-top: none;
+  border-bottom-color: rgba(255, 255, 255, 0.96);
+}
 @keyframes bubble-in {
   from {
     opacity: 0;
@@ -237,16 +247,38 @@
   }
 }
 
-/* 控制栏（同样注册为命中区域，命中才可点） */
+/* 控制栏:位置由配置驱动(left/top 内联),可拖动 */
 .ctrl-bar {
   position: absolute;
-  top: 10px;
-  left: 50%;
   transform: translateX(-50%);
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   z-index: 30;
+}
+
+/* 拖动把手:按住移动整条工具栏 */
+.bar-grip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 30px;
+  border-radius: 8px;
+  background: rgba(30, 30, 45, 0.55);
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 14px;
+  cursor: grab;
+  user-select: none;
+  backdrop-filter: blur(6px);
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
+}
+.bar-grip.hot {
+  background: rgba(124, 108, 240, 0.92);
+  color: #fff;
+  cursor: grabbing;
 }
 
 /* 滑动分段选择器：日常 | 相声，滑块随选中态平移 */
@@ -288,7 +320,7 @@
   color: #fff;
 }
 
-/* 图标按钮：默认只显示图标，命中/悬停时展开文字 */
+/* 图标按钮：默认只显示图标;文字为浮层标签,展开不影响按钮/工具栏宽度 */
 .ctrl-btn {
   padding: 6px 16px;
   border: 1px solid rgba(255, 255, 255, 0.25);
@@ -303,6 +335,7 @@
     border-color 0.15s ease;
 }
 .ctrl-btn.icon {
+  position: relative;
   display: inline-flex;
   align-items: center;
   padding: 6px 10px;
@@ -311,23 +344,6 @@
   display: block;
   flex: none;
 }
-.ctrl-btn .label {
-  display: inline-block;
-  max-width: 0;
-  opacity: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  transition:
-    max-width 0.18s ease,
-    opacity 0.18s ease,
-    padding 0.18s ease;
-}
-.ctrl-btn.icon.hot .label,
-.ctrl-btn.icon:hover .label {
-  max-width: 64px;
-  opacity: 1;
-  padding-left: 6px;
-}
 .ctrl-btn.hot {
   background: rgba(124, 108, 240, 0.92);
   border-color: rgba(124, 108, 240, 0.92);
@@ -335,6 +351,16 @@
 }
 .ctrl-btn.on {
   border-color: rgba(124, 108, 240, 0.85);
+  color: #fff;
+}
+/* 停止按钮:有生成/演出进行中时红色描边提示 */
+.ctrl-btn.danger {
+  border-color: rgba(255, 90, 90, 0.75);
+  color: #ff9a9a;
+}
+.ctrl-btn.danger.hot {
+  background: rgba(255, 90, 90, 0.85);
+  border-color: rgba(255, 90, 90, 0.85);
   color: #fff;
 }
 .ctrl-btn:disabled {
@@ -394,6 +420,29 @@
   justify-content: space-between;
   font-size: 13px;
   color: rgba(255, 255, 255, 0.85);
+}
+.panel-tabs {
+  display: flex;
+  gap: 4px;
+}
+.panel-tab {
+  padding: 4px 14px;
+  border: none;
+  border-radius: 12px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 13px;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
+}
+.panel-tab:hover {
+  color: #fff;
+}
+.panel-tab.on {
+  background: rgba(124, 108, 240, 0.92);
+  color: #fff;
 }
 .panel-btn.danger {
   display: inline-flex;
