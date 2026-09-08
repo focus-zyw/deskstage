@@ -3,7 +3,7 @@ import type { PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent }
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { CharacterSprite } from './stage/CharacterSprite'
 import { Bubble } from './stage/Bubble'
-import { PlayIcon, StopIcon, GearIcon } from './stage/icons'
+import { EyeIcon, EyeOffIcon, PlayIcon, StopIcon, GearIcon, PowerIcon, TargetIcon } from './stage/icons'
 import { SPRITE_SETS, preloadSprites } from './stage/spriteSets'
 import {
   initPointerManager,
@@ -18,7 +18,7 @@ import {
 import { MODES, modeList, modeOf, type Mode } from './performer/modes'
 import { generateDialog } from './engine/llmClient'
 import { prefetchNext } from './engine/dialogPrefetch'
-import { pickTopic } from './engine/topicSeeds'
+import { TOPIC_SEEDS, pickTopic } from './engine/topicSeeds'
 import { takePrefetch } from './storage/prefetchStore'
 import { appendHistory, loadRecentHistory, listEpisodes, deleteEpisodes, toggleFavorite, type Episode } from './storage/historyStore'
 import {
@@ -70,6 +70,10 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [form, setForm] = useState<AppConfig>(DEFAULT_CONFIG)
   const [saveState, setSaveState] = useState<SaveState>('idle')
+  // 手动锁定主题;null = 随机。主题面板弹/收与搜索词
+  const [topicOverride, setTopicOverride] = useState<string | null>(null)
+  const [topicOpen, setTopicOpen] = useState(false)
+  const [topicQuery, setTopicQuery] = useState('')
   // 空闲自动重放:频率来自配置,activeTick 用于用户互动后重置计时
   const [autoReplayMin, setAutoReplayMin] = useState(DEFAULT_CONFIG.autoReplayMin)
   const [activeTick, setActiveTick] = useState(0)
@@ -79,17 +83,22 @@ function App() {
   const charCfgRef = useRef(charCfg)
   const [charHidden, setCharHidden] = useState(DEFAULT_CONFIG.charactersHidden)
   const charSaveTimer = useRef(0)
+  // 退出两段确认:第一次点亮,3 秒内再点才真正退出
+  const [exitArmed, setExitArmed] = useState(false)
+  const exitTimer = useRef(0)
   const dragRef = useRef<{ who: Speaker; startX: number; startY: number; orig: CharPos; moved: boolean } | null>(null)
   const draggingWho = useRef<Speaker | null>(null)
 
   const charA = useRef<HTMLDivElement>(null)
   const charB = useRef<HTMLDivElement>(null)
   const segCtl = useRef<HTMLDivElement>(null)
-  const closeBtn = useRef<HTMLButtonElement>(null)
   const btnGen = useRef<HTMLButtonElement>(null)
   const btnStop = useRef<HTMLButtonElement>(null)
   const btnGear = useRef<HTMLButtonElement>(null)
+  const btnEye = useRef<HTMLButtonElement>(null)
+  const btnTopic = useRef<HTMLButtonElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
+  const topicPanelRef = useRef<HTMLDivElement>(null)
   const timers = useRef<Record<Speaker, number>>({ A: 0, B: 0 })
 
   // 演出播放器：LLM 生成的 DialogLine[] 与硬编码脚本走同一条路
@@ -122,6 +131,7 @@ function App() {
       setAutoReplayMin(c.autoReplayMin)
       applyChars(c.characters)
       setCharHidden(c.charactersHidden)
+      setTopicOverride(c.topicOverride)
     })
     // 启动恢复：读最近历史，续集生成时衔接上次聊到的内容
     void loadRecentHistory(20).then((entries) => {
@@ -145,8 +155,8 @@ function App() {
             ? new DOMRect(0, 0, window.innerWidth, window.innerHeight)
             : charB.current!.getBoundingClientRect(),
       }),
-      registerHitRegion('close', {
-        getRect: () => closeBtn.current!.getBoundingClientRect(),
+      registerHitRegion('eye', {
+        getRect: () => btnEye.current!.getBoundingClientRect(),
       }),
       registerHitRegion('modes', {
         getRect: () => segCtl.current!.getBoundingClientRect(),
@@ -159,6 +169,9 @@ function App() {
       }),
       registerHitRegion('settings', {
         getRect: () => btnGear.current!.getBoundingClientRect(),
+      }),
+      registerHitRegion('topic', {
+        getRect: () => btnTopic.current!.getBoundingClientRect(),
       }),
     ]
     return () => unsubs.forEach((u) => u())
@@ -173,15 +186,39 @@ function App() {
     })
   }, [settingsOpen])
 
-  // Escape 关闭面板（窗口持有焦点时生效）
+  // 主题面板打开期间整体可命中
   useEffect(() => {
-    if (!settingsOpen) return
+    if (!topicOpen) return
+    return registerHitRegion('topic-panel', {
+      getRect: () =>
+        topicPanelRef.current?.getBoundingClientRect() ?? new DOMRect(0, 0, 0, 0),
+    })
+  }, [topicOpen])
+
+  // Escape 关闭任一打开的面板
+  useEffect(() => {
+    if (!settingsOpen && !topicOpen) return
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setSettingsOpen(false)
+      if (e.key === 'Escape') {
+        setSettingsOpen(false)
+        setTopicOpen(false)
+      }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [settingsOpen])
+  }, [settingsOpen, topicOpen])
+
+  /** 播放指定的一集(自动重放与历史行点击共用):不调 LLM、不写历史 */
+  function playEpisode(ep: Episode) {
+    generateAbort.current?.abort() // 若有生成在途,直接作废
+    player.current!.stop()
+    lastReplayTs.current = ep.ts
+    lastLines.current = ep.lines // 衔接后续手动生成
+    setBubble({ A: null, B: null })
+    setAction({ A: 'idle', B: 'idle' })
+    setPhase('performing')
+    player.current!.play(ep.lines, { gap: modeOf(ep.mode).gap })
+  }
 
   /** 加权随机抽一集历史重放(收藏权重 5):不调 LLM、不写历史 */
   async function autoReplay() {
@@ -194,13 +231,13 @@ function App() {
       for (let i = 0; i < (e.fav ? 5 : 1); i++) bag.push(e)
     }
     const ep = bag[Math.floor(Math.random() * bag.length)]
-    lastReplayTs.current = ep.ts
-    lastLines.current = ep.lines // 重放也算"最近内容",衔接后续手动生成
-    setBubble({ A: null, B: null })
-    setAction({ A: 'idle', B: 'idle' })
-    setPhase('performing')
-    // 历史里的 mode 是任意字符串,未知 id 由 modeOf 回退日常节奏
-    player.current!.play(ep.lines, { gap: modeOf(ep.mode).gap })
+    playEpisode(ep)
+  }
+
+  /** 点击历史行:关闭面板并回放该集 */
+  function replayFromHistory(ep: Episode) {
+    setSettingsOpen(false)
+    playEpisode(ep)
   }
 
   /** 空闲自动重放:仅在没有生成/演出、没开设置面板、角色未隐藏时计时;任何依赖变化都会重置计时 */
@@ -218,14 +255,18 @@ function App() {
     setBubble({ A: null, B: null })
     setAction({ A: 'idle', B: 'idle' })
 
-    // 预生成命中：跳过 generating 直接开播
-    const hit = await takePrefetch(m)
+    // 主题:手动锁定则用固定主题(强约束),否则随机挑
+    const fixedTopic = topicOverride
+    const actualTopic = fixedTopic ?? pickTopic(modeOf(m))
+
+    // 预生成命中:有主题时只取同主题条目,无主题时 FIFO 任意条目
+    const hit = await takePrefetch(m, fixedTopic ?? undefined)
     if (hit) {
       lastLines.current = hit.lines
-      void appendHistory(hit.lines, hit.mode) // 使用后移入 history(fire-and-forget)
+      void appendHistory(hit.lines, hit.mode, hit.topic) // 使用后移入 history(fire-and-forget)
       setPhase('performing')
       player.current!.play(hit.lines, { gap: modeOf(hit.mode).gap })
-      void prefetchNext(m, hit.lines) // 补货下一轮(静默)
+      void prefetchNext(m, hit.lines, fixedTopic ?? undefined) // 补货下一轮(静默)
       return
     }
 
@@ -233,15 +274,15 @@ function App() {
     setPhase('generating')
     const ctrl = new AbortController()
     generateAbort.current = ctrl
-    const topic = pickTopic(modeOf(m))
+    const topic = actualTopic
     try {
-      const lines = await generateDialog(m, topic, lastLines.current, ctrl.signal)
+      const lines = await generateDialog(m, topic, lastLines.current, ctrl.signal, fixedTopic != null)
       if (ctrl.signal.aborted) return
       lastLines.current = lines
-      void appendHistory(lines, m) // 落盘（fire-and-forget，失败不阻断演出）
+      void appendHistory(lines, m, topic) // 落盘（fire-and-forget，失败不阻断演出）
       setPhase('performing')
       player.current!.play(lines, { gap: MODES[m].gap })
-      void prefetchNext(m, lines) // 请求生成两轮：当前轮 + 后台预生成
+      void prefetchNext(m, lines, fixedTopic ?? undefined) // 请求生成两轮：当前轮 + 后台预生成
     } catch (e) {
       if (ctrl.signal.aborted) return
       console.error('LLM 生成失败，回退硬编码脚本', e)
@@ -379,6 +420,34 @@ function App() {
     saveConfig({ charactersHidden: v }).catch((e) => console.warn('显示开关保存失败(静默)', e))
   }
 
+  /** 手动锁定主题:立即落盘 + 按新主题预生成一单(旧缓冲保留,无主题时照常消费) */
+  function applyTopic(topic: string) {
+    const norm = topic.trim()
+    setTopicOverride(norm)
+    setTopicOpen(false)
+    void saveConfig({ topicOverride: norm }).catch((e) => console.warn('主题保存失败(静默)', e))
+    if (norm) void prefetchNext(mode, lastLines.current, norm)
+  }
+
+  /** 清除主题,回到话题池随机 */
+  function clearTopic() {
+    setTopicOverride(null)
+    setTopicOpen(false)
+    void saveConfig({ topicOverride: null }).catch((e) => console.warn('主题清除失败(静默)', e))
+    void prefetchNext(mode, lastLines.current) // 重新随机补一单
+  }
+
+  /** 退出程序:两段确认,3 秒内再点一次才真正关闭,防误触 */
+  function requestExit() {
+    if (exitArmed) {
+      void getCurrentWindow().close()
+      return
+    }
+    setExitArmed(true)
+    window.clearTimeout(exitTimer.current)
+    exitTimer.current = window.setTimeout(() => setExitArmed(false), 3000)
+  }
+
   function poke(who: Speaker) {
     setActiveTick((t) => t + 1) // 用户互动,重置自动重放计时
     const line = POKE_LINES[Math.floor(Math.random() * POKE_LINES.length)]
@@ -395,15 +464,6 @@ function App() {
 
   return (
     <div className="stage">
-      <button
-        ref={closeBtn}
-        className={`close-btn${hovered === 'close' ? ' hot' : ''}`}
-        title="关闭"
-        onClick={() => void getCurrentWindow().close()}
-      >
-        ✕
-      </button>
-
       <div className="ctrl-bar">
         <div ref={segCtl} className={`seg${hovered === 'modes' ? ' hot' : ''}`}>
           <div
@@ -454,10 +514,38 @@ function App() {
         >
           <GearIcon />
         </button>
+
+        <button
+          ref={btnEye}
+          className={`ctrl-btn icon${hovered === 'eye' ? ' hot' : ''}`}
+          title={charHidden ? '显示角色' : '隐藏角色'}
+          onClick={() => setCharsHidden(!charHidden)}
+        >
+          {charHidden ? <EyeOffIcon /> : <EyeIcon />}
+        </button>
+
+        <button
+          ref={btnTopic}
+          className={`ctrl-btn icon${hovered === 'topic' ? ' hot' : ''}${topicOverride ? ' on' : ''}`}
+          title={topicOverride ? `话题：${topicOverride}` : '设置聊天主题'}
+          onClick={() => (topicOpen ? setTopicOpen(false) : (setSettingsOpen(false), setTopicOpen(true)))}
+        >
+          <TargetIcon />
+        </button>
       </div>
 
       {settingsOpen && (
         <div ref={panelRef} className="settings-panel">
+          <div className="panel-head">
+            <span>设置</span>
+            <button
+              className={`panel-btn danger${exitArmed ? ' armed' : ''}`}
+              title={exitArmed ? '再点一次确认退出' : '退出程序'}
+              onClick={requestExit}
+            >
+              {exitArmed ? '确认退出?' : <PowerIcon />}
+            </button>
+          </div>
           <div className="settings-row">
             <label htmlFor="cfg-key">API Key</label>
             <input
@@ -553,7 +641,12 @@ function App() {
             {episodes.map((ep) => {
               const bm = modeOf(ep.mode)
               return (
-                <div className="hist-row" key={ep.ts}>
+                <div
+                  className="hist-row"
+                  key={ep.ts}
+                  title="点击回放此段"
+                  onClick={() => replayFromHistory(ep)}
+                >
                   <span className="hist-mode" style={{ background: bm.accent }}>
                     {bm.label}
                   </span>
@@ -561,12 +654,16 @@ function App() {
                     <div className="hist-preview">{ep.lines[0]?.text ?? ''}</div>
                     <div className="hist-meta">
                       {fmtTime(ep.ts)} · {ep.lines.length} 句
+                      {ep.topic ? ` · ${ep.topic}` : ''}
                     </div>
                   </div>
                   <button
                     className={`hist-fav${ep.fav ? ' on' : ''}`}
                     title={ep.fav ? '取消收藏' : '收藏（不会被删除，重放权重更高）'}
-                    onClick={() => void onToggleFav(ep)}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      void onToggleFav(ep)
+                    }}
                   >
                     {ep.fav ? '★' : '☆'}
                   </button>
@@ -574,13 +671,59 @@ function App() {
                     className="hist-del"
                     title={ep.fav ? '收藏对话不可删除' : '删除此段'}
                     disabled={ep.fav}
-                    onClick={() => void onDeleteEpisode(ep)}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      void onDeleteEpisode(ep)
+                    }}
                   >
                     ✕
                   </button>
                 </div>
               )
             })}
+          </div>
+        </div>
+      )}
+
+      {topicOpen && (
+        <div ref={topicPanelRef} className="settings-panel topic-panel">
+          <div className="panel-head">
+            <span>聊天主题</span>
+            {topicOverride && (
+              <button className="panel-btn" onClick={clearTopic}>
+                清除主题（回到随机）
+              </button>
+            )}
+          </div>
+          <input
+            className="topic-search"
+            value={topicQuery}
+            autoFocus
+            placeholder="搜索内置话题,或输入自定义主题…"
+            onChange={(e) => setTopicQuery(e.target.value)}
+          />
+          <div className="topic-list">
+            {topicQuery.trim() === '' && (
+              <div className="topic-empty">输入关键词搜索,或直接点下方话题</div>
+            )}
+            {topicQuery.trim() !== '' &&
+              !TOPIC_SEEDS.some((t) => t.includes(topicQuery.trim())) && (
+                <button
+                  className="topic-item"
+                  onClick={() => applyTopic(topicQuery)}
+                >
+                  用『{topicQuery.trim()}』作为话题
+                </button>
+              )}
+            {TOPIC_SEEDS.filter((t) => t.includes(topicQuery.trim())).map((t) => (
+              <button
+                key={t}
+                className={`topic-item${topicOverride === t ? ' on' : ''}`}
+                onClick={() => applyTopic(t)}
+              >
+                {t}
+              </button>
+            ))}
           </div>
         </div>
       )}

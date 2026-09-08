@@ -9,11 +9,13 @@ export interface ChatMessage {
 }
 
 /** 组装 prompt：人设 + 输出协议 + 模式指令 + 上段结尾衔接 + 话题。
- *  人设/协议是所有模式共享的"父类公共代码"，模式差异来自 DialogMode.prompt */
+ *  人设/协议是所有模式共享的"父类公共代码"，模式差异来自 DialogMode.prompt。
+ *  topicFixed = 用户手动锁定的主题:措辞升级为硬约束,防跑题 */
 export function buildMessages(
   mode: Mode,
   topic: string,
   recentLines: DialogLine[],
+  topicFixed?: boolean,
 ): ChatMessage[] {
   const persona = `角色设定：
 - 甲（speaker 用 "A"）：精力充沛、爱吹牛、脑洞大、说话夸张
@@ -34,6 +36,10 @@ export function buildMessages(
         .join('\n')}\n\n`
     : ''
 
+  const topicText = topicFixed
+    ? `本段话题（必须全程围绕此话题展开，不要偏题）：${topic}`
+    : `本段话题：${topic}`
+
   return [
     {
       role: 'system',
@@ -41,7 +47,7 @@ export function buildMessages(
     },
     {
       role: 'user',
-      content: `${history}本段话题：${topic}\n请输出这一段完整对话的 JSON。`,
+      content: `${history}${topicText}\n请输出这一段完整对话的 JSON。`,
     },
   ]
 }

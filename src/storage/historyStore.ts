@@ -10,6 +10,7 @@ import type { DialogLine, Speaker } from '../performer/player'
 export interface HistoryEntry extends DialogLine {
   ts: number
   mode: string
+  topic?: string
 }
 
 /** 一集对话：历史按 ts 聚合；fav 来自收藏库 */
@@ -18,6 +19,7 @@ export interface Episode {
   mode: string
   lines: DialogLine[]
   fav: boolean
+  topic?: string
 }
 
 type FavRecord = Omit<Episode, 'fav'>
@@ -54,7 +56,14 @@ function todayFileId(): string {
 }
 
 function entryToLine(e: HistoryEntry): string {
-  return JSON.stringify({ ts: e.ts, mode: e.mode, speaker: e.speaker, text: e.text, action: e.action })
+  return JSON.stringify({
+    ts: e.ts,
+    mode: e.mode,
+    speaker: e.speaker,
+    text: e.text,
+    action: e.action,
+    topic: e.topic,
+  })
 }
 
 /** 解析一个日文件的全部行，跳过坏行 */
@@ -70,6 +79,7 @@ function parseEntries(raw: string): HistoryEntry[] {
           speaker: obj.speaker as Speaker,
           text: String(obj.text || ''),
           action: String(obj.action || 'talk'),
+          topic: typeof obj.topic === 'string' && obj.topic ? obj.topic : undefined,
         })
       }
     } catch {
@@ -87,15 +97,17 @@ async function listHistoryFiles(dir: string): Promise<string[]> {
     .sort()
 }
 
-/** 一集生成成功后整段落盘 */
-export async function appendHistory(lines: DialogLine[], mode: string): Promise<void> {
+/** 一集生成成功后整段落盘;topic 可选(手动锁定主题时记录) */
+export async function appendHistory(lines: DialogLine[], mode: string, topic?: string): Promise<void> {
   try {
     const dir = await getHistoryDir()
     const file = await join(dir, `${todayFileId()}.jsonl`)
     const ts = Date.now()
     const chunk =
       lines
-        .map((l) => entryToLine({ ts, mode, speaker: l.speaker, text: l.text, action: l.action }))
+        .map((l) =>
+          entryToLine({ ts, mode, speaker: l.speaker, text: l.text, action: l.action, topic }),
+        )
         .join('\n') + '\n'
     await writeTextFile(file, chunk, { append: true })
   } catch (e) {
@@ -139,7 +151,8 @@ async function readFavorites(): Promise<FavRecord[]> {
           lines.push({ speaker: l.speaker, text: String(l.text), action: String(l.action || 'talk') })
         }
       }
-      if (lines.length > 0) out.push({ ts, mode: String(it.mode || 'daily'), lines })
+      if (lines.length > 0)
+        out.push({ ts, mode: String(it.mode || 'daily'), lines, topic: String(it.topic || '') || undefined })
     }
     return out
   } catch (e) {
@@ -163,7 +176,7 @@ export async function toggleFavorite(ep: FavRecord): Promise<boolean> {
       await writeFavorites(favs)
       return false
     }
-    favs.push({ ts: ep.ts, mode: ep.mode, lines: ep.lines })
+    favs.push({ ts: ep.ts, mode: ep.mode, lines: ep.lines, topic: ep.topic })
     await writeFavorites(favs)
     return true
   } catch (e) {
@@ -186,16 +199,17 @@ export async function listEpisodes(limit = 50): Promise<Episode[]> {
       for (const e of parseEntries(await readTextFile(await join(dir, name)))) {
         let ep = byTs.get(e.ts)
         if (!ep) {
-          ep = { ts: e.ts, mode: e.mode, lines: [], fav: false }
+          ep = { ts: e.ts, mode: e.mode, lines: [], fav: false, topic: e.topic }
           byTs.set(e.ts, ep)
         }
+        if (!ep.topic && e.topic) ep.topic = e.topic
         ep.lines.push({ speaker: e.speaker, text: e.text, action: e.action })
       }
     }
     for (const f of await readFavorites()) {
       const ep = byTs.get(f.ts)
       if (ep) ep.fav = true
-      else byTs.set(f.ts, { ts: f.ts, mode: f.mode, lines: f.lines, fav: true })
+      else byTs.set(f.ts, { ts: f.ts, mode: f.mode, lines: f.lines, fav: true, topic: f.topic })
     }
     return [...byTs.values()].sort((a, b) => b.ts - a.ts).slice(0, limit)
   } catch (e) {

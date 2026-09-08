@@ -237,26 +237,6 @@
   }
 }
 
-/* 关闭按钮（同样注册为命中区域，命中才可点） */
-.close-btn {
-  position: absolute;
-  top: 10px;
-  right: 12px;
-  width: 34px;
-  height: 34px;
-  border: none;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.14);
-  color: rgba(255, 255, 255, 0.55);
-  font-size: 16px;
-  cursor: pointer;
-  transition: background 0.15s ease;
-}
-.close-btn.hot {
-  background: rgba(255, 90, 90, 0.85);
-  color: #fff;
-}
-
 /* 控制栏（同样注册为命中区域，命中才可点） */
 .ctrl-bar {
   position: absolute;
@@ -407,6 +387,29 @@
     transform: translateX(-50%) translateY(0);
   }
 }
+/* 面板头部:标题 + 退出程序(两段确认) */
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.85);
+}
+.panel-btn.danger {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  color: rgba(255, 255, 255, 0.55);
+}
+.panel-btn.danger:hover {
+  color: #ff9a9a;
+  background: rgba(255, 90, 90, 0.15);
+}
+.panel-btn.danger.armed {
+  background: rgba(255, 90, 90, 0.85);
+  color: #fff;
+}
+
 .settings-row {
   display: flex;
   flex-direction: column;
@@ -504,6 +507,11 @@
   padding: 6px 8px;
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.05);
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.hist-row:hover {
+  background: rgba(124, 108, 240, 0.25);
 }
 .hist-mode {
   flex: none;
@@ -603,4 +611,55 @@
   color: rgba(255, 255, 255, 0.35);
   font-size: 12px;
   pointer-events: none;
+}
+
+/* 主题面板 */
+.topic-panel {
+  top: 56px;
+}
+.topic-search {
+  padding: 7px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+.topic-search:focus {
+  border-color: rgba(124, 108, 240, 0.9);
+}
+.topic-empty {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.4);
+  text-align: center;
+  padding: 8px 0;
+}
+.topic-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.topic-item {
+  padding: 6px 10px;
+  border: none;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
+}
+.topic-item:hover {
+  background: rgba(124, 108, 240, 0.25);
+}
+.topic-item.on {
+  background: rgba(124, 108, 240, 0.6);
+  color: #fff;
 }

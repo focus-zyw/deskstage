@@ -27,6 +27,8 @@ export interface AppConfig {
   characters: CharactersConfig
   /** 隐藏角色开关 */
   charactersHidden: boolean
+  /** 手动锁定的聊天主题;null = 从话题池随机 */
+  topicOverride: string | null
 }
 
 // 默认值（首启写入）。想换端点：改 appData/data/config.json 后重启
@@ -41,6 +43,7 @@ export const DEFAULT_CONFIG: AppConfig = {
     B: { xPct: 80, bottom: 0 },
   },
   charactersHidden: false,
+  topicOverride: null,
 }
 
 /** 清洗自动重放频率:非法值回退默认 */
@@ -92,6 +95,10 @@ export function getConfig(): Promise<AppConfig> {
             autoReplayMin: sanitizeReplayMin(obj.autoReplayMin),
             characters: sanitizeCharacters(obj.characters),
             charactersHidden: obj.charactersHidden === true,
+            topicOverride:
+              typeof obj.topicOverride === 'string' && obj.topicOverride.trim()
+                ? obj.topicOverride.trim()
+                : null,
           }
         }
         await writeTextFile(file, JSON.stringify(DEFAULT_CONFIG, null, 2))

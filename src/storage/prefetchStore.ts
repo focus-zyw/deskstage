@@ -75,11 +75,13 @@ export async function savePrefetchEntry(entry: PrefetchEntry): Promise<void> {
   }
 }
 
-/** 取出该模式的一条预生成(FIFO)并从文件移除;没有则 null */
-export async function takePrefetch(mode: string): Promise<PrefetchEntry | null> {
+/** 取出该模式的一条预生成并从文件移除;没有则 null。
+ *  topic 传入时只取 mode+topic 都匹配的条目(手动主题);
+ *  不传时维持 FIFO,任意条目都合法(随机主题) */
+export async function takePrefetch(mode: string, topic?: string): Promise<PrefetchEntry | null> {
   try {
     const entries = await readAll()
-    const idx = entries.findIndex((e) => e.mode === mode)
+    const idx = topic ? entries.findIndex((e) => e.mode === mode && e.topic === topic) : entries.findIndex((e) => e.mode === mode)
     if (idx < 0) return null
     const [hit] = entries.splice(idx, 1)
     await writeAll(entries)

@@ -87,8 +87,9 @@ export async function generateDialog(
   topic: string,
   recentLines: DialogLine[],
   signal?: AbortSignal,
+  topicFixed?: boolean,
 ): Promise<DialogLine[]> {
-  const messages = buildMessages(mode, topic, recentLines)
+  const messages = buildMessages(mode, topic, recentLines, topicFixed)
   let lastErr: unknown = new Error('未知错误')
   for (let attempt = 0; attempt < 2; attempt++) {
     if (signal?.aborted) throw new DOMException('已中止', 'AbortError')
