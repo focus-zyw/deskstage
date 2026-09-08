@@ -35,3 +35,5 @@ scripts/user_*.png
 scripts/preview_ai_sprites.png
 scripts/diag_*.png
 public/sprites/b/_backup_old/
+scripts/*.wav
+scripts/*.mp3

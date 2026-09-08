@@ -111,3 +111,16 @@ export function TargetIcon() {
     </svg>
   )
 }
+
+/** 精灵球:正统配色(红上白下 + 深色赤纬带 + 中心按钮),用作工具栏收起/展开把手 */
+export function PokeballIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="32" height="32" aria-hidden="true">
+      <circle cx="12" cy="12" r="10" fill="#f4f4f6" />
+      <path d="M2 12a10 10 0 0 1 20 0z" fill="#e3350d" />
+      <circle cx="12" cy="12" r="10" fill="none" stroke="#2a2a35" strokeWidth="2" />
+      <path d="M2 12h20" stroke="#2a2a35" strokeWidth="2" />
+      <circle cx="12" cy="12" r="3.4" fill="#f4f4f6" stroke="#2a2a35" strokeWidth="2" />
+    </svg>
+  )
+}

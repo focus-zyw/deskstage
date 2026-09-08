@@ -5,7 +5,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { readFile } from '@tauri-apps/plugin-fs'
 import { CharacterSprite } from './stage/CharacterSprite'
 import { Bubble } from './stage/Bubble'
-import { EyeIcon, EyeOffIcon, PlayIcon, StopIcon, GearIcon, PowerIcon, TargetIcon } from './stage/icons'
+import { EyeIcon, EyeOffIcon, PlayIcon, StopIcon, GearIcon, PowerIcon, TargetIcon, PokeballIcon } from './stage/icons'
 import { SPRITE_SETS, preloadSprites } from './stage/spriteSets'
 import {
   initPointerManager,
@@ -97,9 +97,12 @@ function fmtTime(ts: number): string {
 function CloneVoiceRow({
   apiKey,
   onCloned,
+  onRecordingChange,
 }: {
   apiKey: string
   onCloned: (v: ClonedVoice) => void
+  /** 录音状态上报:录音中锁定面板(点外部/Esc 不收起,停止入口不会丢失) */
+  onRecordingChange?: (recording: boolean) => void
 }) {
   const [file, setFile] = useState<File | null>(null)
   const [name, setName] = useState('')
@@ -107,23 +110,31 @@ function CloneVoiceRow({
   const [state, setState] = useState<'idle' | 'busy' | 'ok' | 'error'>('idle')
   const [errMsg, setErrMsg] = useState('')
   // 应用声音录制:会话列表/选中项/录音状态与计时
-  const [sessions, setSessions] = useState<{ pid: number; name: string }[]>([])
+  const [sessions, setSessions] = useState<{ pid: number; name: string; playing: boolean }[]>([])
+  const [targetFilter, setTargetFilter] = useState('')
   const [target, setTarget] = useState<string>('')
   const [recording, setRecording] = useState(false)
   const [elapsed, setElapsed] = useState(0)
+  const recordingRef = useRef(false)
 
-  // 计时器须在早退 return 之前(Hook 必须每条渲染路径都执行)
+  // 计时器 + 卸载保险:面板若在此期间被关闭/卸载,自动停录,不留孤儿线程
   useEffect(() => {
     if (!recording) return
     const t = window.setInterval(() => setElapsed((s) => s + 1), 1000)
-    return () => window.clearInterval(t)
+    return () => {
+      window.clearInterval(t)
+      if (recordingRef.current) {
+        void invoke('stop_capture').catch(() => {})
+        onRecordingChange?.(false)
+      }
+    }
   }, [recording])
 
   if (!apiKey.trim()) return null
 
   async function refreshSessions() {
     try {
-      const list = await invoke<{ pid: number; name: string }[]>('list_audio_sessions')
+      const list = await invoke<{ pid: number; name: string; playing: boolean }[]>('list_audio_sessions')
       setSessions(list)
     } catch (e) {
       console.warn('应用声音会话列表拉取失败', e)
@@ -136,7 +147,9 @@ function CloneVoiceRow({
         await invoke('start_capture', {
           pid: target === 'system' || target === '' ? null : Number(target),
         })
+        recordingRef.current = true
         setRecording(true)
+        onRecordingChange?.(true)
         setElapsed(0)
         setFile(null)
       } catch (e) {
@@ -150,8 +163,11 @@ function CloneVoiceRow({
       const bytes = await readFile(path)
       setFile(new File([bytes], path.split(/[\\/]/).pop() ?? 'capture.wav', { type: 'audio/wav' }))
       setRecording(false)
+      onRecordingChange?.(false)
     } catch (e) {
       setRecording(false)
+      recordingRef.current = false
+      onRecordingChange?.(false)
       setErrMsg(String(e).slice(0, 120))
       setState('error')
     }
@@ -181,17 +197,28 @@ function CloneVoiceRow({
           onChange={(e) => setFile(e.target.files?.[0] ?? null)}
         />
         <div className="capture-fields">
+          <input
+            type="text"
+            placeholder="过滤应用名…"
+            value={targetFilter}
+            onChange={(e) => setTargetFilter(e.target.value)}
+          />
+        </div>
+        <div className="capture-fields">
           <select
             value={target}
             onChange={(e) => setTarget(e.target.value)}
             onFocus={() => void refreshSessions()}
           >
             <option value="system">整个系统的声音</option>
-            {sessions.map((s) => (
-              <option key={s.pid} value={String(s.pid)}>
-                {s.name}
-              </option>
-            ))}
+            {sessions
+              .filter((s) => s.name.toLowerCase().includes(targetFilter.toLowerCase()))
+              .map((s) => (
+                <option key={s.pid} value={String(s.pid)}>
+                  {s.playing ? '🔊 ' : ''}
+                  {s.name}
+                </option>
+              ))}
           </select>
           <button
             className="panel-btn"
@@ -201,6 +228,9 @@ function CloneVoiceRow({
             {recording ? `停止录制 (${elapsed}s)` : target === 'system' ? '录制系统' : '录制该应用'}
           </button>
         </div>
+        {recording && (
+          <span className="clone-tip warn">录音中:去目标应用播放声音即可;面板已锁定,点停止后恢复正常</span>
+        )}
         {file && (
           <span className="clone-tip ok">样本:{file.name}({Math.round(file.size / 1024)}KB)</span>
         )}
@@ -261,6 +291,8 @@ function App() {
   const [chatBusy, setChatBusy] = useState(false)
   const [userBubble, setUserBubble] = useState<string | null>(null)
   const lastChatTarget = useRef<Speaker>('A')
+  // 语音录制进行中:面板锁定(点外部/Esc/齿轮均不收起,防止丢失停止入口)
+  const voiceRecording = useRef(false)
   // 设置面板当前选中的厂商(custom = 本地/自定义,baseUrl/model 自由输入)
   const [vendorId, setVendorId] = useState(CUSTOM_VENDOR_ID)
   // 面板内各厂商 key 的草稿:切换厂商时把输入存回旧键、从新键带出,保存时合并落盘
@@ -462,11 +494,12 @@ function App() {
     })
   }, [settingsOpen, topicOpen, chatOpen])
 
-  // Escape 关闭任一打开的面板
+  // Escape 关闭任一打开的面板(语音录制中锁定:先停止录制才能关闭)
   useEffect(() => {
     if (!settingsOpen && !topicOpen && !chatOpen) return
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
+        if (voiceRecording.current && settingsOpen) return
         setSettingsOpen(false)
         setTopicOpen(false)
         setChatOpen(false)
@@ -889,8 +922,8 @@ function App() {
   }
 
   function onBarPointerDown(e: ReactPointerEvent<HTMLDivElement>) {
-    // 只响应把手,按钮/分段控件不受影响
-    if (e.target !== e.currentTarget) return
+    // 只响应把手及内部图标(图标已 pointer-events:none),按钮/分段控件不受影响
+    if (!(e.target instanceof Node) || !e.currentTarget.contains(e.target)) return
     ctrlDragRef.current = {
       startX: e.clientX,
       startY: e.clientY,
@@ -1029,6 +1062,8 @@ function App() {
       className="stage"
       onPointerDown={(e) => {
         // 点在面板/工具栏之外 → 收起已打开的面板(穿透窗口下 e.target 即 .stage 本体)
+        // 录音中点击外部不收面板(防止丢失停止入口)
+        if (voiceRecording.current && settingsOpen) return
         if (e.target === e.currentTarget) {
           setSettingsOpen(false)
           setTopicOpen(false)
@@ -1048,7 +1083,7 @@ function App() {
           onPointerMove={onBarPointerMove}
           onPointerUp={onBarPointerUp}
         >
-          ⠿
+          <PokeballIcon />
         </span>
         <div ref={segCtl} className={`seg${hovered === 'modes' ? ' hot' : ''}`}>
           <div
@@ -1093,7 +1128,10 @@ function App() {
           ref={btnGear}
           className={`ctrl-btn icon gear${hovered === 'settings' ? ' hot' : ''}${settingsOpen ? ' on' : ''}`}
           title="设置"
-          onClick={() => (settingsOpen ? setSettingsOpen(false) : void openSettings())}
+          onClick={() => {
+            if (settingsOpen && voiceRecording.current) return // 录音中锁定
+            settingsOpen ? setSettingsOpen(false) : void openSettings()
+          }}
         >
           <GearIcon />
         </button>
@@ -1426,6 +1464,7 @@ function App() {
               </div>
               <CloneVoiceRow
                 apiKey={voice.apiKey}
+                onRecordingChange={(rec) => (voiceRecording.current = rec)}
                 onCloned={(v) => {
                   setClonedVoices((list) => [...list.filter((x) => x.uri !== v.uri), v])
                   const next = { ...voice, B: v.uri }
@@ -1611,7 +1650,6 @@ function App() {
           <input
             className="topic-search"
             value={topicQuery}
-            autoFocus
             placeholder="搜索内置话题,或输入自定义主题…"
             onChange={(e) => setTopicQuery(e.target.value)}
           />
@@ -1702,11 +1740,13 @@ function App() {
       </div>
 
       {chatOpen && (
-          <div className="chat-box">
+          <div
+            className="chat-box"
+            style={{ left: `${ctrlBar.xPct}%`, top: ctrlBar.top + 46 }}
+          >
             {userBubble && <div className="user-bubble">你说:{userBubble}</div>}
             <div className="chat-row">
               <input
-                autoFocus
                 type="text"
                 placeholder="和角色说话…(@甲/@乙 指定谁回)"
                 value={chatDraft}

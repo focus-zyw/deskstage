@@ -1,6 +1,6 @@
 // 应用/系统声音捕获:WASAPI 环回,录为 PCM16 WAV,供音色克隆取参考音频。
 // 进程环回(按 pid)需 Windows 10 2004+;系统环回 = 默认渲染设备 + Capture 方向(wasapi 自动加 LOOPBACK 标志)。
-// 全部命令对前端暴露;录音线程每 200ms 检查停止标志,超 120s 自动停止。
+// 全部命令对前端暴露;录音线程每 200ms 检查停止标志,超 180s 自动停止。
 
 use std::fs::File;
 use std::io::{Seek, SeekFrom, Write};
@@ -9,14 +9,22 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use std::collections::HashSet;
+
 use serde::Serialize;
 use tauri::{Manager, State};
+use windows::core::BOOL;
+use windows::Win32::Foundation::{HWND, LPARAM};
+use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
+use windows::Win32::UI::WindowsAndMessaging::{EnumWindows, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible};
 use wasapi::{AudioClient, DeviceEnumerator, Direction, SampleType, StreamMode, WaveFormat, SessionState};
 
 #[derive(Serialize, Clone)]
 pub struct AudioSessionInfo {
     pub pid: u32,
     pub name: String,
+    /// 该进程此刻是否有活动声音会话(全量列表里用 🔊 标出)
+    pub playing: bool,
 }
 
 #[derive(Default)]
@@ -29,45 +37,113 @@ struct CaptureJob {
     handle: Option<std::thread::JoinHandle<Result<PathBuf, String>>>,
 }
 
-/// 列出当前正在发声的程序(WASAPI 活动会话,pid + 进程名)
+/// 列出可选的录制目标:全部可见顶层窗口(标题+pid),标出此刻正在发声的。
+/// 对齐 OBS"应用音频捕获"的体验——允许先选中还没播放声音的程序。
 #[tauri::command]
 pub fn list_audio_sessions() -> Result<Vec<AudioSessionInfo>, String> {
     wasapi::initialize_mta().ok();
+
+    // 1. 正在发声的进程集合(WASAPI 活动会话)
+    let mut playing_pids: HashSet<u32> = HashSet::new();
     let enumerator = DeviceEnumerator::new().map_err(|e| e.to_string())?;
     let device = enumerator
         .get_default_device(&Direction::Render)
         .map_err(|e| e.to_string())?;
     let manager = device.get_iaudiosessionmanager().map_err(|e| e.to_string())?;
     let sessions = manager.get_audiosessionenumerator().map_err(|e| e.to_string())?;
-
-    let sys = sysinfo::System::new_all();
-    let mut out = Vec::new();
-    let mut seen = std::collections::HashSet::new();
     let count = sessions.get_count().map_err(|e| e.to_string())?;
     for i in 0..count {
         let control = match sessions.get_session(i) {
             Ok(c) => c,
             Err(_) => continue,
         };
-        if control.get_state().unwrap_or(SessionState::Expired)
-            != SessionState::Active
-        {
-            continue;
+        if control.get_state().unwrap_or(SessionState::Expired) == SessionState::Active {
+            if let Ok(pid) = control.get_process_id() {
+                playing_pids.insert(pid);
+            }
         }
-        let pid = match control.get_process_id() {
-            Ok(p) => p,
-            Err(_) => continue,
-        };
-        if !seen.insert(pid) {
-            continue;
-        }
-        let name = sys
-            .process(sysinfo::Pid::from_u32(pid))
-            .map(|pr| pr.name().to_string_lossy().to_string())
-            .unwrap_or_else(|| format!("进程 {pid}"));
-        out.push(AudioSessionInfo { pid, name });
     }
+
+    // 2. 枚举可见顶层窗口(标题 + pid)
+    let mut wins: Vec<(u32, String)> = Vec::new();
+    let lparam = LPARAM(&mut wins as *mut _ as isize);
+    unsafe {
+        EnumWindows(Some(collect_window), lparam).map_err(|e| e.to_string())?;
+    }
+
+    // 3. 按进程名去重(多窗口留一条),剔除系统组件;展示标题取第一个窗口
+    //    代表 pid:该名下正在发声的窗口进程优先(环回含子进程树,能抓到浏览器的音频子进程)
+    const SYSTEM_UI: &[&str] = &[
+        "explorer.exe", "searchhost.exe", "startmenuexperiencehost.exe", "shellexperiencehost.exe",
+        "applicationframehost.exe", "textinputhost.exe", "runtimebroker.exe", "lockapp.exe",
+        "widgets.exe", "widgetservice.exe", "msedgewebview2.exe", "systemsettings.exe",
+        "securityhealthsystray.exe", "securityhealthservice.exe", "sihost.exe", "ctfmon.exe",
+        "svchost.exe", "csrss.exe", "dwm.exe", "winlogon.exe", "wininit.exe", "services.exe",
+        "lsass.exe", "smss.exe", "fontdrvhost.exe", "dllhost.exe", "taskhostw.exe",
+        "conhost.exe", "openconsole.exe", "audiodg.exe", "cmd.exe", "powershell.exe",
+        "windows_terminal.exe", "werfault.exe", "wermgr.exe",
+    ];
+
+    let sys = sysinfo::System::new_all();
+    let self_pid = std::process::id();
+    // key(进程名小写) -> (展示标题, 代表 pid, playing)
+    let mut by_name: std::collections::HashMap<String, (String, u32, bool)> = std::collections::HashMap::new();
+    for (pid, title) in wins {
+        if pid == self_pid {
+            continue;
+        }
+        let Some(proc_ref) = sys.process(sysinfo::Pid::from_u32(pid)) else {
+            continue;
+        };
+        let proc_name = proc_ref.name().to_string_lossy().to_string();
+        let key = proc_name.to_lowercase();
+        if SYSTEM_UI.contains(&key.as_str()) || key.is_empty() {
+            continue;
+        }
+        let playing = playing_pids.contains(&pid);
+        let entry = by_name.entry(key).or_insert((String::new(), pid, false));
+        if entry.0.is_empty() && !title.is_empty() {
+            entry.0 = title;
+        }
+        if playing {
+            entry.1 = pid; // 正在发声的窗口进程作为捕获目标
+            entry.2 = true;
+        }
+    }
+
+    let mut out: Vec<AudioSessionInfo> = by_name
+        .into_iter()
+        .map(|(key, (title, pid, playing))| {
+            let name = if title.is_empty() { key } else { title };
+            AudioSessionInfo { pid, name, playing }
+        })
+        .collect();
+    out.sort_by(|a, b| b.playing.cmp(&a.playing).then(a.name.to_lowercase().cmp(&b.name.to_lowercase())));
     Ok(out)
+}
+
+/// EnumWindows 回调:过滤可见/非 cloaked/有标题的顶层窗口,收集 (pid, 标题)
+unsafe extern "system" fn collect_window(hwnd: HWND, lparam: LPARAM) -> windows::core::BOOL {
+    let wins = &mut *(lparam.0 as *mut Vec<(u32, String)>);
+    if !IsWindowVisible(hwnd).as_bool() {
+        return windows::core::BOOL(1);
+    }
+    if GetWindowTextLengthW(hwnd) == 0 {
+        return windows::core::BOOL(1);
+    }
+    let mut cloaked: u32 = 0;
+    if DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &mut cloaked as *mut _ as _, std::mem::size_of::<u32>() as _).is_ok()
+        && cloaked != 0
+    {
+        return windows::core::BOOL(1);
+    }
+    let mut pid: u32 = 0;
+    GetWindowThreadProcessId(hwnd, Some(&mut pid));
+    let n = GetWindowTextLengthW(hwnd).min(120) as usize;
+    let mut buf = [0u16; 128];
+    GetWindowTextW(hwnd, &mut buf);
+    wins.push((pid, String::from_utf16_lossy(&buf[..n])));
+    windows::core::BOOL(1)
 }
 
 /// 开始录音:pid 传 Some 为按进程环回,None 为整个系统。返回确认。
@@ -150,7 +226,7 @@ fn capture_thread(stop: Arc<AtomicBool>, path: PathBuf, pid: Option<u32>) -> Res
 
     let started = Instant::now();
     loop {
-        if stop.load(Ordering::SeqCst) || started.elapsed() > Duration::from_secs(120) {
+        if stop.load(Ordering::SeqCst) || started.elapsed() > Duration::from_secs(180) {
             break;
         }
         let frames = capture
