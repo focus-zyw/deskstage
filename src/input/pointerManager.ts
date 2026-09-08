@@ -71,6 +71,17 @@ export async function initPointerManager() {
   await setInteractive(false) // 初始：全窗口穿透
   await win.show() // 定位完成后再显示，避免初始闪烁
 
+  // 显示器布局/DPI 缩放变化时,窗口原点与缩放系数都要重算,
+  // 否则热区整体漂移:该穿透的不穿透、该点到的点不到
+  const recomputeOrigin = async () => {
+    const p = await win.outerPosition()
+    winOrigin = { x: p.x, y: p.y }
+    const mon = await currentMonitor()
+    if (mon) scale = mon.scaleFactor
+  }
+  void win.onMoved(() => void recomputeOrigin())
+  void win.onScaleChanged(() => void recomputeOrigin())
+
   await listen<[number, number]>('cursor-pos', (e) => {
     const [px, py] = e.payload
     const id = hitTest(px, py)

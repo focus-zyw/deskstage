@@ -2,7 +2,7 @@
 // 请求走 tauri-plugin-http(Rust 侧发,无 CORS;capabilities 里放行了 api.siliconflow.cn)。
 // 原则:语音失败永不影响演出 —— 所有错误静默降级为无语音,气泡照常走。
 import { fetch } from '@tauri-apps/plugin-http'
-import { readTextFile, writeTextFile, exists, mkdir } from '@tauri-apps/plugin-fs'
+import { readTextFile, writeTextFile, exists, mkdir, readDir, remove, stat } from '@tauri-apps/plugin-fs'
 import { appDataDir, join } from '@tauri-apps/api/path'
 import { getConfig, inTauri, registerVoiceIds } from '../storage/configStore'
 import type { Speaker } from '../performer/player'
@@ -106,6 +106,28 @@ registerVoiceIds([...VOICES.map((v) => v.id), '__custom__'])
 
 let dirPromise: Promise<string> | null = null
 
+/** 磁盘缓存文件数上限(每条 mp3 约几十~两百 KB,超限按 mtime 淘汰最旧) */
+const MAX_CACHE_FILES = 500
+
+/** 启动后静默清理一次:文件数超限删最旧,防缓存目录无界膨胀 */
+async function pruneCacheDir(dir: string): Promise<void> {
+  try {
+    const entries = await readDir(dir)
+    const files: string[] = []
+    for (const e of entries) {
+      if (e.isFile && e.name?.endsWith('.mp3.txt')) files.push(await join(dir, e.name))
+    }
+    if (files.length <= MAX_CACHE_FILES) return
+    const withTime = await Promise.all(
+      files.map(async (f) => ({ f, t: (await stat(f)).mtime?.getTime() ?? 0 })),
+    )
+    const excess = withTime.sort((a, b) => a.t - b.t).slice(0, files.length - MAX_CACHE_FILES)
+    for (const { f } of excess) await remove(f).catch(() => {})
+  } catch {
+    // 清理失败不影响合成主流程
+  }
+}
+
 /** appData/data/audio-cache 目录(懒创建) */
 function cacheDir(): Promise<string> {
   if (!dirPromise) {
@@ -113,6 +135,7 @@ function cacheDir(): Promise<string> {
       const base = await appDataDir()
       const dir = await join(base, 'data', 'audio-cache')
       if (!(await exists(dir))) await mkdir(dir, { recursive: true })
+      void pruneCacheDir(dir)
       return dir
     })()
   }

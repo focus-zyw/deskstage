@@ -3,7 +3,7 @@ import type { PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent }
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { listen } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
-import { readFile } from '@tauri-apps/plugin-fs'
+import { readFile, remove } from '@tauri-apps/plugin-fs'
 import { CharacterSprite } from './stage/CharacterSprite'
 import { Bubble } from './stage/Bubble'
 import { EyeIcon, EyeOffIcon, PlayIcon, StopIcon, GearIcon, PowerIcon, TargetIcon, PokeballIcon, ChatIcon } from './stage/icons'
@@ -117,15 +117,27 @@ function CloneVoiceRow({
   const [recording, setRecording] = useState(false)
   const [elapsed, setElapsed] = useState(0)
   const recordingRef = useRef(false)
+  const togglingRef = useRef(false) // 录音按钮防抖:命令在途时忽略重复点击
+  const capturePathRef = useRef<string | null>(null) // 本次录音的 wav 落盘路径(克隆成功后清理)
 
-  // 计时器 + 卸载保险:面板若在此期间被关闭/卸载,自动停录,不留孤儿线程
+  /** 删除本次录音的 wav(克隆已用完/面板中途取消) */
+  function discardCapture(path: string | null) {
+    if (!path) return
+    capturePathRef.current = null
+    void remove(path).catch(() => {})
+  }
+
+  // 计时器 + 卸载保险:面板若在此期间被关闭/卸载,自动停录并丢弃半成品,不留孤儿线程/文件
   useEffect(() => {
     if (!recording) return
     const t = window.setInterval(() => setElapsed((s) => s + 1), 1000)
     return () => {
       window.clearInterval(t)
       if (recordingRef.current) {
-        void invoke('stop_capture').catch(() => {})
+        void invoke<string>('stop_capture')
+          .then((p) => remove(p).catch(() => {}))
+          .catch(() => {})
+        recordingRef.current = false
         onRecordingChange?.(false)
       }
     }
@@ -137,6 +149,7 @@ function CloneVoiceRow({
   async function finishRecording() {
     const path = await invoke<string>('stop_capture') // 同时清掉后端 job,线程已结束时立即返回
     const bytes = await readFile(path)
+    capturePathRef.current = path
     setFile(new File([bytes], path.split(/[\\/]/).pop() ?? 'capture.wav', { type: 'audio/wav' }))
     recordingRef.current = false
     setRecording(false)
@@ -183,30 +196,37 @@ function CloneVoiceRow({
   }
 
   async function toggleRecord() {
-    if (!recording) {
+    if (togglingRef.current) return // 命令在途,防双击造成"已有录音/没有录音"误报
+    togglingRef.current = true
+    try {
+      if (!recording) {
+        try {
+          await invoke('start_capture', {
+            pid: target === 'system' || target === '' ? null : Number(target),
+          })
+          recordingRef.current = true
+          setRecording(true)
+          onRecordingChange?.(true)
+          setElapsed(0)
+          discardCapture(capturePathRef.current) // 换新样本,旧录音不再需要
+          setFile(null)
+        } catch (e) {
+          setErrMsg(String(e).slice(0, 120))
+          setState('error')
+        }
+        return
+      }
       try {
-        await invoke('start_capture', {
-          pid: target === 'system' || target === '' ? null : Number(target),
-        })
-        recordingRef.current = true
-        setRecording(true)
-        onRecordingChange?.(true)
-        setElapsed(0)
-        setFile(null)
+        await finishRecording()
       } catch (e) {
+        recordingRef.current = false
+        setRecording(false)
+        onRecordingChange?.(false)
         setErrMsg(String(e).slice(0, 120))
         setState('error')
       }
-      return
-    }
-    try {
-      await finishRecording()
-    } catch (e) {
-      recordingRef.current = false
-      setRecording(false)
-      onRecordingChange?.(false)
-      setErrMsg(String(e).slice(0, 120))
-      setState('error')
+    } finally {
+      togglingRef.current = false
     }
   }
 
@@ -215,6 +235,7 @@ function CloneVoiceRow({
     setState('busy')
     try {
       const v = await cloneVoice(apiKey, file, file.name, name.trim(), text.trim())
+      discardCapture(capturePathRef.current) // 克隆成功,参考录音完成使命
       setState('ok')
       onCloned(v)
     } catch (e) {
@@ -231,7 +252,10 @@ function CloneVoiceRow({
           id="cfg-clone-file"
           type="file"
           accept="audio/*"
-          onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+          onChange={(e) => {
+            discardCapture(capturePathRef.current) // 改选手动文件,之前录的不再需要
+            setFile(e.target.files?.[0] ?? null)
+          }}
         />
         <div className="capture-fields">
           <input
@@ -269,7 +293,10 @@ function CloneVoiceRow({
           <span className="clone-tip warn">录音中:去目标应用播放声音即可;面板已锁定,点停止后恢复正常</span>
         )}
         {file && (
-          <span className="clone-tip ok">样本:{file.name}({Math.round(file.size / 1024)}KB)</span>
+          <span className="clone-tip ok">
+            样本:{file.name}({Math.round(file.size / 1024)}KB)
+            {file.size < 100_000 && ' · 偏小:确认目标应用真的在发声、录满 10~20 秒再停'}
+          </span>
         )}
         <input
           type="text"
