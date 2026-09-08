@@ -103,9 +103,6 @@ export async function listCustomVoices(apiKey: string): Promise<ClonedVoice[]> {
 // 启动即注册音色名单,configStore 清洗配置时据此校正非法音色名。
 // 自定义克隆音色(speech: 开头)是账号侧资源,单独放行不参与内置名单校正
 registerVoiceIds([...VOICES.map((v) => v.id), '__custom__'])
-export function isAllowedVoice(v: string): boolean {
-  return v.startsWith('speech:') || VOICES.some((x) => x.id === v)
-}
 
 let dirPromise: Promise<string> | null = null
 
@@ -199,6 +196,8 @@ let warnedNoKey = false
 
 /** 说一句:停掉当前语音,起播这句。fire-and-forget,失败静默 */
 export function speak(speaker: Speaker, text: string): void {
+  // 进函数即领序号:若先发的句子合成慢,完成时序号已落后,不会反向覆盖新句
+  const my = ++epoch
   void (async () => {
     try {
       const cfg = await getConfig()
@@ -212,7 +211,8 @@ export function speak(speaker: Speaker, text: string): void {
       }
       const voice = cfg.voice[speaker]
       const url = await ensure(text, voice, cfg.voice.apiKey)
-      const my = ++epoch
+      // 等待合成期间来了新句/停止指令 → 不起播
+      if (my !== epoch) return
       current?.pause()
       const audio = new Audio(url)
       current = audio
@@ -225,7 +225,7 @@ export function speak(speaker: Speaker, text: string): void {
         console.warn('[tts] play 被拒(自动播放策略?)', err)
         return
       }
-      // 等待期间来了新句,丢弃本次播放
+      // 播放起手后又来了新句,丢弃本次播放
       if (my !== epoch) audio.pause()
     } catch (e) {
       console.warn('[tts] 语音合成/播放失败(静默降级)', e)

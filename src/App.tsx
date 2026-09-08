@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import type { PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
+import { listen } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
 import { readFile } from '@tauri-apps/plugin-fs'
 import { CharacterSprite } from './stage/CharacterSprite'
 import { Bubble } from './stage/Bubble'
-import { EyeIcon, EyeOffIcon, PlayIcon, StopIcon, GearIcon, PowerIcon, TargetIcon, PokeballIcon } from './stage/icons'
+import { EyeIcon, EyeOffIcon, PlayIcon, StopIcon, GearIcon, PowerIcon, TargetIcon, PokeballIcon, ChatIcon } from './stage/icons'
 import { SPRITE_SETS, preloadSprites } from './stage/spriteSets'
 import {
   initPointerManager,
@@ -128,7 +129,47 @@ function CloneVoiceRow({
         onRecordingChange?.(false)
       }
     }
+    // onRecordingChange 是父组件的内联回调,行为恒定;入 deps 会让计时器每帧重建
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [recording])
+
+  /** 收尾一次录音:取回文件、复位 UI。手动停止与 180s 自动停共用 */
+  async function finishRecording() {
+    const path = await invoke<string>('stop_capture') // 同时清掉后端 job,线程已结束时立即返回
+    const bytes = await readFile(path)
+    setFile(new File([bytes], path.split(/[\\/]/).pop() ?? 'capture.wav', { type: 'audio/wav' }))
+    recordingRef.current = false
+    setRecording(false)
+    onRecordingChange?.(false)
+  }
+
+  // 后端录音线程意外结束(设备失效/目标进程异常 → 报错;达到 180s 上限 → 自动停):
+  // 把前端拉回一致状态并清后端残留 job。手动停止的正常事件由 toggleRecord 收尾,这里跳过
+  useEffect(() => {
+    const un = listen<{ ok: boolean; path?: string; error?: string; auto: boolean }>(
+      'capture-ended',
+      (e) => {
+        if (!recordingRef.current) return
+        if (e.payload.ok && !e.payload.auto) return
+        recordingRef.current = false
+        setRecording(false)
+        onRecordingChange?.(false)
+        if (!e.payload.ok) {
+          setErrMsg(String(e.payload.error ?? '录音意外结束').slice(0, 120))
+          setState('error')
+          void invoke('stop_capture').catch(() => {}) // 清残留 job,下次才能再录
+          return
+        }
+        void finishRecording().catch(() => {
+          void invoke('stop_capture').catch(() => {})
+        })
+      },
+    )
+    return () => {
+      void un.then((f) => f())
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   if (!apiKey.trim()) return null
 
@@ -159,14 +200,10 @@ function CloneVoiceRow({
       return
     }
     try {
-      const path = await invoke<string>('stop_capture')
-      const bytes = await readFile(path)
-      setFile(new File([bytes], path.split(/[\\/]/).pop() ?? 'capture.wav', { type: 'audio/wav' }))
-      setRecording(false)
-      onRecordingChange?.(false)
+      await finishRecording()
     } catch (e) {
-      setRecording(false)
       recordingRef.current = false
+      setRecording(false)
       onRecordingChange?.(false)
       setErrMsg(String(e).slice(0, 120))
       setState('error')
@@ -350,10 +387,12 @@ function App() {
   const btnGear = useRef<HTMLButtonElement>(null)
   const btnEye = useRef<HTMLButtonElement>(null)
   const btnTopic = useRef<HTMLButtonElement>(null)
+  const btnChat = useRef<HTMLButtonElement>(null)
   const btnExit = useRef<HTMLButtonElement>(null)
   const gripRef = useRef<HTMLSpanElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
   const topicPanelRef = useRef<HTMLDivElement>(null)
+  const chatBoxRef = useRef<HTMLDivElement>(null)
   const timers = useRef<Record<Speaker, number>>({ A: 0, B: 0 })
 
   // 演出播放器：LLM 生成的 DialogLine[] 与硬编码脚本走同一条路
@@ -408,6 +447,7 @@ function App() {
     void initPointerManager()
     preloadSprites(Object.values(SPRITE_SETS)) // 预热立绘,演出中切换动作零延迟
     void getConfig().then((c) => {
+      setForm(c) // form 与磁盘配置同步:兴趣/画像等在播放流程里也会读,不能等打开设置才回填
       setAutoReplayMin(c.autoReplayMin)
       applyChars(c.characters)
       setCharHidden(c.charactersHidden)
@@ -456,6 +496,11 @@ function App() {
       registerHitRegion('topic', {
         getRect: () => btnTopic.current!.getBoundingClientRect(),
       }),
+      // 聊天按钮必须注册热区:穿透架构下未注册区域收不到任何鼠标事件,
+      // 漏注册 = 入口彻底点不到(此前聊天入口即因此失效)
+      registerHitRegion('chat', {
+        getRect: () => btnChat.current!.getBoundingClientRect(),
+      }),
       registerHitRegion('exit', {
         getRect: () => btnExit.current!.getBoundingClientRect(),
       }),
@@ -484,11 +529,20 @@ function App() {
     })
   }, [topicOpen])
 
+  // 聊天框打开期间整体可命中(输入框/发送按钮可点)
+  useEffect(() => {
+    if (!chatOpen) return
+    return registerHitRegion('chat-box', {
+      getRect: () =>
+        chatBoxRef.current?.getBoundingClientRect() ?? new DOMRect(0, 0, 0, 0),
+    })
+  }, [chatOpen])
+
   // 任一面板打开时注册全屏兜底热区:穿透窗口里面板外的屏幕点击也能送达 DOM,
   // "点外部收起"才生效。注册顺序在最后 → hitTest 先命中面板/工具栏/角色等小热区,
   // 只有落在它们之外的光标才会命中 outside
   useEffect(() => {
-    if (!settingsOpen && !topicOpen) return
+    if (!settingsOpen && !topicOpen && !chatOpen) return
     return registerHitRegion('outside', {
       getRect: () => new DOMRect(0, 0, window.innerWidth, window.innerHeight),
     })
@@ -528,6 +582,8 @@ function App() {
   async function autoReplay() {
     if (player.current!.playing) return
     const eps = await listEpisodes(100)
+    // 读历史(可能数百 ms)期间用户点了生成/聊天 → 不抢场
+    if (phaseRef.current !== 'idle' || player.current!.playing) return
     if (eps.length === 0) return
     const pool = eps.length > 1 ? eps.filter((e) => e.ts !== lastReplayTs.current) : eps
     const bag: Episode[] = []
@@ -544,12 +600,12 @@ function App() {
     playEpisode(ep)
   }
 
-  /** 空闲自动重放:仅在没有生成/演出、没开设置面板、角色未隐藏时计时;任何依赖变化都会重置计时 */
+  /** 空闲自动重放:仅在没有生成/演出、没开面板/聊天框、角色未隐藏时计时;任何依赖变化都会重置计时 */
   useEffect(() => {
-    if (phase !== 'idle' || settingsOpen || charHidden || autoReplayMin <= 0) return
+    if (phase !== 'idle' || settingsOpen || chatOpen || charHidden || autoReplayMin <= 0) return
     const t = window.setTimeout(() => void autoReplay(), autoReplayMin * 60_000)
     return () => window.clearTimeout(t)
-  }, [phase, settingsOpen, charHidden, autoReplayMin, activeTick])
+  }, [phase, settingsOpen, chatOpen, charHidden, autoReplayMin, activeTick])
 
   /** 播出一段短聊天(问候/自发),计入历史,静默失败 */
   function playShortChat(lines: DialogLine[]) {
@@ -562,7 +618,7 @@ function App() {
 
   /** 自发短聊天调度:连续空闲 2.5~5 分钟后尝试一次;各守卫不过就静默跳过 */
   useEffect(() => {
-    if (phase !== 'idle' || settingsOpen || topicOpen || charHidden || autoReplayMin <= 0) return
+    if (phase !== 'idle' || settingsOpen || topicOpen || chatOpen || charHidden || autoReplayMin <= 0) return
     const t = window.setTimeout(() => void trySpontaneous(), 150_000 + Math.random() * 150_000)
     return () => window.clearTimeout(t)
 
@@ -586,7 +642,7 @@ function App() {
         // 生成失败静默——自发内容宁可错过
       }
     }
-  }, [phase, settingsOpen, topicOpen, charHidden, autoReplayMin, activeTick, spontTick])
+  }, [phase, settingsOpen, topicOpen, chatOpen, charHidden, autoReplayMin, activeTick, spontTick])
 
   /** 启动问候:打开应用时按当前时段打招呼(失败静默);占用自发聊天的预算 */
   useEffect(() => {
@@ -642,12 +698,12 @@ function App() {
             ban: form.userProfile.banTopics,
             weights: await getTopicWeights(),
           }))
-    bumpTopicSeen(actualTopic)
     bumpMode(m)
 
     // 预生成命中:有主题时只取同主题条目,无主题时 FIFO 任意条目
     const hit = await takePrefetch(m, fixedTopic ?? undefined)
     if (hit) {
+      bumpTopicSeen(hit.topic) // 口味记账对齐实际播出的主题(命中缓冲时≠本次抽中的主题)
       lastLines.current = hit.lines
       void appendHistory(hit.lines, hit.mode, hit.topic) // 使用后移入 history(fire-and-forget)
       setPhase('performing')
@@ -665,6 +721,7 @@ function App() {
     try {
       const lines = await generateDialog(m, topic, lastLines.current, ctrl.signal, fixedTopic != null)
       if (ctrl.signal.aborted) return
+      bumpTopicSeen(topic) // 这轮真的播出了才记 seen,避免污染偏好加权
       lastLines.current = lines
       void appendHistory(lines, m, topic) // 落盘（fire-and-forget，失败不阻断演出）
       setPhase('performing')
@@ -699,6 +756,7 @@ function App() {
     setSpeaking(null)
     setBubble({ A: null, B: null })
     setAction({ A: 'idle', B: 'idle' })
+    setUserBubble(null)
   }
 
   /** 聊天通道:解析 @角色 → 被指定角色回一句 → 后台提取记忆入库。
@@ -731,6 +789,7 @@ function App() {
         setBubble((b) => (b[who] === reply ? { ...b, [who]: null } : b))
         setAction((a) => ({ ...a, [who]: 'idle' }))
         setSpeaking(null)
+        setUserBubble((u) => (u === text ? null : u)) // 应答结束,你说的这句一并收走
       }, 2200 + reply.length * 160)
     } catch {
       setUserBubble(null)
@@ -783,17 +842,23 @@ function App() {
   }
 
   /** 保存配置：落盘 + 刷新缓存，下一次生成即生效。
+   *  只写设置面板拥有的字段(连接信息/画像/自动重放/语音),布局、主题等
+   *  由各自的保存通道维护,避免用打开面板时刻的旧快照覆盖拖动等并发改动。
    *  apiKeys = 已存值 ∪ 面板草稿 ∪ 当前输入(归位到当前厂商键),各厂商 key 一并持久化 */
   async function saveSettings() {
     setSaveState('saving')
     try {
       const next = await saveConfig({
-        ...form,
+        apiKey: form.apiKey,
         apiKeys: {
           ...form.apiKeys,
           ...keyDrafts,
           [vendorKeyOf(vendorId, form.baseUrl)]: form.apiKey,
         },
+        baseUrl: form.baseUrl,
+        model: form.model,
+        userProfile: form.userProfile,
+        autoReplayMin: form.autoReplayMin,
         voice, // 语音配置(key/音色/开关)与表单一起整体落盘
       })
       setAutoReplayMin(next.autoReplayMin) // 空闲计时按新频率重新武装
@@ -1045,9 +1110,15 @@ function App() {
       improvLastAt.current = now
       improvPokeLine(who, lastLines.current)
         .then((line) => {
-          if (Date.now() - now < 4500) showPoke(who, line, 'talk', 2200)
+          // 返回时已超窗或开始正式演出 → 丢弃,防止顶掉台词气泡
+          if (Date.now() - now >= 4500) return
+          if (phaseRef.current !== 'idle' || player.current!.playing) return
+          showPoke(who, line, 'talk', 2200)
         })
-        .catch(() => showPoke(who, fallback, fallbackAction))
+        .catch(() => {
+          if (phaseRef.current !== 'idle' || player.current!.playing) return
+          showPoke(who, fallback, fallbackAction)
+        })
       // 先给一个占位反应,LLM 返回后替换
       showPoke(who, '（被戳得一激灵）', 'surprise', 1200)
       return
@@ -1130,7 +1201,8 @@ function App() {
           title="设置"
           onClick={() => {
             if (settingsOpen && voiceRecording.current) return // 录音中锁定
-            settingsOpen ? setSettingsOpen(false) : void openSettings()
+            if (settingsOpen) setSettingsOpen(false)
+            else void openSettings()
           }}
         >
           <GearIcon />
@@ -1149,17 +1221,33 @@ function App() {
           ref={btnTopic}
           className={`ctrl-btn icon${hovered === 'topic' ? ' hot' : ''}${topicOverride ? ' on' : ''}`}
           title={topicOverride ? `话题：${topicOverride}` : '设置聊天主题'}
-          onClick={() => (topicOpen ? setTopicOpen(false) : (setSettingsOpen(false), setTopicOpen(true)))}
+          onClick={() => {
+            if (topicOpen) {
+              setTopicOpen(false)
+            } else {
+              setSettingsOpen(false)
+              setTopicOpen(true)
+            }
+          }}
         >
           <TargetIcon />
         </button>
 
         <button
+          ref={btnChat}
           className={`ctrl-btn icon${hovered === 'chat' ? ' hot' : ''}${chatOpen ? ' on' : ''}`}
           title="和角色说话(@甲/@乙 指定谁回)"
-          onClick={() => (chatOpen ? setChatOpen(false) : (setSettingsOpen(false), setTopicOpen(false), setChatOpen(true)))}
+          onClick={() => {
+            if (chatOpen) {
+              setChatOpen(false)
+            } else {
+              setSettingsOpen(false)
+              setTopicOpen(false)
+              setChatOpen(true)
+            }
+          }}
         >
-          💬
+          <ChatIcon />
         </button>
 
         <button
@@ -1741,6 +1829,7 @@ function App() {
 
       {chatOpen && (
           <div
+            ref={chatBoxRef}
             className="chat-box"
             style={{ left: `${ctrlBar.xPct}%`, top: ctrlBar.top + 46 }}
           >
@@ -1768,7 +1857,7 @@ function App() {
         )}
 
         {showWatermark && (
-          <div className="watermark">M5 · 空闲自动重放历史 · 选模式点 ▶ 生成一集</div>
+          <div className="watermark">空闲时自动重放历史 · 选模式点 ▶ 生成一集 · 拖精灵球移动工具栏</div>
         )}
       </div>
   )

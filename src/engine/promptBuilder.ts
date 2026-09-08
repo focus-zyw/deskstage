@@ -19,11 +19,6 @@ export interface UserContext {
   facts?: string[]
 }
 
-export interface ChatMessage {
-  role: 'system' | 'user'
-  content: string
-}
-
 /** 把画像/口味/记忆事实渲染成一段"观众画像"文本,空字段自动省略 */
 export function renderUserContext(ctx: UserContext): string {
   const p = ctx.profile

@@ -1,4 +1,5 @@
-import { getConfig } from '../storage/configStore'
+import { fetch as rustFetch } from '@tauri-apps/plugin-http'
+import { getConfig, inTauri } from '../storage/configStore'
 import type { UserProfile } from '../storage/configStore'
 import { buildMessages, renderUserContext, type UserContext } from './promptBuilder'
 import { getMemory, topFacts, tasteSummary, type FactCategory } from '../storage/memoryStore'
@@ -13,6 +14,7 @@ const VALID_ACTIONS = new Set([
   'angry',
   'sad',
   'surprise',
+  'shy', // 乙有独立贴图;甲缺图运行时回退 idle
   'shake',
   'jump',
 ])
@@ -36,10 +38,29 @@ function signalAborted(e: unknown): boolean {
   return (e as Error)?.name === 'AbortError'
 }
 
-/** 调用 OpenAI 兼容 /chat/completions，返回原始文本。90s 超时，可被外部中止 */
+/** LLM 请求走 Rust 侧 http(tauri-plugin-http):不受 WebView CORS 限制,
+ *  国内厂商(dashscope/方舟等不发 CORS 头)也能直连。
+ *  capabilities 只放行了预设厂商域与 http://*(本地/局域网服务);
+ *  未放行的自定义 https 端点会报 scope 错误,此时回落原生 fetch(靠对方 CORS 头)。 */
+async function fetchLlm(url: string, init: RequestInit): Promise<Response> {
+  if (!inTauri) return fetch(url, init)
+  try {
+    return await rustFetch(url, init)
+  } catch (e) {
+    if (/not allowed on the configured scope/i.test(String((e as Error)?.message ?? ''))) {
+      return fetch(url, init)
+    }
+    throw e
+  }
+}
+
+/** 调用 OpenAI 兼容 /chat/completions，返回原始文本。90s 超时，可被外部中止。
+ *  jsonMode=false 用于纯文本应答(戳一戳吐槽/聊天回复):这些调用本就不该强迫
+ *  模型输出 JSON,且部分端点(如 deepseek-reasoner)不支持 response_format 会直接 400 */
 async function chatRaw(
   messages: { role: string; content: string }[],
   signal?: AbortSignal,
+  jsonMode = true,
 ): Promise<string> {
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(new DOMException('超时', 'TimeoutError')), 90_000)
@@ -47,7 +68,7 @@ async function chatRaw(
   signal?.addEventListener('abort', onAbort, { once: true })
   try {
     const cfg = await getConfig()
-    const res = await fetch(`${cfg.baseUrl}/chat/completions`, {
+    const res = await fetchLlm(`${cfg.baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -58,7 +79,7 @@ async function chatRaw(
         messages,
         temperature: 1.1,
         max_tokens: 4000,
-        response_format: { type: 'json_object' },
+        ...(jsonMode ? { response_format: { type: 'json_object' } } : {}),
       }),
       signal: ctrl.signal,
     })
@@ -127,15 +148,21 @@ export async function generateDialog(
   }
   const messages = buildMessages(mode, topic, recentLines, topicFixed, cfg.userInterests, userCtx)
   let lastErr: unknown = new Error('未知错误')
+  let noJsonMode = false // 该端点不支持 response_format 时降级(400 判定)
   for (let attempt = 0; attempt < 2; attempt++) {
     if (signal?.aborted) throw new DOMException('已中止', 'AbortError')
     try {
-      const raw = await chatRaw(messages, signal)
+      const raw = await chatRaw(messages, signal, !noJsonMode)
       return parseDialog(raw)
     } catch (e) {
       // 用户主动中止不重试，直接抛
       if (signal?.aborted || (e as Error)?.name === 'AbortError') throw e
       lastErr = e
+      if (attempt === 0) {
+        // 400 多为端点不支持 response_format → 第二次去掉;其他错误稍退避,避免限流下二连发
+        noJsonMode = (e as { status?: number }).status === 400
+        if (!noJsonMode) await new Promise((r) => setTimeout(r, 600))
+      }
     }
   }
   throw lastErr
@@ -216,7 +243,7 @@ export async function improvPokeLine(
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(new DOMException('超时', 'TimeoutError')), 4_000)
   try {
-    let raw = (await chatRaw(messages, ctrl.signal)).trim()
+    let raw = (await chatRaw(messages, ctrl.signal, false)).trim()
     // 模型偶尔无视"只输出一句话"把结果包成 JSON(如 {"text":"..."}) → 解包
     if (raw.startsWith('{')) {
       try {
@@ -265,7 +292,7 @@ export async function generateUserChatReply(who: Speaker, userText: string): Pro
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(new DOMException('超时', 'TimeoutError')), 8_000)
   try {
-    let raw = (await chatRaw(messages, ctrl.signal)).trim()
+    let raw = (await chatRaw(messages, ctrl.signal, false)).trim()
     if (raw.startsWith('{')) {
       try {
         const obj = JSON.parse(raw) as { text?: unknown; content?: unknown }

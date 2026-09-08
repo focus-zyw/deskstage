@@ -25,8 +25,6 @@ export interface CharacterSpriteProps {
   hot: boolean
   /** 点击反应动画进行中 */
   reacting: boolean
-  /** 点击反应（拖动判定在外层处理,这里只收纯点击） */
-  onClick?: () => void
   ref?: Ref<HTMLDivElement>
 }
 
@@ -71,7 +69,6 @@ export function CharacterSprite({
   dragging,
   hot,
   reacting,
-  onClick,
   ref,
 }: CharacterSpriteProps) {
   // shake/jump 等无独立贴图的动作复用 idle 图，表现由 CSS 动画承担
@@ -118,7 +115,7 @@ export function CharacterSprite({
   if (broken) {
     // 兜底：素材缺失时渲染原占位胶囊，演出不中断
     return (
-      <div ref={ref} className={cls} style={style} onClick={onClick}>
+      <div ref={ref} className={cls} style={style}>
         <div className="char-capsule">
           <div className="char-face">
             <div className="char-eyes">
@@ -134,7 +131,7 @@ export function CharacterSprite({
   }
 
   return (
-    <div ref={ref} className={cls} style={style} onClick={onClick}>
+    <div ref={ref} className={cls} style={style}>
       <div className={`char-body${fidget ? ` ${fidget}` : ''}`}>
         {prev && !underGone && <img className="char-img under" src={prev} alt="" />}
         <img
