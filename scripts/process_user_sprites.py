@@ -57,7 +57,7 @@ def head_width(im: Image.Image) -> int:
 
 
 def main(prefix: str, flip: bool = False) -> None:
-    actions = ["idle", "talk", "happy", "angry", "sad", "surprise"]
+    actions = ["idle", "talk", "happy", "angry", "sad", "surprise", "shy"]
     loaded = {}
     for act in actions:
         p = os.path.join(TEMP, f"{prefix}-{act}.png")

@@ -1,5 +1,6 @@
 import type { DialogLine } from '../performer/player'
 import { modeOf, type Mode } from '../performer/modes'
+import { currentTimeSlot } from './timeAware'
 
 const ACTIONS = 'idle, talk, happy, angry, sad, surprise, shake, jump'
 
@@ -34,6 +35,9 @@ export function buildMessages(
     ? `\n\n使用者画像：我们的观众朋友有以下兴趣爱好：${userInterests.trim()}。聊天中可以自然地偶尔聊到这些（不要刻意每句都提）。`
     : ''
 
+  const slot = currentTimeSlot()
+  const timeCtx = `\n\n现实时间：现在是${slot.label}，${slot.scene}。段子的场景和情绪可以贴合这个时间段。`
+
   const protocol = `输出协议（严格遵守）：
 - 只输出一个 JSON 对象，不要输出任何其他文字
 - 格式：{"dialog":[{"speaker":"A","text":"台词","action":"动作"},...]}
@@ -56,7 +60,7 @@ export function buildMessages(
   return [
     {
       role: 'system',
-      content: `你是一位擅长传统相声和网络脱口秀的资深喜剧编剧,给桌面双人情景剧写段子。${persona}${profile}\n\n${craft}\n\n${protocol}\n\n${modeOf(mode).prompt}`,
+      content: `你是一位擅长传统相声和网络脱口秀的资深喜剧编剧,给桌面双人情景剧写段子。${persona}${profile}${timeCtx}\n\n${craft}\n\n${protocol}\n\n${modeOf(mode).prompt}`,
     },
     {
       role: 'user',

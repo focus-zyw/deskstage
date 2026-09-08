@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import type { PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
+import { invoke } from '@tauri-apps/api/core'
+import { readFile } from '@tauri-apps/plugin-fs'
 import { CharacterSprite } from './stage/CharacterSprite'
 import { Bubble } from './stage/Bubble'
 import { EyeIcon, EyeOffIcon, PlayIcon, StopIcon, GearIcon, PowerIcon, TargetIcon } from './stage/icons'
@@ -16,8 +18,9 @@ import {
   type Speaker,
 } from './performer/player'
 import { MODES, modeList, modeOf, type Mode } from './performer/modes'
-import { generateDialog, describeLlmError } from './engine/llmClient'
-import { speak, prefetchVoice, stopSpeaking, VOICES } from './engine/tts'
+import { generateDialog, generateShortChat, improvPokeLine, describeLlmError } from './engine/llmClient'
+import { isQuietHours } from './engine/timeAware'
+import { speak, prefetchVoice, stopSpeaking, VOICES, cloneVoice, listCustomVoices, type ClonedVoice } from './engine/tts'
 import { prefetchNext } from './engine/dialogPrefetch'
 import { TOPIC_SEEDS, pickTopic } from './engine/topicSeeds'
 import { VENDORS, CUSTOM_VENDOR_ID, vendorIdOfBaseUrl } from './engine/vendors'
@@ -34,7 +37,7 @@ import {
 } from './storage/configStore'
 import './App.css'
 
-// 点击反应台词池（后续可改为 LLM 即兴生成）
+// 点击反应台词池,按连戳强度分级(60s 滑动窗口计数)
 const POKE_LINES = [
   '干嘛点我！',
   '再点要收费了！',
@@ -42,7 +45,26 @@ const POKE_LINES = [
   '别闹，正聊着呢',
   '摸鱼被发现了？！',
   '（默默挪开半步）',
+  '手滑了？再来一次试试',
+  '点我有什么好玩的嘛',
 ]
+const SHY_LINES = [
+  '（脸红）别、别一直戳啦…',
+  '呜…突然这样我会不好意思的',
+  '（往后缩了缩）你今天好奇怪',
+]
+const ANGRY_LINES = [
+  '够了！再戳我真的生气了！！',
+  '（拍开你的手）烦不烦！',
+  '再戳一下试试？信不信我下线！',
+]
+/** 连戳计数窗口与阈值 */
+const POKE_WINDOW_MS = 60_000
+const SHY_AT = 2 // 窗口内第 2~4 次戳 → 害羞
+const ANGRY_AT = 5 // 第 5 次起 → 生气,并不再响应直到窗口清空
+/** LLM 即兴吐槽:轻戳时的触发概率与冷却 */
+const IMPROV_CHANCE = 0.3
+const IMPROV_COOLDOWN_MS = 30_000
 
 type Phase = 'idle' | 'generating' | 'performing'
 type SaveState = 'idle' | 'saving' | 'saved' | 'error'
@@ -56,6 +78,145 @@ function fmtTime(ts: number): string {
   const d = new Date(ts)
   const p = (n: number) => String(n).padStart(2, '0')
   return `${d.getMonth() + 1}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+}
+
+/** 音色克隆行:选一段 10~20 秒的清晰人声(说话内容与文本一致),上传后成为账号下的克隆音色。
+ *  也支持从正在播放声音的应用直接录一段(进程环回,隔离其他软件声音)。
+ *  克隆成功自动选中给角色乙(通常捧哏换个有味道的声线) */
+function CloneVoiceRow({
+  apiKey,
+  onCloned,
+}: {
+  apiKey: string
+  onCloned: (v: ClonedVoice) => void
+}) {
+  const [file, setFile] = useState<File | null>(null)
+  const [name, setName] = useState('')
+  const [text, setText] = useState('')
+  const [state, setState] = useState<'idle' | 'busy' | 'ok' | 'error'>('idle')
+  const [errMsg, setErrMsg] = useState('')
+  // 应用声音录制:会话列表/选中项/录音状态与计时
+  const [sessions, setSessions] = useState<{ pid: number; name: string }[]>([])
+  const [target, setTarget] = useState<string>('')
+  const [recording, setRecording] = useState(false)
+  const [elapsed, setElapsed] = useState(0)
+
+  // 计时器须在早退 return 之前(Hook 必须每条渲染路径都执行)
+  useEffect(() => {
+    if (!recording) return
+    const t = window.setInterval(() => setElapsed((s) => s + 1), 1000)
+    return () => window.clearInterval(t)
+  }, [recording])
+
+  if (!apiKey.trim()) return null
+
+  async function refreshSessions() {
+    try {
+      const list = await invoke<{ pid: number; name: string }[]>('list_audio_sessions')
+      setSessions(list)
+    } catch (e) {
+      console.warn('应用声音会话列表拉取失败', e)
+    }
+  }
+
+  async function toggleRecord() {
+    if (!recording) {
+      try {
+        await invoke('start_capture', {
+          pid: target === 'system' || target === '' ? null : Number(target),
+        })
+        setRecording(true)
+        setElapsed(0)
+        setFile(null)
+      } catch (e) {
+        setErrMsg(String(e).slice(0, 120))
+        setState('error')
+      }
+      return
+    }
+    try {
+      const path = await invoke<string>('stop_capture')
+      const bytes = await readFile(path)
+      setFile(new File([bytes], path.split(/[\\/]/).pop() ?? 'capture.wav', { type: 'audio/wav' }))
+      setRecording(false)
+    } catch (e) {
+      setRecording(false)
+      setErrMsg(String(e).slice(0, 120))
+      setState('error')
+    }
+  }
+
+  async function submit() {
+    if (!file || !name.trim() || !text.trim()) return
+    setState('busy')
+    try {
+      const v = await cloneVoice(apiKey, file, file.name, name.trim(), text.trim())
+      setState('ok')
+      onCloned(v)
+    } catch (e) {
+      setState('error')
+      setErrMsg((e as Error).message.slice(0, 120))
+    }
+  }
+
+  return (
+    <div className="settings-row clone-row" title="用一段真人录音克隆专属音色:内容需与文本一致,清晰无背景音乐">
+      <label htmlFor="cfg-clone-file">克隆音色(选人声样本,或从应用录一段)</label>
+      <div className="clone-fields">
+        <input
+          id="cfg-clone-file"
+          type="file"
+          accept="audio/*"
+          onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+        />
+        <div className="capture-fields">
+          <select
+            value={target}
+            onChange={(e) => setTarget(e.target.value)}
+            onFocus={() => void refreshSessions()}
+          >
+            <option value="system">整个系统的声音</option>
+            {sessions.map((s) => (
+              <option key={s.pid} value={String(s.pid)}>
+                {s.name}
+              </option>
+            ))}
+          </select>
+          <button
+            className="panel-btn"
+            disabled={state === 'busy'}
+            onClick={() => void toggleRecord()}
+          >
+            {recording ? `停止录制 (${elapsed}s)` : target === 'system' ? '录制系统' : '录制该应用'}
+          </button>
+        </div>
+        {file && (
+          <span className="clone-tip ok">样本:{file.name}({Math.round(file.size / 1024)}KB)</span>
+        )}
+        <input
+          type="text"
+          placeholder="音色名(如:up主小张)"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+        />
+        <input
+          type="text"
+          placeholder="录音里说的那句话(逐字)"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+        />
+        <button
+          className="panel-btn"
+          disabled={!file || !name.trim() || !text.trim() || state === 'busy'}
+          onClick={() => void submit()}
+        >
+          {state === 'busy' ? '上传中…' : '克隆'}
+        </button>
+      </div>
+      {state === 'ok' && <span className="clone-tip ok">✓ 克隆成功,已选给角色乙</span>}
+      {state === 'error' && <span className="clone-tip err">{errMsg}</span>}
+    </div>
+  )
 }
 
 function App() {
@@ -79,7 +240,7 @@ function App() {
   const [form, setForm] = useState<AppConfig>(DEFAULT_CONFIG)
   const [saveState, setSaveState] = useState<SaveState>('idle')
   // 设置面板分页:常规 / 历史
-  const [settingsTab, setSettingsTab] = useState<'general' | 'history'>('general')
+  const [settingsTab, setSettingsTab] = useState<'general' | 'voice' | 'history'>('general')
   // 设置面板当前选中的厂商(custom = 本地/自定义,baseUrl/model 自由输入)
   const [vendorId, setVendorId] = useState(CUSTOM_VENDOR_ID)
   // 面板内各厂商 key 的草稿:切换厂商时把输入存回旧键、从新键带出,保存时合并落盘
@@ -109,6 +270,8 @@ function App() {
   const [showWatermark, setShowWatermark] = useState(DEFAULT_CONFIG.showWatermark)
   // 角色语音配置(开关 + 双角色音色,改即落盘)
   const [voice, setVoice] = useState(DEFAULT_CONFIG.voice)
+  // 账号下的克隆音色(打开设置时拉取),供音色下拉选择
+  const [clonedVoices, setClonedVoices] = useState<ClonedVoice[]>([])
   // 使用者的兴趣爱好(设置面板填写,随机话题时按模式概率介入)
   const [userInterests, setUserInterests] = useState(DEFAULT_CONFIG.userInterests)
   // 最近交互的角色显示在上层(z-order)
@@ -120,6 +283,11 @@ function App() {
   const [dropFor, setDropFor] = useState<Speaker | null>(null)
   const dropTimer = useRef(0)
   const [dragUi, setDragUi] = useState<Speaker | null>(null)
+  // 时间感知:启动问候 + 空闲自发短聊天
+  const [spontTick, setSpontTick] = useState(0)
+  const phaseRef = useRef(phase)
+  const lastSpontAt = useRef(0)
+  const greeted = useRef(false)
   const dragRef = useRef<{ who: Speaker; startX: number; startY: number; orig: CharPos; moved: boolean } | null>(null)
   const draggingWho = useRef<Speaker | null>(null)
 
@@ -170,6 +338,10 @@ function App() {
     })
   }
   const generateAbort = useRef<AbortController | null>(null)
+  // phase 的 ref 镜像:异步回调(LLM 返回)里判断此刻是否仍空闲
+  useEffect(() => {
+    phaseRef.current = phase
+  }, [phase])
   // 上一段台词（内存中），续播时喂给 LLM 做衔接
   const lastLines = useRef<DialogLine[]>([])
   // 上一次自动重放的集,连续重放时避开
@@ -256,6 +428,16 @@ function App() {
     })
   }, [topicOpen])
 
+  // 任一面板打开时注册全屏兜底热区:穿透窗口里面板外的屏幕点击也能送达 DOM,
+  // "点外部收起"才生效。注册顺序在最后 → hitTest 先命中面板/工具栏/角色等小热区,
+  // 只有落在它们之外的光标才会命中 outside
+  useEffect(() => {
+    if (!settingsOpen && !topicOpen) return
+    return registerHitRegion('outside', {
+      getRect: () => new DOMRect(0, 0, window.innerWidth, window.innerHeight),
+    })
+  }, [settingsOpen, topicOpen])
+
   // Escape 关闭任一打开的面板
   useEffect(() => {
     if (!settingsOpen && !topicOpen) return
@@ -309,6 +491,62 @@ function App() {
     const t = window.setTimeout(() => void autoReplay(), autoReplayMin * 60_000)
     return () => window.clearTimeout(t)
   }, [phase, settingsOpen, charHidden, autoReplayMin, activeTick])
+
+  /** 播出一段短聊天(问候/自发),计入历史,静默失败 */
+  function playShortChat(lines: DialogLine[]) {
+    lastLines.current = lines
+    playingLines.current = lines
+    setPhase('performing')
+    player.current!.play(lines, { gap: 700 })
+    void appendHistory(lines, 'daily')
+  }
+
+  /** 自发短聊天调度:连续空闲 2.5~5 分钟后尝试一次;各守卫不过就静默跳过 */
+  useEffect(() => {
+    if (phase !== 'idle' || settingsOpen || topicOpen || charHidden || autoReplayMin <= 0) return
+    const t = window.setTimeout(() => void trySpontaneous(), 150_000 + Math.random() * 150_000)
+    return () => window.clearTimeout(t)
+
+    async function trySpontaneous() {
+      setSpontTick((n) => n + 1) // 本次尝试结束 → 调度 effect 重新武装
+      if (phaseRef.current !== 'idle' || player.current!.playing) return
+      if (isQuietHours()) return // 凌晨免打扰,角色也该睡觉
+      if (autoReplayMin <= 0) return // 用户关了自动内容,自发聊天一并尊重
+      const now = Date.now()
+      if (now - lastSpontAt.current < 15 * 60_000) return // 最小间隔
+      if (Math.random() > 0.4) return // 这次不聊
+      const cfg = await getConfig()
+      if (!cfg.apiKey.trim()) return
+      lastSpontAt.current = now
+      try {
+        const lines = await generateShortChat('spontaneous', lastLines.current, cfg.userInterests)
+        if (phaseRef.current !== 'idle' || player.current!.playing) return
+        if (lines.length === 0) return
+        playShortChat(lines)
+      } catch {
+        // 生成失败静默——自发内容宁可错过
+      }
+    }
+  }, [phase, settingsOpen, topicOpen, charHidden, autoReplayMin, activeTick, spontTick])
+
+  /** 启动问候:打开应用时按当前时段打招呼(失败静默);占用自发聊天的预算 */
+  useEffect(() => {
+    if (greeted.current) return
+    greeted.current = true
+    void (async () => {
+      const cfg = await getConfig()
+      if (!cfg.apiKey.trim()) return
+      try {
+        const lines = await generateShortChat('greeting', lastLines.current, cfg.userInterests)
+        if (phaseRef.current !== 'idle' || player.current!.playing) return
+        if (lines.length === 0) return
+        lastSpontAt.current = Date.now() - 14 * 60_000 // 问候后约 1 分钟起,自发聊天才可用
+        playShortChat(lines)
+      } catch {
+        // 问候失败静默
+      }
+    })()
+  }, [])
 
   /** 单次点播：优先消费预生成(秒开,使用后移入 history);
    *  未命中则生成当前轮,开播后后台再静默预生成下一轮(共两轮) */
@@ -409,6 +647,12 @@ function App() {
     setKeyDrafts({ ...cfg.apiKeys, [vendorKeyOf(id, cfg.baseUrl)]: cfg.apiKey })
     setVoice(cfg.voice)
     setEpisodes(await listEpisodes())
+    // 拉取账号下的克隆音色(失败静默,下拉只是少了自定义项)
+    if (cfg.voice.apiKey.trim()) {
+      listCustomVoices(cfg.voice.apiKey)
+        .then(setClonedVoices)
+        .catch((e) => console.warn('克隆音色列表拉取失败(静默)', e))
+    }
   }
 
   /** 保存配置：落盘 + 刷新缓存，下一次生成即生效。
@@ -624,17 +868,62 @@ function App() {
     exitTimer.current = window.setTimeout(() => setExitArmed(false), 3000)
   }
 
-  function poke(who: Speaker) {
-    setActiveTick((t) => t + 1) // 用户互动,重置自动重放计时
-    setTopActor(who)
-    const line = POKE_LINES[Math.floor(Math.random() * POKE_LINES.length)]
+  /** 连戳计数(60s 滑动窗口),决定反应强度 */
+  const pokeCounts = useRef<Record<Speaker, number[]>>({ A: [], B: [] })
+  const improvLastAt = useRef(0)
+
+  function showPoke(who: Speaker, line: string, action: string, ms = 1600) {
     setBubble((b) => ({ ...b, [who]: line }))
+    setAction((a) => ({ ...a, [who]: action }))
     setReacting((r) => ({ ...r, [who]: true }))
     window.clearTimeout(timers.current[who])
     timers.current[who] = window.setTimeout(() => {
       setBubble((b) => ({ ...b, [who]: null }))
+      setAction((a) => ({ ...a, [who]: 'idle' }))
       setReacting((r) => ({ ...r, [who]: false }))
-    }, 1600)
+    }, ms)
+  }
+
+  function poke(who: Speaker) {
+    setActiveTick((t) => t + 1) // 用户互动,重置自动重放计时
+    setTopActor(who)
+
+    // 连戳分级:滑动窗口计数,生气期内不再响应
+    const now = Date.now()
+    const arr = (pokeCounts.current[who] = pokeCounts.current[who].filter(
+      (t) => now - t < POKE_WINDOW_MS,
+    ))
+    const count = arr.length + 1
+    if (count >= ANGRY_AT) {
+      arr.push(now)
+      showPoke(who, ANGRY_LINES[Math.floor(Math.random() * ANGRY_LINES.length)], 'angry', 2000)
+      return
+    }
+    arr.push(now)
+    const shy = count >= SHY_AT
+    const fallback = shy
+      ? SHY_LINES[Math.floor(Math.random() * SHY_LINES.length)]
+      : POKE_LINES[Math.floor(Math.random() * POKE_LINES.length)]
+    const fallbackAction = shy ? 'shy' : 'talk'
+
+    // 轻戳小概率走 LLM 即兴(冷却内/演出生成中不触发);失败静默用固定台词
+    if (
+      !shy &&
+      phase === 'idle' &&
+      Math.random() < IMPROV_CHANCE &&
+      now - improvLastAt.current >= IMPROV_COOLDOWN_MS
+    ) {
+      improvLastAt.current = now
+      improvPokeLine(who, lastLines.current)
+        .then((line) => {
+          if (Date.now() - now < 4500) showPoke(who, line, 'talk', 2200)
+        })
+        .catch(() => showPoke(who, fallback, fallbackAction))
+      // 先给一个占位反应,LLM 返回后替换
+      showPoke(who, '（被戳得一激灵）', 'surprise', 1200)
+      return
+    }
+    showPoke(who, fallback, fallbackAction)
   }
 
   const busy = phase === 'generating'
@@ -749,6 +1038,12 @@ function App() {
                 onClick={() => setSettingsTab('general')}
               >
                 常规
+              </button>
+              <button
+                className={`panel-tab${settingsTab === 'voice' ? ' on' : ''}`}
+                onClick={() => setSettingsTab('voice')}
+              >
+                语音
               </button>
               <button
                 className={`panel-tab${settingsTab === 'history' ? ' on' : ''}`}
@@ -909,6 +1204,29 @@ function App() {
               }}
             />
           </div>
+          <div className="settings-actions">
+            <button className="panel-btn" onClick={() => setSettingsOpen(false)}>
+              取消
+            </button>
+            <button
+              className="panel-btn primary"
+              disabled={saveState === 'saving'}
+              onClick={() => void saveSettings()}
+            >
+              {saveState === 'saving' ? '保存中…' : '保存'}
+            </button>
+          </div>
+          {saveState === 'saved' && (
+            <div className="settings-tip ok">✓ 已保存，下次生成即生效</div>
+          )}
+          {saveState === 'error' && (
+            <div className="settings-tip err">保存失败，详见控制台日志</div>
+          )}
+            </>
+          )}
+
+          {settingsTab === 'voice' && (
+            <>
           <div className="settings-row">
             <label htmlFor="cfg-voice">角色语音(硅基流动)</label>
             <input
@@ -927,7 +1245,7 @@ function App() {
           {voice.enabled && (
             <>
               <div className="settings-row">
-                <label htmlFor="cfg-voice-key" title="siliconflow.cn 的 API Key,与上方 LLM 的 key 相互独立">
+                <label htmlFor="cfg-voice-key" title="siliconflow.cn 的 API Key,与常规页 LLM 的 key 相互独立">
                   语音 API Key
                 </label>
                 <input
@@ -962,6 +1280,9 @@ function App() {
                       {v.label}
                     </option>
                   ))}
+                  {clonedVoices.length > 0 && <optgroup label="我的克隆音色">{clonedVoices.map((v) => (
+                    <option key={v.uri} value={v.uri}>{v.name}</option>
+                  ))}</optgroup>}
                 </select>
               </div>
               <div className="settings-row">
@@ -982,27 +1303,21 @@ function App() {
                       {v.label}
                     </option>
                   ))}
+                  {clonedVoices.length > 0 && <optgroup label="我的克隆音色">{clonedVoices.map((v) => (
+                    <option key={v.uri} value={v.uri}>{v.name}</option>
+                  ))}</optgroup>}
                 </select>
               </div>
+              <CloneVoiceRow
+                apiKey={voice.apiKey}
+                onCloned={(v) => {
+                  setClonedVoices((list) => [...list.filter((x) => x.uri !== v.uri), v])
+                  const next = { ...voice, B: v.uri }
+                  setVoice(next)
+                  saveConfig({ voice: next }).catch(() => {})
+                }}
+              />
             </>
-          )}
-          <div className="settings-actions">
-            <button className="panel-btn" onClick={() => setSettingsOpen(false)}>
-              取消
-            </button>
-            <button
-              className="panel-btn primary"
-              disabled={saveState === 'saving'}
-              onClick={() => void saveSettings()}
-            >
-              {saveState === 'saving' ? '保存中…' : '保存'}
-            </button>
-          </div>
-          {saveState === 'saved' && (
-            <div className="settings-tip ok">✓ 已保存，下次生成即生效</div>
-          )}
-          {saveState === 'error' && (
-            <div className="settings-tip err">保存失败，详见控制台日志</div>
           )}
             </>
           )}

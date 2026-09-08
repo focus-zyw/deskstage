@@ -105,7 +105,9 @@ function sanitizeVoice(v: unknown): VoiceConfig {
   const d = DEFAULT_CONFIG.voice
   const o = (v ?? {}) as Record<string, unknown>
   const name = (x: unknown, fb: string): string => {
-    const s = typeof x === 'string' ? x.trim().slice(0, 120) : ''
+    const s = typeof x === 'string' ? x.trim().slice(0, 200) : ''
+    // 克隆音色(speech: 开头,账号侧资源)直接放行;内置音色须在注册名单内
+    if (s.startsWith('speech:')) return s
     return TTS_VOICE_IDS.size === 0 || TTS_VOICE_IDS.has(s) ? s || fb : fb
   }
   return {

@@ -850,3 +850,37 @@
   background: rgba(124, 108, 240, 0.6);
   color: #fff;
 }
+
+/* 音色克隆行:字段竖排在小面板里 */
+.clone-row {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+}
+.clone-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.clone-fields input[type='text'],
+.clone-fields input[type='file'] {
+  width: 100%;
+  box-sizing: border-box;
+}
+.clone-fields input[type='text'] {
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.12);
+  color: inherit;
+  padding: 5px 8px;
+  font-size: 12px;
+}
+.clone-tip {
+  font-size: 11px;
+}
+.clone-tip.ok {
+  color: #6fcf7f;
+}
+.clone-tip.err {
+  color: #ff8a80;
+}

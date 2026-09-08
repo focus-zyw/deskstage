@@ -1,5 +1,6 @@
 import { getConfig } from '../storage/configStore'
 import { buildMessages } from './promptBuilder'
+import { currentTimeSlot } from './timeAware'
 import type { DialogLine, Speaker } from '../performer/player'
 import type { Mode } from '../performer/modes'
 
@@ -78,7 +79,7 @@ async function chatRaw(
 }
 
 /** 解析并规范化 LLM 输出：容忍代码围栏/多余文本，非法 action 归一为 talk，丢弃坏行 */
-function parseDialog(raw: string): DialogLine[] {
+function parseDialog(raw: string, minLines = 4): DialogLine[] {
   let obj: unknown
   try {
     obj = JSON.parse(raw)
@@ -100,7 +101,7 @@ function parseDialog(raw: string): DialogLine[] {
       typeof it.action === 'string' && VALID_ACTIONS.has(it.action) ? it.action : 'talk'
     lines.push({ speaker, text, action })
   }
-  if (lines.length < 4) throw new Error('有效台词过少')
+  if (lines.length < minLines) throw new Error('有效台词过少')
   return lines
 }
 
@@ -130,4 +131,91 @@ export async function generateDialog(
     }
   }
   throw lastErr
+}
+
+/**
+ * 时间感知短聊天:启动问候 / 空闲自发小话题,2~4 句即止。
+ * 12s 超时、不重试——自发内容宁可错过也不能拖沓;失败由调用方静默处理。
+ */
+export async function generateShortChat(
+  kind: 'greeting' | 'spontaneous',
+  recentLines: DialogLine[],
+  userInterests?: string,
+): Promise<DialogLine[]> {
+  const slot = currentTimeSlot()
+  const persona =
+    '甲:精力充沛、爱吹牛、脑洞大,满嘴跑火车还特别得意;乙:冷静毒舌、专拆台、话少但一针见血。两人是互怼但有默契的老搭档'
+  const interests = userInterests?.trim() ? `观众朋友的兴趣:${userInterests.trim()}。` : ''
+  const prev = recentLines
+    .slice(-2)
+    .map((l) => `${l.speaker === 'A' ? '甲' : '乙'}:${l.text}`)
+    .join('\n')
+  const task =
+    (kind === 'greeting'
+      ? '观众刚打开应用。用一段符合当前时间的简短开场,两人互相招呼并带上点时间段的梗。'
+      : `两人空闲了一会儿,自发起一个小话题随便聊聊(像真人闲坐时随口开话头)。${interests}`) +
+    (prev ? `\n不要重复、要自然衔接刚才的结尾:${prev}` : '')
+  const messages: { role: string; content: string }[] = [
+    {
+      role: 'system',
+      content: `桌面双人情景剧的短互动编剧。角色:${persona}。现实时间:现在是${slot.label},${slot.scene}。创作要口语化、有梗、像真说话。\n输出协议(严格遵守):只输出一个 JSON 对象,格式 {"dialog":[{"speaker":"A","text":"台词","action":"动作"},...]};speaker 只能是 A 或 B 且交替;action 只能是 idle|talk|happy|angry|sad|surprise|shy;一共 2~4 句;每句不超过 18 个字。`,
+    },
+    { role: 'user', content: task },
+  ]
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(new DOMException('超时', 'TimeoutError')), 12_000)
+  try {
+    const raw = await chatRaw(messages, ctrl.signal)
+    return parseDialog(raw, 2)
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/**
+ * 点击角色的即兴反应:让 LLM 以当前角色人设说一句短吐槽(≤15 字)。
+ * 4s 超时、不重试——戳一戳场景宁可快速回退固定台词。
+ */
+export async function improvPokeLine(
+  who: 'A' | 'B',
+  recentLines: DialogLine[],
+): Promise<string> {
+  const persona =
+    who === 'A'
+      ? '甲:精力充沛、爱吹牛、脑洞大、说话夸张'
+      : '乙:冷静毒舌、专拆台、话少但一针见血'
+  const ctx = recentLines
+    .slice(-4)
+    .map((l) => `${l.speaker === 'A' ? '甲' : '乙'}:${l.text}`)
+    .join('\n')
+  const messages: { role: string; content: string }[] = [
+    {
+      role: 'system',
+      content: `桌面情景剧互动。你是情景剧里的${persona}。观众朋友刚用鼠标戳了你一下。用你的口吻说一句对被戳的即兴反应,15 字以内,只输出这一句话,不要引号。`,
+    },
+    {
+      role: 'user',
+      content: ctx ? `最近剧情:\n${ctx}\n\n(观众戳了你一下)` : '(观众戳了你一下)',
+    },
+  ]
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(new DOMException('超时', 'TimeoutError')), 4_000)
+  try {
+    let raw = (await chatRaw(messages, ctrl.signal)).trim()
+    // 模型偶尔无视"只输出一句话"把结果包成 JSON(如 {"text":"..."}) → 解包
+    if (raw.startsWith('{')) {
+      try {
+        const obj = JSON.parse(raw) as { text?: unknown; content?: unknown; line?: unknown }
+        const inner = [obj.text, obj.content, obj.line].find((v) => typeof v === 'string')
+        if (inner) raw = (inner as string).trim()
+      } catch {
+        // 不是合法 JSON,按原文处理
+      }
+    }
+    const line = raw.replace(/^["'「『]|["'」』]$/g, '')
+    if (!line || line.length > 25) throw new Error('即兴结果不合规')
+    return line
+  } finally {
+    clearTimeout(timer)
+  }
 }

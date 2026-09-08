@@ -33,7 +33,7 @@ export const SPRITE_SETS: Record<'A' | 'B', SpriteSet> = {
     name: '乙',
     accent: '#5a6472', // 程序员:深灰蓝主色
     height: 320,
-    actions: [...ART_ACTIONS],
+    actions: [...ART_ACTIONS, 'shy'], // shy:连戳害羞反应(仅乙有素材)
   },
 }
 
