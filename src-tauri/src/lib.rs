@@ -24,6 +24,36 @@ fn spawn_cursor_poll(handle: tauri::AppHandle) {
   });
 }
 
+// 看视频不被打扰:窗口默认 WS_EX_NOACTIVATE(点击不抢焦点,播放器不会因失焦暂停),
+// 需要键盘输入的设置面板打开时临时关闭,关闭面板后恢复。
+#[tauri::command]
+fn set_noactivate(window: tauri::WebviewWindow, enable: bool) {
+  #[cfg(windows)]
+  {
+    #[link(name = "user32")]
+    extern "system" {
+      fn GetWindowLongPtrW(hwnd: isize, index: i32) -> isize;
+      fn SetWindowLongPtrW(hwnd: isize, index: i32, value: isize) -> isize;
+    }
+    const GWL_EXSTYLE: i32 = -20;
+    const WS_EX_NOACTIVATE: isize = 0x0800_0000;
+    if let Ok(hwnd) = window.hwnd() {
+      let handle = hwnd.0 as isize;
+      unsafe {
+        let style = GetWindowLongPtrW(handle, GWL_EXSTYLE);
+        let style = if enable {
+          style | WS_EX_NOACTIVATE
+        } else {
+          style & !WS_EX_NOACTIVATE
+        };
+        SetWindowLongPtrW(handle, GWL_EXSTYLE, style);
+      }
+    }
+  }
+  #[cfg(not(windows))]
+  let _ = (window, enable);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
@@ -31,6 +61,7 @@ pub fn run() {
     .plugin(tauri_plugin_http::init())
     .manage(audio_capture::CaptureState::default())
     .invoke_handler(tauri::generate_handler![
+      set_noactivate,
       audio_capture::list_audio_sessions,
       audio_capture::start_capture,
       audio_capture::stop_capture

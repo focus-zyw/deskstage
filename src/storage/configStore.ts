@@ -34,6 +34,20 @@ export interface VoiceConfig {
   B: string
 }
 
+/** 使用者画像:手填的"角色认识你"信息(多值字段逗号/顿号/换行分隔) */
+export interface UserProfile {
+  /** 称呼,如"小张"(角色会这样叫你) */
+  userName: string
+  /** 职业/身份,如"在读研究生" */
+  occupation: string
+  /** 喜欢的话题/事物 */
+  likes: string
+  /** 讨厌的话题/事物 */
+  dislikes: string
+  /** 雷区:完全不聊的关键词 */
+  banTopics: string
+}
+
 export interface AppConfig {
   apiKey: string
   /** 各厂商分别记忆的 API Key:键 = 预设厂商 id,自定义端点 = `custom:{baseUrl}`;
@@ -41,6 +55,8 @@ export interface AppConfig {
   apiKeys: Record<string, string>
   baseUrl: string
   model: string
+  /** 使用者画像:手填的"角色认识你"信息,注入所有对话 prompt */
+  userProfile: UserProfile
   /** 角色语音 */
   voice: VoiceConfig
   /** 空闲多少分钟后自动重放历史对话;0 = 关闭 */
@@ -83,6 +99,22 @@ export const DEFAULT_CONFIG: AppConfig = {
   ctrlBar: { xPct: 50, top: 10, collapsed: false },
   showWatermark: false,
   userInterests: '',
+  userProfile: { userName: '', occupation: '', likes: '', dislikes: '', banTopics: '' },
+}
+
+/** 清洗使用者画像:逐字段裁剪;likes 为空时回落旧 userInterests 字段(老配置平滑迁移) */
+function sanitizeUserProfile(v: unknown, legacyInterests: string): UserProfile {
+  const o = (v ?? {}) as Record<string, unknown>
+  const str = (x: unknown, cap: number): string =>
+    typeof x === 'string' ? x.trim().slice(0, cap) : ''
+  const likes = str(o.likes, 200) || legacyInterests.slice(0, 200)
+  return {
+    userName: str(o.userName, 30),
+    occupation: str(o.occupation, 60),
+    likes,
+    dislikes: str(o.dislikes, 200),
+    banTopics: str(o.banTopics, 200),
+  }
 }
 
 /** 清洗自动重放频率:非法值回退默认,钳位 0~1440 分钟(0=关闭) */
@@ -194,6 +226,7 @@ function sanitizeConfig(obj: unknown): AppConfig {
     ctrlBar: sanitizeCtrlBar(o.ctrlBar),
     showWatermark: o.showWatermark === true,
     userInterests: typeof o.userInterests === 'string' ? o.userInterests.trim() : '',
+    userProfile: sanitizeUserProfile(o.userProfile, typeof o.userInterests === 'string' ? o.userInterests : ''),
   }
 }
 

@@ -18,11 +18,12 @@ import {
   type Speaker,
 } from './performer/player'
 import { MODES, modeList, modeOf, type Mode } from './performer/modes'
-import { generateDialog, generateShortChat, improvPokeLine, describeLlmError } from './engine/llmClient'
+import { generateDialog, generateShortChat, improvPokeLine, describeLlmError, generateUserChatReply, extractFacts } from './engine/llmClient'
 import { isQuietHours } from './engine/timeAware'
 import { speak, prefetchVoice, stopSpeaking, VOICES, cloneVoice, listCustomVoices, type ClonedVoice } from './engine/tts'
 import { prefetchNext } from './engine/dialogPrefetch'
 import { TOPIC_SEEDS, pickTopic } from './engine/topicSeeds'
+import { bumpTopicSeen, bumpTopicFavored, bumpTopicReplays, bumpMode, bumpPoke, getTopicWeights, getMemory, clearMemory, deleteFact, togglePinFact, topFacts, mergeFacts, type MemoryFact } from './storage/memoryStore'
 import { VENDORS, CUSTOM_VENDOR_ID, vendorIdOfBaseUrl } from './engine/vendors'
 import { takePrefetch } from './storage/prefetchStore'
 import { appendHistory, loadRecentHistory, listEpisodes, deleteEpisodes, toggleFavorite, type Episode } from './storage/historyStore'
@@ -68,6 +69,16 @@ const IMPROV_COOLDOWN_MS = 30_000
 
 type Phase = 'idle' | 'generating' | 'performing'
 type SaveState = 'idle' | 'saving' | 'saved' | 'error'
+
+/** 记忆事实分类的中文标签 */
+const MEM_CAT_LABEL: Record<string, string> = {
+  identity: '身份',
+  preference: '喜好',
+  habit: '习惯',
+  people: '身边人',
+  event: '事件',
+  other: '其他',
+}
 
 /** apiKeys 的存储键:预设厂商用 id,自定义端点按 baseUrl 区分(与 configStore 注释约定一致) */
 function vendorKeyOf(id: string, baseUrl: string): string {
@@ -239,8 +250,17 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [form, setForm] = useState<AppConfig>(DEFAULT_CONFIG)
   const [saveState, setSaveState] = useState<SaveState>('idle')
-  // 设置面板分页:常规 / 历史
-  const [settingsTab, setSettingsTab] = useState<'general' | 'voice' | 'history'>('general')
+  // 设置面板分页:常规 / 语音 / 记忆 / 历史
+  const [settingsTab, setSettingsTab] = useState<'general' | 'voice' | 'memory' | 'history'>('general')
+  // 记忆系统的机器事实列表(设置"记忆"页展示/管理)
+  const [memoryFacts, setMemoryFacts] = useState<MemoryFact[]>([])
+  const [clearMemArmed, setClearMemArmed] = useState(false)
+  // 聊天通道:输入框开合/草稿/应答中;用户气泡(区别于角色气泡)
+  const [chatOpen, setChatOpen] = useState(false)
+  const [chatDraft, setChatDraft] = useState('')
+  const [chatBusy, setChatBusy] = useState(false)
+  const [userBubble, setUserBubble] = useState<string | null>(null)
+  const lastChatTarget = useRef<Speaker>('A')
   // 设置面板当前选中的厂商(custom = 本地/自定义,baseUrl/model 自由输入)
   const [vendorId, setVendorId] = useState(CUSTOM_VENDOR_ID)
   // 面板内各厂商 key 的草稿:切换厂商时把输入存回旧键、从新键带出,保存时合并落盘
@@ -273,7 +293,6 @@ function App() {
   // 账号下的克隆音色(打开设置时拉取),供音色下拉选择
   const [clonedVoices, setClonedVoices] = useState<ClonedVoice[]>([])
   // 使用者的兴趣爱好(设置面板填写,随机话题时按模式概率介入)
-  const [userInterests, setUserInterests] = useState(DEFAULT_CONFIG.userInterests)
   // 最近交互的角色显示在上层(z-order)
   const [topActor, setTopActor] = useState<Speaker>('A')
   // 活人感:当前说话者/听者惊讶脉冲/拖动落地回弹/拖动中的角色
@@ -342,6 +361,12 @@ function App() {
   useEffect(() => {
     phaseRef.current = phase
   }, [phase])
+
+  // 看视频不被打扰:默认点击不抢焦点(WS_EX_NOACTIVATE);
+  // 仅设置/主题面板打开时临时恢复激活(输入框需要键盘),关闭即恢复
+  useEffect(() => {
+    void invoke('set_noactivate', { enable: !(settingsOpen || topicOpen || chatOpen) }).catch(() => {})
+  }, [settingsOpen, topicOpen, chatOpen])
   // 上一段台词（内存中），续播时喂给 LLM 做衔接
   const lastLines = useRef<DialogLine[]>([])
   // 上一次自动重放的集,连续重放时避开
@@ -358,7 +383,6 @@ function App() {
       applyCtrlBar(c.ctrlBar)
       setShowWatermark(c.showWatermark)
       setVoice(c.voice)
-      setUserInterests(c.userInterests)
     })
     // 启动恢复：读最近历史，续集生成时衔接上次聊到的内容
     void loadRecentHistory(20).then((entries) => {
@@ -436,20 +460,21 @@ function App() {
     return registerHitRegion('outside', {
       getRect: () => new DOMRect(0, 0, window.innerWidth, window.innerHeight),
     })
-  }, [settingsOpen, topicOpen])
+  }, [settingsOpen, topicOpen, chatOpen])
 
   // Escape 关闭任一打开的面板
   useEffect(() => {
-    if (!settingsOpen && !topicOpen) return
+    if (!settingsOpen && !topicOpen && !chatOpen) return
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         setSettingsOpen(false)
         setTopicOpen(false)
+        setChatOpen(false)
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [settingsOpen, topicOpen])
+  }, [settingsOpen, topicOpen, chatOpen])
 
   /** 播放指定的一集(自动重放与历史行点击共用):不调 LLM、不写历史 */
   function playEpisode(ep: Episode) {
@@ -458,6 +483,7 @@ function App() {
     stopSpeaking()
     lastReplayTs.current = ep.ts
     lastLines.current = ep.lines // 衔接后续手动生成
+    bumpTopicReplays(ep.topic) // 重放(自动/手动) = 口味正信号
     setBubble({ A: null, B: null })
     setAction({ A: 'idle', B: 'idle' })
     setPhase('performing')
@@ -519,7 +545,7 @@ function App() {
       if (!cfg.apiKey.trim()) return
       lastSpontAt.current = now
       try {
-        const lines = await generateShortChat('spontaneous', lastLines.current, cfg.userInterests)
+        const lines = await generateShortChat('spontaneous', lastLines.current)
         if (phaseRef.current !== 'idle' || player.current!.playing) return
         if (lines.length === 0) return
         playShortChat(lines)
@@ -537,7 +563,7 @@ function App() {
       const cfg = await getConfig()
       if (!cfg.apiKey.trim()) return
       try {
-        const lines = await generateShortChat('greeting', lastLines.current, cfg.userInterests)
+        const lines = await generateShortChat('greeting', lastLines.current)
         if (phaseRef.current !== 'idle' || player.current!.playing) return
         if (lines.length === 0) return
         lastSpontAt.current = Date.now() - 14 * 60_000 // 问候后约 1 分钟起,自发聊天才可用
@@ -569,14 +595,22 @@ function App() {
     setBubble({ A: null, B: null })
     setAction({ A: 'idle', B: 'idle' })
 
-    // 主题:手动锁定 > 按模式概率聊使用者兴趣 > 话题池随机
+    // 主题:手动锁定 > 按模式概率聊使用者画像/兴趣 > 话题池随机(雷区过滤+偏好加权)
     const fixedTopic = topicOverride
-    const interests = userInterests.split(/[,，、;；\n]/).map((x) => x.trim()).filter(Boolean)
+    const interests = form.userProfile.likes
+      .split(/[,，、;；\n]/)
+      .map((x) => x.trim())
+      .filter(Boolean)
     const actualTopic =
       fixedTopic ??
       (interests.length > 0 && Math.random() < (modeOf(m).interestTopicChance ?? 0)
         ? `使用者感兴趣的事:${interests[Math.floor(Math.random() * interests.length)]}`
-        : pickTopic(modeOf(m)))
+        : pickTopic(modeOf(m), {
+            ban: form.userProfile.banTopics,
+            weights: await getTopicWeights(),
+          }))
+    bumpTopicSeen(actualTopic)
+    bumpMode(m)
 
     // 预生成命中:有主题时只取同主题条目,无主题时 FIFO 任意条目
     const hit = await takePrefetch(m, fixedTopic ?? undefined)
@@ -634,6 +668,66 @@ function App() {
     setAction({ A: 'idle', B: 'idle' })
   }
 
+  /** 聊天通道:解析 @角色 → 被指定角色回一句 → 后台提取记忆入库。
+   *  无 @ 时甲乙轮换;演出进行中禁发(避免气泡互相打架) */
+  async function sendUserChat() {
+    const text = chatDraft.trim()
+    if (!text || chatBusy || phase !== 'idle') return
+    const m = text.match(/^\s*@?(甲|乙|A|B)\s*/)
+    const who: Speaker = m
+      ? m[1] === '甲' || m[1] === 'A'
+        ? 'A'
+        : 'B'
+      : (lastChatTarget.current = lastChatTarget.current === 'A' ? 'B' : 'A')
+    setUserBubble(text)
+    setChatDraft('')
+    setChatBusy(true)
+    setTopActor(who)
+    setActiveTick((t) => t + 1)
+    try {
+      const reply = await generateUserChatReply(who, text)
+      setBubble((b) => ({ ...b, [who]: reply }))
+      setAction((a) => ({ ...a, [who]: 'talk' }))
+      setSpeaking(who)
+      speak(who, reply)
+      const listener: Speaker = who === 'A' ? 'B' : 'A'
+      setPulseFor(listener)
+      window.clearTimeout(pulseTimer.current)
+      pulseTimer.current = window.setTimeout(() => setPulseFor(null), 600)
+      window.setTimeout(() => {
+        setBubble((b) => (b[who] === reply ? { ...b, [who]: null } : b))
+        setAction((a) => ({ ...a, [who]: 'idle' }))
+        setSpeaking(null)
+      }, 2200 + reply.length * 160)
+    } catch {
+      setUserBubble(null)
+      const fb = '（信号不好，没听清…再说一遍？）'
+      setBubble((b) => ({ ...b, [who]: fb }))
+      window.setTimeout(() => setBubble((b) => (b[who] === fb ? { ...b, [who]: null } : b)), 2200)
+    } finally {
+      setChatBusy(false)
+    }
+    // 后台记忆提取:不阻塞、失败静默
+    void (async () => {
+      try {
+        const mem = await getMemory()
+        const known = topFacts(mem, 8)
+        const candidates = await extractFacts(text, known)
+        if (candidates.length > 0) {
+          await mergeFacts(candidates)
+          setMemoryFacts((await getMemory()).facts)
+        }
+      } catch {
+        // 静默
+      }
+    })()
+  }
+
+  /** 记忆页:刷新事实列表 */
+  async function refreshMemoryFacts() {
+    setMemoryFacts((await getMemory()).facts)
+  }
+
   /** 打开设置：读当前配置回填表单，加载历史分集 */
   async function openSettings() {
     setSaveState('idle')
@@ -679,7 +773,8 @@ function App() {
   }
 
   async function onToggleFav(ep: Episode) {
-    await toggleFavorite(ep)
+    const nowFav = await toggleFavorite(ep)
+    if (nowFav) bumpTopicFavored(ep.topic) // 收藏 = 口味正信号
     setEpisodes(await listEpisodes())
   }
 
@@ -887,6 +982,7 @@ function App() {
   function poke(who: Speaker) {
     setActiveTick((t) => t + 1) // 用户互动,重置自动重放计时
     setTopActor(who)
+    bumpPoke() // 行为信号:互动频率
 
     // 连戳分级:滑动窗口计数,生气期内不再响应
     const now = Date.now()
@@ -936,6 +1032,7 @@ function App() {
         if (e.target === e.currentTarget) {
           setSettingsOpen(false)
           setTopicOpen(false)
+          setChatOpen(false)
         }
       }}
     >
@@ -1020,6 +1117,14 @@ function App() {
         </button>
 
         <button
+          className={`ctrl-btn icon${hovered === 'chat' ? ' hot' : ''}${chatOpen ? ' on' : ''}`}
+          title="和角色说话(@甲/@乙 指定谁回)"
+          onClick={() => (chatOpen ? setChatOpen(false) : (setSettingsOpen(false), setTopicOpen(false), setChatOpen(true)))}
+        >
+          💬
+        </button>
+
+        <button
           ref={btnExit}
           className={`ctrl-btn icon${hovered === 'exit' ? ' hot' : ''}${exitArmed ? ' danger armed' : ''}`}
           title={exitArmed ? '再点一次确认退出' : '退出程序'}
@@ -1044,6 +1149,15 @@ function App() {
                 onClick={() => setSettingsTab('voice')}
               >
                 语音
+              </button>
+              <button
+                className={`panel-tab${settingsTab === 'memory' ? ' on' : ''}`}
+                onClick={() => {
+                  setSettingsTab('memory')
+                  void refreshMemoryFacts()
+                }}
+              >
+                记忆
               </button>
               <button
                 className={`panel-tab${settingsTab === 'history' ? ' on' : ''}`}
@@ -1181,13 +1295,15 @@ function App() {
             />
           </div>
           <div className="settings-row">
-            <label htmlFor="cfg-interests">使用者的兴趣爱好(选填,逗号分隔)</label>
+            <label htmlFor="cfg-interests">使用者的兴趣爱好(选填,逗号分隔 — 完整画像在"记忆"页)</label>
             <textarea
               id="cfg-interests"
               rows={2}
-              value={form.userInterests}
+              value={form.userProfile.likes}
               placeholder="如:摄影,健身,玩unity,听周杰伦 — 日常闲聊会偶尔聊到"
-              onChange={(e) => setForm({ ...form, userInterests: e.target.value })}
+              onChange={(e) =>
+                setForm({ ...form, userProfile: { ...form.userProfile, likes: e.target.value } })
+              }
             />
           </div>
           <div className="settings-row">
@@ -1319,6 +1435,101 @@ function App() {
               />
             </>
           )}
+            </>
+          )}
+
+          {settingsTab === 'memory' && (
+            <>
+          <div className="settings-sep">
+            <span>使用者画像(角色据此认识你)</span>
+          </div>
+          <div className="settings-row">
+            <label htmlFor="cfg-mem-name">你的称呼</label>
+            <input
+              id="cfg-mem-name"
+              placeholder="角色会这样叫你"
+              value={form.userProfile.userName}
+              onChange={(e) => setForm({ ...form, userProfile: { ...form.userProfile, userName: e.target.value } })}
+            />
+          </div>
+          <div className="settings-row">
+            <label htmlFor="cfg-mem-occ">职业 / 身份</label>
+            <input
+              id="cfg-mem-occ"
+              placeholder="如:在读研究生"
+              value={form.userProfile.occupation}
+              onChange={(e) => setForm({ ...form, userProfile: { ...form.userProfile, occupation: e.target.value } })}
+            />
+          </div>
+          <div className="settings-row">
+            <label htmlFor="cfg-mem-likes">喜欢(逗号分隔)</label>
+            <input
+              id="cfg-mem-likes"
+              value={form.userProfile.likes}
+              onChange={(e) => setForm({ ...form, userProfile: { ...form.userProfile, likes: e.target.value } })}
+            />
+          </div>
+          <div className="settings-row">
+            <label htmlFor="cfg-mem-dis">不喜欢(逗号分隔)</label>
+            <input
+              id="cfg-mem-dis"
+              value={form.userProfile.dislikes}
+              onChange={(e) => setForm({ ...form, userProfile: { ...form.userProfile, dislikes: e.target.value } })}
+            />
+          </div>
+          <div className="settings-row">
+            <label htmlFor="cfg-mem-ban">雷区(完全不聊)</label>
+            <input
+              id="cfg-mem-ban"
+              placeholder="如:考试,前任"
+              value={form.userProfile.banTopics}
+              onChange={(e) => setForm({ ...form, userProfile: { ...form.userProfile, banTopics: e.target.value } })}
+            />
+          </div>
+          <div className="settings-sep">
+            <span>记住的事({memoryFacts.length})</span>
+            <button
+              className={`hist-clear${clearMemArmed ? ' danger' : ''}`}
+              disabled={memoryFacts.length === 0}
+              onClick={() => {
+                if (!clearMemArmed) {
+                  setClearMemArmed(true)
+                  window.setTimeout(() => setClearMemArmed(false), 3000)
+                  return
+                }
+                void (async () => {
+                  await clearMemory()
+                  setMemoryFacts([])
+                  setClearMemArmed(false)
+                })()
+              }}
+            >
+              {clearMemArmed ? '确认清空?' : '清空全部'}
+            </button>
+          </div>
+          {memoryFacts.length === 0 && (
+            <div className="settings-tip">还没有记忆 — 和角色聊天时透露的信息会被自动记住</div>
+          )}
+          {memoryFacts.map((f) => (
+            <div className="mem-fact" key={f.id}>
+              <span className="mem-cat">{MEM_CAT_LABEL[f.category]}</span>
+              <span className="mem-content">{f.content}</span>
+              <button
+                className={`mem-btn${f.pinned ? ' on' : ''}`}
+                title={f.pinned ? '取消置顶' : '置顶(永不遗忘)'}
+                onClick={() => void (async () => { await togglePinFact(f.id); await refreshMemoryFacts() })()}
+              >
+                📌
+              </button>
+              <button
+                className="mem-btn"
+                title="忘记这条"
+                onClick={() => void (async () => { await deleteFact(f.id); await refreshMemoryFacts() })()}
+              >
+                ✕
+              </button>
+            </div>
+          ))}
             </>
           )}
 
@@ -1490,12 +1701,36 @@ function App() {
         />
       </div>
 
-      {showWatermark && (
-        <div className="watermark">
-          M5 · 空闲自动重放历史 · 选模式点 ▶ 生成一集
-        </div>
-      )}
-    </div>
+      {chatOpen && (
+          <div className="chat-box">
+            {userBubble && <div className="user-bubble">你说:{userBubble}</div>}
+            <div className="chat-row">
+              <input
+                autoFocus
+                type="text"
+                placeholder="和角色说话…(@甲/@乙 指定谁回)"
+                value={chatDraft}
+                onChange={(e) => setChatDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') void sendUserChat()
+                }}
+              />
+              <button
+                className="panel-btn primary"
+                disabled={chatBusy || phase !== 'idle' || !chatDraft.trim()}
+                title={phase !== 'idle' ? '演出/生成进行中,稍后再说' : ''}
+                onClick={() => void sendUserChat()}
+              >
+                {chatBusy ? '…' : '发送'}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {showWatermark && (
+          <div className="watermark">M5 · 空闲自动重放历史 · 选模式点 ▶ 生成一集</div>
+        )}
+      </div>
   )
 }
 

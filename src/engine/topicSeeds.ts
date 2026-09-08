@@ -109,17 +109,53 @@ export const TOPIC_ANGLES = [
   '被算法拿捏的一天',
 ]
 
-// 每个话题池单独记上一次的下标，避免连续重复
-const lastIdx = new Map<string, number>()
+// 每个话题池单独记上一次抽中的种子,避免连续重复
+const lastSeed = new Map<string, string>()
 
-/** 随机取一个话题 + 随机活化角度,避免连续重复 */
-export function pickTopic(mode?: DialogMode): string {
+export interface PickTopicOptions {
+  /** 雷区关键词:种子命中任一关键词则跳过(全部命中时退化为不过滤) */
+  ban?: string
+  /** 话题种子→权重(来自行为偏好统计),缺省等权 */
+  weights?: Record<string, number>
+}
+
+function weightedPick(candidates: string[], weightOf: (seed: string) => number): number {
+  const total = candidates.reduce((sum, s) => sum + weightOf(s), 0)
+  let roll = Math.random() * total
+  for (let i = 0; i < candidates.length; i++) {
+    roll -= weightOf(candidates[i]!)
+    if (roll < 0) return i
+  }
+  return candidates.length - 1
+}
+
+/** 随机取一个话题(带活化角度),支持雷区过滤与偏好加权,避免连续重复 */
+export function pickTopic(mode?: DialogMode, opts?: PickTopicOptions): string {
   const pool = mode?.topics ?? TOPIC_SEEDS
   const key = mode?.id ?? '__global__'
-  let i = Math.floor(Math.random() * pool.length)
-  if (i === lastIdx.get(key)) i = (i + 1) % pool.length
-  lastIdx.set(key, i)
-  const seed = pool[i]!
+
+  // 雷区过滤:种子含任一关键词即剔除;若过滤后为空则退回全池
+  let candidates = pool
+  const banWords = (opts?.ban ?? '')
+    .split(/[,，、;；\n]/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+  if (banWords.length) {
+    const filtered = pool.filter((seed) => !banWords.some((w) => seed.includes(w)))
+    if (filtered.length) candidates = filtered
+  }
+
+  const weights = opts?.weights
+  const weightOf = (seed: string): number => weights?.[seed] ?? 1
+
+  // 加权随机;若与上次相同则重抽一次(小池子/权重极端时保底换一个)
+  let i = weightedPick(candidates, weightOf)
+  if (candidates[i] === lastSeed.get(key) && candidates.length > 1) {
+    i = weightedPick(candidates, weightOf)
+  }
+  const seed = candidates[i]!
+  lastSeed.set(key, seed)
+
   // 20% 概率只给裸种子(让模型自己发挥),80% 概率叠加角度
   if (Math.random() < 0.2) return seed
   const angle = TOPIC_ANGLES[Math.floor(Math.random() * TOPIC_ANGLES.length)]

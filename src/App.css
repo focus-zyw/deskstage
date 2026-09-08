@@ -518,9 +518,9 @@
   gap: 10px;
   border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 14px;
-  background: rgba(20, 20, 31, 0.92);
+  /* 不用毛玻璃(backdrop-filter):叠在视频上会破坏硬件合成,导致视频黑框/暂停 */
+  background: rgba(20, 20, 31, 0.97);
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
-  backdrop-filter: blur(10px);
   z-index: 40;
   animation: panel-in 0.16s ease;
 }
@@ -883,4 +883,83 @@
 }
 .clone-tip.err {
   color: #ff8a80;
+}
+
+/* 记忆页:事实列表 */
+.mem-fact {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.06);
+  margin-bottom: 5px;
+  font-size: 12px;
+}
+.mem-cat {
+  flex: none;
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(124, 108, 240, 0.4);
+  color: #fff;
+}
+.mem-content {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mem-btn {
+  flex: none;
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.55);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 2px 4px;
+}
+.mem-btn:hover {
+  color: #fff;
+}
+.mem-btn.on {
+  opacity: 1;
+  color: #ffd166;
+}
+.hist-clear.danger {
+  color: #ff8a80;
+}
+
+/* 聊天输入条(工具栏下方弹出) */
+.chat-box {
+  position: absolute;
+  top: 56px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 380px;
+  padding: 10px;
+  z-index: 30;
+}
+.chat-row {
+  display: flex;
+  gap: 6px;
+}
+.chat-row input[type='text'] {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  padding: 7px 10px;
+  font-size: 13px;
+}
+.user-bubble {
+  margin: 0 0 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: rgba(124, 108, 240, 0.35);
+  font-size: 12px;
+  text-align: center;
 }

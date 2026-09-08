@@ -1,5 +1,7 @@
 import { getConfig } from '../storage/configStore'
-import { buildMessages } from './promptBuilder'
+import type { UserProfile } from '../storage/configStore'
+import { buildMessages, renderUserContext, type UserContext } from './promptBuilder'
+import { getMemory, topFacts, tasteSummary, type FactCategory } from '../storage/memoryStore'
 import { currentTimeSlot } from './timeAware'
 import type { DialogLine, Speaker } from '../performer/player'
 import type { Mode } from '../performer/modes'
@@ -116,8 +118,14 @@ export async function generateDialog(
   signal?: AbortSignal,
   topicFixed?: boolean,
 ): Promise<DialogLine[]> {
-  const { userInterests } = await getConfig()
-  const messages = buildMessages(mode, topic, recentLines, topicFixed, userInterests)
+  const cfg = await getConfig()
+  const mem = await getMemory()
+  const userCtx: UserContext = {
+    profile: cfg.userProfile,
+    taste: await tasteSummary(3) || undefined,
+    facts: topFacts(mem, 8),
+  }
+  const messages = buildMessages(mode, topic, recentLines, topicFixed, cfg.userInterests, userCtx)
   let lastErr: unknown = new Error('未知错误')
   for (let attempt = 0; attempt < 2; attempt++) {
     if (signal?.aborted) throw new DOMException('已中止', 'AbortError')
@@ -140,19 +148,26 @@ export async function generateDialog(
 export async function generateShortChat(
   kind: 'greeting' | 'spontaneous',
   recentLines: DialogLine[],
-  userInterests?: string,
 ): Promise<DialogLine[]> {
+  const cfg = await getConfig()
+  const mem = await getMemory()
   const slot = currentTimeSlot()
   const persona =
     '甲:精力充沛、爱吹牛、脑洞大,满嘴跑火车还特别得意;乙:冷静毒舌、专拆台、话少但一针见血。两人是互怼但有默契的老搭档'
-  const interests = userInterests?.trim() ? `观众朋友的兴趣:${userInterests.trim()}。` : ''
+  const userCtx: UserContext = {
+    profile: cfg.userProfile,
+    taste: (await tasteSummary(3)) || undefined,
+    facts: topFacts(mem, 3),
+  }
+  const profileBits = renderUserContext(userCtx).trim()
+  const interests = profileBits ? `${profileBits}\n` : ''
   const prev = recentLines
     .slice(-2)
     .map((l) => `${l.speaker === 'A' ? '甲' : '乙'}:${l.text}`)
     .join('\n')
   const task =
     (kind === 'greeting'
-      ? '观众刚打开应用。用一段符合当前时间的简短开场,两人互相招呼并带上点时间段的梗。'
+      ? `观众刚打开应用。用一段符合当前时间的简短开场,两人互相招呼并带上点时间段的梗。`
       : `两人空闲了一会儿,自发起一个小话题随便聊聊(像真人闲坐时随口开话头)。${interests}`) +
     (prev ? `\n不要重复、要自然衔接刚才的结尾:${prev}` : '')
   const messages: { role: string; content: string }[] = [
@@ -215,6 +230,93 @@ export async function improvPokeLine(
     const line = raw.replace(/^["'「『]|["'」』]$/g, '')
     if (!line || line.length > 25) throw new Error('即兴结果不合规')
     return line
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/**
+ * 聊天通道:观众对指定角色说了一句话,该角色用自己的口吻回一句(15~25 字)。
+ * 注入称呼/画像/记忆事实,命中雷区的话题不接。8s 超时、不重试,失败由调用方静默兜底。
+ */
+export async function generateUserChatReply(who: Speaker, userText: string): Promise<string> {
+  const cfg = await getConfig()
+  const mem = await getMemory()
+  const p: UserProfile = cfg.userProfile
+  const persona =
+    who === 'A'
+      ? '甲:精力充沛、爱吹牛、脑洞大、说话夸张,口头禅"我跟你说""好家伙"'
+      : '乙:冷静毒舌、专拆台、话少但一针见血,惯用反问和吐槽'
+  const bits: string[] = []
+  if (p.userName) bits.push(`观众称呼"${p.userName}"`)
+  if (p.occupation) bits.push(`身份:${p.occupation}`)
+  if (p.likes) bits.push(`喜欢:${p.likes}`)
+  if (p.dislikes) bits.push(`不喜欢:${p.dislikes}`)
+  if (p.banTopics) bits.push(`绝对不要聊:${p.banTopics}`)
+  const facts = topFacts(mem, 3)
+  if (facts.length) bits.push(`记住的观众的事:${facts.join(';')}`)
+  const messages: { role: string; content: string }[] = [
+    {
+      role: 'system',
+      content: `桌面双人情景剧互动。你是${persona}。观众朋友直接对你说了一句话,用你的口吻回一句。要求:15~25 字,口语化,像真说话${p.userName ? `,称呼观众"${p.userName}"` : ''};不要引号,不要 JSON。${bits.length ? `\n关于观众:${bits.join(';')}。` : ''}`,
+    },
+    { role: 'user', content: userText },
+  ]
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(new DOMException('超时', 'TimeoutError')), 8_000)
+  try {
+    let raw = (await chatRaw(messages, ctrl.signal)).trim()
+    if (raw.startsWith('{')) {
+      try {
+        const obj = JSON.parse(raw) as { text?: unknown; content?: unknown }
+        const inner = [obj.text, obj.content].find((v) => typeof v === 'string')
+        if (inner) raw = (inner as string).trim()
+      } catch {
+        // 不是合法 JSON,按原文处理
+      }
+    }
+    const line = raw.replace(/^["'「『]|["'」』]$/g, '')
+    if (!line || line.length > 40) throw new Error('应答不合规')
+    return line
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/**
+ * 记忆提取:从观众的一句话里挖"关于观众本人的长期事实",与已知事实去重后由调用方入库。
+ * 6s 超时、不重试;失败抛错由调用方静默。
+ */
+export async function extractFacts(
+  userText: string,
+  known: string[],
+): Promise<{ content: string; category: FactCategory }[]> {
+  const cats: FactCategory[] = ['identity', 'preference', 'habit', 'people', 'event', 'other']
+  const messages: { role: string; content: string }[] = [
+    {
+      role: 'system',
+      content: `从观众说的话里提取"关于观众本人的长期事实"(身份/喜好/习惯/身边人/重要事件)。已知事实(不要重复提取):${known.length ? known.join(';') : '(无)'}。只输出一个 JSON 对象:{"facts":[{"content":"事实","category":"identity|preference|habit|people|event|other"}]}。只提取观众明确透露的信息,不要推测;没有新事实就输出 {"facts":[]}。`,
+    },
+    { role: 'user', content: userText },
+  ]
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(new DOMException('超时', 'TimeoutError')), 6_000)
+  try {
+    const raw = await chatRaw(messages, ctrl.signal)
+    const m = raw.match(/\{[\s\S]*\}/)
+    if (!m) return []
+    const obj = JSON.parse(m[0]) as { facts?: unknown }
+    if (!Array.isArray(obj.facts)) return []
+    return obj.facts
+      .map((f) => (f && typeof f === 'object' ? (f as { content?: unknown; category?: unknown }) : null))
+      .filter(
+        (f): f is { content: string; category: string } =>
+          typeof f?.content === 'string' && f.content.trim().length > 1,
+      )
+      .map((f) => ({
+        content: f.content.trim().slice(0, 120),
+        category: (cats.includes(f.category as FactCategory) ? f.category : 'other') as FactCategory,
+      }))
   } finally {
     clearTimeout(timer)
   }
