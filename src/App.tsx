@@ -46,6 +46,11 @@ const POKE_LINES = [
 type Phase = 'idle' | 'generating' | 'performing'
 type SaveState = 'idle' | 'saving' | 'saved' | 'error'
 
+/** apiKeys 的存储键:预设厂商用 id,自定义端点按 baseUrl 区分(与 configStore 注释约定一致) */
+function vendorKeyOf(id: string, baseUrl: string): string {
+  return id === CUSTOM_VENDOR_ID ? `custom:${baseUrl.trim()}` : id
+}
+
 function fmtTime(ts: number): string {
   const d = new Date(ts)
   const p = (n: number) => String(n).padStart(2, '0')
@@ -76,6 +81,8 @@ function App() {
   const [settingsTab, setSettingsTab] = useState<'general' | 'history'>('general')
   // 设置面板当前选中的厂商(custom = 本地/自定义,baseUrl/model 自由输入)
   const [vendorId, setVendorId] = useState(CUSTOM_VENDOR_ID)
+  // 面板内各厂商 key 的草稿:切换厂商时把输入存回旧键、从新键带出,保存时合并落盘
+  const [keyDrafts, setKeyDrafts] = useState<Record<string, string>>({})
   // 手动锁定主题;null = 随机。主题面板弹/收与搜索词
   const [topicOverride, setTopicOverride] = useState<string | null>(null)
   const [topicOpen, setTopicOpen] = useState(false)
@@ -348,15 +355,26 @@ function App() {
     setTopicOpen(false)
     const cfg = await getConfig()
     setForm(cfg)
-    setVendorId(vendorIdOfBaseUrl(cfg.baseUrl))
+    const id = vendorIdOfBaseUrl(cfg.baseUrl)
+    setVendorId(id)
+    // 各厂商 key 草稿 = 已保存的 apiKeys + 当前生效 key 归位到它的键
+    setKeyDrafts({ ...cfg.apiKeys, [vendorKeyOf(id, cfg.baseUrl)]: cfg.apiKey })
     setEpisodes(await listEpisodes())
   }
 
-  /** 保存配置：落盘 + 刷新缓存，下一次生成即生效 */
+  /** 保存配置：落盘 + 刷新缓存，下一次生成即生效。
+   *  apiKeys = 已存值 ∪ 面板草稿 ∪ 当前输入(归位到当前厂商键),各厂商 key 一并持久化 */
   async function saveSettings() {
     setSaveState('saving')
     try {
-      const next = await saveConfig(form)
+      const next = await saveConfig({
+        ...form,
+        apiKeys: {
+          ...form.apiKeys,
+          ...keyDrafts,
+          [vendorKeyOf(vendorId, form.baseUrl)]: form.apiKey,
+        },
+      })
       setAutoReplayMin(next.autoReplayMin) // 空闲计时按新频率重新武装
       setSaveState('saved')
       window.setTimeout(() => setSettingsOpen(false), 900)
@@ -662,10 +680,23 @@ function App() {
               value={vendorId}
               onChange={(e) => {
                 const id = e.target.value
+                // 当前输入的 key 存回旧厂商的键,再从新厂商的键带出(没有则空)
+                const drafts = { ...keyDrafts, [vendorKeyOf(vendorId, form.baseUrl)]: form.apiKey }
+                setKeyDrafts(drafts)
                 setVendorId(id)
-                if (id === CUSTOM_VENDOR_ID) return // 保留当前输入,自由填写
-                const v = VENDORS.find((x) => x.id === id)!
-                setForm({ ...form, baseUrl: v.baseUrl, model: v.models[0] ?? '' })
+                let baseUrl = form.baseUrl
+                let model = form.model
+                if (id !== CUSTOM_VENDOR_ID) {
+                  const v = VENDORS.find((x) => x.id === id)!
+                  baseUrl = v.baseUrl
+                  model = v.models[0] ?? ''
+                }
+                setForm({
+                  ...form,
+                  baseUrl,
+                  model,
+                  apiKey: drafts[vendorKeyOf(id, baseUrl)] ?? '',
+                })
               }}
             >
               {VENDORS.map((v) => (
@@ -677,12 +708,17 @@ function App() {
             </select>
           </div>
           <div className="settings-row">
-            <label htmlFor="cfg-key">API Key{vendorId === CUSTOM_VENDOR_ID ? '(本地服务可为空)' : ''}</label>
+            <label htmlFor="cfg-key" title="每个厂商(自定义按接口地址)分别记忆,切换自动带出">
+              API Key{vendorId === CUSTOM_VENDOR_ID ? '(本地服务可为空)' : ''}
+            </label>
             <input
               id="cfg-key"
               type="password"
               value={form.apiKey}
-              onChange={(e) => setForm({ ...form, apiKey: e.target.value })}
+              onChange={(e) => {
+                setForm({ ...form, apiKey: e.target.value })
+                setKeyDrafts((d) => ({ ...d, [vendorKeyOf(vendorId, form.baseUrl)]: e.target.value }))
+              }}
             />
           </div>
           <div className="settings-row">
@@ -693,7 +729,12 @@ function App() {
               placeholder={
                 vendorId === CUSTOM_VENDOR_ID ? 'http://localhost:11434/v1' : 'https://api.deepseek.com/v1'
               }
-              onChange={(e) => setForm({ ...form, baseUrl: e.target.value })}
+              onChange={(e) => {
+                // 自定义端点键含 baseUrl:先把 key 存回旧地址的键,换地址互不串
+                const drafts = { ...keyDrafts, [vendorKeyOf(vendorId, form.baseUrl)]: form.apiKey }
+                setKeyDrafts(drafts)
+                setForm({ ...form, baseUrl: e.target.value })
+              }}
             />
           </div>
           <div className="settings-row">

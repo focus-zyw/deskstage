@@ -20,6 +20,9 @@ export interface CharactersConfig {
 
 export interface AppConfig {
   apiKey: string
+  /** 各厂商分别记忆的 API Key:键 = 预设厂商 id,自定义端点 = `custom:{baseUrl}`;
+   *  apiKey 是当前生效值,切换厂商时从这里带出 */
+  apiKeys: Record<string, string>
   baseUrl: string
   model: string
   /** 空闲多少分钟后自动重放历史对话;0 = 关闭 */
@@ -40,6 +43,7 @@ export interface AppConfig {
 // apiKey 默认空,在设置面板填写;勿将真实 key 提交进仓库
 export const DEFAULT_CONFIG: AppConfig = {
   apiKey: '',
+  apiKeys: {},
   baseUrl: 'https://api.deepseek.com/v1',
   model: 'deepseek-chat',
   autoReplayMin: 10,
@@ -59,6 +63,19 @@ function sanitizeReplayMin(v: unknown): number {
   const n = Number(v)
   if (!Number.isFinite(n) || n < 0) return DEFAULT_CONFIG.autoReplayMin
   return Math.min(1440, n)
+}
+
+/** 清洗按厂商记忆的 apiKeys:只收字符串键值,限 50 条、键 100/值 500 字符,防膨胀 */
+function sanitizeApiKeys(v: unknown): Record<string, string> {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return {}
+  const out: Record<string, string> = {}
+  for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+    if (typeof val === 'string' && k.length > 0 && k.length <= 100) {
+      out[k.slice(0, 100)] = val.slice(0, 500)
+    }
+    if (Object.keys(out).length >= 50) break
+  }
+  return out
 }
 
 /** 控制栏位置:横向屏宽百分比 + 距顶部逻辑像素 */
@@ -115,6 +132,7 @@ export function getConfig(): Promise<AppConfig> {
           const obj = JSON.parse(await readTextFile(file))
           return {
             apiKey: String(obj.apiKey || DEFAULT_CONFIG.apiKey),
+            apiKeys: sanitizeApiKeys(obj.apiKeys),
             baseUrl: String(obj.baseUrl || DEFAULT_CONFIG.baseUrl),
             model: String(obj.model || DEFAULT_CONFIG.model),
             autoReplayMin: sanitizeReplayMin(obj.autoReplayMin),
