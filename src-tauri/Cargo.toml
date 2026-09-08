@@ -28,4 +28,5 @@ mouse_position = "0.1"
 tauri-plugin-http = "2"
 wasapi = "0.24.0"
 sysinfo = "0.36.1"
-windows = { version = "0.61.3", features = ["Win32_UI_WindowsAndMessaging", "Win32_Graphics_Dwm", "Win32_System_Threading"] }
+windows = { version = "0.61.3", features = ["Win32_UI_WindowsAndMessaging", "Win32_Graphics_Dwm"] }
+tauri-plugin-single-instance = "2.4.4"

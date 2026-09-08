@@ -12,10 +12,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::collections::HashSet;
 
 use serde::Serialize;
-use tauri::{Manager, State};
-use windows::core::BOOL;
-use windows::Win32::Foundation::{HWND, LPARAM};
-use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
+use tauri::{Emitter, Manager, State};
+use windows::Win32::Foundation::{HWND, LPARAM};use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
 use windows::Win32::UI::WindowsAndMessaging::{EnumWindows, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible};
 use wasapi::{AudioClient, DeviceEnumerator, Direction, SampleType, StreamMode, WaveFormat, SessionState};
 
@@ -39,9 +37,17 @@ struct CaptureJob {
 
 /// 列出可选的录制目标:全部可见顶层窗口(标题+pid),标出此刻正在发声的。
 /// 对齐 OBS"应用音频捕获"的体验——允许先选中还没播放声音的程序。
+/// 枚举涉及 COM/全进程刷新,放阻塞线程池执行,避免卡住主事件循环(光标轮询会停摆)。
 #[tauri::command]
-pub fn list_audio_sessions() -> Result<Vec<AudioSessionInfo>, String> {
-    wasapi::initialize_mta().ok();
+pub async fn list_audio_sessions() -> Result<Vec<AudioSessionInfo>, String> {
+    tauri::async_runtime::spawn_blocking(list_audio_sessions_blocking)
+        .await
+        .map_err(|e| format!("任务调度失败:{e}"))?
+}
+
+fn list_audio_sessions_blocking() -> Result<Vec<AudioSessionInfo>, String> {
+    // COM 已初始化(线程池线程常已带 MTA)时返回错误属正常,忽略;真失败会在后续 COM 调用处报出
+    let _ = wasapi::initialize_mta();
 
     // 1. 正在发声的进程集合(WASAPI 活动会话)
     let mut playing_pids: HashSet<u32> = HashSet::new();
@@ -84,7 +90,9 @@ pub fn list_audio_sessions() -> Result<Vec<AudioSessionInfo>, String> {
         "windows_terminal.exe", "werfault.exe", "wermgr.exe",
     ];
 
-    let sys = sysinfo::System::new_all();
+    let mut sys = sysinfo::System::new();
+    // 只刷进程表,不要 new_all() 的磁盘/网络全量采集(枚举每次聚焦下拉都会跑)
+    sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
     let self_pid = std::process::id();
     // key(进程名小写) -> (展示标题, 代表 pid, playing)
     let mut by_name: std::collections::HashMap<String, (String, u32, bool)> = std::collections::HashMap::new();
@@ -147,6 +155,8 @@ unsafe extern "system" fn collect_window(hwnd: HWND, lparam: LPARAM) -> windows:
 }
 
 /// 开始录音:pid 传 Some 为按进程环回,None 为整个系统。返回确认。
+/// 录音线程无论正常/异常结束都会向前端发 `capture-ended` 事件
+/// (含 auto 标记:是否为 180s 上限自动停止),前端据此复位 UI 并取回文件。
 #[tauri::command]
 pub fn start_capture(
     pid: Option<u32>,
@@ -172,7 +182,22 @@ pub fn start_capture(
 
     let stop = Arc::new(AtomicBool::new(false));
     let stop_thread = stop.clone();
-    let handle = std::thread::spawn(move || capture_thread(stop_thread, path, pid));
+    let auto = Arc::new(AtomicBool::new(false));
+    let auto_thread = auto.clone();
+    let app_thread = app.clone();
+    let handle = std::thread::spawn(move || {
+        let result = capture_thread(stop_thread, auto_thread.clone(), path, pid);
+        let payload = match &result {
+            Ok(p) => serde_json::json!({
+                "ok": true,
+                "path": p.to_string_lossy(),
+                "auto": auto_thread.load(Ordering::SeqCst),
+            }),
+            Err(e) => serde_json::json!({ "ok": false, "error": e, "auto": false }),
+        };
+        let _ = app_thread.emit("capture-ended", payload);
+        result
+    });
     *guard = Some(CaptureJob {
         stop,
         handle: Some(handle),
@@ -180,22 +205,31 @@ pub fn start_capture(
     Ok("recording".into())
 }
 
-/// 停止录音,回填 WAV 头,返回文件绝对路径
+/// 停止录音,回填 WAV 头,返回文件绝对路径。
+/// join 阻塞最长 ~200ms,放阻塞线程池,不卡命令线程。
 #[tauri::command]
-pub fn stop_capture(state: State<CaptureState>) -> Result<String, String> {
-    let mut guard = state.job.lock().map_err(|e| e.to_string())?;
-    let job = guard.take().ok_or("没有进行中的录音")?;
-    job.stop.store(true, Ordering::SeqCst);
-    let path = job
-        .handle
-        .expect("job 存在则 handle 存在")
-        .join()
-        .map_err(|_| "录音线程崩溃".to_string())??;
-    Ok(path.to_string_lossy().into_owned())
+pub async fn stop_capture(state: tauri::State<'_, CaptureState>) -> Result<String, String> {
+    let handle = {
+        let mut guard = state.job.lock().map_err(|e| e.to_string())?;
+        let job = guard.take().ok_or("没有进行中的录音")?;
+        job.stop.store(true, Ordering::SeqCst);
+        job.handle.ok_or("录音句柄丢失")? // start_capture 恒置 Some,此守卫仅为免 panic
+    };
+    let path = tauri::async_runtime::spawn_blocking(move || {
+        handle.join().map_err(|_| "录音线程崩溃".to_string())
+    })
+    .await
+    .map_err(|e| format!("任务调度失败:{e}"))??;
+    Ok(path?.to_string_lossy().into_owned())
 }
 
-fn capture_thread(stop: Arc<AtomicBool>, path: PathBuf, pid: Option<u32>) -> Result<PathBuf, String> {
-    wasapi::initialize_mta().ok();
+fn capture_thread(
+    stop: Arc<AtomicBool>,
+    auto: Arc<AtomicBool>,
+    path: PathBuf,
+    pid: Option<u32>,
+) -> Result<PathBuf, String> {
+    let _ = wasapi::initialize_mta();
     // 捕获格式:f32 48k 立体声(autoconvert 由 WASAPI 负责重采样),落盘转 PCM16
     let format = WaveFormat::new(32, 32, &SampleType::Float, 48000, 2, None);
     let mut client = match pid {
@@ -226,7 +260,11 @@ fn capture_thread(stop: Arc<AtomicBool>, path: PathBuf, pid: Option<u32>) -> Res
 
     let started = Instant::now();
     loop {
-        if stop.load(Ordering::SeqCst) || started.elapsed() > Duration::from_secs(180) {
+        if stop.load(Ordering::SeqCst) {
+            break;
+        }
+        if started.elapsed() > Duration::from_secs(180) {
+            auto.store(true, Ordering::SeqCst); // 触达上限自动停,前端据此取回文件并复位
             break;
         }
         let frames = capture

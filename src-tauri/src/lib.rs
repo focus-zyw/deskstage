@@ -57,6 +57,9 @@ fn set_noactivate(window: tauri::WebviewWindow, enable: bool) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
+    // 单实例:双开会导致两个全屏穿透覆盖层 + 两份前端并发写同一批 json(内存锁互不可见)。
+    // 二次启动时窗口常驻穿透、无从唤起,仅作静默退出
+    .plugin(tauri_plugin_single_instance::init(|_app, _args, _cwd| {}))
     .plugin(tauri_plugin_fs::init())
     .plugin(tauri_plugin_http::init())
     .manage(audio_capture::CaptureState::default())
