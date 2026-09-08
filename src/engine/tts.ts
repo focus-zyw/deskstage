@@ -1,0 +1,197 @@
+// 角色语音:硅基流动 CosyVoice2 合成 + 两级缓存(内存 blobUrl → 磁盘 mp3)+ 预合成。
+// 请求走 tauri-plugin-http(Rust 侧发,无 CORS;capabilities 里放行了 api.siliconflow.cn)。
+// 原则:语音失败永不影响演出 —— 所有错误静默降级为无语音,气泡照常走。
+import { fetch } from '@tauri-apps/plugin-http'
+import { readTextFile, writeTextFile, exists, mkdir } from '@tauri-apps/plugin-fs'
+import { appDataDir, join } from '@tauri-apps/api/path'
+import { getConfig, inTauri, registerVoiceIds } from '../storage/configStore'
+import type { Speaker } from '../performer/player'
+
+const TTS_URL = 'https://api.siliconflow.cn/v1/audio/speech'
+const TTS_MODEL = 'FunAudioLLM/CosyVoice2-0.5B'
+
+/** 音色清单(实测有效的 CosyVoice2 内置音色,2026-09 逐个探测确认),label 显示在设置下拉 */
+export const VOICES: { id: string; label: string }[] = [
+  { id: 'bella', label: 'Bella · 女声明快' },
+  { id: 'claire', label: 'Claire · 女声柔和' },
+  { id: 'anna', label: 'Anna · 女声' },
+  { id: 'alex', label: 'Alex · 男声沉稳' },
+  { id: 'benjamin', label: 'Benjamin · 男声磁性' },
+  { id: 'charles', label: 'Charles · 男声健谈' },
+  { id: 'david', label: 'David · 男声欢乐' },
+]
+
+// 启动即注册音色名单,configStore 清洗配置时据此校正非法音色名
+registerVoiceIds(VOICES.map((v) => v.id))
+
+/** 合成一句,返回 mp3 二进制。失败抛错由调用方静默 */
+async function synth(text: string, voice: string, apiKey: string): Promise<ArrayBuffer> {
+  const resp = await fetch(TTS_URL, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: TTS_MODEL,
+      input: text,
+      voice: `${TTS_MODEL}:${voice}`,
+      response_format: 'mp3',
+      sample_rate: 44100,
+      stream: true,
+      speed: 1,
+      gain: 0,
+    }),
+  })
+  if (!resp.ok) {
+    const body = await resp.text().catch(() => '')
+    throw new Error(`tts http ${resp.status}: ${body.slice(0, 200)}`)
+  }
+  return resp.arrayBuffer()
+}
+
+let dirPromise: Promise<string> | null = null
+
+/** appData/data/audio-cache 目录(懒创建) */
+function cacheDir(): Promise<string> {
+  if (!dirPromise) {
+    dirPromise = (async () => {
+      const base = await appDataDir()
+      const dir = await join(base, 'data', 'audio-cache')
+      if (!(await exists(dir))) await mkdir(dir, { recursive: true })
+      return dir
+    })()
+  }
+  return dirPromise
+}
+
+/** hash(文本+音色) → blobUrl;上限 200 条,满了从头清(演出语音重复率低,够用) */
+const memory = new Map<string, string>()
+/** 在飞合成去重:同一 hash 只发一次请求 */
+const inflight = new Map<string, Promise<string>>()
+
+async function hashOf(text: string, voice: string): Promise<string> {
+  const data = new TextEncoder().encode(`${voice}|${text}`)
+  const digest = await crypto.subtle.digest('SHA-256', data)
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('')
+}
+
+function remember(hash: string, bytes: ArrayBuffer): string {
+  const url = URL.createObjectURL(new Blob([bytes], { type: 'audio/mpeg' }))
+  memory.set(hash, url)
+  if (memory.size > 200) {
+    const oldest = memory.keys().next().value
+    if (oldest !== undefined) {
+      const u = memory.get(oldest)
+      memory.delete(oldest)
+      if (u) URL.revokeObjectURL(u)
+    }
+  }
+  return url
+}
+
+/** 确保该句已合成并缓存,返回 blobUrl。失败抛错由调用方静默 */
+async function ensure(text: string, voice: string, apiKey: string): Promise<string> {
+  const hash = await hashOf(text, voice)
+  const hit = memory.get(hash)
+  if (hit) return hit
+
+  const existing = inflight.get(hash)
+  if (existing) return existing
+
+  const task = (async () => {
+    if (!inTauri) {
+      // 浏览器预览:无文件系统,只用内存缓存
+      return remember(hash, await synth(text, voice, apiKey))
+    }
+    const file = await join(await cacheDir(), `${hash}.mp3.txt`)
+    if (await exists(file)) {
+      // 磁盘命中:mp3 以 base64 文本落盘(规避插件二进制读取接口差异),读回还原
+      const bin = atob(await readTextFile(file))
+      const bytes = new ArrayBuffer(bin.length)
+      const arr = new Uint8Array(bytes)
+      for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i)
+      return remember(hash, bytes)
+    }
+    const buf = await synth(text, voice, apiKey)
+    // base64 落盘
+    const u8 = new Uint8Array(buf)
+    let s = ''
+    for (let i = 0; i < u8.length; i += 0x8000) {
+      s += String.fromCharCode(...u8.subarray(i, i + 0x8000))
+    }
+    await writeTextFile(file, btoa(s))
+    return remember(hash, buf)
+  })()
+  inflight.set(hash, task)
+  try {
+    return await task
+  } finally {
+    inflight.delete(hash)
+  }
+}
+
+// ---------- 播放 ----------
+
+let current: HTMLAudioElement | null = null
+/** 当前语音的序号:新 speak 递增,过期完成的播放直接丢弃 */
+let epoch = 0
+
+/** 缺 key 只提示一次,避免每句台词都刷 */
+let warnedNoKey = false
+
+/** 说一句:停掉当前语音,起播这句。fire-and-forget,失败静默 */
+export function speak(speaker: Speaker, text: string): void {
+  void (async () => {
+    try {
+      const cfg = await getConfig()
+      if (!cfg.voice.enabled) return
+      if (!cfg.voice.apiKey.trim()) {
+        if (!warnedNoKey) {
+          warnedNoKey = true
+          console.warn('[tts] 未配置语音 API Key(设置 → 角色语音),本次无声')
+        }
+        return
+      }
+      const voice = cfg.voice[speaker]
+      const url = await ensure(text, voice, cfg.voice.apiKey)
+      const my = ++epoch
+      current?.pause()
+      const audio = new Audio(url)
+      current = audio
+      audio.onended = () => {
+        if (current === audio) current = null
+      }
+      try {
+        await audio.play()
+      } catch (err) {
+        console.warn('[tts] play 被拒(自动播放策略?)', err)
+        return
+      }
+      // 等待期间来了新句,丢弃本次播放
+      if (my !== epoch) audio.pause()
+    } catch (e) {
+      console.warn('[tts] 语音合成/播放失败(静默降级)', e)
+    }
+  })()
+}
+
+/** 只合成不播放:预合成下一句,开播即有声 */
+export function prefetchVoice(speaker: Speaker, text: string): void {
+  void (async () => {
+    try {
+      const cfg = await getConfig()
+      if (!cfg.voice.enabled || !cfg.voice.apiKey.trim()) return
+      await ensure(text, cfg.voice[speaker], cfg.voice.apiKey)
+    } catch {
+      // 静默
+    }
+  })()
+}
+
+/** 停止当前语音(演出停止/切换时) */
+export function stopSpeaking(): void {
+  epoch++
+  current?.pause()
+  current = null
+}

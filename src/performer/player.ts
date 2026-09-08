@@ -15,8 +15,8 @@ export function bubbleDuration(text: string): number {
 }
 
 export interface PlayerCallbacks {
-  /** 一句台词开始：显示气泡 + 切动作 */
-  onLine: (line: DialogLine) => void
+  /** 一句台词开始：显示气泡 + 切动作;index 用于语音预合成下一句 */
+  onLine: (line: DialogLine, index: number) => void
   /** 一句台词结束：清气泡 + 回 idle */
   onLineEnd: (speaker: Speaker) => void
   /** 整段播完（自然结束，非 stop） */
@@ -55,9 +55,10 @@ export class PerformancePlayer {
     this.ctrl = ctrl
     const gap = opts.gap ?? 400
     void (async () => {
-      for (const line of lines) {
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i]
         if (ctrl.signal.aborted) break
-        this.cbs.onLine(line)
+        this.cbs.onLine(line, i)
         await sleep(bubbleDuration(line.text), ctrl.signal)
         if (ctrl.signal.aborted) break
         this.cbs.onLineEnd(line.speaker)

@@ -131,6 +131,7 @@ function App() {
   const btnGear = useRef<HTMLButtonElement>(null)
   const btnEye = useRef<HTMLButtonElement>(null)
   const btnTopic = useRef<HTMLButtonElement>(null)
+  const btnExit = useRef<HTMLButtonElement>(null)
   const gripRef = useRef<HTMLSpanElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
   const topicPanelRef = useRef<HTMLDivElement>(null)
@@ -226,6 +227,9 @@ function App() {
       }),
       registerHitRegion('topic', {
         getRect: () => btnTopic.current!.getBoundingClientRect(),
+      }),
+      registerHitRegion('exit', {
+        getRect: () => btnExit.current!.getBoundingClientRect(),
       }),
       registerHitRegion('grip', {
         getRect: () => gripRef.current!.getBoundingClientRect(),
@@ -636,7 +640,16 @@ function App() {
   const busy = phase === 'generating'
 
   return (
-    <div className="stage">
+    <div
+      className="stage"
+      onPointerDown={(e) => {
+        // 点在面板/工具栏之外 → 收起已打开的面板(穿透窗口下 e.target 即 .stage 本体)
+        if (e.target === e.currentTarget) {
+          setSettingsOpen(false)
+          setTopicOpen(false)
+        }
+      }}
+    >
       <div
         className={`ctrl-bar${ctrlBar.collapsed ? ' collapsed' : ''}`}
         style={{ left: `${ctrlBar.xPct}%`, top: ctrlBar.top }}
@@ -716,6 +729,15 @@ function App() {
         >
           <TargetIcon />
         </button>
+
+        <button
+          ref={btnExit}
+          className={`ctrl-btn icon${hovered === 'exit' ? ' hot' : ''}${exitArmed ? ' danger armed' : ''}`}
+          title={exitArmed ? '再点一次确认退出' : '退出程序'}
+          onClick={requestExit}
+        >
+          {exitArmed ? '确认退出?' : <PowerIcon />}
+        </button>
       </div>
 
       {settingsOpen && (
@@ -735,13 +757,6 @@ function App() {
                 历史
               </button>
             </div>
-            <button
-              className={`panel-btn danger${exitArmed ? ' armed' : ''}`}
-              title={exitArmed ? '再点一次确认退出' : '退出程序'}
-              onClick={requestExit}
-            >
-              {exitArmed ? '确认退出?' : <PowerIcon />}
-            </button>
           </div>
           {settingsTab === 'general' && (
             <>
@@ -854,15 +869,20 @@ function App() {
             </button>
           </div>
           <div className="settings-row">
-            <label htmlFor="cfg-replay">空闲自动重放(分钟,0 = 关闭)</label>
+            <label htmlFor="cfg-replay">空闲自动重放(分钟,留空 = 关闭)</label>
             <input
               id="cfg-replay"
               type="number"
-              min={0}
+              min={1}
               max={1440}
               step={1}
-              value={form.autoReplayMin}
-              onChange={(e) => setForm({ ...form, autoReplayMin: Number(e.target.value) })}
+              placeholder="留空则不自动重放"
+              value={form.autoReplayMin || ''}
+              onChange={(e) => {
+                const raw = e.target.value
+                // 空串/非法输入按 0(关闭)存,不往输入框里塞 0 硬占位
+                setForm({ ...form, autoReplayMin: raw.trim() === '' ? 0 : Math.max(0, Number(raw) || 0) })
+              }}
             />
           </div>
           <div className="settings-row">

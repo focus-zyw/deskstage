@@ -38,7 +38,7 @@ export const VENDORS: VendorPreset[] = [
     id: 'doubao',
     label: '豆包(火山引擎)',
     baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
-    models: ['doubao-pro-32k', 'doubao-pro-128k', 'doubao-lite-32k'],
+    models: ['doubao-seed-1-6-250615', 'doubao-1-5-pro-32k-250115', 'doubao-1-5-lite-32k-250115'],
   },
   {
     id: 'openai',
