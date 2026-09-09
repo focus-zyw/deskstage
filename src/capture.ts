@@ -6,6 +6,7 @@
 
 import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
+import { appDataDir, join } from '@tauri-apps/api/path'
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow'
 import { register, unregister } from '@tauri-apps/plugin-global-shortcut'
 import { getConfig } from './storage/configStore'
@@ -22,27 +23,41 @@ export async function startScreenshot(): Promise<void> {
   if (running) return
   running = true
   const main = getCurrentWindow()
+  let hidden = false
   try {
-    // 冻结抓屏前把主窗收起:角色不进画面。WDA 开启时是双保险,关闭时是唯一兜底
-    await main.hide()
-    let path: string
-    try {
+    const cfg = await getConfig()
+    // hideSelf 开启时角色已被 WDA 系统级排除,主窗不用动;
+    // 关闭时才隐藏主窗 260ms 兜底,保证角色不进冻结画面
+    if (!cfg.screenshot.hideSelf) {
+      await main.hide()
+      hidden = true
       await sleep(260) // 等 DWM 合成完,避免拍到收起瞬间的残影
-      path = await invoke<string>('capture_screen')
-    } catch (e) {
+    }
+    const path = await invoke<string>('capture_screen')
+    if (hidden) {
       await main.show().catch(() => {})
-      throw e
+      hidden = false
+      await sleep(120) // 主窗先回来,覆盖窗马上盖上去
     }
 
     // 残留覆盖窗(上次异常退出)先清掉,否则同 label 建窗会失败
     const stale = (await WebviewWindow.getAll()).find((w) => w.label === OVERLAY_LABEL)
     if (stale) await stale.destroy().catch(() => {})
 
-    // 全屏交给系统 fullscreen:true:逻辑尺寸换算在多 DPI 下不可靠。
-    // 覆盖窗内部用 innerWidth 与图像宽的比值做坐标换算,不受窗口实际 DPI 影响
+    // 覆盖窗用独立数据目录:主窗配了 additionalBrowserArgs,WebView2 规定
+    // browser args 不同的 WebView 必须使用不同数据目录,否则创建报 0x8007139F
+    const base = await appDataDir()
+    const dataDirectory = await join(base, 'data', 'capture-webview')
+
+    // 全屏交给系统 fullscreen:true 会在 Windows 上导致 WebView2 创建失败
+    // (0x8007139F,实测),改用主窗口的 screen 逻辑尺寸铺满(同显示器,无换算问题);
+    // 覆盖窗内部用 innerWidth 与图像宽的比值做坐标换算,不受 DPI 影响
     const overlay = new WebviewWindow(OVERLAY_LABEL, {
       url: `index.html?capture=1&p=${encodeURIComponent(path)}`,
-      fullscreen: true,
+      x: 0,
+      y: 0,
+      width: window.screen.width,
+      height: window.screen.height,
       decorations: false,
       resizable: false,
       skipTaskbar: true,
@@ -50,13 +65,27 @@ export async function startScreenshot(): Promise<void> {
       shadow: false,
       focus: true,
       title: '截屏框选',
+      dataDirectory,
     })
-    overlay.once('tauri://destroyed', () => {
-      void main.show().catch(() => {})
+    overlay.once('tauri://error', (e) => {
+      console.warn('[capture] 覆盖窗创建失败', e)
+      if (hidden) void main.show().catch(() => {})
       running = false
     })
-    // running 保持 true 直到覆盖窗销毁,期间不重复触发
+    overlay.once('tauri://destroyed', () => {
+      if (hidden) void main.show().catch(() => {})
+      running = false
+    })
+    // 创建看门狗:创建失败时 error/destroyed 事件都可能不触发(wry 层失败只写日志),
+    // running 若卡死会让之后所有截屏点击被早退吞掉,5 秒未建窗就强制解锁
+    window.setTimeout(() => {
+      if (running) {
+        if (hidden) void main.show().catch(() => {})
+        running = false
+      }
+    }, 5000)
   } catch (e) {
+    if (hidden) await main.show().catch(() => {})
     running = false
     throw e
   }
