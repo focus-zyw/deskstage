@@ -1343,3 +1343,44 @@
     transform: translateX(0);
   }
 }
+
+/* ---------- 命令面板:在 topic-panel 基础上加提醒确认表单 ---------- */
+.cmd-panel {
+  width: 430px;
+}
+.cmd-panel .panel-head {
+  justify-content: space-between;
+}
+.cmd-memo {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid rgba(124, 108, 240, 0.5);
+  border-radius: var(--radius-input);
+  background: rgba(124, 108, 240, 0.12);
+}
+.cmd-memo-title {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.75);
+}
+.cmd-memo input {
+  padding: 7px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: var(--radius-input);
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  font-size: 13px;
+  outline: none;
+}
+.cmd-memo input:focus {
+  border-color: rgba(124, 108, 240, 0.9);
+}
+.cmd-memo-actions {
+  display: flex;
+  gap: 8px;
+}
+.cmd-hint {
+  font-size: 12px;
+  color: rgba(255, 210, 130, 0.85);
+}

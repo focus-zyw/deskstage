@@ -6,7 +6,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { readFile, remove } from '@tauri-apps/plugin-fs'
 import { CharacterSprite } from './stage/CharacterSprite'
 import { Bubble } from './stage/Bubble'
-import { EyeIcon, EyeOffIcon, PlayIcon, StopIcon, GearIcon, PowerIcon, TargetIcon, PokeballIcon, ChatIcon, CropIcon } from './stage/icons'
+import { PlayIcon, StopIcon, GearIcon, PokeballIcon, ChatIcon, GridIcon, BellOffIcon } from './stage/icons'
 import { startScreenshot, applyScreenshotHotkey } from './capture'
 import { defaultPersonaText, setCharacterNames, setPersonaOverride } from './engine/persona'
 import { startEnvPolling, stopEnvPolling, isFullscreenApp } from './engine/envAware'
@@ -43,6 +43,8 @@ import { VENDORS, CUSTOM_VENDOR_ID, vendorIdOfBaseUrl } from './engine/vendors'
 import { takePrefetch } from './storage/prefetchStore'
 import { appendHistory, loadRecentHistory, listEpisodes, deleteEpisodes, toggleFavorite, type Episode } from './storage/historyStore'
 import { TranslationPanel, type TranslationInject } from './translation/TranslationPanel'
+import { CommandPanel } from './ui/CommandPanel'
+import type { Command } from './features/commands/commands'
 import {
   useRuntime,
   getCaps,
@@ -482,9 +484,10 @@ function App() {
   const lastChatTarget = useRef<Speaker>('A')
   // 翻译面板:开合由 runtime overlays 管;OCR 链路注入的原文(auto=截图翻译入口,填入即自动翻)
   const translationOpen = rt.overlays.includes('translation')
+  const toolsOpen = rt.overlays.includes('tools')
+  const overlaysOpen = rt.overlays.length > 0
   const [trInject, setTrInject] = useState<TranslationInject | null>(null)
   const trPanelRef = useRef<HTMLDivElement>(null)
-  const btnTrans = useRef<HTMLButtonElement>(null)
   const pendingOcrTranslate = useRef(false)
   const trQuipAt = useRef(0)
   // 最近打开的面板由 runtime overlays 栈决定(escapeTarget),不再单独记 ref
@@ -561,16 +564,14 @@ function App() {
   const btnGen = useRef<HTMLButtonElement>(null)
   const btnStop = useRef<HTMLButtonElement>(null)
   const btnGear = useRef<HTMLButtonElement>(null)
-  const btnEye = useRef<HTMLButtonElement>(null)
-  const btnTopic = useRef<HTMLButtonElement>(null)
-  const btnShot = useRef<HTMLButtonElement>(null)
-  const btnOcr = useRef<HTMLButtonElement>(null)
+  const btnTools = useRef<HTMLButtonElement>(null)
+  const btnDnd = useRef<HTMLButtonElement>(null)
   const btnChat = useRef<HTMLButtonElement>(null)
-  const btnExit = useRef<HTMLButtonElement>(null)
   const gripRef = useRef<HTMLSpanElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
   const topicPanelRef = useRef<HTMLDivElement>(null)
   const chatBoxRef = useRef<HTMLDivElement>(null)
+  const cmdPanelRef = useRef<HTMLDivElement>(null)
   const timers = useRef<Record<Speaker, number>>({ A: 0, B: 0, C: 0 })
 
   // 演出播放器：LLM 生成的 DialogLine[] 与硬编码脚本走同一条路
@@ -702,6 +703,53 @@ function App() {
     })
   }
 
+  /** 普通截屏(命令面板入口):框选→复制到剪贴板,不触发翻译 */
+  function startPlainScreenshot() {
+    pendingOcrTranslate.current = false
+    startScreenshot().catch((e) => {
+      const msg = String((e as Error)?.message ?? e).slice(0, 50)
+      setBubble({ A: `截图失败:${msg}`, B: null, C: null })
+      window.setTimeout(() => {
+        setBubble((b) => (b.A?.startsWith('截图失败') ? { A: null, B: null, C: null } : b))
+      }, 2400)
+    })
+  }
+
+  /** 勿扰:TTS 全静 + 调度器停发主动行为(备忘卡片照弹);立即落盘 */
+  function toggleDnd() {
+    const next = !rt.dnd
+    setRuntimeDnd(next)
+    saveConfig({ dnd: next }).catch((e) => console.warn('勿扰保存失败(静默)', e))
+    showPoke(next ? 'B' : 'A', next ? '知道了,我们安静待着' : '欢迎回来~', 'talk', 2000)
+  }
+
+  /** 命令面板:点播一段演出(话题可选;把主题挂上让这次点播聊它) */
+  function performNow(m: Mode, topic?: string) {
+    if (topic) applyTopic(topic)
+    setMode(m)
+    void playMode(m)
+  }
+
+  /** 命令面板:跳到备忘页手填(时间没解析出来时的兜底入口) */
+  function openMemoSettings() {
+    setSettingsTab('memo')
+    void openSettings()
+  }
+
+  /** 命令注册表:新工具 = 注册一条,工具栏不再加按钮 */
+  const commands: Command[] = [
+    { id: 'clipboard-translate', label: '把剪贴板图片翻译出来(先截屏)', keywords: ['剪贴板'], run: () => startOcrIntoTranslation(true) },
+    { id: 'translate', label: '翻译文字(打开翻译面板)', keywords: ['翻译', 'translate'], run: () => openOverlayExclusive('translation') },
+    { id: 'capture-translate', label: '截图翻译(框选→识别→翻译)', keywords: ['截图翻译', '截屏翻译'], run: startScreenshotTranslate },
+    { id: 'ocr', label: '提取文字(剪贴板图片→文字)', keywords: ['提取', '识别', 'ocr'], run: () => startOcrIntoTranslation(false) },
+    { id: 'screenshot', label: '截屏(框选→复制到剪贴板)', keywords: ['截屏', '截图'], run: startPlainScreenshot },
+    { id: 'memo', label: '添加提醒(打开备忘页)', keywords: ['备忘页'], run: openMemoSettings },
+    { id: 'topic', label: '设置聊天主题', keywords: ['话题', '主题'], run: () => openOverlayExclusive('topic') },
+    { id: 'toggle-chars', label: charHidden ? '显示角色' : '隐藏角色', keywords: ['隐藏角色', '显示角色'], run: () => setCharsHidden(!charHidden) },
+    { id: 'crosstalk', label: '来一段相声', keywords: ['相声'], run: () => performNow('crosstalk') },
+    { id: 'daily', label: '来一段日常', keywords: ['日常', '段子'], run: () => performNow('daily') },
+  ]
+
   /** 翻译成功后的角色搭腔:甲吹一句乙拆台,只在空闲时插话,20s 冷却 */
   function translateQuip() {
     if (phaseRef.current !== 'idle' || player.current!.playing) return
@@ -718,10 +766,10 @@ function App() {
 
 
   // 看视频不被打扰:默认点击不抢焦点(WS_EX_NOACTIVATE);
-  // 仅设置/主题面板打开时临时恢复激活(输入框需要键盘),关闭即恢复
+  // 仅面板/框选期间临时恢复激活(输入框与框选需要鼠标键盘),关闭即恢复
   useEffect(() => {
-    void invoke('set_noactivate', { enable: !(settingsOpen || topicOpen || chatOpen || translationOpen || !!captureShot) }).catch(() => {})
-  }, [settingsOpen, topicOpen, chatOpen, translationOpen, captureShot])
+    void invoke('set_noactivate', { enable: !(overlaysOpen || !!captureShot) }).catch(() => {})
+  }, [overlaysOpen, captureShot])
   // 上一段台词（内存中），续播时喂给 LLM 做衔接
   const lastLines = useRef<DialogLine[]>([])
   // 上一次自动重放的集,连续重放时避开
@@ -780,9 +828,6 @@ function App() {
             ? new DOMRect(0, 0, window.innerWidth, window.innerHeight)
             : charB.current!.getBoundingClientRect(),
       }),
-      registerHitRegion('eye', {
-        getRect: () => btnEye.current!.getBoundingClientRect(),
-      }),
       registerHitRegion('modes', {
         getRect: () => segCtl.current!.getBoundingClientRect(),
       }),
@@ -792,28 +837,18 @@ function App() {
       registerHitRegion('stop', {
         getRect: () => btnStop.current!.getBoundingClientRect(),
       }),
+      // 工具/勿扰热区必须注册:穿透架构下未注册区域收不到任何鼠标事件
+      registerHitRegion('tools', {
+        getRect: () => btnTools.current!.getBoundingClientRect(),
+      }),
+      registerHitRegion('dnd', {
+        getRect: () => btnDnd.current!.getBoundingClientRect(),
+      }),
       registerHitRegion('settings', {
         getRect: () => btnGear.current!.getBoundingClientRect(),
       }),
-      registerHitRegion('topic', {
-        getRect: () => btnTopic.current!.getBoundingClientRect(),
-      }),
-      // 聊天按钮必须注册热区:穿透架构下未注册区域收不到任何鼠标事件,
-      // 漏注册 = 入口彻底点不到(此前聊天入口即因此失效)
-      registerHitRegion('shot', {
-        getRect: () => btnShot.current!.getBoundingClientRect(),
-      }),
-      registerHitRegion('ocr', {
-        getRect: () => btnOcr.current!.getBoundingClientRect(),
-      }),
-      registerHitRegion('translate', {
-        getRect: () => btnTrans.current!.getBoundingClientRect(),
-      }),
       registerHitRegion('chat', {
         getRect: () => btnChat.current!.getBoundingClientRect(),
-      }),
-      registerHitRegion('exit', {
-        getRect: () => btnExit.current!.getBoundingClientRect(),
       }),
       registerHitRegion('grip', {
         getRect: () => gripRef.current!.getBoundingClientRect(),
@@ -858,19 +893,28 @@ function App() {
     })
   }, [translationOpen])
 
+  // 命令面板打开期间整体可命中
+  useEffect(() => {
+    if (!toolsOpen) return
+    return registerHitRegion('cmd-panel', {
+      getRect: () =>
+        cmdPanelRef.current?.getBoundingClientRect() ?? new DOMRect(0, 0, 0, 0),
+    })
+  }, [toolsOpen])
+
   // 任一面板打开时注册全屏兜底热区:穿透窗口里面板外的屏幕点击也能送达 DOM,
   // "点外部收起"才生效。注册顺序在最后 → hitTest 先命中面板/工具栏/角色等小热区,
   // 只有落在它们之外的光标才会命中 outside
   useEffect(() => {
-    if (!settingsOpen && !topicOpen && !chatOpen && !translationOpen) return
+    if (!overlaysOpen) return
     return registerHitRegion('outside', {
       getRect: () => new DOMRect(0, 0, window.innerWidth, window.innerHeight),
     })
-  }, [settingsOpen, topicOpen, chatOpen, translationOpen])
+  }, [overlaysOpen])
 
   // Escape 只关最后打开的面板(runtime overlays 栈顶;语音录制中锁定:先停止录制才能关闭)
   useEffect(() => {
-    if (!settingsOpen && !topicOpen && !chatOpen && !translationOpen) return
+    if (!overlaysOpen) return
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
       if (voiceRecording.current && settingsOpen) return
@@ -879,7 +923,7 @@ function App() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [settingsOpen, topicOpen, chatOpen, translationOpen])
+  }, [overlaysOpen, settingsOpen])
 
   /** 播放指定的一集(自动重放与历史行点击共用):不调 LLM、不写历史 */
   function playEpisode(ep: Episode, source: 'auto' | 'manual') {
@@ -1852,78 +1896,15 @@ function App() {
           <span className="bar-sep" aria-hidden="true" />
 
         <button
-          ref={btnGear}
-          className={`ctrl-btn icon${hovered === 'settings' ? ' hot' : ''}${settingsOpen ? ' on' : ''}`}
-          title="设置"
+          ref={btnTools}
+          className={`ctrl-btn icon${hovered === 'tools' ? ' hot' : ''}${toolsOpen ? ' on' : ''}`}
+          title="工具(翻译/截屏/提醒…搜命令或直接说)"
           onClick={() => {
-            if (settingsOpen && voiceRecording.current) return // 录音中锁定
-            if (settingsOpen) closeOverlay('settings')
-            else openSettings()
+            if (toolsOpen) closeOverlay('tools')
+            else openOverlayExclusive('tools')
           }}
         >
-          <GearIcon />
-        </button>
-
-        <button
-          ref={btnEye}
-          className={`ctrl-btn icon${hovered === 'eye' ? ' hot' : ''}`}
-          title={charHidden ? '显示角色' : '隐藏角色'}
-          onClick={() => setCharsHidden(!charHidden)}
-        >
-          {charHidden ? <EyeOffIcon /> : <EyeIcon />}
-        </button>
-          <span className="bar-sep" aria-hidden="true" />
-
-        <button
-          ref={btnTopic}
-          className={`ctrl-btn icon${hovered === 'topic' ? ' hot' : ''}${topicOverride ? ' on' : ''}`}
-          title={topicOverride ? `话题：${topicOverride}` : '设置聊天主题'}
-          onClick={() => {
-            if (topicOpen) closeOverlay('topic')
-            else openOverlayExclusive('topic')
-          }}
-        >
-          <TargetIcon />
-        </button>
-
-        <button
-          ref={btnShot}
-          className={`ctrl-btn icon${hovered === 'shot' ? ' hot' : ''}`}
-          title="截屏(框选,复制到剪贴板)"
-          onClick={() => {
-            pendingOcrTranslate.current = false // 普通截屏不触发翻译
-            closeAllOverlays()
-            startScreenshot().catch((e) => {
-              const msg = String((e as Error)?.message ?? e).slice(0, 50)
-              setBubble({ A: `截图失败:${msg}`, B: null, C: null })
-              window.setTimeout(() => {
-                setBubble((b) => (b.A?.startsWith('截图失败') ? { A: null, B: null, C: null } : b))
-              }, 2400)
-            })
-          }}
-        >
-          <CropIcon />
-        </button>
-
-        <button
-          ref={btnOcr}
-          className={`ctrl-btn icon${hovered === 'ocr' ? ' hot' : ''}`}
-          title="识别剪贴板图片文字,填入翻译面板(先截屏,再点我)"
-          onClick={() => startOcrIntoTranslation(false)}
-        >
-          <span aria-hidden="true">文</span>
-        </button>
-
-        <button
-          ref={btnTrans}
-          className={`ctrl-btn icon${hovered === 'translate' ? ' hot' : ''}${translationOpen ? ' on' : ''}`}
-          title="翻译(粘贴文字,或截图识别后翻译)"
-          onClick={() => {
-            if (translationOpen) closeOverlay('translation')
-            else openOverlayExclusive('translation')
-          }}
-        >
-          <span aria-hidden="true">译</span>
+          <GridIcon />
         </button>
 
         <button
@@ -1937,15 +1918,27 @@ function App() {
         >
           <ChatIcon />
         </button>
-          <span className="bar-sep" aria-hidden="true" />
 
         <button
-          ref={btnExit}
-          className={`ctrl-btn icon${hovered === 'exit' ? ' hot' : ''}${exitArmed ? ' danger armed' : ''}`}
-          title={exitArmed ? '再点一次确认退出' : '退出程序'}
-          onClick={requestExit}
+          ref={btnDnd}
+          className={`ctrl-btn icon${hovered === 'dnd' ? ' hot' : ''}${rt.dnd ? ' on' : ''}`}
+          title={rt.dnd ? '勿扰中:点击恢复声音与主动搭话' : '勿扰:静音并暂停主动搭话(提醒卡片照弹)'}
+          onClick={toggleDnd}
         >
-          <PowerIcon />
+          <BellOffIcon />
+        </button>
+
+        <button
+          ref={btnGear}
+          className={`ctrl-btn icon${hovered === 'settings' ? ' hot' : ''}${settingsOpen ? ' on' : ''}`}
+          title="设置"
+          onClick={() => {
+            if (settingsOpen && voiceRecording.current) return // 录音中锁定
+            if (settingsOpen) closeOverlay('settings')
+            else openSettings()
+          }}
+        >
+          <GearIcon />
         </button>
       </div>
 
@@ -1998,6 +1991,13 @@ function App() {
                 历史
               </button>
             </div>
+            <button
+              className={`panel-btn danger${exitArmed ? ' armed' : ''}`}
+              title={exitArmed ? '再点一次确认退出' : '退出程序(3 秒内再点确认)'}
+              onClick={requestExit}
+            >
+              {exitArmed ? '确认退出' : '退出'}
+            </button>
           </div>
           {settingsTab === 'general' && (
             <>
@@ -3029,6 +3029,20 @@ function App() {
             onClose={() => closeOverlay('translation')}
             onScreenshotTranslate={startScreenshotTranslate}
             onTranslated={translateQuip}
+          />
+        )}
+
+        {toolsOpen && (
+          <CommandPanel
+            innerRef={cmdPanelRef}
+            pos={ctrlBar}
+            commands={commands}
+            onClose={() => closeOverlay('tools')}
+            onAddMemo={(text, dueAt) => {
+              showPrivacyTip()
+              void addMemo(text, dueAt, null).then(() => void refreshMemos())
+            }}
+            onPerform={performNow}
           />
         )}
 
