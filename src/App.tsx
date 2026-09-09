@@ -1301,7 +1301,8 @@ function App() {
         if (memoSweepBusy.current) return
         memoSweepBusy.current = true
         try {
-          const due = await getDueMemos()
+          const cfg = await getConfig()
+          const due = await getDueMemos(Date.now(), cfg.memo.advanceMin)
           for (const memo of due) {
             await updateMemo(memo.id, { fired: true })
             setMemoAlerts((list) => [...list, { id: memo.id, text: memo.text }])
@@ -1851,11 +1852,11 @@ function App() {
           onClick={() => {
             setOcrBusy(true)
             setBubble({ A: '识别中…', B: null, C: null })
-            invoke<string[]>('ocr_clipboard')
-              .then(async (lines) => {
-                const text = lines.join('\n')
+            invoke<{ lines: string[]; lang: string }>('ocr_clipboard')
+              .then(async (r) => {
+                const text = r.lines.join('\n')
                 try { await navigator.clipboard.writeText(text) } catch { /* 剪贴板写入失败也展示 */ }
-                setBubble({ A: `已提取 ${lines.length} 行,文字已复制到剪贴板`, B: null, C: null })
+                setBubble({ A: `已提取 ${r.lines.length} 行,文字已复制到剪贴板`, B: null, C: null })
                 window.setTimeout(() => {
                   setBubble((b) => (b.A?.startsWith('已提取') ? { A: null, B: null, C: null } : b))
                 }, 2600)

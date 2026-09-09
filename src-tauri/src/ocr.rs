@@ -6,8 +6,14 @@
 
 use std::task::{Context, Poll};
 
+#[derive(serde::Serialize)]
+pub struct OcrOutput {
+  pub lines: Vec<String>,
+  pub lang: String,
+}
+
 #[tauri::command]
-pub async fn ocr_clipboard() -> Result<Vec<String>, String> {
+pub async fn ocr_clipboard() -> Result<OcrOutput, String> {
   // 专用 STA 线程执行,结果经通道回传
   let (tx, rx) = std::sync::mpsc::channel();
   std::thread::spawn(move || {
@@ -20,12 +26,13 @@ pub async fn ocr_clipboard() -> Result<Vec<String>, String> {
 }
 
 #[cfg(windows)]
-fn ocr_impl_sta() -> Result<Vec<String>, String> {
+fn ocr_impl_sta() -> Result<OcrOutput, String> {
   use windows::ApplicationModel::DataTransfer::{Clipboard, StandardDataFormats};
   use windows::Globalization::Language;
   use windows::Graphics::Imaging::BitmapDecoder;
   use windows::Media::Ocr::OcrEngine;
   use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+  use windows::Win32::UI::WindowsAndMessaging::{DispatchMessageW, GetMessageW, MSG, PeekMessageW, PM_REMOVE, TranslateMessage};
 
   // 本线程是专用的,STA 初始化必成功(S_FALSE 表示已初始化过,同样可用)
   unsafe {
@@ -49,6 +56,14 @@ fn ocr_impl_sta() -> Result<Vec<String>, String> {
       if let Poll::Ready(v) = std::future::Future::poll(fut.as_mut(), &mut cx) {
         return v;
       }
+      // STA 等待剪贴板延迟渲染数据时必须泵消息,否则会死等
+      unsafe {
+        let mut msg = MSG::default();
+        while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
+          let _ = TranslateMessage(&msg);
+          DispatchMessageW(&msg);
+        }
+      }
       std::thread::sleep(std::time::Duration::from_millis(4));
     }
   }
@@ -66,17 +81,22 @@ fn ocr_impl_sta() -> Result<Vec<String>, String> {
   let decoder = block(BitmapDecoder::CreateAsync(&stream).map_err(str_err)?).map_err(str_err)?;
   let bitmap = block(decoder.GetSoftwareBitmapAsync().map_err(str_err)?).map_err(str_err)?;
 
-  // 优先简体中文引擎;缺失则跟随系统语言;都没有 → 引导装语言包
-  let engine = {
-    let zh = Language::CreateLanguage(&windows::core::HSTRING::from("zh-Hans-CN")).map_err(str_err)?;
-    match OcrEngine::TryCreateFromLanguage(&zh) {
-      Ok(e) => Some(e),
-      Err(_) => OcrEngine::TryCreateFromUserProfileLanguages().ok(),
-    }
-  }
-  .ok_or_else(|| {
-    "系统缺少中文 OCR 语言包:设置 → 时间和语言 → 语言 → 添加中文,并下载基本输入".to_string()
-  })?;
+  // 优先 zh-Hans(简体输出);系统只有繁体包时回退 zh-Hant(输出会是繁体,前端提示)
+  let try_lang = |tag: &str| -> Option<OcrEngine> {
+    let lang = Language::CreateLanguage(&windows::core::HSTRING::from(tag)).ok()?;
+    OcrEngine::TryCreateFromLanguage(&lang).ok()
+  };
+  let engine = try_lang("zh-Hans-CN")
+    .or_else(|| try_lang("zh-Hant"))
+    .or_else(|| OcrEngine::TryCreateFromUserProfileLanguages().ok());
+  let Some(engine) = engine else {
+    return Err("系统缺少中文 OCR 语言包:设置 → 时间和语言 → 语言 → 添加中文,并下载基本输入".into());
+  };
+  let lang = engine
+    .RecognizerLanguage()
+    .and_then(|l| l.LanguageTag())
+    .map(|t| t.to_string())
+    .unwrap_or_default();
 
   let result = block(engine.RecognizeAsync(&bitmap).map_err(str_err)?).map_err(str_err)?;
   let text = result.Text().map_err(str_err)?.to_string();
@@ -90,11 +110,22 @@ fn ocr_impl_sta() -> Result<Vec<String>, String> {
   if lines.is_empty() {
     return Err("没识别出文字".into());
   }
-  Ok(lines)
+  Ok(OcrOutput { lines, lang: engine_tag_of(&engine) })
 }
+
+
 
 #[cfg(not(windows))]
 #[tauri::command]
 pub async fn ocr_clipboard() -> Result<Vec<String>, String> {
   Err("OCR 仅支持 Windows".into())
+}
+
+#[cfg(windows)]
+fn engine_tag_of(engine: &windows::Media::Ocr::OcrEngine) -> String {
+  engine
+    .RecognizerLanguage()
+    .and_then(|l| l.LanguageTag())
+    .map(|t| t.to_string())
+    .unwrap_or_default()
 }

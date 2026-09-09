@@ -143,10 +143,18 @@ export async function removeMemo(id: string): Promise<void> {
   })
 }
 
-/** 到达提醒窗口的未完成备忘(已 fired 的不重复返回) */
-export async function getDueMemos(now = Date.now()): Promise<Memo[]> {
+/** 到达提醒窗口的未完成备忘(已 fired 的不重复返回)。
+ *  defaultAdvanceMin:未单独设置提前量时使用的默认提前分钟数(设置里的默认值) */
+export async function getDueMemos(
+  now = Date.now(),
+  defaultAdvanceMin = 0,
+): Promise<Memo[]> {
   const all = await getMemos()
-  return all.filter((m) => !m.done && !m.fired && now >= m.dueAt - (m.advanceMin ?? 0) * 60_000)
+  return all.filter((m) => {
+    if (m.done || m.fired) return false
+    const advance = m.advanceMin ?? defaultAdvanceMin
+    return now >= m.dueAt - advance * 60_000
+  })
 }
 
 async function persist(data: MemoData): Promise<void> {
