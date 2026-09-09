@@ -44,6 +44,20 @@ import { takePrefetch } from './storage/prefetchStore'
 import { appendHistory, loadRecentHistory, listEpisodes, deleteEpisodes, toggleFavorite, type Episode } from './storage/historyStore'
 import { TranslationPanel, type TranslationInject } from './translation/TranslationPanel'
 import {
+  useRuntime,
+  getCaps,
+  setMode as setRuntimeMode,
+  beginPerforming,
+  beginCapture,
+  endCapture,
+  beginRecording,
+  endRecording,
+  openOverlayExclusive,
+  closeOverlay,
+  closeAllOverlays,
+  setCharHidden as setRuntimeCharHidden,
+} from './runtime/runtimeMode'
+import {
   getConfig,
   saveConfig,
   DEFAULT_CONFIG,
@@ -172,6 +186,7 @@ function CloneVoiceRow({
           .catch(() => {})
         recordingRef.current = false
         onRecordingChange?.(false)
+        endRecording()
       }
     }
     // onRecordingChange 是父组件的内联回调,行为恒定;入 deps 会让计时器每帧重建
@@ -187,6 +202,7 @@ function CloneVoiceRow({
     recordingRef.current = false
     setRecording(false)
     onRecordingChange?.(false)
+    endRecording()
   }
 
   // 后端录音线程意外结束(设备失效/目标进程异常 → 报错;达到 180s 上限 → 自动停):
@@ -200,6 +216,7 @@ function CloneVoiceRow({
         recordingRef.current = false
         setRecording(false)
         onRecordingChange?.(false)
+        endRecording()
         if (!e.payload.ok) {
           setErrMsg(String(e.payload.error ?? '录音意外结束').slice(0, 120))
           setState('error')
@@ -240,6 +257,7 @@ function CloneVoiceRow({
           recordingRef.current = true
           setRecording(true)
           onRecordingChange?.(true)
+          beginRecording() // 录音进统一运行态(调度器/Esc 锁定的闸门)
           setElapsed(0)
           discardCapture(capturePathRef.current) // 换新样本,旧录音不再需要
           setFile(null)
@@ -255,6 +273,7 @@ function CloneVoiceRow({
         recordingRef.current = false
         setRecording(false)
         onRecordingChange?.(false)
+        endRecording()
         setErrMsg(String(e).slice(0, 120))
         setState('error')
       }
@@ -403,6 +422,8 @@ function HotkeyRecorder({ value, onChange }: { value: string; onChange: (v: stri
 }
 
 function App() {
+  // 统一运行状态:phase/面板开关全部派生自它,写入走 setRuntimeMode/openOverlayExclusive 等
+  const rt = useRuntime()
   const [hovered, setHovered] = useState<string | null>(null)
   const [reacting, setReacting] = useState<Record<Speaker, boolean>>({
     A: false,
@@ -425,10 +446,17 @@ function App() {
     B: undefined,
     C: undefined,
   })
-  const [phase, setPhase] = useState<Phase>('idle')
+  const phase: Phase =
+    rt.mode.type === 'generating'
+      ? 'generating'
+      : rt.mode.type === 'choosing'
+        ? 'choosing'
+        : rt.mode.type === 'performing'
+          ? 'performing'
+          : 'idle'
   // 分段选择器当前选中模式；生成按钮按它点播
   const [mode, setMode] = useState<Mode>('daily')
-  const [settingsOpen, setSettingsOpen] = useState(false)
+  const settingsOpen = rt.overlays.includes('settings')
   const [form, setForm] = useState<AppConfig>(DEFAULT_CONFIG)
   // 即存反馈:最近一次自动保存/失败的时间戳(渲染 2.5s 后自动消失)
   const [savedTick, setSavedTick] = useState(0)
@@ -444,20 +472,19 @@ function App() {
   // 长期关系一句话摘要(记忆页展示)
   const [bondLine, setBondLine] = useState<string | null>(null)
   // 聊天通道:输入框开合/草稿/应答中;用户气泡(区别于角色气泡)
-  const [chatOpen, setChatOpen] = useState(false)
+  const chatOpen = rt.overlays.includes('chat')
   const [chatDraft, setChatDraft] = useState('')
   const [chatBusy, setChatBusy] = useState(false)
   const [userBubble, setUserBubble] = useState<string | null>(null)
   const lastChatTarget = useRef<Speaker>('A')
-  // 翻译面板:开合与 OCR 链路注入的原文(auto=截图翻译入口,填入即自动翻)
-  const [translationOpen, setTranslationOpen] = useState(false)
+  // 翻译面板:开合由 runtime overlays 管;OCR 链路注入的原文(auto=截图翻译入口,填入即自动翻)
+  const translationOpen = rt.overlays.includes('translation')
   const [trInject, setTrInject] = useState<TranslationInject | null>(null)
   const trPanelRef = useRef<HTMLDivElement>(null)
   const btnTrans = useRef<HTMLButtonElement>(null)
   const pendingOcrTranslate = useRef(false)
   const trQuipAt = useRef(0)
-  // 最近打开的面板:Esc 只关它,不一刀切全关
-  const lastOpenedPanel = useRef<'settings' | 'topic' | 'chat' | 'translation' | null>(null)
+  // 最近打开的面板由 runtime overlays 栈决定(escapeTarget),不再单独记 ref
   // 语音录制进行中:面板锁定(点外部/Esc/齿轮均不收起,防止丢失停止入口)
   const voiceRecording = useRef(false)
   // 设置面板当前选中的厂商(custom = 本地/自定义,baseUrl/model 自由输入)
@@ -466,7 +493,7 @@ function App() {
   const [keyDrafts, setKeyDrafts] = useState<Record<string, string>>({})
   // 手动锁定主题;null = 随机。主题面板弹/收与搜索词
   const [topicOverride, setTopicOverride] = useState<string | null>(null)
-  const [topicOpen, setTopicOpen] = useState(false)
+  const topicOpen = rt.overlays.includes('topic')
   const [topicQuery, setTopicQuery] = useState('')
   // 空闲自动重放:频率来自配置,activeTick 用于用户互动后重置计时
   const [autoReplayMin, setAutoReplayMin] = useState(DEFAULT_CONFIG.autoReplayMin)
@@ -477,7 +504,7 @@ function App() {
   // 角色布局(位置各自独立/缩放共享)与隐藏开关;ref 供拖动/滚轮事件读最新值
   const [charCfg, setCharCfg] = useState<CharactersConfig>(DEFAULT_CONFIG.characters)
   const charCfgRef = useRef(charCfg)
-  const [charHidden, setCharHidden] = useState(DEFAULT_CONFIG.charactersHidden)
+  const charHidden = rt.charHidden
   const charSaveTimer = useRef(0)
   // 退出两段确认:第一次点亮,3 秒内再点才真正退出
   const [exitArmed, setExitArmed] = useState(false)
@@ -578,7 +605,7 @@ function App() {
       },
       onChoice: (cp) => {
         setChoice(cp)
-        setPhase('choosing')
+        setRuntimeMode({ type: 'choosing', choiceId: String(Date.now()) })
       },
       onDone: () => {
         // 选边集:播完(含所选分支)后补记后半段历史
@@ -589,7 +616,7 @@ function App() {
           nowPlaying.current = { topic: p.topic, lines: branchLines, total: branchLines.length, index: -1, source: 'gen' }
         }
         pendingEpisode.current = null
-        setPhase('idle')
+        setRuntimeMode({ type: 'idle' })
         setSpeaking(null)
         setDelivery({ A: undefined, B: undefined, C: undefined })
         // 看完一集 = 弱正信号;自动重放是系统行为不计偏好,防"系统自播→自我强化"污染
@@ -621,10 +648,13 @@ function App() {
   useEffect(() => {
     const start = listen('capture-start', ({ payload }) => {
       setCaptureMode(true)
+      // 框选是临时态:记住底下正在做的事(演出继续播),结束后恢复
+      beginCapture(pendingOcrTranslate.current ? 'translate' : 'save')
       setCaptureShot(String(payload))
     })
     const fail = listen('capture-error', ({ payload }) => {
       pendingOcrTranslate.current = false // 本次框选没走完,别让下一次截图莫名触发翻译
+      endCapture() // 冻结屏没拿到也恢复底下状态
       const msg = String(payload).slice(0, 50)
       setBubble({ A: `截图失败:${msg}`, B: null, C: null })
       window.setTimeout(() => {
@@ -652,10 +682,7 @@ function App() {
         window.setTimeout(() => setBubble((b) => (b.A === '没识别出文字' ? { A: null, B: null, C: null } : b)), 2600)
         return
       }
-      setSettingsOpen(false)
-      setTopicOpen(false)
-      setChatOpen(false)
-      setTranslationOpen(true)
+      openOverlayExclusive('translation')
       setTrInject({ text: r.lines.join('\n'), nonce: Date.now(), auto })
       setBubble({
         A: `已识别 ${r.lines.length} 行${auto ? ',翻译中…' : ',已填入翻译面板'}`,
@@ -725,7 +752,7 @@ function App() {
       setForm(c) // form 与磁盘配置同步:兴趣/画像等在播放流程里也会读,不能等打开设置才回填
       setAutoReplayMin(c.autoReplayMin)
       applyChars(c.characters)
-      setCharHidden(c.charactersHidden)
+      setRuntimeCharHidden(c.charactersHidden)
       setTopicOverride(c.topicOverride)
       applyCtrlBar(c.ctrlBar)
       setShowWatermark(c.showWatermark)
@@ -851,18 +878,14 @@ function App() {
     })
   }, [settingsOpen, topicOpen, chatOpen, translationOpen])
 
-  // Escape 关闭任一打开的面板(语音录制中锁定:先停止录制才能关闭)
+  // Escape 只关最后打开的面板(runtime overlays 栈顶;语音录制中锁定:先停止录制才能关闭)
   useEffect(() => {
     if (!settingsOpen && !topicOpen && !chatOpen && !translationOpen) return
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        if (voiceRecording.current && settingsOpen) return
-        if (lastOpenedPanel.current === 'settings') setSettingsOpen(false)
-        else if (lastOpenedPanel.current === 'topic') setTopicOpen(false)
-        else if (lastOpenedPanel.current === 'chat') setChatOpen(false)
-        else if (lastOpenedPanel.current === 'translation') setTranslationOpen(false)
-        lastOpenedPanel.current = null
-      }
+      if (e.key !== 'Escape') return
+      if (voiceRecording.current && settingsOpen) return
+      const target = getCaps().escapeTarget
+      if (target) closeOverlay(target)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -880,7 +903,7 @@ function App() {
     nowPlaying.current = { topic: ep.topic, lines: ep.lines, total: ep.lines.length, index: -1, source }
     setBubble({ A: null, B: null, C: null })
     setAction({ A: 'idle', B: 'idle', C: 'idle' })
-    setPhase('performing')
+    beginPerforming()
     playingLines.current = ep.lines
     player.current!.play(withFinalePause(ep.lines), { gap: modeOf(ep.mode).gap })
   }
@@ -904,7 +927,7 @@ function App() {
 
   /** 点击历史行:关闭面板并回放该集 */
   function replayFromHistory(ep: Episode) {
-    setSettingsOpen(false)
+    closeOverlay('settings')
     playEpisode(ep, 'manual')
   }
 
@@ -919,7 +942,7 @@ function App() {
   function pickOption(option: ChoiceOption) {
     window.clearTimeout(choiceTimer.current)
     setChoice(null)
-    setPhase('performing')
+    beginPerforming()
     if (pendingEpisode.current) pendingEpisode.current.chosen = option.id
     playingLines.current = pendingEpisode.current?.after[option.id] ?? []
     nowPlaying.current = {
@@ -951,7 +974,7 @@ function App() {
     nowPlaying.current = null
     setAction({ A: 'wave', B: 'wave', C: 'idle' })
     window.setTimeout(() => {
-      setPhase('performing')
+      beginPerforming()
       player.current!.play(lines, { gap: 700 })
       void appendHistory(lines, 'daily')
     }, 900)
@@ -1023,7 +1046,7 @@ function App() {
           if (phaseRef.current !== 'idle' || player.current!.playing || lines.length === 0) return
           lastLines.current = lines
           playingLines.current = lines
-          setPhase('performing')
+          beginPerforming()
           player.current!.play(lines, { gap: 700 })
         } catch {
           // 静默:提醒宁可错过
@@ -1102,7 +1125,7 @@ function App() {
       nowPlaying.current = { topic: hit.topic, lines: hit.lines, total: hit.lines.length, index: -1, source: 'gen' }
       lastLines.current = hit.lines
       void appendHistory(hit.lines, hit.mode, hit.topic) // 使用后移入 history(fire-and-forget)
-      setPhase('performing')
+      beginPerforming()
       playingLines.current = hit.lines
       player.current!.play(withFinalePause(hit.lines), { gap: modeOf(hit.mode).gap })
       void prefetchNext(m, hit.lines, fixedTopic ?? undefined) // 补货下一轮(静默)
@@ -1111,7 +1134,7 @@ function App() {
 
     // 未命中：生成当前轮(等待期两人进入思考姿势)
     setAction({ A: 'thinking', B: 'thinking', C: 'thinking' })
-    setPhase('generating')
+    setRuntimeMode({ type: 'generating' })
     const ctrl = new AbortController()
     generateAbort.current = ctrl
     const topic = actualTopic
@@ -1123,7 +1146,7 @@ function App() {
       lastLines.current = script.before
       pendingEpisode.current = { before: script.before, after: script.after, mode: m, topic }
       void appendHistory(script.before, m, topic) // 前半段落盘;选边后半在播完后补记
-      setPhase('performing')
+      beginPerforming()
       playingLines.current = script.before
       player.current!.play(withFinalePause(script.before), {
         gap: MODES[m].gap,
@@ -1138,7 +1161,7 @@ function App() {
       console.error('LLM 生成失败，回退硬编码脚本', e)
       lastLines.current = MODES[m].script
       nowPlaying.current = null // 兜底剧本与抽中的话题无关,不参与看完/跳过记账
-      setPhase('performing')
+      beginPerforming()
       // 先出提示气泡(带具体原因),短暂停留后再开播,避免被第一句台词立即覆盖
       const reason = await describeLlmError(e)
       if (ctrl.signal.aborted) return
@@ -1162,7 +1185,7 @@ function App() {
     generateAbort.current = null
     player.current!.stop()
     stopSpeaking()
-    setPhase('idle')
+    setRuntimeMode({ type: 'idle' })
     setSpeaking(null)
     setDelivery({ A: undefined, B: undefined, C: undefined })
     setChoice(null)
@@ -1266,9 +1289,7 @@ function App() {
 
   /** 打开设置：读当前配置回填表单，加载历史分集 */
   async function openSettings() {
-    setSettingsOpen(true)
-    setTopicOpen(false)
-    setTranslationOpen(false)
+    openOverlayExclusive('settings')
     const cfg = await getConfig()
     // 人设输入框显示生效中的全文(自定义或内置默认),编辑后保存即采纳
     setForm({
@@ -1411,7 +1432,7 @@ function App() {
               if (phaseRef.current === 'idle' && !player.current!.playing && lines.length) {
                 lastLines.current = lines
                 playingLines.current = lines
-                setPhase('performing')
+                beginPerforming()
                 player.current!.play(lines, { gap: 700 })
               }
             } catch { /* 讨论失败静默 */ }
@@ -1632,7 +1653,7 @@ function App() {
 
   /** 隐藏/显示角色(立即落盘) */
   function setCharsHidden(v: boolean) {
-    setCharHidden(v)
+    setRuntimeCharHidden(v)
     saveConfig({ charactersHidden: v }).catch((e) => console.warn('显示开关保存失败(静默)', e))
   }
 
@@ -1700,7 +1721,7 @@ function App() {
   function applyTopic(topic: string) {
     const norm = topic.trim()
     setTopicOverride(norm)
-    setTopicOpen(false)
+    closeOverlay('topic')
     void saveConfig({ topicOverride: norm }).catch((e) => console.warn('主题保存失败(静默)', e))
     if (norm) void prefetchNext(mode, lastLines.current, norm)
   }
@@ -1708,7 +1729,7 @@ function App() {
   /** 清除主题,回到话题池随机 */
   function clearTopic() {
     setTopicOverride(null)
-    setTopicOpen(false)
+    closeOverlay('topic')
     void saveConfig({ topicOverride: null }).catch((e) => console.warn('主题清除失败(静默)', e))
     void prefetchNext(mode, lastLines.current) // 重新随机补一单
   }
@@ -1811,12 +1832,7 @@ function App() {
         // 点在面板/工具栏之外 → 收起已打开的面板(穿透窗口下 e.target 即 .stage 本体)
         // 录音中点击外部不收面板(防止丢失停止入口)
         if (voiceRecording.current && settingsOpen) return
-        if (e.target === e.currentTarget) {
-          setSettingsOpen(false)
-          setTopicOpen(false)
-          setChatOpen(false)
-          setTranslationOpen(false)
-        }
+        if (e.target === e.currentTarget) closeAllOverlays()
       }}
     >
       <div
@@ -1880,11 +1896,8 @@ function App() {
           title="设置"
           onClick={() => {
             if (settingsOpen && voiceRecording.current) return // 录音中锁定
-            if (settingsOpen) setSettingsOpen(false)
-            else {
-              openSettings()
-              lastOpenedPanel.current = 'settings'
-            }
+            if (settingsOpen) closeOverlay('settings')
+            else openSettings()
           }}
         >
           <GearIcon />
@@ -1905,15 +1918,8 @@ function App() {
           className={`ctrl-btn icon${hovered === 'topic' ? ' hot' : ''}${topicOverride ? ' on' : ''}`}
           title={topicOverride ? `话题：${topicOverride}` : '设置聊天主题'}
           onClick={() => {
-            if (topicOpen) {
-              setTopicOpen(false)
-            } else {
-              setSettingsOpen(false)
-              setChatOpen(false)
-              setTranslationOpen(false)
-              setTopicOpen(true)
-              lastOpenedPanel.current = 'topic'
-            }
+            if (topicOpen) closeOverlay('topic')
+            else openOverlayExclusive('topic')
           }}
         >
           <TargetIcon />
@@ -1925,10 +1931,7 @@ function App() {
           title="截屏(框选,复制到剪贴板)"
           onClick={() => {
             pendingOcrTranslate.current = false // 普通截屏不触发翻译
-            setSettingsOpen(false)
-            setTopicOpen(false)
-            setChatOpen(false)
-            setTranslationOpen(false)
+            closeAllOverlays()
             startScreenshot().catch((e) => {
               const msg = String((e as Error)?.message ?? e).slice(0, 50)
               setBubble({ A: `截图失败:${msg}`, B: null, C: null })
@@ -1956,15 +1959,8 @@ function App() {
           className={`ctrl-btn icon${hovered === 'translate' ? ' hot' : ''}${translationOpen ? ' on' : ''}`}
           title="翻译(粘贴文字,或截图识别后翻译)"
           onClick={() => {
-            if (translationOpen) {
-              setTranslationOpen(false)
-              return
-            }
-            setSettingsOpen(false)
-            setTopicOpen(false)
-            setChatOpen(false)
-            setTranslationOpen(true)
-            lastOpenedPanel.current = 'translation'
+            if (translationOpen) closeOverlay('translation')
+            else openOverlayExclusive('translation')
           }}
         >
           <span aria-hidden="true">译</span>
@@ -1975,15 +1971,8 @@ function App() {
           className={`ctrl-btn icon${hovered === 'chat' ? ' hot' : ''}${chatOpen ? ' on' : ''}`}
           title="和角色说话(@甲/@乙 指定谁回)"
           onClick={() => {
-            if (chatOpen) {
-              setChatOpen(false)
-            } else {
-              setSettingsOpen(false)
-              setTopicOpen(false)
-              setTranslationOpen(false)
-              setChatOpen(true)
-              lastOpenedPanel.current = 'chat'
-            }
+            if (chatOpen) closeOverlay('chat')
+            else openOverlayExclusive('chat')
           }}
         >
           <ChatIcon />
@@ -3034,6 +3023,7 @@ function App() {
           <CaptureOverlay
             path={captureShot}
             onDone={(ok) => {
+              endCapture() // 无论成败都恢复框选前的演出态
               setCaptureMode(false)
               setCaptureShot(null)
               if (ok) {
@@ -3055,7 +3045,7 @@ function App() {
             innerRef={trPanelRef}
             pos={ctrlBar}
             inject={trInject}
-            onClose={() => setTranslationOpen(false)}
+            onClose={() => closeOverlay('translation')}
             onScreenshotTranslate={startScreenshotTranslate}
             onTranslated={translateQuip}
           />
