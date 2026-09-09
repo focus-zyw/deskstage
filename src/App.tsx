@@ -398,6 +398,7 @@ function App() {
   const [dropFor, setDropFor] = useState<Speaker | null>(null)
   const dropTimer = useRef(0)
   const [dragUi, setDragUi] = useState<Speaker | null>(null)
+  const finaleTimer = useRef(0)
   // 时间感知:启动问候 + 空闲自发短聊天
   const [spontTick, setSpontTick] = useState(0)
   const phaseRef = useRef(phase)
@@ -430,7 +431,10 @@ function App() {
     player.current = new PerformancePlayer({
       onLine: (line, index) => {
         setBubble((b) => ({ ...b, [line.speaker]: line.text }))
-        setAction((a) => ({ ...a, [line.speaker]: line.action || 'talk' }))
+        // 台词在笑 → 用大笑表情(LLM 词表有 laugh 时直接命中,否则启发式兜底)
+        const laughing = /哈哈+|嘿嘿|嘻嘻|笑死|233/.test(line.text)
+        const act = laughing ? 'laugh' : line.action || 'talk'
+        setAction((a) => ({ ...a, [line.speaker]: act }))
         setSpeaking(line.speaker)
         speak(line.speaker, line.text) // 语音失败静默,不影响气泡
         const next = playingLines.current[index + 1]
@@ -451,6 +455,10 @@ function App() {
       onDone: () => {
         setPhase('idle')
         setSpeaking(null)
+        // 收底:一集演完两人一起大笑收场
+        setAction({ A: 'laugh', B: 'laugh' })
+        window.clearTimeout(finaleTimer.current)
+        finaleTimer.current = window.setTimeout(() => setAction({ A: 'idle', B: 'idle' }), 2600)
       },
     })
   }
@@ -634,13 +642,16 @@ function App() {
     return () => window.clearTimeout(t)
   }, [phase, settingsOpen, chatOpen, charHidden, autoReplayMin, activeTick])
 
-  /** 播出一段短聊天(问候/自发),计入历史,静默失败 */
+  /** 播出一段短聊天(问候/自发),计入历史,静默失败;开场先挥手 */
   function playShortChat(lines: DialogLine[]) {
     lastLines.current = lines
     playingLines.current = lines
-    setPhase('performing')
-    player.current!.play(lines, { gap: 700 })
-    void appendHistory(lines, 'daily')
+    setAction({ A: 'wave', B: 'wave' })
+    window.setTimeout(() => {
+      setPhase('performing')
+      player.current!.play(lines, { gap: 700 })
+      void appendHistory(lines, 'daily')
+    }, 900)
   }
 
   /** 自发短聊天调度:连续空闲 2.5~5 分钟后尝试一次;各守卫不过就静默跳过 */
@@ -671,6 +682,16 @@ function App() {
     }
   }, [phase, settingsOpen, topicOpen, chatOpen, charHidden, autoReplayMin, activeTick, spontTick])
 
+  // 空闲 3 分钟无互动 → 角色打瞌睡(sleepy);任何互动/演出/面板恢复
+  const [sleepyOn, setSleepyOn] = useState(false)
+  useEffect(() => {
+    if (phase !== 'idle' || settingsOpen || topicOpen || chatOpen || charHidden) return
+    const t = window.setTimeout(() => setSleepyOn(true), 180_000)
+    return () => {
+      window.clearTimeout(t)
+      setSleepyOn(false)
+    }
+  }, [phase, settingsOpen, topicOpen, chatOpen, charHidden, activeTick])
   /** 启动问候:打开应用时按当前时段打招呼(失败静默);占用自发聊天的预算 */
   useEffect(() => {
     if (greeted.current) return
@@ -708,6 +729,7 @@ function App() {
     generateAbort.current?.abort()
     player.current!.stop()
     stopSpeaking()
+    window.clearTimeout(finaleTimer.current)
     setBubble({ A: null, B: null })
     setAction({ A: 'idle', B: 'idle' })
 
@@ -740,7 +762,8 @@ function App() {
       return
     }
 
-    // 未命中：生成当前轮
+    // 未命中：生成当前轮(等待期两人进入思考姿势)
+    setAction({ A: 'thinking', B: 'thinking' })
     setPhase('generating')
     const ctrl = new AbortController()
     generateAbort.current = ctrl
@@ -781,6 +804,7 @@ function App() {
     stopSpeaking()
     setPhase('idle')
     setSpeaking(null)
+    window.clearTimeout(finaleTimer.current)
     setBubble({ A: null, B: null })
     setAction({ A: 'idle', B: 'idle' })
     setUserBubble(null)
@@ -1125,7 +1149,7 @@ function App() {
     const fallback = shy
       ? SHY_LINES[Math.floor(Math.random() * SHY_LINES.length)]
       : POKE_LINES[Math.floor(Math.random() * POKE_LINES.length)]
-    const fallbackAction = shy ? 'shy' : 'talk'
+    const fallbackAction = shy ? 'shy' : Math.random() < 0.3 ? 'laugh' : 'talk'
 
     // 轻戳小概率走 LLM 即兴(冷却内/演出生成中不触发);失败静默用固定台词
     if (
@@ -1154,6 +1178,9 @@ function App() {
   }
 
   const busy = phase === 'generating'
+  // 显示用动作:打瞌睡仅覆盖 idle 态,任何明确动作优先
+  const displayAction = (who: Speaker) =>
+    sleepyOn && action[who] === 'idle' ? 'sleepy' : action[who]
 
   return (
     <div
@@ -1812,7 +1839,7 @@ function App() {
           ref={charA}
           sprite={SPRITE_SETS.A}
           heightOverride={charCfg.height}
-          action={action.A}
+          action={displayAction('A')}
           talkDuration={bubble.A ? 0.3 + Math.min(0.7, bubble.A.length * 0.04) : undefined}
           lean={speaking === 'B' ? (charCfg.A.xPct <= charCfg.B.xPct ? 'right' : 'left') : undefined}
           listening={speaking === 'B'}
@@ -1842,7 +1869,7 @@ function App() {
           ref={charB}
           sprite={SPRITE_SETS.B}
           heightOverride={charCfg.height}
-          action={action.B}
+          action={displayAction('B')}
           talkDuration={bubble.B ? 0.3 + Math.min(0.7, bubble.B.length * 0.04) : undefined}
           lean={speaking === 'A' ? (charCfg.B.xPct <= charCfg.A.xPct ? 'right' : 'left') : undefined}
           listening={speaking === 'A'}

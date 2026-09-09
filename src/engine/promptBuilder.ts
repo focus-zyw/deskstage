@@ -3,7 +3,7 @@ import { modeOf, type Mode } from '../performer/modes'
 import { currentTimeSlot } from './timeAware'
 import type { UserProfile } from '../storage/configStore'
 
-const ACTIONS = 'idle, talk, happy, angry, sad, surprise, shake, jump'
+const ACTIONS = 'idle, talk, happy, laugh, shy, sleepy, wave, thinking, angry, sad, surprise, shake, jump'
 
 export interface ChatMessage {
   role: 'system' | 'user'

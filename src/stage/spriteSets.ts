@@ -26,14 +26,14 @@ export const SPRITE_SETS: Record<'A' | 'B', SpriteSet> = {
     name: '甲',
     accent: '#3d8bd4', // 便利店店员:蓝黄制服主色
     height: 320,
-    actions: [...ART_ACTIONS],
+    actions: [...ART_ACTIONS, 'laugh', 'shy', 'sleepy', 'wave', 'thinking', 'jump'],
   },
   B: {
     dir: 'sprites/b',
     name: '乙',
     accent: '#5a6472', // 程序员:深灰蓝主色
     height: 320,
-    actions: [...ART_ACTIONS, 'shy'], // shy:连戳害羞反应(仅乙有素材)
+    actions: [...ART_ACTIONS, 'shy', 'laugh', 'sleepy', 'wave', 'thinking', 'jump'],
   },
 }
 
