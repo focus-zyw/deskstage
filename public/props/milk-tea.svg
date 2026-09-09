@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title">
+  <title id="title">珍珠奶茶</title>
+  <path d="m76 10 15 3-12 47" fill="none" stroke="#2a2a35" stroke-width="12" stroke-linecap="round"/>
+  <path d="m76 10 15 3-12 47" fill="none" stroke="#ff7b8b" stroke-width="6" stroke-linecap="round"/>
+  <path d="M25 35h72l-7 77a7 7 0 0 1-7 6H39a7 7 0 0 1-7-6Z" fill="#ffd18a" stroke="#2a2a35" stroke-width="7" stroke-linejoin="round"/>
+  <path d="M31 70h60l-4 42H35Z" fill="#c88954" opacity=".52"/>
+  <path d="M20 35h82" stroke="#2a2a35" stroke-width="9" stroke-linecap="round"/>
+  <path d="M35 49h49" stroke="#fff4d9" stroke-width="7" stroke-linecap="round" opacity=".75"/>
+  <g fill="#51405d" stroke="#2a2a35" stroke-width="3">
+    <circle cx="45" cy="99" r="7"/><circle cx="62" cy="105" r="7"/><circle cx="79" cy="97" r="7"/>
+    <circle cx="53" cy="84" r="6"/><circle cx="73" cy="83" r="6"/>
+  </g>
+</svg>

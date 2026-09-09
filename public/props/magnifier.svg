@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title">
+  <title id="title">放大镜</title>
+  <circle cx="54" cy="52" r="34" fill="#bcecff" stroke="#2a2a35" stroke-width="7"/>
+  <path d="m78 77 34 34" fill="none" stroke="#2a2a35" stroke-width="17" stroke-linecap="round"/>
+  <path d="m78 77 34 34" fill="none" stroke="#ff9f43" stroke-width="9" stroke-linecap="round"/>
+  <path d="M35 38c8-10 24-13 35-5" fill="none" stroke="#fff" stroke-width="7" stroke-linecap="round" opacity=".9"/>
+  <path d="m18 19 4 8 8 4-8 4-4 8-4-8-8-4 8-4Z" fill="#ffd45c" stroke="#2a2a35" stroke-width="4" stroke-linejoin="round"/>
+</svg>

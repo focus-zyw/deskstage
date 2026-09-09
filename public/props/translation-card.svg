@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title">
+  <title id="title">翻译卡片</title>
+  <path d="M13 24a8 8 0 0 1 8-8h64a8 8 0 0 1 8 8v49a8 8 0 0 1-8 8H48L31 96V81H21a8 8 0 0 1-8-8Z" fill="#eaf5ff" stroke="#2a2a35" stroke-width="6" stroke-linejoin="round"/>
+  <path d="M49 55a8 8 0 0 1 8-8h50a8 8 0 0 1 8 8v42a8 8 0 0 1-8 8H92v12l-15-12H57a8 8 0 0 1-8-8Z" fill="#fff1b8" stroke="#2a2a35" stroke-width="6" stroke-linejoin="round"/>
+  <text x="34" y="59" fill="#3d8bd4" font-family="Arial, sans-serif" font-size="38" font-weight="800">A</text>
+  <text x="69" y="91" fill="#d96835" font-family="Microsoft YaHei, PingFang SC, sans-serif" font-size="31" font-weight="800">文</text>
+  <path d="M64 24v13M58 31h13" stroke="#5a6472" stroke-width="5" stroke-linecap="round"/>
+</svg>

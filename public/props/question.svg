@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title">
+  <title id="title">疑问</title>
+  <path d="M16 18a9 9 0 0 1 9-9h78a9 9 0 0 1 9 9v64a9 9 0 0 1-9 9H73l-24 24V91H25a9 9 0 0 1-9-9Z" fill="#fff1b8" stroke="#2a2a35" stroke-width="7" stroke-linejoin="round"/>
+  <path d="M46 38c2-13 12-20 25-20 15 0 25 8 25 21 0 10-5 15-14 21-7 5-10 9-10 17" fill="none" stroke="#3d8bd4" stroke-width="10" stroke-linecap="round"/>
+  <circle cx="71" cy="91" r="6" fill="#3d8bd4"/>
+</svg>

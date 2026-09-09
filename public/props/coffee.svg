@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title">
+  <title id="title">咖啡</title>
+  <path d="M30 43h61v51a19 19 0 0 1-19 19H49a19 19 0 0 1-19-19Z" fill="#70b8ed" stroke="#2a2a35" stroke-width="7" stroke-linejoin="round"/>
+  <path d="M91 56h9c13 0 19 8 19 18s-7 18-21 18h-7" fill="none" stroke="#2a2a35" stroke-width="7" stroke-linecap="round"/>
+  <path d="M34 51h53" stroke="#fff" stroke-width="6" stroke-linecap="round" opacity=".75"/>
+  <path d="M45 31c-8-9 8-13 0-22M64 31c-8-9 8-13 0-22M83 31c-8-9 8-13 0-22" fill="none" stroke="#5a6472" stroke-width="6" stroke-linecap="round"/>
+  <path d="M41 73h37" stroke="#fff9e8" stroke-width="8" stroke-linecap="round"/>
+  <path d="M49 87h21" stroke="#fff9e8" stroke-width="8" stroke-linecap="round"/>
+</svg>

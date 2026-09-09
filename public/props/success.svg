@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title">
+  <title id="title">成功</title>
+  <circle cx="64" cy="66" r="45" fill="#70d6a8" stroke="#2a2a35" stroke-width="7"/>
+  <path d="m39 66 16 16 34-39" fill="none" stroke="#fff" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="m20 9 4 10 10 4-10 4-4 10-4-10-10-4 10-4ZM105 7l3 8 8 3-8 3-3 8-3-8-8-3 8-3ZM108 91l3 7 7 3-7 3-3 7-3-7-7-3 7-3Z" fill="#ffd45c" stroke="#2a2a35" stroke-width="3" stroke-linejoin="round"/>
+</svg>

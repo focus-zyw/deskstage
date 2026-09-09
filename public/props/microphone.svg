@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title">
+  <title id="title">话筒</title>
+  <rect x="39" y="9" width="50" height="65" rx="25" fill="#8d7cf0" stroke="#2a2a35" stroke-width="7"/>
+  <path d="M27 57v7c0 21 15 36 37 36s37-15 37-36v-7" fill="none" stroke="#2a2a35" stroke-width="7" stroke-linecap="round"/>
+  <path d="M64 100v17M45 117h38" fill="none" stroke="#2a2a35" stroke-width="7" stroke-linecap="round"/>
+  <path d="M50 29h28M50 44h28M50 59h28" stroke="#fff" stroke-width="6" stroke-linecap="round" opacity=".85"/>
+  <path d="m103 18 3 7 7 3-7 3-3 7-3-7-7-3 7-3Z" fill="#ffd45c" stroke="#2a2a35" stroke-width="3" stroke-linejoin="round"/>
+</svg>
