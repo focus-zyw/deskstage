@@ -37,6 +37,13 @@
     scale 0.2s ease;
 }
 /* 次级动画载体:点头/惊讶/落地/小动作同一时刻只播一个 */
+/* 面向对方:镜像立绘,名牌不镜像 */
+.char.flipped .char-img.main {
+  transform: scaleX(-1);
+}
+.char.flipped .char-img.under {
+  transform: translateX(-50%) scaleX(-1);
+}
 .char-body {
   position: relative;
   display: flex;

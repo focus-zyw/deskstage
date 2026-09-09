@@ -23,6 +23,8 @@ export interface CharacterSpriteProps {
   dropped?: boolean
   /** 拖动进行中(轻微缩小+提亮) */
   dragging?: boolean
+  /** 水平镜像(面向对方角色) */
+  flipped?: boolean
   /** 光标命中热区（窗口已恢复交互） */
   hot: boolean
   /** 点击反应动画进行中 */
@@ -70,6 +72,7 @@ export function CharacterSprite({
   pulsing,
   dropped,
   dragging,
+  flipped,
   hot,
   reacting,
   ref,
@@ -104,6 +107,7 @@ export function CharacterSprite({
     pulsing ? 'pulse' : '',
     dropped ? 'dropped' : '',
     dragging ? 'dragging' : '',
+    flipped ? 'flipped' : '',
     fidget,
   ]
     .filter(Boolean)

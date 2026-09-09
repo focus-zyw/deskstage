@@ -1941,6 +1941,7 @@ function App() {
           ref={charA}
           sprite={SPRITE_SETS.A}
           heightOverride={charCfg.height}
+          flipped={charCfg.B.xPct < charCfg.A.xPct}
           action={displayAction('A')}
           delivery={delivery.A}
           talkDuration={
@@ -1976,6 +1977,7 @@ function App() {
           ref={charB}
           sprite={SPRITE_SETS.B}
           heightOverride={charCfg.height}
+          flipped={charCfg.B.xPct >= charCfg.A.xPct}
           action={displayAction('B')}
           delivery={delivery.B}
           talkDuration={
