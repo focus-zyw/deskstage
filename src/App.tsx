@@ -8,7 +8,7 @@ import { CharacterSprite } from './stage/CharacterSprite'
 import { Bubble } from './stage/Bubble'
 import { EyeIcon, EyeOffIcon, PlayIcon, StopIcon, GearIcon, PowerIcon, TargetIcon, PokeballIcon, ChatIcon, CropIcon } from './stage/icons'
 import { startScreenshot, applyScreenshotHotkey } from './capture'
-import { defaultPersonaText, setPersonaOverride } from './engine/persona'
+import { defaultPersonaText, setCharacterNames, setPersonaOverride } from './engine/persona'
 import { startEnvPolling, stopEnvPolling, isFullscreenApp, isUserActive } from './engine/envAware'
 import { setCaptureMode } from './input/pointerManager'
 import { CaptureOverlay } from './CaptureOverlay'
@@ -599,6 +599,8 @@ function App() {
   // 截屏流程:capture-start 进入框选模式(主窗恢复交互,CaptureOverlay 铺满冻结图),
   // 失败反馈(capture.ts 内部 catch 后 emit 过来)走气泡
   const [captureShot, setCaptureShot] = useState<string | null>(null)
+  // 角色名(名牌与台词称呼),设置里可改
+  const [charNames, setCharNames] = useState<{ A: string; B: string }>({ A: '甲', B: '乙' })
   useEffect(() => {
     const start = listen('capture-start', ({ payload }) => {
       setCaptureMode(true)
@@ -651,6 +653,9 @@ function App() {
       // 截屏:应用全局快捷键 + 按配置把本窗口从系统级屏幕捕获中排除
       void applyScreenshotHotkey()
       void invoke('set_capture_excluded', { enable: c.screenshot.hideSelf }).catch(() => {})
+      // 用户自定义角色名:先应用(名牌与台词称呼)
+      setCharacterNames(c.names.a, c.names.b)
+      setCharNames({ A: c.names.a, B: c.names.b })
       // 用户自定义人设:先应用,后续所有生成即采纳
       setPersonaOverride(c.persona.a, c.persona.b)
       // 环境感知:按配置低频轮询本机状态(电量/前台应用分类等)
@@ -1080,9 +1085,11 @@ function App() {
   async function sendUserChat() {
     const text = chatDraft.trim()
     if (!text || chatBusy || phase !== 'idle') return
-    const m = text.match(/^\s*@?(甲|乙|A|B)\s*/)
+    const esc = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const alt = new RegExp(`^\\s*@?(${esc(charNames.A)}|${esc(charNames.B)}|甲|乙|A|B)\\s*`)
+    const m = text.match(alt)
     const who: Speaker = m
-      ? m[1] === '甲' || m[1] === 'A'
+      ? m[1] === charNames.A || m[1] === 'A'
         ? 'A'
         : 'B'
       : (lastChatTarget.current = lastChatTarget.current === 'A' ? 'B' : 'A')
@@ -1209,6 +1216,10 @@ function App() {
       if (next.envSense) startEnvPolling()
       else stopEnvPolling()
       if (partial.persona) setPersonaOverride(partial.persona.a, partial.persona.b) // 新人设立即采纳
+      if (partial.names) {
+        setCharacterNames(partial.names.a, partial.names.b)
+        setCharNames({ A: partial.names.a, B: partial.names.b })
+      }
       setSavedTick(Date.now())
       window.setTimeout(() => setSavedTick(0), 2500)
     } catch (e) {
@@ -1952,11 +1963,37 @@ function App() {
               </select>
             )}
           </div>
+          <div className="settings-row">
+            <label htmlFor="cfg-name-a">角色A的名字(名牌与台词称呼)</label>
+            <input
+              id="cfg-name-a"
+              value={form.names.a}
+              maxLength={12}
+              onChange={(e) => {
+                const next = { ...form.names, a: e.target.value }
+                setForm({ ...form, names: next })
+                saveField({ names: next })
+              }}
+            />
+          </div>
+          <div className="settings-row">
+            <label htmlFor="cfg-name-b">角色B的名字</label>
+            <input
+              id="cfg-name-b"
+              value={form.names.b}
+              maxLength={12}
+              onChange={(e) => {
+                const next = { ...form.names, b: e.target.value }
+                setForm({ ...form, names: next })
+                saveField({ names: next })
+              }}
+            />
+          </div>
           <div className="settings-sep">
             <span>人设(自由编辑,输入后自动保存并采纳;"还原默认"恢复出厂搭档)</span>
           </div>
           <div className="settings-row">
-            <label htmlFor="cfg-persona-a">甲的人设(性别/职业/性格/日常素材,自由发挥)</label>
+            <label htmlFor="cfg-persona-a">{charNames.A} 的人设(性别/职业/性格/日常素材,自由发挥)</label>
             <textarea
               id="cfg-persona-a"
               rows={3}
@@ -1968,7 +2005,7 @@ function App() {
             />
           </div>
           <div className="settings-row">
-            <label htmlFor="cfg-persona-b">乙的人设</label>
+            <label htmlFor="cfg-persona-b">{charNames.B} 的人设</label>
             <textarea
               id="cfg-persona-b"
               rows={3}
@@ -2613,6 +2650,7 @@ function App() {
         <CharacterSprite
           ref={charA}
           sprite={SPRITE_SETS.A}
+          nameOverride={charNames.A}
           heightOverride={charCfg.height}
           flipped={charCfg.B.xPct < charCfg.A.xPct}
           action={displayAction('A')}
@@ -2649,6 +2687,7 @@ function App() {
         <CharacterSprite
           ref={charB}
           sprite={SPRITE_SETS.B}
+          nameOverride={charNames.B}
           heightOverride={charCfg.height}
           flipped={charCfg.B.xPct >= charCfg.A.xPct}
           action={displayAction('B')}

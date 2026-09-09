@@ -2,7 +2,7 @@ import type { DialogLine } from '../performer/player'
 import { modeOf, type Mode } from '../performer/modes'
 import type { Relationship } from '../performer/modes/relationships'
 import { currentTimeSlot } from './timeAware'
-import { fullPersona } from './persona'
+import { fullPersona, nameOf } from './persona'
 import type { UserProfile } from '../storage/configStore'
 
 const ACTIONS = 'idle, talk, happy, laugh, shy, sleepy, wave, thinking, angry, sad, surprise, shake, jump'
@@ -152,7 +152,7 @@ export function buildMessages(
   const history = recentLines.length
     ? `上一段的结尾（新的一段要自然衔接，不要重复内容）：\n${recentLines
         .slice(-4)
-        .map((l) => `${l.speaker === 'A' ? '甲' : '乙'}：${l.text}`)
+        .map((l) => `${l.speaker === 'A' ? nameOf('A') : nameOf('B')}：${l.text}`)
         .join('\n')}\n\n`
     : ''
 

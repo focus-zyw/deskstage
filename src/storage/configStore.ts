@@ -88,6 +88,8 @@ export interface AppConfig {
   breakReminder: { enabled: boolean; minutes: number }
   /** 用户自定义人设(甲/乙的生效文本;空串 = 内置默认) */
   persona: { a: string; b: string }
+  /** 角色名(名牌与台词称呼) */
+  names: { a: string; b: string }
 }
 
 // 默认值（首启写入）。想换端点：改 appData/data/config.json 后重启。
@@ -122,6 +124,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   envSense: true,
   breakReminder: { enabled: false, minutes: 45 },
   persona: { a: '', b: '' },
+  names: { a: '甲', b: '乙' },
 }
 
 /** 清洗使用者画像:逐字段裁剪;likes 为空时回落旧 userInterests 字段(老配置平滑迁移) */
@@ -287,6 +290,11 @@ function sanitizeConfig(obj: unknown): AppConfig {
       const pr = (o.persona ?? {}) as Record<string, unknown>
       const cap = (x: unknown): string => (typeof x === 'string' ? x.trim().slice(0, 600) : '')
       return { a: cap(pr.a), b: cap(pr.b) }
+    })(),
+    names: ((): { a: string; b: string } => {
+      const nm = (o.names ?? {}) as Record<string, unknown>
+      const name = (x: unknown, dft: string): string => (typeof x === 'string' ? x.trim().slice(0, 12) : '') || dft
+      return { a: name(nm.a, '甲'), b: name(nm.b, '乙') }
     })(),
   }
 }

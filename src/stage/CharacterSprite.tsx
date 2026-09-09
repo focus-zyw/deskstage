@@ -13,6 +13,8 @@ export interface CharacterSpriteProps {
   talkDuration?: number
   /** 语气修饰(deadpan/excited/slow):气色与节奏差异化,配合 TTS 语速 */
   delivery?: string
+  /** 名牌显示名(用户自定义角色名);缺省用 sprite.name */
+  nameOverride?: string
   /** 倾听时朝对方倾斜的方向 */
   lean?: 'left' | 'right'
   /** 正在倾听(随机小点头) */
@@ -65,6 +67,7 @@ export function CharacterSprite({
   sprite,
   heightOverride,
   action = 'idle',
+  nameOverride,
   talkDuration,
   delivery,
   lean,
@@ -133,7 +136,7 @@ export function CharacterSprite({
             <div className="char-mouth" />
           </div>
         </div>
-        <div className="char-name">{sprite.name}</div>
+        <div className="char-name">{nameOverride ?? sprite.name}</div>
       </div>
     )
   }
@@ -146,14 +149,14 @@ export function CharacterSprite({
           key={curr}
           className={`char-img main${ready ? ' ready' : ''}`}
           src={curr}
-          alt={sprite.name}
+          alt={nameOverride ?? sprite.name}
           draggable={false}
           onLoad={() => setFade((f) => ({ ...f, ready: true }))}
           onError={() => setFade((f) => ({ ...f, broken: true }))}
           onAnimationEnd={() => setFade((f) => ({ ...f, underGone: true }))}
         />
       </div>
-      <div className="char-name">{sprite.name}</div>
+      <div className="char-name">{nameOverride ?? sprite.name}</div>
     </div>
   )
 }

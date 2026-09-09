@@ -8,7 +8,7 @@ import { storyContext, getBond } from '../storage/storyStore'
 import { takeRecap } from '../storage/interactionStore'
 import { pickRelationship } from '../performer/modes/relationships'
 import { currentTimeSlot } from './timeAware'
-import { duoShortPersona, soloShortPersona } from './persona'
+import { duoShortPersona, nameOf, soloShortPersona } from './persona'
 import { envContext } from './envAware'
 import {
   clampPauseMs,
@@ -150,7 +150,7 @@ export async function generateDialog(
   const allowChoice = Math.random() < 0.3
   // 约 25% 的集数允许场外角色乱入(与抉择点互斥,重试保持一致):
   // 打破双人固定结构,第三人只用画外音/电话,不占立绘
-  const GUESTS = ['房东', '快递员', '老板', '甲的神秘朋友', '乙的债主', '邻居的猫(只会喵呜)']
+  const GUESTS = ['房东', '快递员', '老板', `${nameOf('A')}的神秘朋友`, `${nameOf('B')}的债主`, '邻居的猫(只会喵呜)']
   const guest = !allowChoice && Math.random() < 0.25 ? GUESTS[Math.floor(Math.random() * GUESTS.length)] : undefined
   // 上一集的观众选择:注入一次即清除
   let lastChoice: string | null = null
@@ -236,7 +236,7 @@ export async function generateShortChat(
   const interests = profileBits ? `${profileBits}\n` : ''
   const prev = recentLines
     .slice(-2)
-    .map((l) => `${l.speaker === 'A' ? '甲' : l.speaker === 'C' ? '丙(场外)' : '乙'}:${l.text}`)
+    .map((l) => `${l.speaker === 'A' ? nameOf('A') : l.speaker === 'C' ? '丙(场外)' : nameOf('B')}:${l.text}`)
     .join('\n')
   const task =
     (kind === 'greeting'
@@ -273,7 +273,7 @@ export async function improvPokeLine(
   const persona = soloShortPersona(who)
   const ctx = recentLines
     .slice(-4)
-    .map((l) => `${l.speaker === 'A' ? '甲' : l.speaker === 'C' ? '丙(场外)' : '乙'}:${l.text}`)
+    .map((l) => `${l.speaker === 'A' ? nameOf('A') : l.speaker === 'C' ? '丙(场外)' : nameOf('B')}:${l.text}`)
     .join('\n')
   const messages: { role: string; content: string }[] = [
     {
@@ -398,7 +398,7 @@ export async function extractFacts(
  * 输出是按行号的编辑表(~100 token),合并时钳位校验;8s 超时,失败原样返回。
  */
 export async function addPerformanceCues(lines: DialogLine[]): Promise<DialogLine[]> {
-  const script = lines.map((l, i) => `${i}.${l.speaker === 'A' ? '甲' : l.speaker === 'C' ? '丙(场外)' : '乙'}:${l.text}`).join('\n')
+  const script = lines.map((l, i) => `${i}.${l.speaker === 'A' ? nameOf('A') : l.speaker === 'C' ? '丙(场外)' : nameOf('B')}:${l.text}`).join('\n')
   const messages: { role: string; content: string }[] = [
     {
       role: 'system',
@@ -480,7 +480,7 @@ export async function distillStory(
   lines: DialogLine[],
   known: StoryInventory = { gags: [], threads: [], arcs: [] },
 ): Promise<DistilledStory> {
-  const text = lines.map((l) => `${l.speaker === 'A' ? '甲' : l.speaker === 'C' ? '丙(场外)' : '乙'}:${l.text}`).join('\n')
+  const text = lines.map((l) => `${l.speaker === 'A' ? nameOf('A') : l.speaker === 'C' ? '丙(场外)' : nameOf('B')}:${l.text}`).join('\n')
   const knownGags = known.gags.map((g) => `${g.id}:${g.text}`).join(';') || '(无)'
   const knownThreads = known.threads.map((t) => `${t.id}:${t.text}`).join(';') || '(无)'
   const knownArcs =
