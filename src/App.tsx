@@ -6,7 +6,8 @@ import { invoke } from '@tauri-apps/api/core'
 import { readFile, remove } from '@tauri-apps/plugin-fs'
 import { CharacterSprite } from './stage/CharacterSprite'
 import { Bubble } from './stage/Bubble'
-import { EyeIcon, EyeOffIcon, PlayIcon, StopIcon, GearIcon, PowerIcon, TargetIcon, PokeballIcon, ChatIcon } from './stage/icons'
+import { EyeIcon, EyeOffIcon, PlayIcon, StopIcon, GearIcon, PowerIcon, TargetIcon, PokeballIcon, ChatIcon, CropIcon } from './stage/icons'
+import { startScreenshot, applyScreenshotHotkey } from './capture'
 import { SPRITE_SETS, preloadSprites } from './stage/spriteSets'
 import {
   initPointerManager,
@@ -434,6 +435,7 @@ function App() {
   const btnGear = useRef<HTMLButtonElement>(null)
   const btnEye = useRef<HTMLButtonElement>(null)
   const btnTopic = useRef<HTMLButtonElement>(null)
+  const btnShot = useRef<HTMLButtonElement>(null)
   const btnChat = useRef<HTMLButtonElement>(null)
   const btnExit = useRef<HTMLButtonElement>(null)
   const gripRef = useRef<HTMLSpanElement>(null)
@@ -532,6 +534,9 @@ function App() {
       applyCtrlBar(c.ctrlBar)
       setShowWatermark(c.showWatermark)
       setVoice(c.voice)
+      // 截屏:应用全局快捷键 + 按配置把本窗口从系统级屏幕捕获中排除
+      void applyScreenshotHotkey()
+      void invoke('set_capture_excluded', { enable: c.screenshot.hideSelf }).catch(() => {})
     })
     // 启动恢复：读最近历史，续集生成时衔接上次聊到的内容
     void loadRecentHistory(20).then((entries) => {
@@ -575,6 +580,9 @@ function App() {
       }),
       // 聊天按钮必须注册热区:穿透架构下未注册区域收不到任何鼠标事件,
       // 漏注册 = 入口彻底点不到(此前聊天入口即因此失效)
+      registerHitRegion('shot', {
+        getRect: () => btnShot.current!.getBoundingClientRect(),
+      }),
       registerHitRegion('chat', {
         getRect: () => btnChat.current!.getBoundingClientRect(),
       }),
@@ -1356,6 +1364,26 @@ function App() {
           }}
         >
           <TargetIcon />
+        </button>
+
+        <button
+          ref={btnShot}
+          className={`ctrl-btn icon${hovered === 'shot' ? ' hot' : ''}`}
+          title="截屏(框选,复制到剪贴板)"
+          onClick={() => {
+            setSettingsOpen(false)
+            setTopicOpen(false)
+            setChatOpen(false)
+            startScreenshot().catch((e) => {
+              const msg = String((e as Error)?.message ?? e).slice(0, 50)
+              setBubble({ A: `截图失败:${msg}`, B: null })
+              window.setTimeout(() => {
+                setBubble((b) => (b.A?.startsWith('截图失败') ? { A: null, B: null } : b))
+              }, 2400)
+            })
+          }}
+        >
+          <CropIcon />
         </button>
 
         <button

@@ -71,6 +71,8 @@ export interface AppConfig {
   ctrlBar: CtrlBarPos
   /** 左上角水印开关 */
   showWatermark: boolean
+  /** 截屏配置 */
+  screenshot: ScreenshotConfig
   /** 使用者的兴趣爱好(逗号/顿号/换行分隔);空 = 不介入对话 */
   userInterests: string
 }
@@ -98,6 +100,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   topicOverride: null,
   ctrlBar: { xPct: 50, top: 10, collapsed: false },
   showWatermark: false,
+  screenshot: { hotkey: 'Ctrl+Alt+A', enabled: true, hideSelf: true },
   userInterests: '',
   userProfile: { userName: '', occupation: '', likes: '', dislikes: '', banTopics: '' },
 }
@@ -170,6 +173,17 @@ export interface CtrlBarPos {
   collapsed: boolean
 }
 
+/** 截屏(ShareX 式框选)配置 */
+export interface ScreenshotConfig {
+  /** 全局快捷键(global-shortcut 格式,如 Ctrl+Alt+A);空串 = 不设 */
+  hotkey: string
+  /** 是否启用全局快捷键 */
+  enabled: boolean
+  /** 系统级把本窗口从屏幕捕获中排除(WDA_EXCLUDEFROMCAPTURE,Win10 2004+):
+   *  角色不出现在任何截图/录屏里 */
+  hideSelf: boolean
+}
+
 /** 清洗控制栏位置:非法/缺字段回默认并钳位 */
 function sanitizeCtrlBar(v: unknown): CtrlBarPos {
   const d = DEFAULT_CONFIG.ctrlBar
@@ -178,6 +192,17 @@ function sanitizeCtrlBar(v: unknown): CtrlBarPos {
     xPct: clampNum(o.xPct, 2, 98, d.xPct),
     top: clampNum(o.top, 0, 400, d.top),
     collapsed: o.collapsed === true,
+  }
+}
+
+/** 清洗截屏配置:快捷键截断,开关缺省视为开(与"角色不需要额外操作即有截图"的预期一致) */
+function sanitizeScreenshot(v: unknown): ScreenshotConfig {
+  const o = (v ?? {}) as Record<string, unknown>
+  const hotkey = typeof o.hotkey === 'string' ? o.hotkey.trim().slice(0, 60) : ''
+  return {
+    hotkey,
+    enabled: o.enabled !== false,
+    hideSelf: o.hideSelf !== false,
   }
 }
 
@@ -225,6 +250,7 @@ function sanitizeConfig(obj: unknown): AppConfig {
         : null,
     ctrlBar: sanitizeCtrlBar(o.ctrlBar),
     showWatermark: o.showWatermark === true,
+    screenshot: sanitizeScreenshot(o.screenshot),
     userInterests: typeof o.userInterests === 'string' ? o.userInterests.trim() : '',
     userProfile: sanitizeUserProfile(o.userProfile, typeof o.userInterests === 'string' ? o.userInterests : ''),
   }
