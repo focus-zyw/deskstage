@@ -93,6 +93,10 @@ export interface AppConfig {
   names: { a: string; b: string }
   /** 备忘默认提前提醒分钟数 */
   memo: { advanceMin: number }
+  /** 勿扰:一键全静(TTS 静音 + 主动行为暂停;备忘卡片仍弹) */
+  dnd: boolean
+  /** 主动程度:角色自发说话的频率档位(安静/平衡/热闹) */
+  proactivity: 'quiet' | 'balanced' | 'lively'
   /** 翻译面板:语言方向/风格/自动朗读(与演出模块完全隔离,不进对话与记忆) */
   translation: TranslationConfig
 }
@@ -142,6 +146,8 @@ export const DEFAULT_CONFIG: AppConfig = {
   persona: { a: '', b: '' },
   names: { a: '甲', b: '乙' },
   memo: { advanceMin: 30 },
+  dnd: false,
+  proactivity: 'balanced',
   translation: { sourceLanguage: 'auto', targetLanguage: 'zh-CN', style: 'natural', autoSpeak: false },
 }
 
@@ -319,6 +325,9 @@ function sanitizeConfig(obj: unknown): AppConfig {
       const v = Number(mm.advanceMin)
       return { advanceMin: Number.isFinite(v) && v >= 1 ? Math.min(1440, Math.round(v)) : 30 }
     })(),
+    dnd: o.dnd === true,
+    proactivity:
+      o.proactivity === 'quiet' || o.proactivity === 'lively' ? o.proactivity : 'balanced',
     translation: ((): TranslationConfig => {
       const t = (o.translation ?? {}) as Record<string, unknown>
       const code = (x: unknown, dft: string): string => {

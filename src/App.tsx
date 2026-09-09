@@ -55,6 +55,7 @@ import {
   openOverlayExclusive,
   closeOverlay,
   closeAllOverlays,
+  setDnd as setRuntimeDnd,
   setCharHidden as setRuntimeCharHidden,
 } from './runtime/runtimeMode'
 import {
@@ -581,7 +582,7 @@ function App() {
         setSpeaking(line.speaker)
         setDelivery((d) => ({ ...d, [line.speaker]: line.delivery }))
         if (nowPlaying.current) nowPlaying.current.index = index
-        speak(line.speaker, line.text, line.delivery) // 语音失败静默,不影响气泡
+        speak(line.speaker, line.text, line.delivery, 'performance') // 语音失败静默,不影响气泡
         const next = playingLines.current[index + 1]
         if (next) prefetchVoice(next.speaker, next.text, next.delivery)
         // 听者同步反应:LLM 指定听者动作(害羞/大笑/欲言又止…),对手戏更活
@@ -753,6 +754,7 @@ function App() {
       setAutoReplayMin(c.autoReplayMin)
       applyChars(c.characters)
       setRuntimeCharHidden(c.charactersHidden)
+      setRuntimeDnd(c.dnd) // 勿扰状态进运行时(工具栏按钮/TTS 同步)
       setTopicOverride(c.topicOverride)
       applyCtrlBar(c.ctrlBar)
       setShowWatermark(c.showWatermark)
@@ -1219,7 +1221,7 @@ function App() {
       setBubble((b) => ({ ...b, [who]: reply }))
       setAction((a) => ({ ...a, [who]: 'talk' }))
       setSpeaking(who)
-      speak(who, reply)
+      speak(who, reply, undefined, 'chat')
       const listener: Speaker = who === 'A' ? 'B' : 'A'
       setPulseFor(listener)
       window.clearTimeout(pulseTimer.current)
@@ -1422,9 +1424,9 @@ function App() {
             setMemoAlerts((list) => [...list, { id: memo.id, text: memo.text }])
             if (phaseRef.current === 'idle') {
               try {
-                speak('C', await memoReminderLine(memo.text))
+                speak('C', await memoReminderLine(memo.text), undefined, 'proactive')
               } catch {
-                speak('C', `叮——该「${memo.text}」了`)
+                speak('C', `叮——该「${memo.text}」了`, undefined, 'proactive')
               }
             }
             try {

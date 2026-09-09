@@ -222,16 +222,46 @@ let current: HTMLAudioElement | null = null
 /** 当前语音的序号:新 speak 递增,过期完成的播放直接丢弃 */
 let epoch = 0
 
+/** TTS 通道:低优先级不得打断高优先级在播(备忘提醒掐掉演出包袱句的历史问题)。
+ *  同级之间仍靠 epoch 抢占(后到者胜,演出逐句天然同级) */
+export type TtsChannel = 'chat' | 'performance' | 'utility' | 'proactive'
+
+const CHANNEL_PRIORITY: Record<TtsChannel, number> = {
+  chat: 0,
+  performance: 1,
+  utility: 2,
+  proactive: 3,
+}
+
+let currentChannel: TtsChannel | null = null
+/** 低优先级被打断的提示只发一次,避免刷控制台 */
+let warnedDemoted = false
+
 /** 缺 key 只提示一次,避免每句台词都刷 */
 let warnedNoKey = false
 
-/** 说一句:停掉当前语音,起播这句。fire-and-forget,失败静默 */
-export function speak(speaker: Speaker, text: string, delivery?: string): void {
+/** 说一句:停掉当前语音,起播这句。fire-and-forget,失败静默。
+ *  channel 决定仲裁优先级(chat<performance<utility<proactive);勿扰时全静 */
+export function speak(speaker: Speaker, text: string, delivery?: string, channel: TtsChannel = 'chat'): void {
+  // 低优先级不打断高优先级在播:直接丢弃本次请求(不改 epoch,不惊动当前语音)
+  if (
+    current &&
+    !current.paused &&
+    currentChannel &&
+    CHANNEL_PRIORITY[channel] < CHANNEL_PRIORITY[currentChannel]
+  ) {
+    if (!warnedDemoted) {
+      warnedDemoted = true
+      console.warn(`[tts] ${channel} 请求被在播的 ${currentChannel} 压制,本次无声`)
+    }
+    return
+  }
   // 进函数即领序号:若先发的句子合成慢,完成时序号已落后,不会反向覆盖新句
   const my = ++epoch
   void (async () => {
     try {
       const cfg = await getConfig()
+      if (cfg.dnd) return // 勿扰:全静(提醒走常驻卡片兜底)
       if (!cfg.voice.enabled) return
       if (!cfg.voice.apiKey.trim()) {
         if (!warnedNoKey) {
@@ -249,8 +279,12 @@ export function speak(speaker: Speaker, text: string, delivery?: string): void {
       current?.pause()
       const audio = new Audio(url)
       current = audio
+      currentChannel = channel
       audio.onended = () => {
-        if (current === audio) current = null
+        if (current === audio) {
+          current = null
+          currentChannel = null
+        }
       }
       try {
         await audio.play()
@@ -271,6 +305,7 @@ export function prefetchVoice(speaker: Speaker, text: string, delivery?: string)
   void (async () => {
     try {
       const cfg = await getConfig()
+      if (cfg.dnd) return
       if (!cfg.voice.enabled || !cfg.voice.apiKey.trim()) return
       const gain = isLateNight() ? -8 : 0
       await ensure(text, cfg.voice[speaker], cfg.voice.apiKey, deliverySpeed(delivery), gain)
@@ -285,4 +320,5 @@ export function stopSpeaking(): void {
   epoch++
   current?.pause()
   current = null
+  currentChannel = null
 }

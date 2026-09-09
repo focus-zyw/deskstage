@@ -97,7 +97,7 @@ export function TranslationPanel({
       onTranslated?.()
       const live = await getConfig()
       if (live.translation.autoSpeak) {
-        speak('A', r.translation)
+        speak('A', r.translation, undefined, 'utility')
         setSpeakOn(true)
         speakOnRef.current = true
       }
@@ -146,7 +146,7 @@ export function TranslationPanel({
       return
     }
     if (!result?.translation) return
-    speak('A', result.translation)
+    speak('A', result.translation, undefined, 'utility')
     setSpeakOn(true)
     speakOnRef.current = true
   }
