@@ -220,8 +220,9 @@ export async function generateDialog(
  * 12s 超时、不重试——自发内容宁可错过也不能拖沓;失败由调用方静默处理。
  */
 export async function generateShortChat(
-  kind: 'greeting' | 'spontaneous' | 'break',
+  kind: 'greeting' | 'spontaneous' | 'break' | 'memo',
   recentLines: DialogLine[],
+  memoText?: string,
 ): Promise<DialogLine[]> {
   const cfg = await getConfig()
   const mem = await getMemory()
@@ -243,7 +244,9 @@ export async function generateShortChat(
       ? `观众刚打开应用。用一段符合当前时间的简短开场,两人互相招呼并带上点时间段的梗。`
       : kind === 'break'
         ? `两人注意到观众已经连续忙了很久,用角色口吻提醒观众休息一下(可以伸懒腰、递杯水、劝两句话),温和一点,别唠叨,2~4 句。`
-        : `两人空闲了一会儿,自发起一个小话题随便聊聊(像真人闲坐时随口开话头)。${interests}`) +
+        : kind === 'memo'
+          ? `画外音刚播报了一条待办:${memoText ?? ''}。两人顺势接话讨论这件待办(可以互相推诿谁来干、吐槽时间安排),2~4 句,别重复画外音的原话。`
+          : `两人空闲了一会儿,自发起一个小话题随便聊聊(像真人闲坐时随口开话头)。${interests}`) +
     (prev ? `\n不要重复、要自然衔接刚才的结尾:${prev}` : '')
   const messages: { role: string; content: string }[] = [
     {
@@ -386,6 +389,31 @@ export async function extractFacts(
         content: f.content.trim().slice(0, 120),
         category: (cats.includes(f.category as FactCategory) ? f.category : 'other') as FactCategory,
       }))
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/**
+ * 备忘提醒短句:以场外角色(C)的口吻播报一条到点的待办。
+ * 8s 超时、不重试;失败由调用方回退固定模板。
+ */
+export async function memoReminderLine(memoText: string): Promise<string> {
+  const messages: { role: string; content: string }[] = [
+    {
+      role: 'system',
+      content:
+        '你是桌面情景剧的场外画外音(播报员)。用一句 15~25 字的口吻播报一条到点的待办,可以带点综艺感(比如"叮——"),但要把事情说清楚,只输出这一句话,不要引号。',
+    },
+    { role: 'user', content: `到点的待办:${memoText}` },
+  ]
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(new DOMException('超时', 'TimeoutError')), 8_000)
+  try {
+    const raw = (await chatRaw(messages, ctrl.signal, false)).trim()
+    const line = raw.replace(/^["'「『]|["'」』]$/g, '')
+    if (!line || line.length > 60) throw new Error('提醒不合规')
+    return line
   } finally {
     clearTimeout(timer)
   }

@@ -90,6 +90,8 @@ export interface AppConfig {
   persona: { a: string; b: string }
   /** 角色名(名牌与台词称呼) */
   names: { a: string; b: string }
+  /** 备忘默认提前提醒分钟数 */
+  memo: { advanceMin: number }
 }
 
 // 默认值（首启写入）。想换端点：改 appData/data/config.json 后重启。
@@ -125,6 +127,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   breakReminder: { enabled: false, minutes: 45 },
   persona: { a: '', b: '' },
   names: { a: '甲', b: '乙' },
+  memo: { advanceMin: 30 },
 }
 
 /** 清洗使用者画像:逐字段裁剪;likes 为空时回落旧 userInterests 字段(老配置平滑迁移) */
@@ -295,6 +298,11 @@ function sanitizeConfig(obj: unknown): AppConfig {
       const nm = (o.names ?? {}) as Record<string, unknown>
       const name = (x: unknown, dft: string): string => (typeof x === 'string' ? x.trim().slice(0, 12) : '') || dft
       return { a: name(nm.a, '甲'), b: name(nm.b, '乙') }
+    })(),
+    memo: ((): { advanceMin: number } => {
+      const mm = (o.memo ?? {}) as Record<string, unknown>
+      const v = Number(mm.advanceMin)
+      return { advanceMin: Number.isFinite(v) && v >= 1 ? Math.min(1440, Math.round(v)) : 30 }
     })(),
   }
 }

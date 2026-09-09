@@ -26,7 +26,7 @@ import {
   type Speaker,
 } from './performer/player'
 import { MODES, modeList, modeOf, type Mode } from './performer/modes'
-import { generateDialog, generateShortChat, improvPokeLine, describeLlmError, generateUserChatReply, extractFacts, distillStory } from './engine/llmClient'
+import { generateDialog, generateShortChat, improvPokeLine, describeLlmError, generateUserChatReply, extractFacts, distillStory, memoReminderLine } from './engine/llmClient'
 import { isQuietHours } from './engine/timeAware'
 import { react, reactBonded, distanceBands } from './engine/interactionRules'
 import { bondTierOf } from './engine/interactionRules'
@@ -38,6 +38,7 @@ import { WEBCHAT_SITES, webchatLogin, webchatProbe, webchatRestoreMain } from '.
 import { TOPIC_SEEDS, pickTopic } from './engine/topicSeeds'
 import { bumpTopicSeen, bumpTopicFavored, bumpTopicReplays, bumpTopicWatched, bumpTopicSkipped, bumpMode, bumpPoke, getTopicWeights, getMemory, clearMemory, deleteFact, togglePinFact, topFacts, mergeFacts, type MemoryFact } from './storage/memoryStore'
 import { getStory, mergeStory, removeArc, removeStoryItem, pickArcBeat, storyInventory, type StoryData } from './storage/storyStore'
+import { getDueMemos, getMemos, addMemo, updateMemo, removeMemo, type Memo } from './storage/memoStore'
 import { VENDORS, CUSTOM_VENDOR_ID, vendorIdOfBaseUrl } from './engine/vendors'
 import { takePrefetch } from './storage/prefetchStore'
 import { appendHistory, loadRecentHistory, listEpisodes, deleteEpisodes, toggleFavorite, type Episode } from './storage/historyStore'
@@ -424,7 +425,7 @@ function App() {
   const [savedTick, setSavedTick] = useState(0)
   const [saveError, setSaveError] = useState(false)
   // 设置面板分页:常规 / 语音 / 记忆 / 历史
-  const [settingsTab, setSettingsTab] = useState<'general' | 'voice' | 'memory' | 'history'>('general')
+  const [settingsTab, setSettingsTab] = useState<'general' | 'voice' | 'memory' | 'memo' | 'history'>('general')
   // 记忆系统的机器事实列表(设置"记忆"页展示/管理)
   const [memoryFacts, setMemoryFacts] = useState<MemoryFact[]>([])
   const [clearMemArmed, setClearMemArmed] = useState(false)
@@ -1246,6 +1247,89 @@ function App() {
     }, 400)
   }
 
+  // ---------- 备忘录:调度与常驻提醒 ----------
+  const [memoAlerts, setMemoAlerts] = useState<{ id: string; text: string }[]>([])
+  // 备忘列表(设置-备忘页)与添加草稿
+  const [memos, setMemos] = useState<Memo[]>([])
+  const [memoDraft, setMemoDraft] = useState<{ text: string; due: string; advance: string }>({
+    text: '',
+    due: '',
+    advance: '',
+  })
+  const memoSweepBusy = useRef(false)
+  const privacyTipIdx = useRef(0)
+  const PRIVACY_TIPS = [
+    '提醒一句:密码、验证码、身份证这种,可别往备忘录里写!',
+    '备忘录我们会拿来说的——银行账号、密码之类,嘴下留情也别笔下留!',
+    '写待办没问题,敏感信息就免了,我们嘴快,怕说漏!',
+  ]
+  function showPrivacyTip() {
+    const who: Speaker = privacyTipIdx.current % 2 === 0 ? 'A' : 'B'
+    const tip = PRIVACY_TIPS[privacyTipIdx.current % PRIVACY_TIPS.length]
+    privacyTipIdx.current += 1
+    showPoke(who, tip, 'surprise', 3600)
+  }
+
+  /** 备忘页:刷新列表 */
+  async function refreshMemos() {
+    setMemos(await getMemos())
+  }
+
+  /** 添加备忘:隐私气泡提醒 + 入库 + 刷新列表 */
+  async function submitMemo() {
+    const text = memoDraft.text.trim()
+    if (!text || !memoDraft.due) return
+    const dueAt = new Date(memoDraft.due).getTime()
+    if (!Number.isFinite(dueAt)) return
+    showPrivacyTip()
+    await addMemo(text, dueAt, memoDraft.advance.trim() === '' ? null : Number(memoDraft.advance))
+    setMemoDraft({ text: '', due: '', advance: '' })
+    await refreshMemos()
+  }
+
+  /** 备忘列表行的时间文案 */
+  function formatDue(dueAt: number): string {
+    const d = new Date(dueAt)
+    const pad = (x: number) => String(x).padStart(2, '0')
+    return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+  }
+
+  // 30 秒扫一次到点备忘:触发画外音提醒(常驻卡片)+ 甲乙讨论;重启后过期未触发的也会补一次
+  useEffect(() => {
+    const t = window.setInterval(() => {
+      void (async () => {
+        if (memoSweepBusy.current) return
+        memoSweepBusy.current = true
+        try {
+          const due = await getDueMemos()
+          for (const memo of due) {
+            await updateMemo(memo.id, { fired: true })
+            setMemoAlerts((list) => [...list, { id: memo.id, text: memo.text }])
+            if (phaseRef.current === 'idle') {
+              try {
+                speak('C', await memoReminderLine(memo.text))
+              } catch {
+                speak('C', `叮——该「${memo.text}」了`)
+              }
+            }
+            try {
+              const lines = await generateShortChat('memo', lastLines.current, memo.text)
+              if (phaseRef.current === 'idle' && !player.current!.playing && lines.length) {
+                lastLines.current = lines
+                playingLines.current = lines
+                setPhase('performing')
+                player.current!.play(lines, { gap: 700 })
+              }
+            } catch { /* 讨论失败静默 */ }
+          }
+        } finally {
+          memoSweepBusy.current = false
+        }
+      })()
+    }, 30_000)
+    return () => window.clearInterval(t)
+  }, [])
+
   // ---------- 网页版生成:Edge 窗口与状态 ----------
 
   // 登录就绪轮询句柄(登录成功自动恢复角色)
@@ -1767,11 +1851,11 @@ function App() {
           onClick={() => {
             setOcrBusy(true)
             setBubble({ A: '识别中…', B: null, C: null })
-            invoke<{ lines: string[] }>('ocr_clipboard')
-              .then(async (r) => {
-                const text = r.lines.join('\n')
+            invoke<string[]>('ocr_clipboard')
+              .then(async (lines) => {
+                const text = lines.join('\n')
                 try { await navigator.clipboard.writeText(text) } catch { /* 剪贴板写入失败也展示 */ }
-                setBubble({ A: `已提取 ${r.lines.length} 行,文字已复制到剪贴板`, B: null, C: null })
+                setBubble({ A: `已提取 ${lines.length} 行,文字已复制到剪贴板`, B: null, C: null })
                 window.setTimeout(() => {
                   setBubble((b) => (b.A?.startsWith('已提取') ? { A: null, B: null, C: null } : b))
                 }, 2600)
@@ -1847,6 +1931,15 @@ function App() {
                 }}
               >
                 记忆
+              </button>
+              <button
+                className={`panel-tab${settingsTab === 'memo' ? ' on' : ''}`}
+                onClick={() => {
+                  setSettingsTab('memo')
+                  void refreshMemos()
+                }}
+              >
+                备忘
               </button>
               <button
                 className={`panel-tab${settingsTab === 'history' ? ' on' : ''}`}
@@ -2514,6 +2607,85 @@ function App() {
             </>
           )}
 
+          {settingsTab === 'memo' && (
+            <>
+          <div className="settings-sep">
+            <span>备忘列表</span>
+            <button
+              className="hist-clear"
+              disabled={!memos.some((m) => m.done)}
+              onClick={() => void (async () => {
+                for (const m of memos.filter((x) => x.done)) await removeMemo(m.id)
+                await refreshMemos()
+              })()}
+            >
+              清已完成
+            </button>
+          </div>
+          <div className="settings-row">
+            <label htmlFor="memo-text">要办的事</label>
+            <textarea
+              id="memo-text"
+              rows={2}
+              placeholder="如:周三下午 3 点取快递(别写密码、验证码这类)"
+              value={memoDraft.text}
+              onChange={(e) => setMemoDraft({ ...memoDraft, text: e.target.value })}
+            />
+          </div>
+          <div className="settings-row">
+            <label htmlFor="memo-due">截止时间</label>
+            <input
+              id="memo-due"
+              type="datetime-local"
+              value={memoDraft.due}
+              onChange={(e) => setMemoDraft({ ...memoDraft, due: e.target.value })}
+            />
+          </div>
+          <div className="settings-row">
+            <label htmlFor="memo-adv">提前提醒(分钟,留空 = 默认 {form.memo.advanceMin})</label>
+            <input
+              id="memo-adv"
+              type="number"
+              min={1}
+              value={memoDraft.advance}
+              placeholder={`默认 ${form.memo.advanceMin}`}
+              onChange={(e) => setMemoDraft({ ...memoDraft, advance: e.target.value })}
+            />
+          </div>
+          <div className="settings-actions">
+            <button className="panel-btn primary" onClick={() => void submitMemo()}>
+              添加备忘
+            </button>
+          </div>
+          {memos.length === 0 && <div className="settings-tip">还没有备忘 — 添加一条,到点画外音会提醒</div>}
+          {memos.map((m) => (
+            <div className="mem-fact" key={m.id}>
+              <input
+                type="checkbox"
+                checked={m.done}
+                title="标记完成"
+                onChange={() => void (async () => { await updateMemo(m.id, { done: !m.done }); await refreshMemos() })()}
+              />
+              <span className="mem-content" style={m.done ? { textDecoration: 'line-through', opacity: 0.55 } : undefined}>
+                {m.text}
+              </span>
+              <span className="memo-meta">
+                {formatDue(m.dueAt)}
+                {m.advanceMin !== null ? ` · 提前 ${m.advanceMin} 分` : ''}
+                {m.done ? ' · 已完成' : ''}
+              </span>
+              <button
+                className="mem-btn"
+                title="删除"
+                onClick={() => void (async () => { await removeMemo(m.id); await refreshMemos() })()}
+              >
+                ✕
+              </button>
+            </div>
+          ))}
+            </>
+          )}
+
           {settingsTab === 'history' && (
             <>
           <div className="settings-sep">
@@ -2740,6 +2912,23 @@ function App() {
           <div className="guest-bubble">
             <span className="guest-tag">📞 画外音</span>
             {bubble.C}
+          </div>
+        )}
+
+        {memoAlerts.length > 0 && (
+          <div className="memo-alerts">
+            {memoAlerts.map((a) => (
+              <div key={a.id} className="memo-alert">
+                <span className="memo-tag">⏰ 备忘提醒</span>
+                <div className="memo-alert-text">{a.text}</div>
+                <button
+                  className="memo-ok"
+                  onClick={() => setMemoAlerts((list) => list.filter((x) => x.id !== a.id))}
+                >
+                  知道了
+                </button>
+              </div>
+            ))}
           </div>
         )}
 
