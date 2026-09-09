@@ -27,7 +27,9 @@ import {
 import { MODES, modeList, modeOf, type Mode } from './performer/modes'
 import { generateDialog, generateShortChat, improvPokeLine, describeLlmError, generateUserChatReply, extractFacts, distillStory } from './engine/llmClient'
 import { isQuietHours } from './engine/timeAware'
-import { react, distanceBands } from './engine/interactionRules'
+import { react, reactBonded, distanceBands } from './engine/interactionRules'
+import { bondTierOf } from './engine/interactionRules'
+import { getBond, shiftBond } from './storage/storyStore'
 import { logInteraction, logInterrupt, logDrag } from './storage/interactionStore'
 import { speak, prefetchVoice, stopSpeaking, VOICES, cloneVoice, listCustomVoices, type ClonedVoice } from './engine/tts'
 import { prefetchNext } from './engine/dialogPrefetch'
@@ -79,7 +81,6 @@ const IMPROV_CHANCE = 0.3
 const IMPROV_COOLDOWN_MS = 30_000
 
 type Phase = 'idle' | 'generating' | 'performing' | 'choosing'
-type SaveState = 'idle' | 'saving' | 'saved' | 'error'
 
 /** 记忆事实分类的中文标签 */
 const MEM_CAT_LABEL: Record<string, string> = {
@@ -285,6 +286,13 @@ function CloneVoiceRow({
             value={targetFilter}
             onChange={(e) => setTargetFilter(e.target.value)}
           />
+          <button
+            className="panel-btn"
+            title="重新拉取应用列表"
+            onClick={() => void refreshSessions()}
+          >
+            ↻
+          </button>
         </div>
         <div className="capture-fields">
           <select
@@ -411,7 +419,9 @@ function App() {
   const [mode, setMode] = useState<Mode>('daily')
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [form, setForm] = useState<AppConfig>(DEFAULT_CONFIG)
-  const [saveState, setSaveState] = useState<SaveState>('idle')
+  // 即存反馈:最近一次自动保存/失败的时间戳(渲染 2.5s 后自动消失)
+  const [savedTick, setSavedTick] = useState(0)
+  const [saveError, setSaveError] = useState(false)
   // 设置面板分页:常规 / 语音 / 记忆 / 历史
   const [settingsTab, setSettingsTab] = useState<'general' | 'voice' | 'memory' | 'history'>('general')
   // 记忆系统的机器事实列表(设置"记忆"页展示/管理)
@@ -420,12 +430,16 @@ function App() {
   const [clearHistArmed, setClearHistArmed] = useState(false)
   // 角色世界(两人之间的老梗/未了结事件),记忆页展示管理
   const [storyData, setStoryData] = useState<StoryData | null>(null)
+  // 长期关系一句话摘要(记忆页展示)
+  const [bondLine, setBondLine] = useState<string | null>(null)
   // 聊天通道:输入框开合/草稿/应答中;用户气泡(区别于角色气泡)
   const [chatOpen, setChatOpen] = useState(false)
   const [chatDraft, setChatDraft] = useState('')
   const [chatBusy, setChatBusy] = useState(false)
   const [userBubble, setUserBubble] = useState<string | null>(null)
   const lastChatTarget = useRef<Speaker>('A')
+  // 最近打开的面板:Esc 只关它,不一刀切全关
+  const lastOpenedPanel = useRef<'settings' | 'topic' | 'chat' | null>(null)
   // 语音录制进行中:面板锁定(点外部/Esc/齿轮均不收起,防止丢失停止入口)
   const voiceRecording = useRef(false)
   // 设置面板当前选中的厂商(custom = 本地/自定义,baseUrl/model 自由输入)
@@ -738,9 +752,10 @@ function App() {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         if (voiceRecording.current && settingsOpen) return
-        setSettingsOpen(false)
-        setTopicOpen(false)
-        setChatOpen(false)
+        if (lastOpenedPanel.current === 'settings') setSettingsOpen(false)
+        else if (lastOpenedPanel.current === 'topic') setTopicOpen(false)
+        else if (lastOpenedPanel.current === 'chat') setChatOpen(false)
+        lastOpenedPanel.current = null
       }
     }
     window.addEventListener('keydown', onKey)
@@ -1113,9 +1128,20 @@ function App() {
     setMemoryFacts((await getMemory()).facts)
   }
 
-  /** 记忆页:刷新角色世界列表 */
+  /** 记忆页:刷新角色世界列表 + 长期关系摘要 */
   async function refreshStory() {
     setStoryData(await getStory())
+    const bond = await getBond()
+    const tier = bondTierOf(bond.trust, bond.rivalry)
+    setBondLine(
+      tier === 'warm'
+        ? '关系很铁,互相信任,平时怎么闹都闹不散'
+        : tier === 'strained'
+          ? '有点相看两厌,摩擦较多,总拿旧账较劲'
+          : bond.rivalry >= 3
+            ? '最近摩擦变多,互相较劲谁也不服谁'
+            : '关系平平,偶尔斗嘴,基本和睦',
+    )
   }
 
   /** 完播后蒸馏角色世界素材:对照库存记账(新素材入库/老梗回收计数/事件线结案)。
@@ -1132,7 +1158,6 @@ function App() {
 
   /** 打开设置：读当前配置回填表单，加载历史分集 */
   async function openSettings() {
-    setSaveState('idle')
     setSettingsOpen(true)
     setTopicOpen(false)
     const cfg = await getConfig()
@@ -1155,38 +1180,43 @@ function App() {
    *  只写设置面板拥有的字段(连接信息/画像/自动重放/语音),布局、主题等
    *  由各自的保存通道维护,避免用打开面板时刻的旧快照覆盖拖动等并发改动。
    *  apiKeys = 已存值 ∪ 面板草稿 ∪ 当前输入(归位到当前厂商键),各厂商 key 一并持久化 */
-  async function saveSettings() {
-    setSaveState('saving')
+  // 即存管线:字段变更 → saveField(防抖合并) → commitSettings(落盘+副作用)
+  const saveDebounce = useRef(0)
+  const pendingSave = useRef<Partial<AppConfig>>({})
+
+  /** 落盘一批字段并执行关联副作用(快捷键换绑/角色排除/环境轮询/空闲计时) */
+  async function commitSettings(partial: Partial<AppConfig>) {
     try {
-      const next = await saveConfig({
-        apiKey: form.apiKey,
-        apiKeys: {
-          ...form.apiKeys,
-          ...keyDrafts,
-          [vendorKeyOf(vendorId, form.baseUrl)]: form.apiKey,
-        },
-        baseUrl: form.baseUrl,
-        model: form.model,
-        userProfile: form.userProfile,
-        autoReplayMin: form.autoReplayMin,
-        voice, // 语音配置(key/音色/开关)与表单一起整体落盘
-        screenshot: form.screenshot, // 截屏配置(快捷键/开关/角色排除)
-        webchatEnabled: form.webchatEnabled,
-        webchatSite: form.webchatSite,
-        envSense: form.envSense, // 环境感知开关
-        breakReminder: form.breakReminder, // 久坐提醒(番茄钟)
-      })
+      const next = await saveConfig(partial)
       setAutoReplayMin(next.autoReplayMin) // 空闲计时按新频率重新武装
       void applyScreenshotHotkey() // 快捷键按新配置换绑
       void invoke('set_capture_excluded', { enable: next.screenshot.hideSelf }).catch(() => {})
       if (next.envSense) startEnvPolling()
       else stopEnvPolling()
-      setSaveState('saved')
-      window.setTimeout(() => setSettingsOpen(false), 900)
+      setSavedTick(Date.now())
+      window.setTimeout(() => setSavedTick(0), 2500)
     } catch (e) {
       console.error('配置保存失败', e)
-      setSaveState('error')
+      setSaveError(true)
+      window.setTimeout(() => setSaveError(false), 2500)
     }
+  }
+
+  /** 字段即存入口:immediate=true 立即落盘(开关/下拉等离散操作),否则 400ms 防抖合并(文本输入) */
+  function saveField(partial: Partial<AppConfig>, immediate = false) {
+    pendingSave.current = { ...pendingSave.current, ...partial }
+    window.clearTimeout(saveDebounce.current)
+    if (immediate) {
+      const p = pendingSave.current
+      pendingSave.current = {}
+      void commitSettings(p)
+      return
+    }
+    saveDebounce.current = window.setTimeout(() => {
+      const p = pendingSave.current
+      pendingSave.current = {}
+      void commitSettings(p)
+    }, 400)
   }
 
   // ---------- 网页版生成:Edge 窗口与状态 ----------
@@ -1342,8 +1372,9 @@ function App() {
     }
   }
 
-  /** 拖拽结束后的距离演出:贴近/远离/叠一起(本地规则,12s 冷却) */
-  function maybeDistancePlay(who: 'A' | 'B') {
+  /** 拖拽结束后的距离演出:按长期关系(bond)给出不同文案与表现,并缓慢回写关系。
+   *  贴近=亲近信号(trust+0.1);叠一起/拖太远=摩擦信号(rivalry+);12s 冷却 */
+  async function maybeDistancePlay(who: 'A' | 'B') {
     if (phaseRef.current !== 'idle') return
     const other: Speaker = who === 'A' ? 'B' : 'A'
     const ax = (charCfg.A.xPct / 100) * window.innerWidth
@@ -1354,26 +1385,34 @@ function App() {
     const cooled = (kind: string) => now - (distLastAt.current[kind] ?? 0) > 12_000
     const mark = (kind: string) => { distLastAt.current[kind] = now }
 
+    const bond = await getBond()
+    const tier = bondTierOf(bond.trust, bond.rivalry)
+
     if (dx < bands.overlap && cooled('overlap')) {
       mark('overlap')
-      showPoke(other, react(other, 'overlap'), 'surprise', 2000)
-      // 推开:被拖者向远离方向挪 6%
+      showPoke(other, reactBonded(other, 'overlap', tier), tier === 'strained' ? 'angry' : 'surprise', 2000)
+      // 推开:被拖者向远离方向挪 6%(关系好时推开幅度减半,挤挤更热闹)
       const cfg = charCfgRef.current
-      const dir = cfg[who].xPct <= cfg[other].xPct ? -6 : 6
+      const dir = (cfg[who].xPct <= cfg[other].xPct ? -6 : 6) * (tier === 'warm' ? 0.5 : 1)
       applyChars({ ...cfg, [who]: { ...cfg[who], xPct: Math.min(97, Math.max(3, cfg[who].xPct + dir)) } }, 'now')
+      void shiftBond(0, 0.3)
       void logDrag()
       return
     }
     if (dx < bands.close && cooled('close')) {
       mark('close')
-      showPoke(other, react(other, 'close'), 'surprise', 2200)
+      const act = tier === 'warm' ? 'happy' : tier === 'strained' ? 'angry' : 'surprise'
+      showPoke(other, reactBonded(other, 'close', tier), act, 2200)
+      void shiftBond(0.1, 0)
       void logDrag()
       return
     }
     if (dx > window.innerWidth * 0.6 && cooled('far')) {
       mark('far')
-      showPoke('A', react('A', 'far'), 'talk', 2400, true)
-      showPoke('B', react('B', 'far'), 'talk', 2400, true)
+      const act = tier === 'strained' ? 'angry' : tier === 'warm' ? 'sad' : 'talk'
+      showPoke('A', reactBonded('A', 'far', tier), act, 2400, true)
+      showPoke('B', reactBonded('B', 'far', tier), act, 2400, true)
+      void shiftBond(-0.1, 0.4)
       void logDrag()
     }
   }
@@ -1606,6 +1645,7 @@ function App() {
             </button>
           ))}
         </div>
+        <span className="bar-sep" aria-hidden="true" />
 
         <button
           ref={btnGen}
@@ -1626,15 +1666,19 @@ function App() {
         >
           <StopIcon />
         </button>
+          <span className="bar-sep" aria-hidden="true" />
 
         <button
           ref={btnGear}
-          className={`ctrl-btn icon gear${hovered === 'settings' ? ' hot' : ''}${settingsOpen ? ' on' : ''}`}
+          className={`ctrl-btn icon${hovered === 'settings' ? ' hot' : ''}${settingsOpen ? ' on' : ''}`}
           title="设置"
           onClick={() => {
             if (settingsOpen && voiceRecording.current) return // 录音中锁定
             if (settingsOpen) setSettingsOpen(false)
-            else void openSettings()
+            else {
+              openSettings()
+              lastOpenedPanel.current = 'settings'
+            }
           }}
         >
           <GearIcon />
@@ -1648,6 +1692,7 @@ function App() {
         >
           {charHidden ? <EyeOffIcon /> : <EyeIcon />}
         </button>
+          <span className="bar-sep" aria-hidden="true" />
 
         <button
           ref={btnTopic}
@@ -1658,7 +1703,9 @@ function App() {
               setTopicOpen(false)
             } else {
               setSettingsOpen(false)
+              setChatOpen(false)
               setTopicOpen(true)
+              lastOpenedPanel.current = 'topic'
             }
           }}
         >
@@ -1696,11 +1743,13 @@ function App() {
               setSettingsOpen(false)
               setTopicOpen(false)
               setChatOpen(true)
+              lastOpenedPanel.current = 'chat'
             }
           }}
         >
           <ChatIcon />
         </button>
+          <span className="bar-sep" aria-hidden="true" />
 
         <button
           ref={btnExit}
@@ -1708,12 +1757,16 @@ function App() {
           title={exitArmed ? '再点一次确认退出' : '退出程序'}
           onClick={requestExit}
         >
-          {exitArmed ? '确认退出?' : <PowerIcon />}
+          <PowerIcon />
         </button>
       </div>
 
       {settingsOpen && (
-        <div ref={panelRef} className="settings-panel">
+        <div
+          ref={panelRef}
+          className="settings-panel"
+          style={{ left: `${Math.min(88, Math.max(12, ctrlBar.xPct))}%`, top: ctrlBar.top + 46 }}
+        >
           <div className="panel-head">
             <div className="panel-tabs">
               <button
@@ -1769,12 +1822,17 @@ function App() {
                   baseUrl = v.baseUrl
                   model = v.models[0] ?? ''
                 }
-                setForm({
-                  ...form,
-                  baseUrl,
-                  model,
-                  apiKey: drafts[vendorKeyOf(id, baseUrl)] ?? '',
-                })
+                const apiKey = drafts[vendorKeyOf(id, baseUrl)] ?? ''
+                setForm({ ...form, baseUrl, model, apiKey })
+                saveField(
+                  {
+                    baseUrl,
+                    model,
+                    apiKey,
+                    apiKeys: { ...form.apiKeys, ...drafts },
+                  },
+                  true,
+                )
               }}
             >
               {VENDORS.map((v) => (
@@ -1794,9 +1852,12 @@ function App() {
               type="password"
               value={form.apiKey}
               onChange={(e) => {
-                setForm({ ...form, apiKey: e.target.value })
-                setKeyDrafts((d) => ({ ...d, [vendorKeyOf(vendorId, form.baseUrl)]: e.target.value }))
+                const v = e.target.value
+                setForm({ ...form, apiKey: v })
+                setKeyDrafts((d) => ({ ...d, [vendorKeyOf(vendorId, form.baseUrl)]: v }))
+                saveField({ apiKey: v, apiKeys: { ...form.apiKeys, [vendorKeyOf(vendorId, form.baseUrl)]: v } })
               }}
+              onBlur={() => saveField({}, true)}
             />
           </div>
           <div className="settings-row">
@@ -1812,6 +1873,7 @@ function App() {
                 const drafts = { ...keyDrafts, [vendorKeyOf(vendorId, form.baseUrl)]: form.apiKey }
                 setKeyDrafts(drafts)
                 setForm({ ...form, baseUrl: e.target.value })
+                saveField({ baseUrl: e.target.value, apiKeys: { ...form.apiKeys, ...drafts } })
               }}
             />
           </div>
@@ -1822,13 +1884,19 @@ function App() {
                 id="cfg-model"
                 value={form.model}
                 placeholder="如 qwen2.5:7b(Ollama 模型名)"
-                onChange={(e) => setForm({ ...form, model: e.target.value })}
+                onChange={(e) => {
+                  setForm({ ...form, model: e.target.value })
+                  saveField({ model: e.target.value })
+                }}
               />
             ) : (
               <select
                 id="cfg-model"
                 value={form.model}
-                onChange={(e) => setForm({ ...form, model: e.target.value })}
+                onChange={(e) => {
+                  setForm({ ...form, model: e.target.value })
+                  saveField({ model: e.target.value }, true)
+                }}
               >
                 {(VENDORS.find((v) => v.id === vendorId)?.models ?? []).map((m) => (
                   <option key={m} value={m}>
@@ -1872,21 +1940,14 @@ function App() {
               onChange={(e) => {
                 const raw = e.target.value
                 // 空串/非法输入按 0(关闭)存,不往输入框里塞 0 硬占位
-                setForm({ ...form, autoReplayMin: raw.trim() === '' ? 0 : Math.max(0, Number(raw) || 0) })
+                const v = raw.trim() === '' ? 0 : Math.max(0, Number(raw) || 0)
+                setForm({ ...form, autoReplayMin: v })
+                saveField({ autoReplayMin: v })
               }}
             />
           </div>
           <div className="settings-row">
-            <label htmlFor="cfg-interests">使用者的兴趣爱好(选填,逗号分隔 — 完整画像在"记忆"页)</label>
-            <textarea
-              id="cfg-interests"
-              rows={2}
-              value={form.userProfile.likes}
-              placeholder="如:摄影,健身,玩unity,听周杰伦 — 日常闲聊会偶尔聊到"
-              onChange={(e) =>
-                setForm({ ...form, userProfile: { ...form.userProfile, likes: e.target.value } })
-              }
-            />
+            <div className="settings-hint">使用者的兴趣爱好在"记忆"页维护 — 日常闲聊会偶尔聊到</div>
           </div>
           <div className="settings-row">
             <label htmlFor="cfg-env">桌面环境感知(电量/前台应用分类等,仅本机分类,不上传)</label>
@@ -1897,10 +1958,7 @@ function App() {
               onChange={(e) => {
                 const next = e.target.checked
                 setForm({ ...form, envSense: next })
-                saveConfig({ envSense: next }).catch((err) =>
-                  console.warn('环境感知开关保存失败(静默)', err),
-                )
-                next ? startEnvPolling() : stopEnvPolling()
+                saveField({ envSense: next }, true)
               }}
             />
           </div>
@@ -1911,12 +1969,11 @@ function App() {
                 id="cfg-break-enable"
                 type="checkbox"
                 checked={form.breakReminder.enabled}
-                onChange={(e) =>
-                  setForm({
-                    ...form,
-                    breakReminder: { ...form.breakReminder, enabled: e.target.checked },
-                  })
-                }
+                onChange={(e) => {
+                  const next = { ...form.breakReminder, enabled: e.target.checked }
+                  setForm({ ...form, breakReminder: next })
+                  saveField({ breakReminder: next }, true)
+                }}
               />
               <input
                 type="number"
@@ -1926,15 +1983,14 @@ function App() {
                 className="break-min-input"
                 title="连续活跃多少分钟后提醒(15~120)"
                 value={form.breakReminder.minutes}
-                onChange={(e) =>
-                  setForm({
-                    ...form,
-                    breakReminder: {
-                      ...form.breakReminder,
-                      minutes: Math.min(120, Math.max(15, Number(e.target.value) || 45)),
-                    },
-                  })
-                }
+                onChange={(e) => {
+                  const next = {
+                    ...form.breakReminder,
+                    minutes: Math.min(120, Math.max(15, Number(e.target.value) || 45)),
+                  }
+                  setForm({ ...form, breakReminder: next })
+                  saveField({ breakReminder: next })
+                }}
               />
               <span>分钟后</span>
             </div>
@@ -1947,9 +2003,7 @@ function App() {
               checked={showWatermark}
               onChange={(e) => {
                 setShowWatermark(e.target.checked)
-                saveConfig({ showWatermark: e.target.checked }).catch((err) =>
-                  console.warn('水印开关保存失败(静默)', err),
-                )
+                saveField({ showWatermark: e.target.checked }, true)
               }}
             />
           </div>
@@ -1967,7 +2021,10 @@ function App() {
               id="cfg-webchat"
               type="checkbox"
               checked={form.webchatEnabled}
-              onChange={(e) => setForm({ ...form, webchatEnabled: e.target.checked })}
+              onChange={(e) => {
+                setForm({ ...form, webchatEnabled: e.target.checked })
+                saveField({ webchatEnabled: e.target.checked }, true)
+              }}
             />
           </div>
           {form.webchatEnabled && (
@@ -1977,9 +2034,10 @@ function App() {
                 <select
                   id="cfg-webchat-site"
                   value={form.webchatSite}
-                  onChange={(e) =>
+                  onChange={(e) => {
                     setForm({ ...form, webchatSite: e.target.value as AppConfig['webchatSite'] })
-                  }
+                    saveField({ webchatSite: e.target.value as AppConfig['webchatSite'] }, true)
+                  }}
                 >
                   {WEBCHAT_SITES.map((s) => (
                     <option key={s.id} value={s.id}>
@@ -2021,15 +2079,19 @@ function App() {
                 id="cfg-shot-enable"
                 type="checkbox"
                 checked={form.screenshot.enabled}
-                onChange={(e) =>
-                  setForm({ ...form, screenshot: { ...form.screenshot, enabled: e.target.checked } })
-                }
+                onChange={(e) => {
+                  const next = { ...form.screenshot, enabled: e.target.checked }
+                  setForm({ ...form, screenshot: next })
+                  saveField({ screenshot: next }, true)
+                }}
               />
               <HotkeyRecorder
                 value={form.screenshot.hotkey}
-                onChange={(hotkey) =>
-                  setForm({ ...form, screenshot: { ...form.screenshot, hotkey } })
-                }
+                onChange={(hotkey) => {
+                  const next = { ...form.screenshot, hotkey }
+                  setForm({ ...form, screenshot: next })
+                  saveField({ screenshot: next }, true)
+                }}
               />
             </div>
           </div>
@@ -2042,30 +2104,14 @@ function App() {
               onChange={(e) => {
                 const next = { ...form.screenshot, hideSelf: e.target.checked }
                 setForm({ ...form, screenshot: next })
-                saveConfig({ screenshot: next }).catch((err) =>
-                  console.warn('截屏排除开关保存失败(静默)', err),
-                )
-                invoke('set_capture_excluded', { enable: e.target.checked }).catch(() => {})
+                saveField({ screenshot: next }, true) // commit 内统一执行角色排除
               }}
             />
           </div>
-          <div className="settings-actions">
-            <button className="panel-btn" onClick={() => setSettingsOpen(false)}>
-              取消
-            </button>
-            <button
-              className="panel-btn primary"
-              disabled={saveState === 'saving'}
-              onClick={() => void saveSettings()}
-            >
-              {saveState === 'saving' ? '保存中…' : '保存'}
-            </button>
-          </div>
-          {saveState === 'saved' && (
-            <div className="settings-tip ok">✓ 已保存，下次生成即生效</div>
-          )}
-          {saveState === 'error' && (
-            <div className="settings-tip err">保存失败，详见控制台日志</div>
+          {(savedTick !== 0 || saveError) && (
+            <div className={`settings-tip ${saveError ? 'err' : 'ok'}`}>
+              {saveError ? '保存失败，详见控制台日志' : '✓ 已自动保存，即时生效'}
+            </div>
           )}
             </>
           )}
@@ -2081,9 +2127,7 @@ function App() {
               onChange={(e) => {
                 const next = { ...voice, enabled: e.target.checked }
                 setVoice(next)
-                saveConfig({ voice: next }).catch((err) =>
-                  console.warn('语音开关保存失败(静默)', err),
-                )
+                saveField({ voice: next }, true)
               }}
             />
           </div>
@@ -2098,61 +2142,43 @@ function App() {
                   type="password"
                   placeholder="sk-...(siliconflow.cn)"
                   value={voice.apiKey}
-                  onChange={(e) => setVoice({ ...voice, apiKey: e.target.value })}
+                  onChange={(e) => {
+                    const next = { ...voice, apiKey: e.target.value }
+                    setVoice(next)
+                    saveField({ voice: next })
+                  }}
                   onBlur={(e) => {
                     const next = { ...voice, apiKey: e.target.value }
-                    saveConfig({ voice: next }).catch((err) =>
-                      console.warn('语音 key 保存失败(静默)', err),
-                    )
+                    setVoice(next)
+                    saveField({ voice: next }, true)
                   }}
                 />
               </div>
-              <div className="settings-row">
-                <label htmlFor="cfg-voice-a">角色甲音色</label>
-                <select
-                  id="cfg-voice-a"
-                  value={voice.A}
-                  onChange={(e) => {
-                    const next = { ...voice, A: e.target.value }
-                    setVoice(next)
-                    saveConfig({ voice: next }).catch((err) =>
-                      console.warn('音色保存失败(静默)', err),
-                    )
-                  }}
-                >
-                  {VOICES.map((v) => (
-                    <option key={v.id} value={v.id}>
-                      {v.label}
-                    </option>
-                  ))}
-                  {clonedVoices.length > 0 && <optgroup label="我的克隆音色">{clonedVoices.map((v) => (
-                    <option key={v.uri} value={v.uri}>{v.name}</option>
-                  ))}</optgroup>}
-                </select>
-              </div>
-              <div className="settings-row">
-                <label htmlFor="cfg-voice-b">角色乙音色</label>
-                <select
-                  id="cfg-voice-b"
-                  value={voice.B}
-                  onChange={(e) => {
-                    const next = { ...voice, B: e.target.value }
-                    setVoice(next)
-                    saveConfig({ voice: next }).catch((err) =>
-                      console.warn('音色保存失败(静默)', err),
-                    )
-                  }}
-                >
-                  {VOICES.map((v) => (
-                    <option key={v.id} value={v.id}>
-                      {v.label}
-                    </option>
-                  ))}
-                  {clonedVoices.length > 0 && <optgroup label="我的克隆音色">{clonedVoices.map((v) => (
-                    <option key={v.uri} value={v.uri}>{v.name}</option>
-                  ))}</optgroup>}
-                </select>
-              </div>
+              {([['a', '角色甲音色', 'cfg-voice-a'], ['b', '角色乙音色', 'cfg-voice-b']] as const).map(
+                ([slot, label, id]) => (
+                  <div className="settings-row" key={slot}>
+                    <label htmlFor={id}>{label}</label>
+                    <select
+                      id={id}
+                      value={voice[slot.toUpperCase() as 'A' | 'B']}
+                      onChange={(e) => {
+                        const next = { ...voice, [slot.toUpperCase()]: e.target.value }
+                        setVoice(next)
+                        saveField({ voice: next }, true)
+                      }}
+                    >
+                      {VOICES.map((v) => (
+                        <option key={v.id} value={v.id}>
+                          {v.label}
+                        </option>
+                      ))}
+                      {clonedVoices.length > 0 && <optgroup label="我的克隆音色">{clonedVoices.map((v) => (
+                        <option key={v.uri} value={v.uri}>{v.name}</option>
+                      ))}</optgroup>}
+                    </select>
+                  </div>
+                ),
+              )}
               <div className="settings-row">
                 <label htmlFor="cfg-voice-c">场外客串音色(第三人乱入时用)</label>
                 <select
@@ -2202,7 +2228,11 @@ function App() {
               id="cfg-mem-name"
               placeholder="角色会这样叫你"
               value={form.userProfile.userName}
-              onChange={(e) => setForm({ ...form, userProfile: { ...form.userProfile, userName: e.target.value } })}
+              onChange={(e) => {
+                const next = { ...form.userProfile, userName: e.target.value }
+                setForm({ ...form, userProfile: next })
+                saveField({ userProfile: next })
+              }}
             />
           </div>
           <div className="settings-row">
@@ -2211,7 +2241,11 @@ function App() {
               id="cfg-mem-occ"
               placeholder="如:在读研究生"
               value={form.userProfile.occupation}
-              onChange={(e) => setForm({ ...form, userProfile: { ...form.userProfile, occupation: e.target.value } })}
+              onChange={(e) => {
+                const next = { ...form.userProfile, occupation: e.target.value }
+                setForm({ ...form, userProfile: next })
+                saveField({ userProfile: next })
+              }}
             />
           </div>
           <div className="settings-row">
@@ -2219,7 +2253,11 @@ function App() {
             <input
               id="cfg-mem-likes"
               value={form.userProfile.likes}
-              onChange={(e) => setForm({ ...form, userProfile: { ...form.userProfile, likes: e.target.value } })}
+              onChange={(e) => {
+                const next = { ...form.userProfile, likes: e.target.value }
+                setForm({ ...form, userProfile: next })
+                saveField({ userProfile: next })
+              }}
             />
           </div>
           <div className="settings-row">
@@ -2227,7 +2265,11 @@ function App() {
             <input
               id="cfg-mem-dis"
               value={form.userProfile.dislikes}
-              onChange={(e) => setForm({ ...form, userProfile: { ...form.userProfile, dislikes: e.target.value } })}
+              onChange={(e) => {
+                const next = { ...form.userProfile, dislikes: e.target.value }
+                setForm({ ...form, userProfile: next })
+                saveField({ userProfile: next })
+              }}
             />
           </div>
           <div className="settings-row">
@@ -2236,7 +2278,11 @@ function App() {
               id="cfg-mem-ban"
               placeholder="如:考试,前任"
               value={form.userProfile.banTopics}
-              onChange={(e) => setForm({ ...form, userProfile: { ...form.userProfile, banTopics: e.target.value } })}
+              onChange={(e) => {
+                const next = { ...form.userProfile, banTopics: e.target.value }
+                setForm({ ...form, userProfile: next })
+                saveField({ userProfile: next })
+              }}
             />
           </div>
           <div className="settings-sep">
@@ -2315,6 +2361,12 @@ function App() {
               </button>
             </div>
           ))}
+          {bondLine && (
+            <div className="mem-fact">
+              <span className="mem-cat">关系</span>
+              <span className="mem-content">{bondLine}</span>
+            </div>
+          )}
           <div className="settings-sep">
             <span>连续剧情(多集推进的剧情线,约 30% 的集数会演下一拍)</span>
           </div>
@@ -2411,7 +2463,11 @@ function App() {
       )}
 
       {topicOpen && (
-        <div ref={topicPanelRef} className="settings-panel topic-panel">
+        <div
+          ref={topicPanelRef}
+          className="settings-panel topic-panel"
+          style={{ left: `${Math.min(88, Math.max(12, ctrlBar.xPct))}%`, top: ctrlBar.top + 46 }}
+        >
           <div className="panel-head">
             <span>聊天主题</span>
             {topicOverride && (

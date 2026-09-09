@@ -38,6 +38,16 @@ export interface StoryData {
   gags: StoryGag[]
   threads: StoryThread[]
   arcs: StoryArc[]
+  /** 两角色的长期关系数值:缓慢衰减,由拖拽距离等互动缓慢漂移 */
+  bond: Bond
+}
+
+export interface Bond {
+  /** 信任 -3(互相看不顺眼)..3(很铁) */
+  trust: number
+  /** 摩擦 0(相安无事)..5(天天较劲) */
+  rivalry: number
+  updatedAt: number
 }
 
 const MAX_GAGS = 30
@@ -46,7 +56,11 @@ const MAX_ACTIVE_ARCS = 3
 /** 剧情线拍到第 4 拍自动完结(多集小剧情,不宜无限拖) */
 const MAX_ARC_STAGE = 4
 const LS_KEY = 'vc-story'
-const EMPTY: StoryData = { version: 1, gags: [], threads: [], arcs: [] }
+const DEFAULT_BOND: Bond = { trust: 1, rivalry: 0, updatedAt: 0 }
+const EMPTY: StoryData = { version: 1, gags: [], threads: [], arcs: [], bond: { ...DEFAULT_BOND, updatedAt: 0 } }
+
+const clampTrust = (v: number): number => Math.min(3, Math.max(-3, v))
+const clampRivalry = (v: number): number => Math.min(5, Math.max(0, v))
 
 let cache: StoryData | null = null
 
@@ -120,7 +134,13 @@ function sanitize(data: unknown): StoryData {
     .map(sanitizeArc)
     .filter((a): a is StoryArc => a !== null)
     .slice(0, 8)
-  return { version: 1, gags, threads, arcs }
+  const bo = (o.bond ?? {}) as Record<string, unknown>
+  const bond: Bond = {
+    trust: clampTrust(Number(bo.trust) || 0) || 0,
+    rivalry: clampRivalry(Number(bo.rivalry) || 0),
+    updatedAt: Number(bo.updatedAt) || 0,
+  }
+  return { version: 1, gags, threads, arcs, bond }
 }
 
 async function loadRaw(): Promise<StoryData> {
@@ -306,6 +326,28 @@ export async function storyContext(maxEach = 2): Promise<{ gags: string[]; threa
     gags: inv.gags.map((g) => g.text),
     threads: inv.threads.map((t) => t.text),
   }
+}
+
+/** 读长期关系:按距上次更新的自然日数做缓慢衰减(每天 trust 向 0 回 0.5、rivalry 降 0.5),
+ *  避免角色永久记仇 */
+export async function getBond(): Promise<Bond> {
+  const story = await getStory()
+  const b = story.bond
+  const days = Math.floor((Date.now() - b.updatedAt) / 86_400_000)
+  const trust = clampTrust(b.trust - days * 0.5 * Math.sign(b.trust || 1))
+  const rivalry = clampRivalry(b.rivalry - days * 0.5)
+  return { trust, rivalry, updatedAt: b.updatedAt }
+}
+
+/** 互动信号回写:拖近/拖远等事件小幅漂移关系,冷却由调用方控制 */
+export async function shiftBond(dTrust: number, dRivalry: number): Promise<void> {
+  await withFileLock('story', async () => {
+    const story = await getStory()
+    story.bond.trust = clampTrust(story.bond.trust + dTrust)
+    story.bond.rivalry = clampRivalry(story.bond.rivalry + dRivalry)
+    story.bond.updatedAt = Date.now()
+    await persist(story)
+  })
 }
 
 /** 蒸馏用:带 id 的已知素材清单(老梗按热度、事件线按新近度、剧情线全量活跃) */

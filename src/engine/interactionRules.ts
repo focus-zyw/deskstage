@@ -52,6 +52,88 @@ export function react(who: Voice, kind: 'interrupt' | 'close' | 'far' | 'overlap
   return pick(table[kind][who])
 }
 
+/** 长期关系档位:trust/rivalry 数值 → 文案表选择 */
+export type BondTier = 'warm' | 'neutral' | 'strained'
+
+export function bondTierOf(trust: number, rivalry: number): BondTier {
+  if (trust <= -2 || rivalry >= 3.5) return 'strained'
+  if (trust >= 2) return 'warm'
+  return 'neutral'
+}
+
+// 按关系档位区分的拖拽文案:warm 甜/纵容,strained 记仇/较劲,neutral 走基础表
+const BOND_CLOSE: Record<BondTier, Record<'A' | 'B', readonly string[]>> = {
+  warm: {
+    A: [
+      '（没躲）……行吧,老搭档,给你个面子',
+      '又挤过来——好家伙,是不是想我了？（得意）',
+    ],
+    B: [
+      '（没挪开）……这次免费,下次收费',
+      '（叹气）拿你没办法,就挤一小会儿',
+    ],
+  },
+  neutral: {
+    A: TOO_CLOSE.A,
+    B: TOO_CLOSE.B,
+  },
+  strained: {
+    A: [
+      '哎哎,上次的账还没清,别贴过来套近乎！',
+      '（侧身挡住）无事献殷勤——你到底想干嘛！',
+    ],
+    B: [
+      '（拿东西隔开）先把之前的账算了,再谈距离',
+      '别碰我。查完账再说',
+    ],
+  },
+}
+
+const BOND_FAR: Record<BondTier, Record<'A' | 'B', readonly string[]>> = {
+  warm: {
+    A: ['喂——跑那么远,我的包袱抖给谁听啊！', '（拢嘴喊）回来回来,刚那梗再演一遍！'],
+    B: ['（往前两步）……只是懒得听你喊,不是想你'],
+  },
+  neutral: {
+    A: TOO_FAR.A,
+    B: TOO_FAR.B,
+  },
+  strained: {
+    A: ['行,走就走——账本我留着呢！', '（背身）正好,懒得看见你！'],
+    B: ['（头也不回）巴不得。清账之前别喊我'],
+  },
+}
+
+const BOND_OVERLAP: Record<BondTier, Record<'A' | 'B', readonly string[]>> = {
+  warm: {
+    A: ['好家伙,挤一块了——这才叫亲密无间！（得意）'],
+    B: ['（没推开）……下不为例'],
+  },
+  neutral: {
+    A: OVERLAP.A,
+    B: OVERLAP.B,
+  },
+  strained: {
+    A: ['挤什么挤！账没清的人没有站位权！'],
+    B: ['（使劲推开）重。下去。别以为挤过来就能赖账'],
+  },
+}
+
+const BOND_TABLE = {
+  close: BOND_CLOSE,
+  far: BOND_FAR,
+  overlap: BOND_OVERLAP,
+} as const
+
+/** 按关系档位取拖拽反应文案;neutral 直接走基础表 */
+export function reactBonded(
+  who: 'A' | 'B',
+  kind: 'close' | 'far' | 'overlap',
+  tier: BondTier,
+): string {
+  return pick(BOND_TABLE[kind][tier][who])
+}
+
 /** 距离阈值(按角色身高换算) */
 export function distanceBands(height: number) {
   return { overlap: height * 0.35, close: height * 0.95 }

@@ -71,6 +71,8 @@ export function buildMessages(
   envNote?: string,
   /** 场外角色乱入(可选):身份名,以电话/画外音形式出现,打破双人固定结构 */
   guest?: string,
+  /** 长期关系底色(可选):信任/摩擦的当前状态描述 */
+  bondNote?: string,
 ): ChatMessage[] {
   const persona = `角色设定：
 - 甲（speaker 用 "A"）：精力充沛、爱吹牛、脑洞大、说话夸张，满嘴跑火车还特别得意，常用"我跟你说""好家伙"当口头禅
@@ -95,6 +97,12 @@ export function buildMessages(
 
   const slot = currentTimeSlot()
   const timeCtx = `\n\n现实时间：现在是${slot.label}，${slot.scene}。段子的场景和情绪可以贴合这个时间段。`
+
+  const bondCtx = bondNote?.trim()
+    ? `
+
+长期关系背景（影响相互态度与语气,不是本集主要矛盾）：${bondNote.trim()}。`
+    : ''
 
   const recap = interactionRecap?.trim()
     ? `另外,上一集演出时观众没少捣乱:${interactionRecap.trim()}。开场先让两人自然地抱怨一下这个观众,再进入正题。
@@ -157,7 +165,7 @@ export function buildMessages(
   return [
     {
       role: 'system',
-      content: `你是一位擅长传统相声和网络脱口秀的资深喜剧编剧,给桌面双人情景剧写段子。${persona}${relCtx}${arcCtx}${guestRule}${profile}${storyCtx}${timeCtx}${choiceRule}\n\n${craft}\n\n${protocol}\n\n${modeOf(mode).prompt}`,
+      content: `你是一位擅长传统相声和网络脱口秀的资深喜剧编剧,给桌面双人情景剧写段子。${persona}${bondCtx}${relCtx}${arcCtx}${guestRule}${profile}${storyCtx}${timeCtx}${choiceRule}\n\n${craft}\n\n${protocol}\n\n${modeOf(mode).prompt}`,
     },
     {
       role: 'user',

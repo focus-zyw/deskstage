@@ -4,7 +4,7 @@ import type { UserProfile } from '../storage/configStore'
 import { buildMessages, renderAudienceContext, type UserContext } from './promptBuilder'
 import { mergeMessages, webchatAsk } from './webchat'
 import { getMemory, topFacts, tasteSummary, type FactCategory } from '../storage/memoryStore'
-import { storyContext } from '../storage/storyStore'
+import { storyContext, getBond } from '../storage/storyStore'
 import { takeRecap } from '../storage/interactionStore'
 import { pickRelationship } from '../performer/modes/relationships'
 import { currentTimeSlot } from './timeAware'
@@ -166,7 +166,17 @@ export async function generateDialog(
   const relationship = pickRelationship(mode)
   const interactionRecap = (await takeRecap()) ?? undefined
   const envNote = cfg.envSense ? envContext() : undefined
-  const messages = buildMessages(mode, topic, recentLines, topicFixed, cfg.userInterests, userCtx, relationship, interactionRecap, allowChoice, lastChoice ?? undefined, arc, envNote, guest)
+  // 长期关系底色:随互动缓慢漂移,给当集台词定相互态度
+  const bond = await getBond()
+  const bondNote =
+    bond.trust >= 2
+      ? '两人长期互相信任、关系很铁,平时互相拆台但底线是护着对方'
+      : bond.trust <= -2
+        ? '两人近期互相看不顺眼,信任度低,总拿旧账试探对方'
+        : bond.rivalry >= 3
+          ? '两人近期摩擦变多,互相较劲谁也不服谁'
+          : undefined
+  const messages = buildMessages(mode, topic, recentLines, topicFixed, cfg.userInterests, userCtx, relationship, interactionRecap, allowChoice, lastChoice ?? undefined, arc, envNote, guest, bondNote)
   // 网页版生成(设置里开启):主演出改经隐藏网页窗口由网页模型生成。
   // 网页端没有 json_mode/temperature,格式服从度靠协议本身(手动验证 6/6 通过,
   // 见 docs/webchat-prompt-test.md)。生成慢(几十秒级),点播与预生成都有耐心等;
