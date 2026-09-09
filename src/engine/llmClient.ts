@@ -29,13 +29,31 @@ export async function describeLlmError(e: unknown): Promise<string> {
   if (err.status === 402 || /insufficient|balance|quota|额度/i.test(`${err.message} ${err.serverMsg ?? ''}`))
     return '账户额度不足'
   if (err.status === 429 || /rate limit/i.test(`${err.message} ${err.serverMsg ?? ''}`)) return '请求过于频繁'
+  if (err.status === 404) {
+    // 火山方舟等:404 = 模型名不存在/已下架,或账号未开通该模型
+    const hint = `${serverMessage(e)} ${err.serverMsg ?? ''}`
+    if (/ModelNotOpen|not activated|have access/i.test(hint))
+      return '模型未在本账号开通(到厂商控制台开通,或换个模型)'
+    return '模型不存在或已下架,检查模型名'
+  }
   if (err.status !== undefined && err.status >= 500) return '服务端故障,稍后再试'
   if (/failed to fetch|network|load failed/i.test(err.message ?? '')) return '网络连接失败'
-  return err.serverMsg || err.message || '未知错误'
+  return serverMessage(e) || err.message || '未知错误'
 }
 
 function signalAborted(e: unknown): boolean {
   return (e as Error)?.name === 'AbortError'
+}
+
+/** 从服务端错误 body 提取人类可读说明(适配 OpenAI/火山方舟等 JSON 错误格式) */
+function serverMessage(e: unknown): string {
+  const raw = (e as { serverMsg?: string }).serverMsg ?? ''
+  try {
+    const o = JSON.parse(raw) as { error?: { message?: string }; message?: string }
+    return o.error?.message || o.message || raw
+  } catch {
+    return raw
+  }
 }
 
 /** LLM 请求走 Rust 侧 http(tauri-plugin-http):不受 WebView CORS 限制,
@@ -80,6 +98,11 @@ async function chatRaw(
         temperature: 1.1,
         max_tokens: 4000,
         ...(jsonMode ? { response_format: { type: 'json_object' } } : {}),
+        // 火山方舟 doubao-seed 系默认深度思考,写段子用不上还拖慢 4~5 倍(实测 6.4s→1.1s),显式关掉。
+        // 该参数仅 ark 认识,按 baseUrl+模型前缀收紧,避免污染其他厂商
+        ...(cfg.baseUrl.includes('volces.com') && cfg.model.startsWith('doubao-seed')
+          ? { thinking: { type: 'disabled' } }
+          : {}),
       }),
       signal: ctrl.signal,
     })

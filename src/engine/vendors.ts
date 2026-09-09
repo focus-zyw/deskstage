@@ -38,7 +38,14 @@ export const VENDORS: VendorPreset[] = [
     id: 'doubao',
     label: '豆包(火山引擎)',
     baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
-    models: ['doubao-seed-1-6-250615', 'doubao-1-5-pro-32k-250115', 'doubao-1-5-lite-32k-250115'],
+    // 按模型名直调需在火山方舟控制台开通对应模型;ModelNotOpen = 去控制台开通。
+    // doubao-seed-2-0-mini 实测开箱可用(2026-09,含 json 模式);1.5/Seed1.6 世代已全网下架
+    models: [
+      'doubao-seed-2-0-mini-260215',
+      'doubao-seed-2-0-lite-260428',
+      'doubao-seed-2-1-turbo-260628',
+      'doubao-seed-2-1-pro-260628',
+    ],
   },
   {
     id: 'openai',
