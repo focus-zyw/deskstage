@@ -1,5 +1,6 @@
 // 临时关系模板池:基础人格稳定(甲吹乙拆),但每集的"局势"随机变化——
 // 谁有求于谁、谁握着谁的把柄、谁在心虚,决定台词的攻守姿态,避免永远固定攻守导致模式化。
+// 关系只覆盖本集攻守,不改变甲乙的基础性格与语言风格。
 // 每次生成随机取一注入 prompt,并要求写进场景卡的 relationship 字段。
 
 export interface Relationship {
@@ -9,7 +10,7 @@ export interface Relationship {
   desc: string
   /** 相声模式是否可用(相声有明确捧逗分工,只放行兼容局势);缺省 false = 仅日常 */
   crosstalk?: boolean
-  /** 抽取权重(缺省 1);"角色反转"靠低权重实现"20% 概率"级别的稀有度 */
+  /** 抽取权重(缺省 1);"反转·乙吹甲拆"权重 2,日常池合计 9 → 约 22%,即"两成概率反转" */
   weight?: number
 }
 
@@ -18,6 +19,12 @@ const POOL: Relationship[] = [
     label: '平级斗嘴',
     desc: '两人互不相让,谁也不服谁,拆与被拆随时互换',
     crosstalk: true,
+  },
+  {
+    label: '子母哏',
+    desc: '逗捧轮流换手:前半段甲吹乙拆,后半段乙吹甲拆,换手要接得严丝合缝',
+    crosstalk: true,
+    weight: 2,
   },
   {
     label: '乙握甲把柄',
@@ -46,17 +53,21 @@ const POOL: Relationship[] = [
   },
   {
     label: '反转·乙吹甲拆',
-    desc: '角色互换:这集乙负责吹牛铺包袱,甲负责拆台翻包袱,乙难得得意一回',
+    desc: '临时互换攻守:这集乙负责吹牛铺包袱,甲负责拆台翻包袱;只换分工,乙的基础性格和语言风格不变',
     weight: 2,
   },
 ]
 
-/** 按模式抽一个临时关系:日常全池加权随机;相声只用兼容捧逗分工的局势 */
-export function pickRelationship(modeId: string): Relationship {
+/** 按模式抽一个临时关系:日常全池加权随机;相声只用兼容捧逗分工的局势。
+ *  rng 可注入,便于稳定测试抽取概率 */
+export function pickRelationship(
+  modeId: string,
+  rng: () => number = Math.random,
+): Relationship {
   const pool = POOL.filter((r) => (modeId === 'crosstalk' ? r.crosstalk === true : true))
   const bag: Relationship[] = []
   for (const r of pool) {
     for (let i = 0; i < (r.weight ?? 1); i++) bag.push(r)
   }
-  return bag[Math.floor(Math.random() * bag.length)] ?? POOL[0]!
+  return bag[Math.floor(rng() * bag.length)] ?? POOL[0]!
 }

@@ -1,7 +1,7 @@
 import { fetch as rustFetch } from '@tauri-apps/plugin-http'
 import { getConfig, inTauri } from '../storage/configStore'
 import type { UserProfile } from '../storage/configStore'
-import { buildMessages, renderUserContext, type UserContext } from './promptBuilder'
+import { buildMessages, renderAudienceContext, type UserContext } from './promptBuilder'
 import { getMemory, topFacts, tasteSummary, type FactCategory } from '../storage/memoryStore'
 import { storyContext } from '../storage/storyStore'
 import { pickRelationship } from '../performer/modes/relationships'
@@ -189,7 +189,7 @@ export async function generateShortChat(
     taste: (await tasteSummary(3)) || undefined,
     facts: topFacts(mem, 3),
   }
-  const profileBits = renderUserContext(userCtx).trim()
+  const profileBits = renderAudienceContext(userCtx).trim()
   const interests = profileBits ? `${profileBits}\n` : ''
   const prev = recentLines
     .slice(-2)

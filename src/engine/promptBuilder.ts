@@ -22,8 +22,8 @@ export interface UserContext {
   story?: { gags: string[]; threads: string[] }
 }
 
-/** 把画像/口味/记忆事实渲染成一段"观众画像"文本,空字段自动省略 */
-export function renderUserContext(ctx: UserContext): string {
+/** 观众语境:称呼/画像/口味/记忆事实。观众资料只用于亲切感,禁止当包袱素材 */
+export function renderAudienceContext(ctx: UserContext): string {
   const p = ctx.profile
   const parts: string[] = []
   const bits: string[] = []
@@ -34,10 +34,18 @@ export function renderUserContext(ctx: UserContext): string {
   if (bits.length) parts.push(`我们的观众朋友${bits.join(';')}。聊天中可以自然地带到这些(不要刻意每句都提)。`)
   if (p?.banTopics) parts.push(`雷区(绝对不要聊):${p.banTopics}。`)
   if (ctx.taste) parts.push(`观众最近爱听的话题:${ctx.taste}。`)
-  if (ctx.story?.gags.length) parts.push(`可回收的老梗(最多自然回收 1 个,别强行):${ctx.story.gags.join(';')}。`)
-  if (ctx.story?.threads.length) parts.push(`未了结的事件(适合在包袱里了结):${ctx.story.threads.join(';')}。`)
-  if (ctx.facts?.length) parts.push(`你已经记住的关于观众的事:\n${ctx.facts.map((f, i) => `${i + 1}. ${f}`).join('\n')}`)
+  if (ctx.facts?.length) parts.push(`你已经记住的关于观众的事(只用于称呼和亲切感语境,不得作为嘲讽、秘密或包袱素材):\n${ctx.facts.map((f, i) => `${i + 1}. ${f}`).join('\n')}`)
   return parts.length ? `\n\n使用者画像：${parts.join(' ')}` : ''
+}
+
+/** 角色世界:两人之间的老梗/未了结事件。这是笑点 callback 的唯一合法来源 */
+export function renderStoryContext(story?: UserContext['story']): string {
+  const parts: string[] = []
+  if (story?.gags.length) parts.push(`可回收的老梗(最多自然回收 1 个,别强行):${story.gags.join(';')}。`)
+  if (story?.threads.length) parts.push(`未了结的事件(适合在包袱里了结):${story.threads.join(';')}。`)
+  if (!parts.length) return ''
+  parts.push('笑点素材只能来自本集场景卡和角色世界;观众的私人信息不是包袱。')
+  return `\n\n角色世界（两人的共同经历）：${parts.join(' ')}`
 }
 
 /** 组装 prompt：人设 + 使用者画像 + 输出协议 + 模式指令 + 上段结尾衔接 + 话题。
@@ -71,18 +79,19 @@ export function buildMessages(
   const legacy = userInterests?.trim()
     ? `\n\n使用者画像：我们的观众朋友有以下兴趣爱好：${userInterests.trim()}。聊天中可以自然地偶尔聊到这些（不要刻意每句都提）。`
     : ''
-  const profile = userCtx ? renderUserContext(userCtx) : legacy
+  const profile = userCtx ? renderAudienceContext(userCtx) : legacy
+  const storyCtx = userCtx ? renderStoryContext(userCtx.story) : ''
 
   const slot = currentTimeSlot()
   const timeCtx = `\n\n现实时间：现在是${slot.label}，${slot.scene}。段子的场景和情绪可以贴合这个时间段。`
 
   const relCtx = relationship
-    ? `\n\n本集关系状态（必须遵守,写进场景卡的 relationship 字段）：${relationship.label}——${relationship.desc}`
+    ? `\n\n本集关系状态（必须遵守,写进场景卡的 relationship 字段）：${relationship.label}——${relationship.desc}。关系只改变本集攻守,甲乙的基础性格与说话风格不变。`
     : ''
 
   const protocol = `输出协议（严格遵守）：
 - 只输出一个 JSON 对象，不要输出任何其他文字
-- 先写场景卡再写台词，格式：{"card":{"relationship":"关系标签","scene":"具体场景一句话","goalA":"甲想要什么","goalB":"乙想要什么","secret":"只有一方知道的底","escalation":["节拍1","节拍2","节拍3"],"callback":"结尾回收的本集铺垫"},"dialog":[{"speaker":"A","text":"台词","action":"动作"},...]}
+- 先写场景卡再写台词，格式：{"card":{"relationship":"关系标签","scene":"具体场景一句话","goalA":"甲想要什么","goalB":"乙想要什么","secret":"被隐瞒的关键信息(一方或双方知道)","escalation":["节拍1","节拍2","节拍3"],"callback":"结尾回收的本集铺垫"},"dialog":[{"speaker":"A","text":"台词","action":"动作"},...]}
 - dialog 必须逐拍实现 card.escalation；secret 在结尾反转揭晓；callback 必须回收本集前面埋的线
 - speaker 只能是 "A" 或 "B"
 - action 只能是这些词之一（禁止用 card 的字段名或其他词）：${ACTIONS}
@@ -104,7 +113,7 @@ export function buildMessages(
   return [
     {
       role: 'system',
-      content: `你是一位擅长传统相声和网络脱口秀的资深喜剧编剧,给桌面双人情景剧写段子。${persona}${relCtx}${profile}${timeCtx}\n\n${craft}\n\n${protocol}\n\n${modeOf(mode).prompt}`,
+      content: `你是一位擅长传统相声和网络脱口秀的资深喜剧编剧,给桌面双人情景剧写段子。${persona}${relCtx}${profile}${storyCtx}${timeCtx}\n\n${craft}\n\n${protocol}\n\n${modeOf(mode).prompt}`,
     },
     {
       role: 'user',
