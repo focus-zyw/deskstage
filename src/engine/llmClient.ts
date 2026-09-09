@@ -1,6 +1,6 @@
-import { fetch as rustFetch } from '@tauri-apps/plugin-http'
-import { getConfig, inTauri } from '../storage/configStore'
+import { getConfig } from '../storage/configStore'
 import type { UserProfile } from '../storage/configStore'
+import { complete } from './llmGateway'
 import { buildMessages, renderAudienceContext, type UserContext } from './promptBuilder'
 import { mergeMessages, webchatAsk } from './webchat'
 import { getMemory, topFacts, tasteSummary, type FactCategory } from '../storage/memoryStore'
@@ -57,23 +57,8 @@ function serverMessage(e: unknown): string {
   }
 }
 
-/** LLM 请求走 Rust 侧 http(tauri-plugin-http):不受 WebView CORS 限制,
- *  国内厂商(dashscope/方舟等不发 CORS 头)也能直连。
- *  capabilities 只放行了预设厂商域与 http://*(本地/局域网服务);
- *  未放行的自定义 https 端点会报 scope 错误,此时回落原生 fetch(靠对方 CORS 头)。 */
-async function fetchLlm(url: string, init: RequestInit): Promise<Response> {
-  if (!inTauri) return fetch(url, init)
-  try {
-    return await rustFetch(url, init)
-  } catch (e) {
-    if (/not allowed on the configured scope/i.test(String((e as Error)?.message ?? ''))) {
-      return fetch(url, init)
-    }
-    throw e
-  }
-}
-
-/** 调用 OpenAI 兼容 /chat/completions，返回原始文本。90s 超时，可被外部中止。
+/** 调用 OpenAI 兼容 /chat/completions，返回原始文本。HTTP 细节在 llmGateway;
+ *  这里固定创作参数:温度 1.1(要放得开)、90s 超时,可被外部中止。
  *  jsonMode=false 用于纯文本应答(戳一戳吐槽/聊天回复):这些调用本就不该强迫
  *  模型输出 JSON,且部分端点(如 deepseek-reasoner)不支持 response_format 会直接 400 */
 async function chatRaw(
@@ -81,48 +66,7 @@ async function chatRaw(
   signal?: AbortSignal,
   jsonMode = true,
 ): Promise<string> {
-  const ctrl = new AbortController()
-  const timer = setTimeout(() => ctrl.abort(new DOMException('超时', 'TimeoutError')), 90_000)
-  const onAbort = () => ctrl.abort()
-  signal?.addEventListener('abort', onAbort, { once: true })
-  try {
-    const cfg = await getConfig()
-    const res = await fetchLlm(`${cfg.baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${cfg.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: cfg.model,
-        messages,
-        temperature: 1.1,
-        max_tokens: 4000,
-        ...(jsonMode ? { response_format: { type: 'json_object' } } : {}),
-        // 火山方舟 doubao-seed 系默认深度思考,写段子用不上还拖慢 4~5 倍(实测 6.4s→1.1s),显式关掉。
-        // 该参数仅 ark 认识,按 baseUrl+模型前缀收紧,避免污染其他厂商
-        ...(cfg.baseUrl.includes('volces.com') && cfg.model.startsWith('doubao-seed')
-          ? { thinking: { type: 'disabled' } }
-          : {}),
-      }),
-      signal: ctrl.signal,
-    })
-    if (!res.ok) {
-      // 服务端错误说明(如 "Your api key is invalid")带到错误对象上,供分类展示
-      const serverMsg = (await res.text().catch(() => '')).slice(0, 300)
-      const err = new Error(`API HTTP ${res.status}`) as Error & { status?: number; serverMsg?: string }
-      err.status = res.status
-      err.serverMsg = serverMsg
-      throw err
-    }
-    const data = await res.json()
-    const content = data?.choices?.[0]?.message?.content
-    if (typeof content !== 'string' || !content) throw new Error('空响应')
-    return content
-  } finally {
-    clearTimeout(timer)
-    signal?.removeEventListener('abort', onAbort)
-  }
+  return complete({ messages, temperature: 1.1, maxTokens: 4000, jsonMode, timeoutMs: 90_000, signal })
 }
 
 /** 解析并规范化 LLM 输出:交给 dialogSchema 统一处理(容忍围栏/混杂文本,

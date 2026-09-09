@@ -42,6 +42,7 @@ import { getDueMemos, getMemos, addMemo, updateMemo, removeMemo, type Memo } fro
 import { VENDORS, CUSTOM_VENDOR_ID, vendorIdOfBaseUrl } from './engine/vendors'
 import { takePrefetch } from './storage/prefetchStore'
 import { appendHistory, loadRecentHistory, listEpisodes, deleteEpisodes, toggleFavorite, type Episode } from './storage/historyStore'
+import { TranslationPanel, type TranslationInject } from './translation/TranslationPanel'
 import {
   getConfig,
   saveConfig,
@@ -81,6 +82,14 @@ const ANGRY_AT = 5 // 第 5 次起 → 生气,并不再响应直到窗口清空
 /** LLM 即兴吐槽:轻戳时的触发概率与冷却 */
 const IMPROV_CHANCE = 0.3
 const IMPROV_COOLDOWN_MS = 30_000
+
+/** 翻译完成后的外围互动(正文保持专业,角色只在外面搭腔);20s 冷却防刷屏 */
+const TRANSLATE_QUIPS = [
+  { a: '翻好了,我这水平能去做同传。', b: '你只是负责点了个发送。' },
+  { a: '这段翻得相当地道,夸我。', b: '行吧,反正是模型翻的。' },
+  { a: '又帮你看懂一段外文。', b: '嗯,你出手指,它出脑子。' },
+]
+const TRANSLATE_QUIP_COOLDOWN_MS = 20_000
 
 type Phase = 'idle' | 'generating' | 'performing' | 'choosing'
 
@@ -440,8 +449,15 @@ function App() {
   const [chatBusy, setChatBusy] = useState(false)
   const [userBubble, setUserBubble] = useState<string | null>(null)
   const lastChatTarget = useRef<Speaker>('A')
+  // 翻译面板:开合与 OCR 链路注入的原文(auto=截图翻译入口,填入即自动翻)
+  const [translationOpen, setTranslationOpen] = useState(false)
+  const [trInject, setTrInject] = useState<TranslationInject | null>(null)
+  const trPanelRef = useRef<HTMLDivElement>(null)
+  const btnTrans = useRef<HTMLButtonElement>(null)
+  const pendingOcrTranslate = useRef(false)
+  const trQuipAt = useRef(0)
   // 最近打开的面板:Esc 只关它,不一刀切全关
-  const lastOpenedPanel = useRef<'settings' | 'topic' | 'chat' | null>(null)
+  const lastOpenedPanel = useRef<'settings' | 'topic' | 'chat' | 'translation' | null>(null)
   // 语音录制进行中:面板锁定(点外部/Esc/齿轮均不收起,防止丢失停止入口)
   const voiceRecording = useRef(false)
   // 设置面板当前选中的厂商(custom = 本地/自定义,baseUrl/model 自由输入)
@@ -608,6 +624,7 @@ function App() {
       setCaptureShot(String(payload))
     })
     const fail = listen('capture-error', ({ payload }) => {
+      pendingOcrTranslate.current = false // 本次框选没走完,别让下一次截图莫名触发翻译
       const msg = String(payload).slice(0, 50)
       setBubble({ A: `截图失败:${msg}`, B: null, C: null })
       window.setTimeout(() => {
@@ -620,12 +637,74 @@ function App() {
     }
   }, [])
 
+  // ---------- 翻译:OCR 链路对接与外围互动 ----------
+
+  /** 剪贴板图片 OCR → 填入翻译面板。auto=true(截图翻译入口)时面板填入后立即翻译;
+   *  工具栏"文"按钮只填入,让用户先看/改识别结果。识别文本不再复制到剪贴板,
+   *  由面板的"复制"按钮按需复制译文 */
+  async function runOcrIntoTranslation(auto: boolean) {
+    setOcrBusy(true)
+    setBubble({ A: '识别中…', B: null, C: null })
+    try {
+      const r = await invoke<{ lines: string[]; lang: string }>('ocr_clipboard')
+      if (r.lines.length === 0) {
+        setBubble({ A: '没识别出文字', B: null, C: null })
+        window.setTimeout(() => setBubble((b) => (b.A === '没识别出文字' ? { A: null, B: null, C: null } : b)), 2600)
+        return
+      }
+      setSettingsOpen(false)
+      setTopicOpen(false)
+      setChatOpen(false)
+      setTranslationOpen(true)
+      setTrInject({ text: r.lines.join('\n'), nonce: Date.now(), auto })
+      setBubble({
+        A: `已识别 ${r.lines.length} 行${auto ? ',翻译中…' : ',已填入翻译面板'}`,
+        B: null,
+        C: null,
+      })
+      window.setTimeout(() => {
+        setBubble((b) => (b.A?.startsWith('已识别') ? { A: null, B: null, C: null } : b))
+      }, 2600)
+    } catch (e) {
+      const msg = String(e).slice(0, 60)
+      setBubble({ A: msg, B: null, C: null })
+      window.setTimeout(() => {
+        setBubble((b) => (b.A === msg ? { A: null, B: null, C: null } : b))
+      }, 3000)
+    } finally {
+      setOcrBusy(false)
+    }
+  }
+
+  /** 面板里的"截图翻译":框选完成(capture_finish 写入剪贴板)后自动 OCR+翻译 */
+  function startScreenshotTranslate() {
+    if (ocrBusy) return
+    pendingOcrTranslate.current = true
+    startScreenshot().catch(() => {
+      pendingOcrTranslate.current = false
+    })
+  }
+
+  /** 翻译成功后的角色搭腔:甲吹一句乙拆台,只在空闲时插话,20s 冷却 */
+  function translateQuip() {
+    if (phaseRef.current !== 'idle' || player.current!.playing) return
+    if (Date.now() - trQuipAt.current < TRANSLATE_QUIP_COOLDOWN_MS) return
+    trQuipAt.current = Date.now()
+    const q = TRANSLATE_QUIPS[Math.floor(Math.random() * TRANSLATE_QUIPS.length)]
+    showPoke('A', q.a, 'happy', 2400)
+    window.setTimeout(() => {
+      // 2.5s 内开演了就不插话,别顶掉台词气泡
+      if (phaseRef.current !== 'idle' || player.current!.playing) return
+      showPoke('B', q.b, 'talk', 2400)
+    }, 2500)
+  }
+
 
   // 看视频不被打扰:默认点击不抢焦点(WS_EX_NOACTIVATE);
   // 仅设置/主题面板打开时临时恢复激活(输入框需要键盘),关闭即恢复
   useEffect(() => {
-    void invoke('set_noactivate', { enable: !(settingsOpen || topicOpen || chatOpen || !!captureShot) }).catch(() => {})
-  }, [settingsOpen, topicOpen, chatOpen, captureShot])
+    void invoke('set_noactivate', { enable: !(settingsOpen || topicOpen || chatOpen || translationOpen || !!captureShot) }).catch(() => {})
+  }, [settingsOpen, topicOpen, chatOpen, translationOpen, captureShot])
   // 上一段台词（内存中），续播时喂给 LLM 做衔接
   const lastLines = useRef<DialogLine[]>([])
   // 上一次自动重放的集,连续重放时避开
@@ -710,6 +789,9 @@ function App() {
       registerHitRegion('ocr', {
         getRect: () => btnOcr.current!.getBoundingClientRect(),
       }),
+      registerHitRegion('translate', {
+        getRect: () => btnTrans.current!.getBoundingClientRect(),
+      }),
       registerHitRegion('chat', {
         getRect: () => btnChat.current!.getBoundingClientRect(),
       }),
@@ -750,31 +832,41 @@ function App() {
     })
   }, [chatOpen])
 
+  // 翻译面板打开期间整体可命中(输入框/下拉/按钮可点)
+  useEffect(() => {
+    if (!translationOpen) return
+    return registerHitRegion('tr-panel', {
+      getRect: () =>
+        trPanelRef.current?.getBoundingClientRect() ?? new DOMRect(0, 0, 0, 0),
+    })
+  }, [translationOpen])
+
   // 任一面板打开时注册全屏兜底热区:穿透窗口里面板外的屏幕点击也能送达 DOM,
   // "点外部收起"才生效。注册顺序在最后 → hitTest 先命中面板/工具栏/角色等小热区,
   // 只有落在它们之外的光标才会命中 outside
   useEffect(() => {
-    if (!settingsOpen && !topicOpen && !chatOpen) return
+    if (!settingsOpen && !topicOpen && !chatOpen && !translationOpen) return
     return registerHitRegion('outside', {
       getRect: () => new DOMRect(0, 0, window.innerWidth, window.innerHeight),
     })
-  }, [settingsOpen, topicOpen, chatOpen])
+  }, [settingsOpen, topicOpen, chatOpen, translationOpen])
 
   // Escape 关闭任一打开的面板(语音录制中锁定:先停止录制才能关闭)
   useEffect(() => {
-    if (!settingsOpen && !topicOpen && !chatOpen) return
+    if (!settingsOpen && !topicOpen && !chatOpen && !translationOpen) return
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         if (voiceRecording.current && settingsOpen) return
         if (lastOpenedPanel.current === 'settings') setSettingsOpen(false)
         else if (lastOpenedPanel.current === 'topic') setTopicOpen(false)
         else if (lastOpenedPanel.current === 'chat') setChatOpen(false)
+        else if (lastOpenedPanel.current === 'translation') setTranslationOpen(false)
         lastOpenedPanel.current = null
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [settingsOpen, topicOpen, chatOpen])
+  }, [settingsOpen, topicOpen, chatOpen, translationOpen])
 
   /** 播放指定的一集(自动重放与历史行点击共用):不调 LLM、不写历史 */
   function playEpisode(ep: Episode, source: 'auto' | 'manual') {
@@ -1176,6 +1268,7 @@ function App() {
   async function openSettings() {
     setSettingsOpen(true)
     setTopicOpen(false)
+    setTranslationOpen(false)
     const cfg = await getConfig()
     // 人设输入框显示生效中的全文(自定义或内置默认),编辑后保存即采纳
     setForm({
@@ -1722,6 +1815,7 @@ function App() {
           setSettingsOpen(false)
           setTopicOpen(false)
           setChatOpen(false)
+          setTranslationOpen(false)
         }
       }}
     >
@@ -1816,6 +1910,7 @@ function App() {
             } else {
               setSettingsOpen(false)
               setChatOpen(false)
+              setTranslationOpen(false)
               setTopicOpen(true)
               lastOpenedPanel.current = 'topic'
             }
@@ -1829,9 +1924,11 @@ function App() {
           className={`ctrl-btn icon${hovered === 'shot' ? ' hot' : ''}`}
           title="截屏(框选,复制到剪贴板)"
           onClick={() => {
+            pendingOcrTranslate.current = false // 普通截屏不触发翻译
             setSettingsOpen(false)
             setTopicOpen(false)
             setChatOpen(false)
+            setTranslationOpen(false)
             startScreenshot().catch((e) => {
               const msg = String((e as Error)?.message ?? e).slice(0, 50)
               setBubble({ A: `截图失败:${msg}`, B: null, C: null })
@@ -1847,31 +1944,30 @@ function App() {
         <button
           ref={btnOcr}
           className={`ctrl-btn icon${hovered === 'ocr' ? ' hot' : ''}${ocrBusy ? ' loading' : ''}`}
-          title="提取剪贴板图片中的文字(复制到剪贴板)"
+          title="识别剪贴板图片文字,填入翻译面板(先截屏,再点我)"
           disabled={ocrBusy}
-          onClick={() => {
-            setOcrBusy(true)
-            setBubble({ A: '识别中…', B: null, C: null })
-            invoke<{ lines: string[]; lang: string }>('ocr_clipboard')
-              .then(async (r) => {
-                const text = r.lines.join('\n')
-                try { await navigator.clipboard.writeText(text) } catch { /* 剪贴板写入失败也展示 */ }
-                setBubble({ A: `已提取 ${r.lines.length} 行,文字已复制到剪贴板`, B: null, C: null })
-                window.setTimeout(() => {
-                  setBubble((b) => (b.A?.startsWith('已提取') ? { A: null, B: null, C: null } : b))
-                }, 2600)
-              })
-              .catch((e) => {
-                const msg = String(e).slice(0, 60)
-                setBubble({ A: msg, B: null, C: null })
-                window.setTimeout(() => {
-                  setBubble((b) => (b.A === msg ? { A: null, B: null, C: null } : b))
-                }, 3000)
-              })
-              .finally(() => setOcrBusy(false))
-          }}
+          onClick={() => void runOcrIntoTranslation(false)}
         >
           <span aria-hidden="true">文</span>
+        </button>
+
+        <button
+          ref={btnTrans}
+          className={`ctrl-btn icon${hovered === 'translate' ? ' hot' : ''}${translationOpen ? ' on' : ''}`}
+          title="翻译(粘贴文字,或截图识别后翻译)"
+          onClick={() => {
+            if (translationOpen) {
+              setTranslationOpen(false)
+              return
+            }
+            setSettingsOpen(false)
+            setTopicOpen(false)
+            setChatOpen(false)
+            setTranslationOpen(true)
+            lastOpenedPanel.current = 'translation'
+          }}
+        >
+          <span aria-hidden="true">译</span>
         </button>
 
         <button
@@ -1884,6 +1980,7 @@ function App() {
             } else {
               setSettingsOpen(false)
               setTopicOpen(false)
+              setTranslationOpen(false)
               setChatOpen(true)
               lastOpenedPanel.current = 'chat'
             }
@@ -2939,8 +3036,28 @@ function App() {
             onDone={(ok) => {
               setCaptureMode(false)
               setCaptureShot(null)
-              if (ok) setActiveTick((t) => t + 1)
+              if (ok) {
+                setActiveTick((t) => t + 1)
+                // 截图翻译入口的框选刚落定:OCR 识别后自动填入翻译面板并翻译
+                if (pendingOcrTranslate.current) {
+                  pendingOcrTranslate.current = false
+                  void runOcrIntoTranslation(true)
+                }
+              } else {
+                pendingOcrTranslate.current = false
+              }
             }}
+          />
+        )}
+
+        {translationOpen && (
+          <TranslationPanel
+            innerRef={trPanelRef}
+            pos={ctrlBar}
+            inject={trInject}
+            onClose={() => setTranslationOpen(false)}
+            onScreenshotTranslate={startScreenshotTranslate}
+            onTranslated={translateQuip}
           />
         )}
 

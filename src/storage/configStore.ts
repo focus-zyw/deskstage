@@ -4,6 +4,7 @@
 import { readTextFile, writeTextFile, exists, mkdir } from '@tauri-apps/plugin-fs'
 import { appDataDir, join } from '@tauri-apps/api/path'
 import { withFileLock } from './writeLock'
+import { LANGUAGES, type TranslationStyle } from '../translation/types'
 
 /** 是否运行在 Tauri 窗口内(浏览器 dev 预览为 false,文件系统相关 API 不可用) */
 export const inTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
@@ -92,6 +93,19 @@ export interface AppConfig {
   names: { a: string; b: string }
   /** 备忘默认提前提醒分钟数 */
   memo: { advanceMin: number }
+  /** 翻译面板:语言方向/风格/自动朗读(与演出模块完全隔离,不进对话与记忆) */
+  translation: TranslationConfig
+}
+
+/** 翻译面板配置 */
+export interface TranslationConfig {
+  /** 源语言代码;'auto' = 自动检测 */
+  sourceLanguage: string
+  /** 目标语言代码 */
+  targetLanguage: string
+  style: TranslationStyle
+  /** 翻译完成后自动朗读结果 */
+  autoSpeak: boolean
 }
 
 // 默认值（首启写入）。想换端点：改 appData/data/config.json 后重启。
@@ -128,6 +142,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   persona: { a: '', b: '' },
   names: { a: '甲', b: '乙' },
   memo: { advanceMin: 30 },
+  translation: { sourceLanguage: 'auto', targetLanguage: 'zh-CN', style: 'natural', autoSpeak: false },
 }
 
 /** 清洗使用者画像:逐字段裁剪;likes 为空时回落旧 userInterests 字段(老配置平滑迁移) */
@@ -303,6 +318,23 @@ function sanitizeConfig(obj: unknown): AppConfig {
       const mm = (o.memo ?? {}) as Record<string, unknown>
       const v = Number(mm.advanceMin)
       return { advanceMin: Number.isFinite(v) && v >= 1 ? Math.min(1440, Math.round(v)) : 30 }
+    })(),
+    translation: ((): TranslationConfig => {
+      const t = (o.translation ?? {}) as Record<string, unknown>
+      const code = (x: unknown, dft: string): string => {
+        const s = typeof x === 'string' ? x.trim().slice(0, 24) : ''
+        // 只放行 auto 与已知语言代码,手改配置文件写进奇怪值时回默认
+        return s === 'auto' || LANGUAGES.some((l) => l.code === s) ? s : dft
+      }
+      return {
+        sourceLanguage: code(t.sourceLanguage, DEFAULT_CONFIG.translation.sourceLanguage),
+        targetLanguage: code(t.targetLanguage, DEFAULT_CONFIG.translation.targetLanguage),
+        style:
+          t.style === 'literal' || t.style === 'polished'
+            ? t.style
+            : DEFAULT_CONFIG.translation.style,
+        autoSpeak: t.autoSpeak === true,
+      }
     })(),
   }
 }

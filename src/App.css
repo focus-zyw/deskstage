@@ -1117,3 +1117,180 @@
   color: #93a1b8;
   white-space: nowrap;
 }
+
+/* ---------- 翻译面板:控制栏正下方弹出,与设置面板同风格 ---------- */
+.tr-panel {
+  position: absolute;
+  transform: translateX(-50%);
+  width: 420px;
+  max-height: calc(100vh - 66px);
+  overflow-y: auto;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: var(--radius-panel);
+  /* 不用毛玻璃(backdrop-filter):叠在视频上会破坏硬件合成 */
+  background: rgba(20, 20, 31, 0.97);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  z-index: 35;
+  animation: panel-in 0.16s ease;
+}
+.tr-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.tr-title {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.85);
+}
+.tr-detected {
+  flex: 1;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.5);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tr-close {
+  margin-left: auto;
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+.tr-close:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.1);
+}
+.tr-langs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.tr-langs select {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: var(--radius-input);
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  font-size: 12px;
+  outline: none;
+}
+.tr-langs select:focus {
+  border-color: rgba(124, 108, 240, 0.9);
+}
+.tr-langs select option {
+  background: #1c1c2e;
+  color: #fff;
+}
+.tr-arrow {
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 13px;
+}
+.tr-styles {
+  display: flex;
+  gap: 6px;
+}
+.tr-style-btn {
+  flex: 1;
+  padding: 5px 0;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 10px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 12px;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
+}
+.tr-style-btn:hover {
+  color: #fff;
+}
+.tr-style-btn.on {
+  background: rgba(124, 108, 240, 0.92);
+  border-color: transparent;
+  color: #fff;
+}
+.tr-input {
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: var(--radius-input);
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  font-size: 13px;
+  font-family: inherit;
+  line-height: 1.5;
+  outline: none;
+  resize: vertical;
+  min-height: 72px;
+}
+.tr-input:focus {
+  border-color: rgba(124, 108, 240, 0.9);
+}
+.tr-actions {
+  display: flex;
+  gap: 8px;
+}
+.tr-actions .panel-btn {
+  padding: 5px 14px;
+  font-size: 12px;
+}
+.tr-err {
+  font-size: 12px;
+  color: #ff9a9a;
+  background: rgba(255, 90, 90, 0.12);
+  border-radius: var(--radius-input);
+  padding: 6px 10px;
+  word-break: break-all;
+}
+.tr-result-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+.tr-result-label {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.65);
+}
+.tr-result {
+  font-size: 13px;
+  line-height: 1.6;
+  color: #fff;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 200px;
+  overflow-y: auto;
+  padding: 8px 10px;
+  border-radius: var(--radius-input);
+  background: rgba(255, 255, 255, 0.06);
+}
+.tr-alt,
+.tr-notes {
+  font-size: 12px;
+  line-height: 1.6;
+  color: rgba(255, 255, 255, 0.6);
+}
+.tr-alt-tag {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 1px 8px;
+  border-radius: 8px;
+  background: rgba(124, 108, 240, 0.25);
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 11px;
+}
+.tr-privacy {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.4);
+}
