@@ -33,7 +33,7 @@ import { prefetchNext } from './engine/dialogPrefetch'
 import { WEBCHAT_SITES, webchatLogin, webchatProbe, webchatRestoreMain } from './engine/webchat'
 import { TOPIC_SEEDS, pickTopic } from './engine/topicSeeds'
 import { bumpTopicSeen, bumpTopicFavored, bumpTopicReplays, bumpTopicWatched, bumpTopicSkipped, bumpMode, bumpPoke, getTopicWeights, getMemory, clearMemory, deleteFact, togglePinFact, topFacts, mergeFacts, type MemoryFact } from './storage/memoryStore'
-import { getStory, mergeStory, removeStoryItem, storyInventory, type StoryData } from './storage/storyStore'
+import { getStory, mergeStory, removeArc, removeStoryItem, pickArcBeat, storyInventory, type StoryData } from './storage/storyStore'
 import { VENDORS, CUSTOM_VENDOR_ID, vendorIdOfBaseUrl } from './engine/vendors'
 import { takePrefetch } from './storage/prefetchStore'
 import { appendHistory, loadRecentHistory, listEpisodes, deleteEpisodes, toggleFavorite, type Episode } from './storage/historyStore'
@@ -910,8 +910,11 @@ function App() {
       .split(/[,，、;；\n]/)
       .map((x) => x.trim())
       .filter(Boolean)
-    const actualTopic =
-      fixedTopic ??
+    // 约 30% 概率演出连续剧情的一拍(手动锁定主题时让位)
+    const arcBeat = fixedTopic ? null : pickArcBeat((await getStory()).arcs)
+    const actualTopic = arcBeat
+      ? `连续剧情《${arcBeat.title}》:${arcBeat.hook}`
+      : fixedTopic ??
       (interests.length > 0 && Math.random() < (modeOf(m).interestTopicChance ?? 0)
         ? `使用者感兴趣的事:${interests[Math.floor(Math.random() * interests.length)]}`
         : pickTopic(modeOf(m), {
@@ -923,7 +926,9 @@ function App() {
     // 预生成命中:有主题时只取同主题条目,无主题时 FIFO 任意条目
     const hit = await takePrefetch(m, fixedTopic ?? undefined)
     if (hit) {
-      bumpTopicSeen(hit.topic) // 口味记账对齐实际播出的主题(命中缓冲时≠本次抽中的主题)
+      if (!hit.topic.startsWith('连续剧情')) {
+        bumpTopicSeen(hit.topic) // 口味记账对齐实际播出的主题(命中缓冲时≠本次抽中的主题)
+      }
       nowPlaying.current = { topic: hit.topic, lines: hit.lines, total: hit.lines.length, index: -1, source: 'gen' }
       lastLines.current = hit.lines
       void appendHistory(hit.lines, hit.mode, hit.topic) // 使用后移入 history(fire-and-forget)
@@ -941,9 +946,9 @@ function App() {
     generateAbort.current = ctrl
     const topic = actualTopic
     try {
-      const script = await generateDialog(m, topic, lastLines.current, ctrl.signal, fixedTopic != null)
+      const script = await generateDialog(m, topic, lastLines.current, ctrl.signal, fixedTopic != null, arcBeat ?? undefined)
       if (ctrl.signal.aborted) return
-      bumpTopicSeen(topic) // 这轮真的播出了才记 seen,避免污染偏好加权
+      if (!arcBeat) bumpTopicSeen(topic) // 这轮真的播出了才记 seen;剧情线拍不入话题账
       nowPlaying.current = { topic, lines: script.before, total: script.before.length, index: -1, source: 'gen' }
       lastLines.current = script.before
       pendingEpisode.current = { before: script.before, after: script.after, mode: m, topic }
@@ -2171,6 +2176,25 @@ function App() {
                 className="mem-btn"
                 title="删掉这条事件线"
                 onClick={() => void (async () => { await removeStoryItem('threads', t.id); await refreshStory() })()}
+              >
+                ✕
+              </button>
+            </div>
+          ))}
+          <div className="settings-sep">
+            <span>连续剧情(多集推进的剧情线,约 30% 的集数会演下一拍)</span>
+          </div>
+          {(storyData?.arcs.length ?? 0) === 0 && (
+            <div className="settings-tip">还没有剧情线 — 演出中冒出的连续剧情会出现在这里</div>
+          )}
+          {storyData?.arcs.map((a) => (
+            <div className="mem-fact" key={a.id}>
+              <span className="mem-cat">{a.status === 'done' ? '完结' : `第${a.stage}拍`}</span>
+              <span className="mem-content">《{a.title}》下一拍:{a.nextHook}</span>
+              <button
+                className="mem-btn"
+                title="删掉这条剧情线"
+                onClick={() => void (async () => { await removeArc(a.id); await refreshStory() })()}
               >
                 ✕
               </button>

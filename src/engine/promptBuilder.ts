@@ -65,6 +65,8 @@ export function buildMessages(
   interactionRecap?: string,
   allowChoice?: boolean,
   lastChoice?: string,
+  /** 连续剧情节拍(可选):本集是多集剧情线的一拍,其他话题铺垫让位于它 */
+  arc?: { title: string; hook: string; stage: number },
 ): ChatMessage[] {
   const persona = `角色设定：
 - 甲（speaker 用 "A"）：精力充沛、爱吹牛、脑洞大、说话夸张，满嘴跑火车还特别得意，常用"我跟你说""好家伙"当口头禅
@@ -98,6 +100,11 @@ export function buildMessages(
 
   const relCtx = relationship
     ? `\n\n本集关系状态（必须遵守,写进场景卡的 relationship 字段）：${relationship.label}——${relationship.desc}。关系只改变本集攻守,甲乙的基础性格与说话风格不变。`
+    : ''
+
+  // 连续剧情节拍:本集是多集剧情线的一拍,话题让位,结尾留下一拍的钩子
+  const arcCtx = arc
+    ? `\n\n连续剧情（本集属于多集剧情线的一拍,话题铺垫让位于它）：《${arc.title}》已演出 ${arc.stage} 拍。本拍必须演出的进展：${arc.hook}。结尾不收死,留下引向下一拍的新悬念/新进展。`
     : ''
 
   // 观众抉择点:由调用方掷骰决定(约 30% 的集数),中段安排一次站队,两分支各 3~5 句,结尾汇合同一包袱
@@ -134,7 +141,7 @@ export function buildMessages(
   return [
     {
       role: 'system',
-      content: `你是一位擅长传统相声和网络脱口秀的资深喜剧编剧,给桌面双人情景剧写段子。${persona}${relCtx}${profile}${storyCtx}${timeCtx}${choiceRule}\n\n${craft}\n\n${protocol}\n\n${modeOf(mode).prompt}`,
+      content: `你是一位擅长传统相声和网络脱口秀的资深喜剧编剧,给桌面双人情景剧写段子。${persona}${relCtx}${arcCtx}${profile}${storyCtx}${timeCtx}${choiceRule}\n\n${craft}\n\n${protocol}\n\n${modeOf(mode).prompt}`,
     },
     {
       role: 'user',

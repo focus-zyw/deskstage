@@ -140,6 +140,8 @@ export async function generateDialog(
   recentLines: DialogLine[],
   signal?: AbortSignal,
   topicFixed?: boolean,
+  /** 连续剧情节拍(可选):本集演剧情线的一拍,prompt 话题让位 */
+  arc?: { title: string; hook: string; stage: number },
 ): Promise<PerformanceScript> {
   const cfg = await getConfig()
   const mem = await getMemory()
@@ -158,7 +160,7 @@ export async function generateDialog(
   // 本集临时关系:随机局势决定攻守姿态,场景卡据此构建(重试沿用同一关系,保持一致)
   const relationship = pickRelationship(mode)
   const interactionRecap = (await takeRecap()) ?? undefined
-  const messages = buildMessages(mode, topic, recentLines, topicFixed, cfg.userInterests, userCtx, relationship, interactionRecap, allowChoice, lastChoice ?? undefined)
+  const messages = buildMessages(mode, topic, recentLines, topicFixed, cfg.userInterests, userCtx, relationship, interactionRecap, allowChoice, lastChoice ?? undefined, arc)
   // 网页版生成(设置里开启):主演出改经隐藏网页窗口由网页模型生成。
   // 网页端没有 json_mode/temperature,格式服从度靠协议本身(手动验证 6/6 通过,
   // 见 docs/webchat-prompt-test.md)。生成慢(几十秒级),点播与预生成都有耐心等;
@@ -430,6 +432,17 @@ export async function addPerformanceCues(lines: DialogLine[]): Promise<DialogLin
 export interface StoryInventory {
   gags: { id: string; text: string }[]
   threads: { id: string; text: string }[]
+  arcs: { id: string; title: string; stage: number; hook: string }[]
+}
+
+export interface ArcAdvance {
+  id: string
+  nextHook: string
+}
+
+export interface NewArc {
+  title: string
+  hook: string
 }
 
 export interface DistilledStory {
@@ -439,32 +452,42 @@ export interface DistilledStory {
   resolvedThreadIds: string[]
   /** 台词里实际回收了的已知老梗 id(真实"被用过"计数) */
   reusedGagIds: string[]
+  /** 连续剧情推进一拍(写新钩子,stage 由存储层自增) */
+  arcAdvance: ArcAdvance | null
+  /** 本集冒出的值得多集延续的新剧情线(最多 1 条) */
+  newArc: NewArc | null
 }
 
 /**
  * 角色世界蒸馏:从一集台词里提炼可长期复用的素材,并对已知素材记账——
  * newGags/newThreads:新形成的固定笑点/还没了结的事件线(自包含短语);
- * reusedGagIds/resolvedThreadIds:已知素材在本集被回收/了结的记账。
+ * reusedGagIds/resolvedThreadIds:已知素材在本集被回收/了结的记账;
+ * arcAdvance:连续剧情推进一拍(给出下一拍钩子);newArc:本集冒出的新剧情线。
  * 8s 超时、不重试;失败由调用方静默——蒸馏宁可错过也不能拖累演出。
  */
 export async function distillStory(
   lines: DialogLine[],
-  known: StoryInventory = { gags: [], threads: [] },
+  known: StoryInventory = { gags: [], threads: [], arcs: [] },
 ): Promise<DistilledStory> {
   const text = lines.map((l) => `${l.speaker === 'A' ? '甲' : '乙'}:${l.text}`).join('\n')
   const knownGags = known.gags.map((g) => `${g.id}:${g.text}`).join(';') || '(无)'
   const knownThreads = known.threads.map((t) => `${t.id}:${t.text}`).join(';') || '(无)'
+  const knownArcs =
+    known.arcs.map((a) => `${a.id}:${a.title}[已演${a.stage}拍,下一拍:${a.hook}]`).join(';') ||
+    '(无)'
   const messages: { role: string; content: string }[] = [
     {
       role: 'system',
       content: `维护桌面双人情景剧的"角色世界"素材库。当前库存:
 老梗(编号:内容):${knownGags}
 事件线(编号:内容):${knownThreads}
+连续剧情(编号:标题[已演N拍,下一拍:hook]):${knownArcs}
 
 对照刚播出的台词,只输出一个 JSON 对象:
-{"newGags":["新形成的固定笑点,自包含短语10~25字,如冰箱是甲的健身器材"],"newThreads":["新出现的、还没了结的事件线,自包含短语"],"resolvedThreadIds":["台词里已经了结的已知事件线编号"],"reusedGagIds":["台词里实际回收了的已知老梗编号"]}
+{"newGags":["新形成的固定笑点,自包含短语10~25字,如冰箱是甲的健身器材"],"newThreads":["新出现的、还没了结的事件线,自包含短语"],"resolvedThreadIds":["台词里已经了结的已知事件线编号"],"reusedGagIds":["台词里实际回收了的已知老梗编号"],"arcAdvance":{"id":"本集演出了其下一拍的连续剧情编号","nextHook":"再下一拍的新进展或悬念,15~40字"},"newArc":{"title":"本集冒出的值得多集延续的新剧情线标题,10字内","hook":"第一拍的悬念,15~40字"}}
 - newGags/newThreads 各最多 2 条,只提炼台词里明确出现的,不要编造;已知素材原文再现时不要重复放进 new*
-- resolvedThreadIds/reusedGagIds 只能填上面列出的编号,没有就给空数组`,
+- resolvedThreadIds/reusedGagIds 只能填上面列出的编号,没有就给空数组
+- arcAdvance 只在本集确实演出了某条连续剧情的"下一拍"时给出,并写出新钩子;newArc 只在本集剧情确有延续价值时给出,各最多 1 条;不适用就给 null`,
     },
     { role: 'user', content: text },
   ]
@@ -473,10 +496,19 @@ export async function distillStory(
   try {
     const raw = await chatRaw(messages, ctrl.signal)
     const m = raw.match(/\{[\s\S]*\}/)
-    if (!m) return { newGags: [], newThreads: [], resolvedThreadIds: [], reusedGagIds: [] }
+    const none: DistilledStory = {
+      newGags: [],
+      newThreads: [],
+      resolvedThreadIds: [],
+      reusedGagIds: [],
+      arcAdvance: null,
+      newArc: null,
+    }
+    if (!m) return none
     const obj = JSON.parse(m[0]) as Record<string, unknown>
     const knownGagIds = new Set(known.gags.map((g) => g.id))
     const knownThreadIds = new Set(known.threads.map((t) => t.id))
+    const knownArcIds = new Set(known.arcs.map((a) => a.id))
     const texts = (v: unknown): string[] =>
       Array.isArray(v)
         ? v
@@ -488,11 +520,23 @@ export async function distillStory(
       Array.isArray(v)
         ? v.filter((x): x is string => typeof x === 'string' && allowed.has(x)).slice(0, 3)
         : []
+    const arcObj = (v: unknown): Record<string, unknown> | null =>
+      v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null
+    const str = (v: unknown, min: number, cap: number): string =>
+      typeof v === 'string' && v.trim().length >= min ? v.trim().slice(0, cap) : ''
+    const adv = arcObj(obj.arcAdvance)
+    const na = arcObj(obj.newArc)
+    const arcAdvance = adv
+      ? { id: String(adv.id ?? ''), nextHook: str(adv.nextHook, 5, 60) }
+      : null
+    const newArc = na ? { title: str(na.title, 2, 30), hook: str(na.hook, 5, 60) } : null
     return {
       newGags: texts(obj.newGags),
       newThreads: texts(obj.newThreads),
       resolvedThreadIds: ids(obj.resolvedThreadIds, knownThreadIds),
       reusedGagIds: ids(obj.reusedGagIds, knownGagIds),
+      arcAdvance: arcAdvance && knownArcIds.has(arcAdvance.id) ? arcAdvance : null,
+      newArc,
     }
   } finally {
     clearTimeout(timer)
