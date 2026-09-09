@@ -2,8 +2,8 @@
   --accent: #7c6cf0;
   --accent-weak: rgba(124, 108, 240, 0.25);
   --accent-strong: rgba(124, 108, 240, 0.6);
-  --ok: var(--ok);
-  --err: var(--err);
+  --ok: #7ee787;
+  --err: #ff9a9a;
   --radius-btn: 16px;
   --radius-input: 8px;
   --radius-panel: 14px;

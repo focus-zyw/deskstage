@@ -6,7 +6,6 @@ import { invoke } from '@tauri-apps/api/core'
 import { readFile, remove } from '@tauri-apps/plugin-fs'
 import { CharacterSprite } from './stage/CharacterSprite'
 import { Bubble } from './stage/Bubble'
-import { PlayIcon, StopIcon, GearIcon, PokeballIcon, ChatIcon, GridIcon, BellOffIcon } from './stage/icons'
 import { startScreenshot, applyScreenshotHotkey } from './capture'
 import { defaultPersonaText, setCharacterNames, setPersonaOverride } from './engine/persona'
 import { startEnvPolling, stopEnvPolling, isFullscreenApp } from './engine/envAware'
@@ -25,7 +24,7 @@ import {
   type DialogLine,
   type Speaker,
 } from './performer/player'
-import { MODES, modeList, modeOf, type Mode } from './performer/modes'
+import { MODES, modeOf, type Mode } from './performer/modes'
 import { generateDialog, generateShortChat, improvPokeLine, describeLlmError, generateUserChatReply, extractFacts, distillStory, memoReminderLine } from './engine/llmClient'
 import { react, reactBonded, distanceBands } from './engine/interactionRules'
 import { bondTierOf } from './engine/interactionRules'
@@ -61,6 +60,7 @@ import {
   setCharHidden as setRuntimeCharHidden,
 } from './runtime/runtimeMode'
 import { runUtilityTask } from './runtime/utilityTasks'
+import { ControlBar } from './ui/ControlBar'
 import { UtilityCards } from './ui/UtilityCard'
 import {
   getConfig,
@@ -526,7 +526,6 @@ function App() {
   const [ctrlBar, setCtrlBar] = useState<CtrlBarPos>(DEFAULT_CONFIG.ctrlBar)
   const ctrlBarRef = useRef(ctrlBar)
   const ctrlBarTimer = useRef(0)
-  const ctrlDragRef = useRef<{ startX: number; startY: number; orig: CtrlBarPos; moved: boolean } | null>(null)
   // 左上角水印开关
   const [showWatermark, setShowWatermark] = useState(DEFAULT_CONFIG.showWatermark)
   // 角色语音配置(开关 + 双角色音色,改即落盘)
@@ -559,16 +558,8 @@ function App() {
   const draggingWho = useRef<Speaker | null>(null)
 
   const charA = useRef<HTMLDivElement>(null)
-  const charB = useRef<HTMLDivElement>(null)
-  const segCtl = useRef<HTMLDivElement>(null)
-  const btnGen = useRef<HTMLButtonElement>(null)
-  const btnStop = useRef<HTMLButtonElement>(null)
-  const btnGear = useRef<HTMLButtonElement>(null)
-  const btnTools = useRef<HTMLButtonElement>(null)
-  const btnDnd = useRef<HTMLButtonElement>(null)
-  const btnChat = useRef<HTMLButtonElement>(null)
-  const gripRef = useRef<HTMLSpanElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
+  const charB = useRef<HTMLDivElement>(null)
   const topicPanelRef = useRef<HTMLDivElement>(null)
   const chatBoxRef = useRef<HTMLDivElement>(null)
   const cmdPanelRef = useRef<HTMLDivElement>(null)
@@ -828,31 +819,7 @@ function App() {
             ? new DOMRect(0, 0, window.innerWidth, window.innerHeight)
             : charB.current!.getBoundingClientRect(),
       }),
-      registerHitRegion('modes', {
-        getRect: () => segCtl.current!.getBoundingClientRect(),
-      }),
-      registerHitRegion('gen', {
-        getRect: () => btnGen.current!.getBoundingClientRect(),
-      }),
-      registerHitRegion('stop', {
-        getRect: () => btnStop.current!.getBoundingClientRect(),
-      }),
-      // 工具/勿扰热区必须注册:穿透架构下未注册区域收不到任何鼠标事件
-      registerHitRegion('tools', {
-        getRect: () => btnTools.current!.getBoundingClientRect(),
-      }),
-      registerHitRegion('dnd', {
-        getRect: () => btnDnd.current!.getBoundingClientRect(),
-      }),
-      registerHitRegion('settings', {
-        getRect: () => btnGear.current!.getBoundingClientRect(),
-      }),
-      registerHitRegion('chat', {
-        getRect: () => btnChat.current!.getBoundingClientRect(),
-      }),
-      registerHitRegion('grip', {
-        getRect: () => gripRef.current!.getBoundingClientRect(),
-      }),
+      // 工具栏按钮的热区由 ui/ControlBar 自行注册
     ]
     return () => unsubs.forEach((u) => u())
   }, [])
@@ -1675,52 +1642,7 @@ function App() {
     else ctrlBarTimer.current = window.setTimeout(write, 500)
   }
 
-  function onBarPointerDown(e: ReactPointerEvent<HTMLDivElement>) {
-    // 只响应把手及内部图标(图标已 pointer-events:none),按钮/分段控件不受影响
-    if (!(e.target instanceof Node) || !e.currentTarget.contains(e.target)) return
-    ctrlDragRef.current = {
-      startX: e.clientX,
-      startY: e.clientY,
-      orig: { ...ctrlBarRef.current },
-      moved: false,
-    }
-    try {
-      ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
-    } catch {
-      // 无活动指针可捕获时忽略
-    }
-  }
-
-  function onBarPointerMove(e: ReactPointerEvent<HTMLDivElement>) {
-    const d = ctrlDragRef.current
-    if (!d) return
-    const dx = e.clientX - d.startX
-    const dy = e.clientY - d.startY
-    if (!d.moved) {
-      if (Math.hypot(dx, dy) < 6) return // 小位移视为点击,留给收起/展开
-      d.moved = true
-    }
-    applyCtrlBar(
-      {
-        ...d.orig,
-        xPct: Math.min(98, Math.max(2, d.orig.xPct + (dx / window.innerWidth) * 100)),
-        top: Math.min(Math.max(0, window.innerHeight - 60), Math.max(0, d.orig.top + dy)),
-      },
-      'no',
-    )
-  }
-
-  function onBarPointerUp() {
-    const d = ctrlDragRef.current
-    ctrlDragRef.current = null
-    if (!d) return
-    if (d.moved) {
-      applyCtrlBar(ctrlBarRef.current, 'now') // 拖动结束:保存位置
-    } else {
-      // 纯点击:切换收起/展开
-      applyCtrlBar({ ...ctrlBarRef.current, collapsed: !ctrlBarRef.current.collapsed }, 'now')
-    }
-  }
+  // 工具栏拖动的指针处理已迁入 ui/ControlBar(经 onPosChange 回调到这里落盘)
 
   /** 手动锁定主题:立即落盘 + 按新主题预生成一单(旧缓冲保留,无主题时照常消费) */
   function applyTopic(topic: string) {
@@ -1840,107 +1762,34 @@ function App() {
         if (e.target === e.currentTarget) closeAllOverlays()
       }}
     >
-      <div
-        className={`ctrl-bar${ctrlBar.collapsed ? ' collapsed' : ''}`}
-        style={{ left: `${ctrlBar.xPct}%`, top: ctrlBar.top }}
-      >
-        <span
-          ref={gripRef}
-          className={`bar-grip${hovered === 'grip' ? ' hot' : ''}`}
-          title={ctrlBar.collapsed ? '展开工具栏(点击)/拖动移动' : '收起工具栏(点击)/拖动移动'}
-          onPointerDown={onBarPointerDown}
-          onPointerMove={onBarPointerMove}
-          onPointerUp={onBarPointerUp}
-        >
-          <PokeballIcon />
-        </span>
-        <div ref={segCtl} className={`seg${hovered === 'modes' ? ' hot' : ''}`}>
-          <div
-            className="seg-thumb"
-            style={{
-              width: `calc(${100 / modeList.length}% - 3px)`,
-              transform: `translateX(${modeList.findIndex((m) => m.id === mode) * 100}%)`,
-            }}
-          />
-          {modeList.map((m) => (
-            <button
-              key={m.id}
-              className={`seg-btn${mode === m.id ? ' on' : ''}`}
-              onClick={() => setMode(m.id)}
-            >
-              {m.label}
-            </button>
-          ))}
-        </div>
-        <span className="bar-sep" aria-hidden="true" />
-
-        <button
-          ref={btnGen}
-          className={`ctrl-btn icon${hovered === 'gen' ? ' hot' : ''}${busy ? ' loading' : ''}`}
-          disabled={busy}
-          title="生成"
-          onClick={() => void playMode(mode)}
-        >
-          <PlayIcon />
-        </button>
-
-        <button
-          ref={btnStop}
-          className={`ctrl-btn icon${hovered === 'stop' ? ' hot' : ''}${phase !== 'idle' ? ' danger' : ''}`}
-          disabled={phase === 'idle'}
-          title="停止"
-          onClick={stopEverything}
-        >
-          <StopIcon />
-        </button>
-          <span className="bar-sep" aria-hidden="true" />
-
-        <button
-          ref={btnTools}
-          className={`ctrl-btn icon${hovered === 'tools' ? ' hot' : ''}${toolsOpen ? ' on' : ''}`}
-          title="工具(翻译/截屏/提醒…搜命令或直接说)"
-          onClick={() => {
-            if (toolsOpen) closeOverlay('tools')
-            else openOverlayExclusive('tools')
-          }}
-        >
-          <GridIcon />
-        </button>
-
-        <button
-          ref={btnChat}
-          className={`ctrl-btn icon${hovered === 'chat' ? ' hot' : ''}${chatOpen ? ' on' : ''}`}
-          title="和角色说话(@甲/@乙 指定谁回)"
-          onClick={() => {
-            if (chatOpen) closeOverlay('chat')
-            else openOverlayExclusive('chat')
-          }}
-        >
-          <ChatIcon />
-        </button>
-
-        <button
-          ref={btnDnd}
-          className={`ctrl-btn icon${hovered === 'dnd' ? ' hot' : ''}${rt.dnd ? ' on' : ''}`}
-          title={rt.dnd ? '勿扰中:点击恢复声音与主动搭话' : '勿扰:静音并暂停主动搭话(提醒卡片照弹)'}
-          onClick={toggleDnd}
-        >
-          <BellOffIcon />
-        </button>
-
-        <button
-          ref={btnGear}
-          className={`ctrl-btn icon${hovered === 'settings' ? ' hot' : ''}${settingsOpen ? ' on' : ''}`}
-          title="设置"
-          onClick={() => {
-            if (settingsOpen && voiceRecording.current) return // 录音中锁定
-            if (settingsOpen) closeOverlay('settings')
-            else openSettings()
-          }}
-        >
-          <GearIcon />
-        </button>
-      </div>
+      <ControlBar
+        pos={ctrlBar}
+        onPosChange={applyCtrlBar}
+        mode={mode}
+        onModeChange={setMode}
+        busy={busy}
+        canStop={phase !== 'idle'}
+        onGenerate={() => void playMode(mode)}
+        onStop={stopEverything}
+        toolsOpen={toolsOpen}
+        onTools={() => {
+          if (toolsOpen) closeOverlay('tools')
+          else openOverlayExclusive('tools')
+        }}
+        chatOpen={chatOpen}
+        onChat={() => {
+          if (chatOpen) closeOverlay('chat')
+          else openOverlayExclusive('chat')
+        }}
+        dnd={rt.dnd}
+        onDnd={toggleDnd}
+        settingsOpen={settingsOpen}
+        onSettings={() => {
+          if (settingsOpen && voiceRecording.current) return // 录音中锁定
+          if (settingsOpen) closeOverlay('settings')
+          else openSettings()
+        }}
+      />
 
       {settingsOpen && (
         <div
