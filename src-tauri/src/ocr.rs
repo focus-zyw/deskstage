@@ -108,7 +108,18 @@ fn ocr_impl_sta() -> Result<OcrOutput, String> {
     .map(String::from)
     .collect();
   if lines.is_empty() {
-    return Err("没识别出文字".into());
+    // 空结果时带上引擎语言:简体包未装时命中的常是繁体/英文引擎,便于定位
+    let tag = engine
+      .RecognizerLanguage()
+      .and_then(|l| l.LanguageTag())
+      .map(|t| t.to_string())
+      .unwrap_or_default();
+    if !tag.starts_with("zh-Hans") {
+      return Err(format!(
+        "没识别出文字(当前识别引擎:{tag};系统未装简体中文识别组件——到 设置 → 时间和语言 → 语言和区域 → 中文(简体) → 语言选项,下载'文字识别'后重试)"
+      ));
+    }
+    return Err("没识别出文字(该区域可能没有可识别文本)".into());
   }
   Ok(OcrOutput { lines, lang: engine_tag_of(&engine) })
 }
