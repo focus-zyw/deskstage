@@ -81,7 +81,9 @@ export function buildMessages(
 - 先写场景卡再写台词，格式：{"card":{"relationship":"关系标签","scene":"具体场景一句话","goalA":"甲想要什么","goalB":"乙想要什么","secret":"只有一方知道的底","escalation":["节拍1","节拍2","节拍3"],"callback":"结尾回收的本集铺垫"},"dialog":[{"speaker":"A","text":"台词","action":"动作"},...]}
 - dialog 必须逐拍实现 card.escalation；secret 在结尾反转揭晓；callback 必须回收本集前面埋的线
 - speaker 只能是 "A" 或 "B"
-- action 只能是这些词之一：${ACTIONS}
+- action 只能是这些词之一（禁止用 card 的字段名或其他词）：${ACTIONS}
+- 演出信息必须有，至少 3 句带：
+  铺垫句带 "pauseBefore":300~600(抖包袱前蓄势)；响底的最后一句必带 "pauseAfter":900~1500(留白给笑)；情绪转折处给听者配 "listenerAction"(词表同 action)；语气是面瘫/兴奋/慢条斯理的句子标 "delivery":"deadpan|excited|slow"
 - 一段共 14~22 句，两人交替说话
 - 每句口语化，不超过 25 个字`
 

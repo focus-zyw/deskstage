@@ -4,11 +4,11 @@ import type { DialogMode } from './index'
 
 const DAILY_SCRIPT: DialogLine[] = [
   { speaker: 'A', text: '今天天气真不错，窗外阳光正好。', action: 'happy' },
-  { speaker: 'B', text: '是啊，这种天最适合摸鱼了。', action: 'talk' },
+  { speaker: 'B', text: '是啊，这种天最适合摸鱼了。', action: 'talk', listenerAction: 'happy' },
   { speaker: 'A', text: '话说你昨天是不是又熬夜了？', action: 'surprise' },
-  { speaker: 'B', text: '咳……怎么可能，我十点就睡了。', action: 'sad' },
-  { speaker: 'A', text: '黑眼圈都快垂到下巴了。', action: 'talk' },
-  { speaker: 'B', text: '你礼貌吗！', action: 'angry' },
+  { speaker: 'B', text: '咳……怎么可能，我十点就睡了。', action: 'sad', pauseBefore: 500 },
+  { speaker: 'A', text: '黑眼圈都快垂到下巴了。', action: 'talk', listenerAction: 'shy' },
+  { speaker: 'B', text: '你礼貌吗！', action: 'angry', pauseAfter: 1200 },
 ]
 
 export const dailyMode: DialogMode<'daily'> = {

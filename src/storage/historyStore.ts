@@ -5,7 +5,7 @@
 // 所有操作静默容错——存储失败不影响演出主流程。
 import { readTextFile, writeTextFile, exists, mkdir, readDir, remove } from '@tauri-apps/plugin-fs'
 import { appDataDir, join } from '@tauri-apps/api/path'
-import type { DialogLine, Speaker } from '../performer/player'
+import { clampPauseMs, sanitizeAction, sanitizeDelivery, type DialogLine, type Speaker } from '../performer/player'
 import { withFileLock } from './writeLock'
 
 export interface HistoryEntry extends DialogLine {
@@ -64,6 +64,11 @@ function entryToLine(e: HistoryEntry): string {
     text: e.text,
     action: e.action,
     topic: e.topic,
+    // 演出信息:停顿/听者动作/语气,回放时还原节奏
+    pauseBefore: e.pauseBefore,
+    pauseAfter: e.pauseAfter,
+    listenerAction: e.listenerAction,
+    delivery: e.delivery,
   })
 }
 
@@ -79,8 +84,15 @@ function parseEntries(raw: string): HistoryEntry[] {
           mode: String(obj.mode || 'daily'),
           speaker: obj.speaker as Speaker,
           text: String(obj.text || ''),
-          action: String(obj.action || 'talk'),
+          action: sanitizeAction(obj.action),
           topic: typeof obj.topic === 'string' && obj.topic ? obj.topic : undefined,
+          pauseBefore: clampPauseMs(obj.pauseBefore),
+          pauseAfter: clampPauseMs(obj.pauseAfter),
+          listenerAction:
+            typeof obj.listenerAction === 'string' && obj.listenerAction
+              ? sanitizeAction(obj.listenerAction)
+              : undefined,
+          delivery: sanitizeDelivery(obj.delivery),
         })
       }
     } catch {
@@ -152,7 +164,18 @@ async function readFavorites(): Promise<FavRecord[]> {
       const lines: DialogLine[] = []
       for (const l of it.lines) {
         if (l && (l.speaker === 'A' || l.speaker === 'B') && typeof l.text === 'string') {
-          lines.push({ speaker: l.speaker, text: String(l.text), action: String(l.action || 'talk') })
+          lines.push({
+            speaker: l.speaker,
+            text: String(l.text),
+            action: sanitizeAction(l.action),
+            pauseBefore: clampPauseMs(l.pauseBefore),
+            pauseAfter: clampPauseMs(l.pauseAfter),
+            listenerAction:
+              typeof l.listenerAction === 'string' && l.listenerAction
+                ? sanitizeAction(l.listenerAction)
+                : undefined,
+            delivery: sanitizeDelivery(l.delivery),
+          })
         }
       }
       if (lines.length > 0)
@@ -210,7 +233,15 @@ export async function listEpisodes(limit = 50): Promise<Episode[]> {
           byTs.set(e.ts, ep)
         }
         if (!ep.topic && e.topic) ep.topic = e.topic
-        ep.lines.push({ speaker: e.speaker, text: e.text, action: e.action })
+        ep.lines.push({
+          speaker: e.speaker,
+          text: e.text,
+          action: e.action,
+          pauseBefore: e.pauseBefore,
+          pauseAfter: e.pauseAfter,
+          listenerAction: e.listenerAction,
+          delivery: e.delivery,
+        })
       }
     }
     for (const f of await readFavorites()) {

@@ -5,24 +5,8 @@ import { buildMessages, renderUserContext, type UserContext } from './promptBuil
 import { getMemory, topFacts, tasteSummary, type FactCategory } from '../storage/memoryStore'
 import { pickRelationship } from '../performer/modes/relationships'
 import { currentTimeSlot } from './timeAware'
-import type { DialogLine, Speaker } from '../performer/player'
+import { VALID_ACTIONS, type DialogLine, type Speaker } from '../performer/player'
 import type { Mode } from '../performer/modes'
-
-const VALID_ACTIONS = new Set([
-  'idle',
-  'talk',
-  'happy',
-  'laugh',
-  'sleepy',
-  'wave',
-  'thinking',
-  'angry',
-  'sad',
-  'surprise',
-  'shy', // 乙有独立贴图;甲缺图运行时回退 idle
-  'shake',
-  'jump',
-])
 
 /** 把底层错误归类成用户能懂的短句;附带 HTTP body 里的服务端说明(截断) */
 export async function describeLlmError(e: unknown): Promise<string> {
@@ -230,7 +214,7 @@ export async function generateShortChat(
   const messages: { role: string; content: string }[] = [
     {
       role: 'system',
-      content: `桌面双人情景剧的短互动编剧。角色:${persona}。现实时间:现在是${slot.label},${slot.scene}。创作要口语化、有梗、像真说话。\n输出协议(严格遵守):只输出一个 JSON 对象,格式 {"dialog":[{"speaker":"A","text":"台词","action":"动作"},...]};speaker 只能是 A 或 B 且交替;action 只能是 idle|talk|happy|angry|sad|surprise|shy;一共 2~4 句;每句不超过 18 个字。`,
+      content: `桌面双人情景剧的短互动编剧。角色:${persona}。现实时间:现在是${slot.label},${slot.scene}。创作要口语化、有梗、像真说话。\n输出协议(严格遵守):只输出一个 JSON 对象,格式 {"dialog":[{"speaker":"A","text":"台词","action":"动作"},...]};speaker 只能是 A 或 B 且交替;action 只能是 idle|talk|happy|laugh|wave|shy|angry|sad|surprise;一共 2~4 句;每句不超过 18 个字。`,
     },
     { role: 'user', content: task },
   ]

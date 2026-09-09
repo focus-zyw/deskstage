@@ -11,6 +11,8 @@ export interface CharacterSpriteProps {
   action?: string
   /** 说话点头节奏(一次循环秒数);不传用默认等速 */
   talkDuration?: number
+  /** 语气修饰(deadpan/excited/slow):气色与节奏差异化,配合 TTS 语速 */
+  delivery?: string
   /** 倾听时朝对方倾斜的方向 */
   lean?: 'left' | 'right'
   /** 正在倾听(随机小点头) */
@@ -62,6 +64,7 @@ export function CharacterSprite({
   heightOverride,
   action = 'idle',
   talkDuration,
+  delivery,
   lean,
   listening,
   pulsing,
@@ -93,6 +96,7 @@ export function CharacterSprite({
   const cls = [
     'char',
     `act-${action}`,
+    delivery ? `delivery-${delivery}` : '',
     hot ? 'hot' : '',
     reacting ? 'reacting' : '',
     lean ? `lean-${lean}` : '',

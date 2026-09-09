@@ -27,8 +27,15 @@ function fullVoice(voice: string): string {
   return voice.startsWith('speech:') ? voice : `${TTS_MODEL}:${voice}`
 }
 
+/** 语气→语速映射:deadpan 面瘫略慢 / excited 兴奋略快 / slow 慢条斯理 */
+const DELIVERY_SPEED: Record<string, number> = { deadpan: 0.92, excited: 1.15, slow: 0.85 }
+
+export function deliverySpeed(delivery?: string): number {
+  return (delivery && DELIVERY_SPEED[delivery]) || 1
+}
+
 /** 合成一句,返回 mp3 二进制。失败抛错由调用方静默 */
-async function synth(text: string, voice: string, apiKey: string): Promise<ArrayBuffer> {
+async function synth(text: string, voice: string, apiKey: string, speed = 1): Promise<ArrayBuffer> {
   const resp = await fetch(TTS_URL, {
     method: 'POST',
     headers: {
@@ -42,7 +49,7 @@ async function synth(text: string, voice: string, apiKey: string): Promise<Array
       response_format: 'mp3',
       sample_rate: 44100,
       stream: true,
-      speed: 1,
+      speed,
       gain: 0,
     }),
   })
@@ -147,8 +154,8 @@ const memory = new Map<string, string>()
 /** 在飞合成去重:同一 hash 只发一次请求 */
 const inflight = new Map<string, Promise<string>>()
 
-async function hashOf(text: string, voice: string): Promise<string> {
-  const data = new TextEncoder().encode(`${voice}|${text}`)
+async function hashOf(text: string, voice: string, speed = 1): Promise<string> {
+  const data = new TextEncoder().encode(`${voice}|${speed}|${text}`)
   const digest = await crypto.subtle.digest('SHA-256', data)
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('')
 }
@@ -168,8 +175,8 @@ function remember(hash: string, bytes: ArrayBuffer): string {
 }
 
 /** 确保该句已合成并缓存,返回 blobUrl。失败抛错由调用方静默 */
-async function ensure(text: string, voice: string, apiKey: string): Promise<string> {
-  const hash = await hashOf(text, voice)
+async function ensure(text: string, voice: string, apiKey: string, speed = 1): Promise<string> {
+  const hash = await hashOf(text, voice, speed)
   const hit = memory.get(hash)
   if (hit) return hit
 
@@ -179,7 +186,7 @@ async function ensure(text: string, voice: string, apiKey: string): Promise<stri
   const task = (async () => {
     if (!inTauri) {
       // 浏览器预览:无文件系统,只用内存缓存
-      return remember(hash, await synth(text, voice, apiKey))
+      return remember(hash, await synth(text, voice, apiKey, speed))
     }
     const file = await join(await cacheDir(), `${hash}.mp3.txt`)
     if (await exists(file)) {
@@ -190,7 +197,7 @@ async function ensure(text: string, voice: string, apiKey: string): Promise<stri
       for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i)
       return remember(hash, bytes)
     }
-    const buf = await synth(text, voice, apiKey)
+    const buf = await synth(text, voice, apiKey, speed)
     // base64 落盘
     const u8 = new Uint8Array(buf)
     let s = ''
@@ -218,7 +225,7 @@ let epoch = 0
 let warnedNoKey = false
 
 /** 说一句:停掉当前语音,起播这句。fire-and-forget,失败静默 */
-export function speak(speaker: Speaker, text: string): void {
+export function speak(speaker: Speaker, text: string, delivery?: string): void {
   // 进函数即领序号:若先发的句子合成慢,完成时序号已落后,不会反向覆盖新句
   const my = ++epoch
   void (async () => {
@@ -233,7 +240,7 @@ export function speak(speaker: Speaker, text: string): void {
         return
       }
       const voice = cfg.voice[speaker]
-      const url = await ensure(text, voice, cfg.voice.apiKey)
+      const url = await ensure(text, voice, cfg.voice.apiKey, deliverySpeed(delivery))
       // 等待合成期间来了新句/停止指令 → 不起播
       if (my !== epoch) return
       current?.pause()
@@ -257,12 +264,12 @@ export function speak(speaker: Speaker, text: string): void {
 }
 
 /** 只合成不播放:预合成下一句,开播即有声 */
-export function prefetchVoice(speaker: Speaker, text: string): void {
+export function prefetchVoice(speaker: Speaker, text: string, delivery?: string): void {
   void (async () => {
     try {
       const cfg = await getConfig()
       if (!cfg.voice.enabled || !cfg.voice.apiKey.trim()) return
-      await ensure(text, cfg.voice[speaker], cfg.voice.apiKey)
+      await ensure(text, cfg.voice[speaker], cfg.voice.apiKey, deliverySpeed(delivery))
     } catch {
       // 静默
     }

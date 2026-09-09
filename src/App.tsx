@@ -81,6 +81,9 @@ const MEM_CAT_LABEL: Record<string, string> = {
   other: '其他',
 }
 
+/** 语气→说话节奏(秒/循环):deadpan 慢半拍、excited 加速、slow 拖沓;与 TTS 语速同向 */
+const DELIVERY_TALK_DUR: Record<string, number> = { deadpan: 1.05, excited: 0.38, slow: 0.9 }
+
 /** apiKeys 的存储键:预设厂商用 id,自定义端点按 baseUrl 区分(与 configStore 注释约定一致) */
 function vendorKeyOf(id: string, baseUrl: string): string {
   return id === CUSTOM_VENDOR_ID ? `custom:${baseUrl.trim()}` : id
@@ -338,6 +341,11 @@ function App() {
     A: 'idle',
     B: 'idle',
   })
+  // 台词语气(delivery):驱动 sprite 修饰类与说话节奏
+  const [delivery, setDelivery] = useState<Record<Speaker, string | undefined>>({
+    A: undefined,
+    B: undefined,
+  })
   const [phase, setPhase] = useState<Phase>('idle')
   // 分段选择器当前选中模式；生成按钮按它点播
   const [mode, setMode] = useState<Mode>('daily')
@@ -436,12 +444,16 @@ function App() {
         const act = laughing ? 'laugh' : line.action || 'talk'
         setAction((a) => ({ ...a, [line.speaker]: act }))
         setSpeaking(line.speaker)
+        setDelivery((d) => ({ ...d, [line.speaker]: line.delivery }))
         if (nowPlaying.current) nowPlaying.current.index = index
-        speak(line.speaker, line.text) // 语音失败静默,不影响气泡
+        speak(line.speaker, line.text, line.delivery) // 语音失败静默,不影响气泡
         const next = playingLines.current[index + 1]
-        if (next) prefetchVoice(next.speaker, next.text)
-        // 台词带感叹/问号 → 听者惊讶脉冲
+        if (next) prefetchVoice(next.speaker, next.text, next.delivery)
+        // 听者同步反应:LLM 指定听者动作(害羞/大笑/欲言又止…),对手戏更活
         const listener: Speaker = line.speaker === 'A' ? 'B' : 'A'
+        const la = line.listenerAction
+        if (la) setAction((a) => ({ ...a, [listener]: la }))
+        // 台词带感叹/问号 → 听者惊讶脉冲
         if (/[!?！？]/.test(line.text)) {
           setPulseFor(listener)
           window.clearTimeout(pulseTimer.current)
@@ -449,13 +461,17 @@ function App() {
         }
       },
       onLineEnd: (speaker) => {
+        const listener: Speaker = speaker === 'A' ? 'B' : 'A'
         setBubble((b) => ({ ...b, [speaker]: null }))
-        setAction((a) => ({ ...a, [speaker]: 'idle' }))
+        // 双方回 idle:说话者收声,听者的反应动作也不滞留到下一拍
+        setAction((a) => ({ ...a, [speaker]: 'idle', [listener]: 'idle' }))
+        setDelivery((d) => ({ ...d, [speaker]: undefined }))
         setSpeaking(null)
       },
       onDone: () => {
         setPhase('idle')
         setSpeaking(null)
+        setDelivery({ A: undefined, B: undefined })
         // 看完一集 = 弱正信号;自动重放是系统行为不计偏好,防"系统自播→自我强化"污染
         const np = nowPlaying.current
         if (np && np.source !== 'auto') bumpTopicWatched(np.topic)
@@ -827,6 +843,7 @@ function App() {
     stopSpeaking()
     setPhase('idle')
     setSpeaking(null)
+    setDelivery({ A: undefined, B: undefined })
     window.clearTimeout(finaleTimer.current)
     setBubble({ A: null, B: null })
     setAction({ A: 'idle', B: 'idle' })
@@ -1863,7 +1880,12 @@ function App() {
           sprite={SPRITE_SETS.A}
           heightOverride={charCfg.height}
           action={displayAction('A')}
-          talkDuration={bubble.A ? 0.3 + Math.min(0.7, bubble.A.length * 0.04) : undefined}
+          delivery={delivery.A}
+          talkDuration={
+            bubble.A
+              ? (delivery.A ? DELIVERY_TALK_DUR[delivery.A] : 0.3 + Math.min(0.7, bubble.A.length * 0.04))
+              : undefined
+          }
           lean={speaking === 'B' ? (charCfg.A.xPct <= charCfg.B.xPct ? 'right' : 'left') : undefined}
           listening={speaking === 'B'}
           pulsing={pulseFor === 'A'}
@@ -1893,7 +1915,12 @@ function App() {
           sprite={SPRITE_SETS.B}
           heightOverride={charCfg.height}
           action={displayAction('B')}
-          talkDuration={bubble.B ? 0.3 + Math.min(0.7, bubble.B.length * 0.04) : undefined}
+          delivery={delivery.B}
+          talkDuration={
+            bubble.B
+              ? (delivery.B ? DELIVERY_TALK_DUR[delivery.B] : 0.3 + Math.min(0.7, bubble.B.length * 0.04))
+              : undefined
+          }
           lean={speaking === 'A' ? (charCfg.B.xPct <= charCfg.A.xPct ? 'right' : 'left') : undefined}
           listening={speaking === 'A'}
           pulsing={pulseFor === 'B'}

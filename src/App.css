@@ -123,6 +123,14 @@
   }
 }
 
+/* 语气修饰(delivery):配合 TTS 语速的气色差异;说话节奏由 --talk-dur 承担(JS 侧按语气注入) */
+.char.delivery-deadpan {
+  filter: saturate(0.78) contrast(0.96);
+}
+.char.delivery-excited {
+  filter: brightness(1.07) saturate(1.15);
+}
+
 /* 命中态：光标在角色热区内（此时窗口已恢复交互） */
 .char.hot {
   filter: brightness(1.18) drop-shadow(0 0 12px rgba(255, 255, 255, 0.55));
