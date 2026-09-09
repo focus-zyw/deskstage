@@ -5,8 +5,10 @@
 // 抓屏前的隐藏在 WDA 关闭时兜底,保证角色绝不进画面。
 
 import { invoke } from '@tauri-apps/api/core'
+import { emit } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { appDataDir, join } from '@tauri-apps/api/path'
+import { mkdir } from '@tauri-apps/plugin-fs'
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow'
 import { register, unregister } from '@tauri-apps/plugin-global-shortcut'
 import { getConfig } from './storage/configStore'
@@ -14,6 +16,13 @@ import { getConfig } from './storage/configStore'
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
 const OVERLAY_LABEL = 'capture'
+
+/** 把截屏失败原因送到主窗气泡(调试与用户反馈两用) */
+function reportError(e: unknown): void {
+  const msg = String((e as Error)?.message ?? e).slice(0, 80)
+  console.warn('[capture] 截屏失败:', msg)
+  void emit('capture-error', msg).catch(() => {})
+}
 
 let running = false
 let registeredHotkey = ''
@@ -48,6 +57,7 @@ export async function startScreenshot(): Promise<void> {
     // browser args 不同的 WebView 必须使用不同数据目录,否则创建报 0x8007139F
     const base = await appDataDir()
     const dataDirectory = await join(base, 'data', 'capture-webview')
+    await mkdir(dataDirectory, { recursive: true }).catch(() => {})
 
     // 全屏交给系统 fullscreen:true 会在 Windows 上导致 WebView2 创建失败
     // (0x8007139F,实测),改用主窗口的 screen 逻辑尺寸铺满(同显示器,无换算问题);
@@ -68,7 +78,7 @@ export async function startScreenshot(): Promise<void> {
       dataDirectory,
     })
     overlay.once('tauri://error', (e) => {
-      console.warn('[capture] 覆盖窗创建失败', e)
+      reportError(`覆盖窗创建失败:${String((e as { payload?: unknown })?.payload ?? e)}`)
       if (hidden) void main.show().catch(() => {})
       running = false
     })
@@ -82,12 +92,13 @@ export async function startScreenshot(): Promise<void> {
       if (running) {
         if (hidden) void main.show().catch(() => {})
         running = false
+        reportError('覆盖窗创建超时')
       }
     }, 5000)
   } catch (e) {
     if (hidden) await main.show().catch(() => {})
     running = false
-    throw e
+    reportError(e)
   }
 }
 

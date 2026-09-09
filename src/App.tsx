@@ -542,6 +542,20 @@ function App() {
     phaseRef.current = phase
   }, [phase])
 
+  // 截屏流程的失败反馈(capture.ts 内部 catch 后 emit 过来)
+  useEffect(() => {
+    const un = listen('capture-error', ({ payload }) => {
+      const msg = String(payload).slice(0, 50)
+      setBubble({ A: `截图失败:${msg}`, B: null })
+      window.setTimeout(() => {
+        setBubble((b) => (b.A?.startsWith('截图失败') ? { A: null, B: null } : b))
+      }, 5000)
+    })
+    return () => {
+      void un.then((f) => f())
+    }
+  }, [])
+
   // 看视频不被打扰:默认点击不抢焦点(WS_EX_NOACTIVATE);
   // 仅设置/主题面板打开时临时恢复激活(输入框需要键盘),关闭即恢复
   useEffect(() => {
