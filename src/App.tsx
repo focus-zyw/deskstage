@@ -337,6 +337,44 @@ function CloneVoiceRow({
   )
 }
 
+/** 全局快捷键录入器:点击进入录入态,按下带修饰键的组合键即完成,Esc 取消。
+ *  输出为 global-shortcut 接受的格式(Ctrl+Alt+A 这类);必须带修饰键,防止单键误占 */
+function HotkeyRecorder({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const [listening, setListening] = useState(false)
+  useEffect(() => {
+    if (!listening) return
+    const onKey = (e: KeyboardEvent) => {
+      e.preventDefault()
+      e.stopPropagation()
+      if (e.key === 'Escape') {
+        setListening(false)
+        return
+      }
+      if (['Control', 'Alt', 'Shift', 'Meta'].includes(e.key)) return // 等主键
+      const mods: string[] = []
+      if (e.ctrlKey) mods.push('Ctrl')
+      if (e.altKey) mods.push('Alt')
+      if (e.shiftKey) mods.push('Shift')
+      if (e.metaKey) mods.push('Super')
+      if (mods.length === 0) {
+        setListening(false) // 无修饰键的组合不收,防误占普通按键
+        return
+      }
+      const main = e.key.length === 1 ? e.key.toUpperCase() : e.key
+      onChange(`${mods.join('+')}+${main}`)
+      setListening(false)
+    }
+    // 捕获阶段拦下,避免 Escape 冒泡把设置面板关掉
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [listening, onChange])
+  return (
+    <button className="panel-btn" onClick={() => setListening(true)}>
+      {listening ? '按下组合键…(Esc 取消)' : value || '未设置'}
+    </button>
+  )
+}
+
 function App() {
   const [hovered, setHovered] = useState<string | null>(null)
   const [reacting, setReacting] = useState<Record<Speaker, boolean>>({
@@ -990,8 +1028,11 @@ function App() {
         userProfile: form.userProfile,
         autoReplayMin: form.autoReplayMin,
         voice, // 语音配置(key/音色/开关)与表单一起整体落盘
+        screenshot: form.screenshot, // 截屏配置(快捷键/开关/角色排除)
       })
       setAutoReplayMin(next.autoReplayMin) // 空闲计时按新频率重新武装
+      void applyScreenshotHotkey() // 快捷键按新配置换绑
+      void invoke('set_capture_excluded', { enable: next.screenshot.hideSelf }).catch(() => {})
       setSaveState('saved')
       window.setTimeout(() => setSettingsOpen(false), 900)
     } catch (e) {
@@ -1597,6 +1638,44 @@ function App() {
                 saveConfig({ showWatermark: e.target.checked }).catch((err) =>
                   console.warn('水印开关保存失败(静默)', err),
                 )
+              }}
+            />
+          </div>
+          <div className="settings-sep">
+            <span>截屏</span>
+          </div>
+          <div className="settings-row">
+            <label htmlFor="cfg-shot-enable">全局截屏快捷键(框选→复制到剪贴板)</label>
+            <div className="shot-key-row">
+              <input
+                id="cfg-shot-enable"
+                type="checkbox"
+                checked={form.screenshot.enabled}
+                onChange={(e) =>
+                  setForm({ ...form, screenshot: { ...form.screenshot, enabled: e.target.checked } })
+                }
+              />
+              <HotkeyRecorder
+                value={form.screenshot.hotkey}
+                onChange={(hotkey) =>
+                  setForm({ ...form, screenshot: { ...form.screenshot, hotkey } })
+                }
+              />
+            </div>
+          </div>
+          <div className="settings-row">
+            <label htmlFor="cfg-shot-hide">截屏/录屏时排除角色(角色不进任何截图与录屏,Win10 2004+)</label>
+            <input
+              id="cfg-shot-hide"
+              type="checkbox"
+              checked={form.screenshot.hideSelf}
+              onChange={(e) => {
+                const next = { ...form.screenshot, hideSelf: e.target.checked }
+                setForm({ ...form, screenshot: next })
+                saveConfig({ screenshot: next }).catch((err) =>
+                  console.warn('截屏排除开关保存失败(静默)', err),
+                )
+                invoke('set_capture_excluded', { enable: e.target.checked }).catch(() => {})
               }}
             />
           </div>

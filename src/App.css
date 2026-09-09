@@ -139,16 +139,18 @@
 }
 
 /* 命中态：光标在角色热区内（此时窗口已恢复交互） */
+/* 命中态:轻微提亮,不刺眼 */
 .char.hot {
-  filter: brightness(1.18) drop-shadow(0 0 12px rgba(255, 255, 255, 0.55));
+  filter: brightness(1.07) drop-shadow(0 0 6px rgba(255, 255, 255, 0.22));
 }
 
 /* 倾听反应：朝说话者方向微倾 */
+/* 倾听反应:朝说话者方向轻微倾斜 */
 .char.lean-left {
-  rotate: -2.2deg;
+  rotate: -1.2deg;
 }
 .char.lean-right {
-  rotate: 2.2deg;
+  rotate: 1.2deg;
 }
 
 /* 拖动中：轻微缩小提亮,像被拎起 */
@@ -981,4 +983,11 @@
 
 .clone-tip.warn {
   color: #ffd166;
+}
+
+/* 截屏设置:开关 + 快捷键录入器同行 */
+.shot-key-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
