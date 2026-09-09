@@ -4,7 +4,7 @@
 // 所有操作静默容错——失败不影响演出主流程。
 import { readTextFile, writeTextFile, exists, mkdir } from '@tauri-apps/plugin-fs'
 import { appDataDir, join } from '@tauri-apps/api/path'
-import { clampPauseMs, sanitizeAction, sanitizeDelivery, type DialogLine, type Speaker } from '../performer/player'
+import { sanitizeDialogLine, type DialogLine } from '../performer/dialogSchema'
 import { withFileLock } from './writeLock'
 
 export interface PrefetchEntry {
@@ -32,20 +32,8 @@ function sanitizeEntries(v: unknown): PrefetchEntry[] {
     const lines: DialogLine[] = []
     if (Array.isArray(it?.lines)) {
       for (const l of it.lines) {
-        if (l && (l.speaker === 'A' || l.speaker === 'B') && typeof l.text === 'string') {
-          lines.push({
-            speaker: l.speaker as Speaker,
-            text: String(l.text),
-            action: sanitizeAction(l.action),
-            pauseBefore: clampPauseMs(l.pauseBefore),
-            pauseAfter: clampPauseMs(l.pauseAfter),
-            listenerAction:
-              typeof l.listenerAction === 'string' && l.listenerAction
-                ? sanitizeAction(l.listenerAction)
-                : undefined,
-            delivery: sanitizeDelivery(l.delivery),
-          })
-        }
+        const line = sanitizeDialogLine(l)
+        if (line) lines.push(line)
       }
     }
     if (mode && topic && lines.length > 0) out.push({ mode, topic, lines })

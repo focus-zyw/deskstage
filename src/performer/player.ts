@@ -1,62 +1,11 @@
 // 演出队列：顺序消费一段对话脚本，按台词时长驱动 UI，可随时中止。
 // LLM 生成的 dialog 数组与硬编码脚本走同一条路；
 // 台词可带演出信息(停顿/听者动作/语气),节奏由喜剧时机决定而不只是字数。
+// 类型与清洗集中在 dialogSchema(唯一事实源),这里只管播放。
 
-export type Speaker = 'A' | 'B'
+import { clampPauseMs, type DialogLine, type Speaker } from './dialogSchema'
 
-/** 语气词表:deadpan 面瘫 / excited 兴奋 / slow 慢条斯理;缺省 normal */
-export const DELIVERIES = ['deadpan', 'excited', 'slow'] as const
-export type Delivery = (typeof DELIVERIES)[number]
-
-/** 动作词表:与贴图/CSS 动画一一对应(shake/jump 复用 idle 图 + 位移动画) */
-export const VALID_ACTIONS = new Set([
-  'idle',
-  'talk',
-  'happy',
-  'laugh',
-  'shy',
-  'sleepy',
-  'wave',
-  'thinking',
-  'angry',
-  'sad',
-  'surprise',
-  'shake',
-  'jump',
-])
-
-export interface DialogLine {
-  speaker: Speaker
-  text: string
-  action: string // 动作词表,见 VALID_ACTIONS
-  /** 句前停顿 ms:包袱前蓄势(协议建议 300~600) */
-  pauseBefore?: number
-  /** 句尾额外停留 ms:响底后留白(协议建议 900~1500) */
-  pauseAfter?: number
-  /** 听者此刻的反应动作(词表同 action;缺省不改变) */
-  listenerAction?: string
-  /** 语气:驱动说话节奏(CSS)与 TTS 语速 */
-  delivery?: Delivery
-}
-
-/** 停顿钳位:非法/≤0 视为无停顿,上限 1.5s 防呆 */
-export function clampPauseMs(v: unknown): number | undefined {
-  const n = Number(v)
-  if (!Number.isFinite(n) || n <= 0) return undefined
-  return Math.min(1500, Math.round(n))
-}
-
-/** 语气清洗:非法或缺省 normal 返回 undefined */
-export function sanitizeDelivery(v: unknown): Delivery | undefined {
-  return typeof v === 'string' && (DELIVERIES as readonly string[]).includes(v)
-    ? (v as Delivery)
-    : undefined
-}
-
-/** 台词动作清洗:非法归一为 talk */
-export function sanitizeAction(v: unknown): string {
-  return typeof v === 'string' && VALID_ACTIONS.has(v) ? v : 'talk'
-}
+export type { DialogLine, Delivery, Speaker } from './dialogSchema'
 
 /** 气泡显示时长：基础 1.2s + 每字 160ms */
 export function bubbleDuration(text: string): number {

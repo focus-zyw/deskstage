@@ -6,7 +6,14 @@ import { getMemory, topFacts, tasteSummary, type FactCategory } from '../storage
 import { storyContext } from '../storage/storyStore'
 import { pickRelationship } from '../performer/modes/relationships'
 import { currentTimeSlot } from './timeAware'
-import { VALID_ACTIONS, clampPauseMs, sanitizeDelivery, type DialogLine, type Speaker } from '../performer/player'
+import {
+  clampPauseMs,
+  parseGeneratedDialog,
+  sanitizeDelivery,
+  VALID_ACTIONS,
+  type DialogLine,
+  type Speaker,
+} from '../performer/dialogSchema'
 import type { Mode } from '../performer/modes'
 
 /** 把底层错误归类成用户能懂的短句;附带 HTTP body 里的服务端说明(截断) */
@@ -114,31 +121,10 @@ async function chatRaw(
   }
 }
 
-/** 解析并规范化 LLM 输出：容忍代码围栏/多余文本，非法 action 归一为 talk，丢弃坏行 */
+/** 解析并规范化 LLM 输出:交给 dialogSchema 统一处理(容忍围栏/混杂文本,
+ *  保留可选演出字段,非法 action 归一为 talk,丢弃坏行) */
 function parseDialog(raw: string, minLines = 4): DialogLine[] {
-  let obj: unknown
-  try {
-    obj = JSON.parse(raw)
-  } catch {
-    // 容错：从混杂文本中抠出 JSON 对象
-    const m = raw.match(/\{[\s\S]*\}/)
-    if (!m) throw new Error('输出中找不到 JSON')
-    obj = JSON.parse(m[0])
-  }
-  const dialog = (obj as { dialog?: unknown }).dialog
-  if (!Array.isArray(dialog)) throw new Error('缺少 dialog 数组')
-  const lines: DialogLine[] = []
-  for (const item of dialog) {
-    const it = item as { speaker?: unknown; text?: unknown; action?: unknown }
-    const speaker = it.speaker === 'A' || it.speaker === 'B' ? (it.speaker as Speaker) : null
-    const text = typeof it.text === 'string' ? it.text.trim() : ''
-    if (!speaker || !text) continue
-    const action =
-      typeof it.action === 'string' && VALID_ACTIONS.has(it.action) ? it.action : 'talk'
-    lines.push({ speaker, text, action })
-  }
-  if (lines.length < minLines) throw new Error('有效台词过少')
-  return lines
+  return parseGeneratedDialog(raw, minLines).lines
 }
 
 /**

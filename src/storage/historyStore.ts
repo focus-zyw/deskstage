@@ -5,9 +5,10 @@
 // 所有操作静默容错——存储失败不影响演出主流程。
 import { readTextFile, writeTextFile, exists, mkdir, readDir, remove } from '@tauri-apps/plugin-fs'
 import { appDataDir, join } from '@tauri-apps/api/path'
-import { clampPauseMs, sanitizeAction, sanitizeDelivery, type DialogLine, type Speaker } from '../performer/player'
+import { sanitizeDialogLine, type DialogLine } from '../performer/dialogSchema'
 import { withFileLock } from './writeLock'
 
+/** 一条历史 = 台词 + 集元数据;台词字段(含可选演出信息)整体继承 */
 export interface HistoryEntry extends DialogLine {
   ts: number
   mode: string
@@ -78,23 +79,14 @@ function parseEntries(raw: string): HistoryEntry[] {
   for (const line of raw.split('\n').filter(Boolean)) {
     try {
       const obj = JSON.parse(line)
-      if (obj.speaker === 'A' || obj.speaker === 'B') {
-        parsed.push({
-          ts: Number(obj.ts) || 0,
-          mode: String(obj.mode || 'daily'),
-          speaker: obj.speaker as Speaker,
-          text: String(obj.text || ''),
-          action: sanitizeAction(obj.action),
-          topic: typeof obj.topic === 'string' && obj.topic ? obj.topic : undefined,
-          pauseBefore: clampPauseMs(obj.pauseBefore),
-          pauseAfter: clampPauseMs(obj.pauseAfter),
-          listenerAction:
-            typeof obj.listenerAction === 'string' && obj.listenerAction
-              ? sanitizeAction(obj.listenerAction)
-              : undefined,
-          delivery: sanitizeDelivery(obj.delivery),
-        })
-      }
+      const lineData = sanitizeDialogLine(obj)
+      if (!lineData) continue
+      parsed.push({
+        ...lineData,
+        ts: Number(obj.ts) || 0,
+        mode: String(obj.mode || 'daily'),
+        topic: typeof obj.topic === 'string' && obj.topic ? obj.topic : undefined,
+      })
     } catch {
       // 跳过坏行
     }
@@ -111,7 +103,8 @@ async function listHistoryFiles(dir: string): Promise<string[]> {
 }
 
 /** 一集生成成功后整段落盘;topic 可选(手动锁定主题时记录)。
- *  与 deleteEpisodes 的"读-重写"互斥,避免追加的行被重写吞掉 */
+ *  台词整体(含可选演出字段)展开写入,与 deleteEpisodes 的"读-重写"互斥,
+ *  避免追加的行被重写吞掉 */
 export async function appendHistory(lines: DialogLine[], mode: string, topic?: string): Promise<void> {
   try {
     await withFileLock('history', async () => {
@@ -120,9 +113,7 @@ export async function appendHistory(lines: DialogLine[], mode: string, topic?: s
       const ts = Date.now()
       const chunk =
         lines
-          .map((l) =>
-            entryToLine({ ts, mode, speaker: l.speaker, text: l.text, action: l.action, topic }),
-          )
+          .map((l) => entryToLine({ ...l, ts, mode, topic }))
           .join('\n') + '\n'
       await writeTextFile(file, chunk, { append: true })
     })
@@ -163,20 +154,8 @@ async function readFavorites(): Promise<FavRecord[]> {
       if (!ts || !Array.isArray(it.lines)) continue
       const lines: DialogLine[] = []
       for (const l of it.lines) {
-        if (l && (l.speaker === 'A' || l.speaker === 'B') && typeof l.text === 'string') {
-          lines.push({
-            speaker: l.speaker,
-            text: String(l.text),
-            action: sanitizeAction(l.action),
-            pauseBefore: clampPauseMs(l.pauseBefore),
-            pauseAfter: clampPauseMs(l.pauseAfter),
-            listenerAction:
-              typeof l.listenerAction === 'string' && l.listenerAction
-                ? sanitizeAction(l.listenerAction)
-                : undefined,
-            delivery: sanitizeDelivery(l.delivery),
-          })
-        }
+        const line = sanitizeDialogLine(l)
+        if (line) lines.push(line)
       }
       if (lines.length > 0)
         out.push({ ts, mode: String(it.mode || 'daily'), lines, topic: String(it.topic || '') || undefined })
@@ -233,15 +212,8 @@ export async function listEpisodes(limit = 50): Promise<Episode[]> {
           byTs.set(e.ts, ep)
         }
         if (!ep.topic && e.topic) ep.topic = e.topic
-        ep.lines.push({
-          speaker: e.speaker,
-          text: e.text,
-          action: e.action,
-          pauseBefore: e.pauseBefore,
-          pauseAfter: e.pauseAfter,
-          listenerAction: e.listenerAction,
-          delivery: e.delivery,
-        })
+        const { ts: _t, mode: _m, topic: _tp, ...line } = e
+        ep.lines.push(line)
       }
     }
     for (const f of await readFavorites()) {

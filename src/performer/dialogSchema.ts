@@ -1,0 +1,146 @@
+// 台词与场景卡的类型定义 + 清洗的唯一事实源(深模块)。
+// LLM 解析、历史 JSONL、收藏、预取缓冲全部通过这里的小接口读写,
+// 新增字段只改这一处,避免四五处复制的浅模块各自漂移。
+
+/** 动作词表:与贴图/CSS 动画一一对应(shake/jump 复用 idle 图 + 位移动画) */
+export const VALID_ACTIONS = new Set([
+  'idle',
+  'talk',
+  'happy',
+  'laugh',
+  'shy',
+  'sleepy',
+  'wave',
+  'thinking',
+  'angry',
+  'sad',
+  'surprise',
+  'shake',
+  'jump',
+])
+
+export type Speaker = 'A' | 'B'
+
+/** 语气词表:deadpan 面瘫 / excited 兴奋 / slow 慢条斯理;缺省 normal(不标注) */
+export const DELIVERIES = ['deadpan', 'excited', 'slow'] as const
+export type Delivery = (typeof DELIVERIES)[number]
+
+export interface DialogLine {
+  speaker: Speaker
+  text: string
+  action: string // 动作词表,见 VALID_ACTIONS
+  /** 句前停顿 ms:包袱前蓄势(协议建议 300~600) */
+  pauseBefore?: number
+  /** 句尾额外停留 ms:响底后留白(协议建议 900~1500) */
+  pauseAfter?: number
+  /** 听者此刻的反应动作(词表同 action;缺省不改变) */
+  listenerAction?: string
+  /** 语气:驱动说话节奏(CSS)与 TTS 语速 */
+  delivery?: Delivery
+}
+
+/** 场景卡:先定前提再写台词的"戏剧前提",dialog 逐拍实现其 escalation */
+export interface SceneCard {
+  relationship: string
+  scene: string
+  goalA: string
+  goalB: string
+  secret: string
+  escalation: string[]
+  callback: string
+}
+
+const PAUSE_MAX_MS = 1500
+
+/** 停顿钳位:非法/≤0 → undefined,上限 1.5s 防呆 */
+export function clampPauseMs(v: unknown): number | undefined {
+  const n = Number(v)
+  if (!Number.isFinite(n) || n <= 0) return undefined
+  return Math.min(PAUSE_MAX_MS, Math.round(n))
+}
+
+/** 动作清洗:非法归一为 talk */
+export function sanitizeAction(v: unknown): string {
+  return typeof v === 'string' && VALID_ACTIONS.has(v) ? v : 'talk'
+}
+
+/** 语气清洗:非法或缺省 → undefined */
+export function sanitizeDelivery(v: unknown): Delivery | undefined {
+  return typeof v === 'string' && (DELIVERIES as readonly string[]).includes(v)
+    ? (v as Delivery)
+    : undefined
+}
+
+/** 语气→语速:deadpan 面瘫略慢 / excited 兴奋略快 / slow 慢条斯理 */
+export function deliverySpeed(delivery?: string): number {
+  return (delivery && { deadpan: 0.92, excited: 1.15, slow: 0.85 }[delivery]) || 1
+}
+
+/** 清洗单条台词:speaker/text 必须合法,否则整条丢弃(null)。
+ *  可选演出字段逐一钳位/校验,来源不限(LLM 输出/JSONL/收藏/预取缓冲) */
+export function sanitizeDialogLine(raw: unknown): DialogLine | null {
+  const o = (raw ?? {}) as Record<string, unknown>
+  if (o.speaker !== 'A' && o.speaker !== 'B') return null
+  const text = typeof o.text === 'string' ? o.text.trim() : ''
+  if (!text) return null
+  const listenerAction =
+    typeof o.listenerAction === 'string' && VALID_ACTIONS.has(o.listenerAction)
+      ? o.listenerAction
+      : undefined
+  return {
+    speaker: o.speaker,
+    text,
+    action: sanitizeAction(o.action),
+    pauseBefore: clampPauseMs(o.pauseBefore),
+    pauseAfter: clampPauseMs(o.pauseAfter),
+    listenerAction,
+    delivery: sanitizeDelivery(o.delivery),
+  }
+}
+
+/** 清洗台词数组:丢坏行;给 minLines 时不足则抛错(LLM 解析用) */
+export function sanitizeDialog(raw: unknown, minLines?: number): DialogLine[] {
+  const arr = Array.isArray(raw) ? raw : []
+  const lines = arr.map(sanitizeDialogLine).filter((l): l is DialogLine => l !== null)
+  if (minLines !== undefined && lines.length < minLines) throw new Error('有效台词过少')
+  return lines
+}
+
+/** 清洗场景卡:关键字段缺失时整卡丢弃(演出不依赖卡,卡只是编剧质量工具) */
+export function sanitizeSceneCard(v: unknown): SceneCard | undefined {
+  const o = (v ?? {}) as Record<string, unknown>
+  const str = (x: unknown, cap: number): string =>
+    typeof x === 'string' ? x.trim().slice(0, cap) : ''
+  const relationship = str(o.relationship, 40)
+  const scene = str(o.scene, 80)
+  const goalA = str(o.goalA, 60)
+  const goalB = str(o.goalB, 60)
+  const secret = str(o.secret, 80)
+  const callback = str(o.callback, 80)
+  const escalation = Array.isArray(o.escalation)
+    ? o.escalation.map((x) => str(x, 40)).filter(Boolean).slice(0, 6)
+    : []
+  if (!relationship || !scene || !secret || escalation.length === 0) return undefined
+  return { relationship, scene, goalA, goalB, secret, escalation, callback }
+}
+
+/** 解析 LLM 生成的原始输出:容忍代码围栏/混杂文本;不合规抛错由调用方兜底。
+ *  card 可缺(模型没写卡照常播),台词经 sanitizeDialogLine 保留演出字段 */
+export function parseGeneratedDialog(
+  raw: string,
+  minLines = 4,
+): { card?: SceneCard; lines: DialogLine[] } {
+  let obj: unknown
+  try {
+    obj = JSON.parse(raw)
+  } catch {
+    const m = raw.match(/\{[\s\S]*\}/)
+    if (!m) throw new Error('输出中找不到 JSON')
+    obj = JSON.parse(m[0])
+  }
+  const o = (obj ?? {}) as Record<string, unknown>
+  return {
+    card: sanitizeSceneCard(o.card),
+    lines: sanitizeDialog(o.dialog, minLines),
+  }
+}
