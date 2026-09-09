@@ -1,3 +1,15 @@
+:root {
+  --accent: #7c6cf0;
+  --accent-weak: rgba(124, 108, 240, 0.25);
+  --accent-strong: rgba(124, 108, 240, 0.6);
+  --ok: var(--ok);
+  --err: var(--err);
+  --radius-btn: 16px;
+  --radius-input: 8px;
+  --radius-panel: 14px;
+  --text-dim: rgba(255, 255, 255, 0.65);
+}
+
 /* 舞台与角色样式（立绘精灵版） */
 
 .stage {
@@ -347,7 +359,7 @@
   max-width: 280px;
   background: rgba(255, 255, 255, 0.96);
   color: #222;
-  border-radius: 14px;
+  border-radius: var(--radius-panel);
   font-size: 15px;
   line-height: 1.5;
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
@@ -434,6 +446,13 @@
   transform: scale(1.15);
   cursor: grabbing;
 }
+/* 提字按钮的文字图标 */
+.ctrl-btn.icon .ocr-glyph,
+.ctrl-btn.icon span[aria-hidden] {
+  font-size: 13px;
+  line-height: 1;
+}
+
 .bar-grip svg {
   display: block;
   pointer-events: none; /* 点击必须落在把手上,svg 不能截获(否则拖动守卫误判) */
@@ -483,7 +502,7 @@
 .ctrl-btn {
   padding: 6px 16px;
   border: 1px solid rgba(255, 255, 255, 0.25);
-  border-radius: 16px;
+  border-radius: var(--radius-btn);
   background: rgba(30, 30, 45, 0.55);
   color: rgba(255, 255, 255, 0.85);
   font-size: 13px;
@@ -544,18 +563,16 @@
 /* 设置面板：控制栏正下方弹出（限高滚动,防止超出 420 高的悬浮条） */
 .settings-panel {
   position: absolute;
-  top: 56px;
-  left: 50%;
   transform: translateX(-50%);
-  width: 340px;
-  max-height: calc(100% - 66px);
+  width: 420px;
+  max-height: calc(100vh - 66px);
   overflow-y: auto;
   padding: 16px;
   display: flex;
   flex-direction: column;
   gap: 10px;
   border: 1px solid rgba(255, 255, 255, 0.14);
-  border-radius: 14px;
+  border-radius: var(--radius-panel);
   /* 不用毛玻璃(backdrop-filter):叠在视频上会破坏硬件合成,导致视频黑框/暂停 */
   background: rgba(20, 20, 31, 0.97);
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
@@ -630,7 +647,7 @@
 .settings-row textarea {
   padding: 7px 10px;
   border: 1px solid rgba(255, 255, 255, 0.18);
-  border-radius: 8px;
+  border-radius: var(--radius-input);
   background: rgba(255, 255, 255, 0.08);
   color: #fff;
   font-size: 13px;
@@ -648,7 +665,7 @@
 .settings-row select {
   padding: 7px 10px;
   border: 1px solid rgba(255, 255, 255, 0.18);
-  border-radius: 8px;
+  border-radius: var(--radius-input);
   background: rgba(255, 255, 255, 0.08);
   color: #fff;
   font-size: 13px;
@@ -659,7 +676,7 @@
   padding: 0;
   width: 18px;
   height: 18px;
-  accent-color: #7c6cf0;
+  accent-color: var(--accent);
   cursor: pointer;
   justify-self: end;
 }
@@ -705,7 +722,7 @@
     background 0.15s ease;
 }
 .hist-clear:hover:not(:disabled) {
-  color: #ff7a7a;
+  color: var(--err);
   background: rgba(255, 90, 90, 0.15);
 }
 .hist-clear:disabled {
@@ -730,13 +747,13 @@
   align-items: center;
   gap: 8px;
   padding: 6px 8px;
-  border-radius: 8px;
+  border-radius: var(--radius-input);
   background: rgba(255, 255, 255, 0.05);
   cursor: pointer;
   transition: background 0.15s ease;
 }
 .hist-row:hover {
-  background: rgba(124, 108, 240, 0.25);
+  background: var(--accent-weak);
 }
 .hist-mode {
   flex: none;
@@ -800,7 +817,7 @@
 .panel-btn {
   padding: 6px 16px;
   border: 1px solid rgba(255, 255, 255, 0.22);
-  border-radius: 14px;
+  border-radius: var(--radius-panel);
   background: transparent;
   color: rgba(255, 255, 255, 0.85);
   font-size: 13px;
@@ -823,10 +840,10 @@
   font-size: 12px;
 }
 .settings-tip.ok {
-  color: #6fd88f;
+  color: var(--ok);
 }
 .settings-tip.err {
-  color: #ff7a7a;
+  color: var(--err);
 }
 
 .watermark {
@@ -845,7 +862,7 @@
 .topic-search {
   padding: 7px 10px;
   border: 1px solid rgba(255, 255, 255, 0.18);
-  border-radius: 8px;
+  border-radius: var(--radius-input);
   background: rgba(255, 255, 255, 0.08);
   color: #fff;
   font-size: 13px;
@@ -871,7 +888,7 @@
 .topic-item {
   padding: 6px 10px;
   border: none;
-  border-radius: 8px;
+  border-radius: var(--radius-input);
   background: rgba(255, 255, 255, 0.05);
   color: rgba(255, 255, 255, 0.85);
   font-size: 13px;
@@ -882,10 +899,10 @@
     color 0.15s ease;
 }
 .topic-item:hover {
-  background: rgba(124, 108, 240, 0.25);
+  background: var(--accent-weak);
 }
 .topic-item.on {
-  background: rgba(124, 108, 240, 0.6);
+  background: var(--accent-strong);
   color: #fff;
 }
 
@@ -917,10 +934,10 @@
   font-size: 11px;
 }
 .clone-tip.ok {
-  color: #6fcf7f;
+  color: var(--ok);
 }
 .clone-tip.err {
-  color: #ff8a80;
+  color: var(--err);
 }
 
 /* 记忆页:事实列表 */
@@ -939,7 +956,7 @@
   font-size: 10px;
   padding: 1px 5px;
   border-radius: 4px;
-  background: rgba(124, 108, 240, 0.4);
+  background: var(--accent-strong);
   color: #fff;
 }
 .mem-content {
@@ -966,7 +983,7 @@
   color: #ffd166;
 }
 .hist-clear.danger {
-  color: #ff8a80;
+  color: var(--err);
 }
 
 /* 聊天输入条:位置跟随工具栏(left/top 内联,锚定把手中心),带面板底色避免叠在视频上看不见 */
@@ -976,7 +993,7 @@
   width: 380px;
   padding: 10px;
   border: 1px solid rgba(255, 255, 255, 0.14);
-  border-radius: 14px;
+  border-radius: var(--radius-panel);
   background: rgba(20, 20, 31, 0.97);
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
   z-index: 30;
@@ -989,7 +1006,7 @@
   flex: 1;
   min-width: 0;
   border: 1px solid rgba(255, 255, 255, 0.18);
-  border-radius: 8px;
+  border-radius: var(--radius-input);
   background: rgba(255, 255, 255, 0.08);
   color: #fff;
   padding: 7px 10px;
@@ -998,8 +1015,8 @@
 .user-bubble {
   margin: 0 0 8px;
   padding: 6px 10px;
-  border-radius: 8px;
-  background: rgba(124, 108, 240, 0.35);
+  border-radius: var(--radius-input);
+  background: var(--accent-weak);
   font-size: 12px;
   text-align: center;
 }
@@ -1018,4 +1035,35 @@
 /* 久坐提醒行:开关 + 分钟数输入 */
 .break-min-input {
   width: 64px;
+}
+
+/* 工具栏分组分隔线 */
+.bar-sep {
+  width: 1px;
+  height: 20px;
+  background: rgba(255, 255, 255, 0.18);
+  border-radius: 1px;
+  flex: none;
+}
+
+/* 退出按钮 armed 态:红底白字填充,尺寸不跳变 */
+.ctrl-btn.danger.armed {
+  background: rgba(229, 72, 72, 0.85);
+  border-color: rgba(255, 138, 128, 0.9);
+  color: #fff;
+}
+
+/* 录音目标行:过滤框/下拉/按钮同行对齐 */
+.capture-fields {
+  display: flex;
+  gap: 6px;
+}
+.capture-fields input[type='text'],
+.capture-fields select {
+  flex: 1;
+  min-width: 0;
+}
+.capture-fields .panel-btn {
+  white-space: nowrap;
+  flex: none;
 }

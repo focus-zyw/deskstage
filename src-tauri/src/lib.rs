@@ -6,6 +6,7 @@ use tauri::Emitter;
 mod audio_capture;
 mod capture;
 mod env;
+mod ocr;
 mod webchat;
 
 // 光标轮询线程：以约 80Hz 读取全局光标位置，位置变化时推送给前端。
@@ -79,7 +80,8 @@ pub fn run() {
       env::env_snapshot,
       webchat::webchat_edge_launch,
       webchat::webchat_edge_kill,
-      webchat::webchat_main_visible
+      webchat::webchat_main_visible,
+      ocr::ocr_clipboard
     ])
     .setup(|app| {
       if cfg!(debug_assertions) {

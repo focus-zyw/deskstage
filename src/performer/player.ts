@@ -76,9 +76,11 @@ export class PerformancePlayer {
         const after = clampPauseMs(line.pauseAfter)
         if (after) await sleep(after, ctrl.signal)
         if (ctrl.signal.aborted) break
-        this.cbs.onLineEnd(line.speaker)
-        // 默认 gap 只在句与句之间;最后一句不叠加,收底留白已由 pauseAfter 承担
-        if (i < lines.length - 1) await sleep(gap, ctrl.signal)
+        // 最后一句跳过 onLineEnd:响底表情定格给观众笑的时间(收底拍由 onDone 侧统一回 idle)
+        if (i < lines.length - 1) {
+          this.cbs.onLineEnd(line.speaker)
+          await sleep(gap, ctrl.signal)
+        }
       }
       // 观众抉择点:暂停推进,窗体侧弹按钮;resume(branchId) 后播对应分支
       if (!ctrl.signal.aborted && opts.choice && opts.after) {
@@ -102,8 +104,10 @@ export class PerformancePlayer {
           const after = clampPauseMs(line.pauseAfter)
           if (after) await sleep(after, ctrl.signal)
           if (ctrl.signal.aborted) break
-          this.cbs.onLineEnd(line.speaker)
-          if (i < afterLines.length - 1) await sleep(gap, ctrl.signal)
+          if (i < afterLines.length - 1) {
+            this.cbs.onLineEnd(line.speaker)
+            await sleep(gap, ctrl.signal)
+          }
         }
       }
       if (!ctrl.signal.aborted) {

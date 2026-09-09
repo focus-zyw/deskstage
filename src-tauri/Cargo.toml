@@ -26,9 +26,11 @@ tauri-plugin-log = "2"
 tauri-plugin-fs = "2"
 mouse_position = "0.1"
 tauri-plugin-http = "2"
+# windows 0.61 以 default-features=false 引入 windows-future;显式开 std 解锁 IAsyncOperation 的 .await
+windows-future = { version = "0.2.1", features = ["std"] }
 wasapi = "0.24.0"
 sysinfo = "0.36.1"
-windows = { version = "0.61.3", features = ["Win32_UI_WindowsAndMessaging", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_System_Power", "Win32_System_Threading", "Win32_UI_Input_KeyboardAndMouse"] }
+windows = { version = "0.61.3", features = ["Win32_UI_WindowsAndMessaging", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_System_Power", "Win32_System_Threading", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_Com", "ApplicationModel_DataTransfer", "Foundation", "Globalization", "Graphics_Imaging", "Media_Ocr", "Storage_Streams"] }
 tauri-plugin-single-instance = "2.4.4"
 image = { version = "0.25.6", default-features = false, features = ["png"] }
 tauri-plugin-clipboard-manager = "2.3.3"
