@@ -3,9 +3,10 @@ import { getConfig, inTauri } from '../storage/configStore'
 import type { UserProfile } from '../storage/configStore'
 import { buildMessages, renderUserContext, type UserContext } from './promptBuilder'
 import { getMemory, topFacts, tasteSummary, type FactCategory } from '../storage/memoryStore'
+import { storyContext } from '../storage/storyStore'
 import { pickRelationship } from '../performer/modes/relationships'
 import { currentTimeSlot } from './timeAware'
-import { VALID_ACTIONS, type DialogLine, type Speaker } from '../performer/player'
+import { VALID_ACTIONS, clampPauseMs, sanitizeDelivery, type DialogLine, type Speaker } from '../performer/player'
 import type { Mode } from '../performer/modes'
 
 /** 把底层错误归类成用户能懂的短句;附带 HTTP body 里的服务端说明(截断) */
@@ -156,6 +157,8 @@ export async function generateDialog(
   const userCtx: UserContext = {
     profile: cfg.userProfile,
     taste: await tasteSummary(3) || undefined,
+    // 50% 概率注入角色世界:老梗高频复读比没有更糟
+    story: Math.random() < 0.5 ? await storyContext(2) : undefined,
     facts: topFacts(mem, 8),
   }
   // 本集临时关系:随机局势决定攻守姿态,场景卡据此构建(重试沿用同一关系,保持一致)
@@ -358,6 +361,94 @@ export async function extractFacts(
         content: f.content.trim().slice(0, 120),
         category: (cats.includes(f.category as FactCategory) ? f.category : 'other') as FactCategory,
       }))
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/**
+ * 演出节奏标注:给一集台词补停顿/听者反应/语气的独立二遍调用。
+ * 为什么不在生成时一并要:实测小模型在长 prompt 下会把字段塞进台词文本、
+ * 把 delivery 泄漏进 action(污染台词),拆开后各自合规。
+ * 输出是按行号的编辑表(~100 token),合并时钳位校验;8s 超时,失败原样返回。
+ */
+export async function addPerformanceCues(lines: DialogLine[]): Promise<DialogLine[]> {
+  const script = lines.map((l, i) => `${i}.${l.speaker === 'A' ? '甲' : '乙'}:${l.text}`).join('\n')
+  const messages: { role: string; content: string }[] = [
+    {
+      role: 'system',
+      content: `给这段双人喜剧台词标注演出节奏,让笑点有呼吸。只输出一个 JSON 对象:{"cues":{"行号":{"pauseBefore":毫秒,"pauseAfter":毫秒,"listenerAction":"动作","delivery":"deadpan|excited|slow"}}}
+- 只给值得标注的行(通常 3~6 行),别每行都标:
+  包袱抖出前的行给 "pauseBefore":300~600;响底的最后一句给 "pauseAfter":900~1500;情绪转折处给听者(另一人)配 "listenerAction",动作只能是 idle|talk|happy|laugh|shy|sleepy|wave|thinking|angry|sad|surprise;语气特别的行(面瘫/兴奋/慢条斯理)给 "delivery"
+- 没有值得标注的行就输出 {"cues":{}}`,
+    },
+    { role: 'user', content: script },
+  ]
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(new DOMException('超时', 'TimeoutError')), 8_000)
+  try {
+    const raw = await chatRaw(messages, ctrl.signal)
+    const m = raw.match(/\{[\s\S]*\}/)
+    if (!m) return lines
+    const obj = JSON.parse(m[0]) as { cues?: Record<string, Record<string, unknown>> }
+    const cues = obj.cues ?? {}
+    return lines.map((line, i) => {
+      const c = cues[String(i)]
+      if (!c || typeof c !== 'object') return line
+      const listenerAction =
+        typeof c.listenerAction === 'string' && VALID_ACTIONS.has(c.listenerAction)
+          ? c.listenerAction
+          : line.listenerAction
+      return {
+        ...line,
+        pauseBefore: clampPauseMs(c.pauseBefore) ?? line.pauseBefore,
+        pauseAfter: clampPauseMs(c.pauseAfter) ?? line.pauseAfter,
+        listenerAction,
+        delivery: sanitizeDelivery(c.delivery) ?? line.delivery,
+      }
+    })
+  } catch {
+    return lines // 标注失败,原样播出
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/**
+ * 角色世界蒸馏:从一集台词里提炼可长期复用的素材——
+ * gags = 两人之间的固定笑点(自包含短语,如"冰箱是甲的健身器材"),
+ * threads = 还没了结的事件线(如"乙还欠甲一杯奶茶")。
+ * 8s 超时、不重试;失败由调用方静默——蒸馏宁可错过也不能拖累演出。
+ */
+export async function distillStory(
+  lines: DialogLine[],
+): Promise<{ gags: string[]; threads: string[] }> {
+  const text = lines.map((l) => `${l.speaker === 'A' ? '甲' : '乙'}:${l.text}`).join('\n')
+  const messages: { role: string; content: string }[] = [
+    {
+      role: 'system',
+      content: `从这段双人情景喜剧台词里,提炼可长期复用的"角色世界"素材。
+- gags:两人之间形成的固定笑点/称呼/歪理,必须是自包含短语(10~25 字,如"冰箱是甲的健身器材"),最多 2 条,没有就给空数组
+- threads:还没了结的事件线(某人欠某人东西/某事没交代完),必须是自包含短语,最多 2 条,没有就给空数组
+只提炼台词里明确出现的,不要编造。只输出一个 JSON 对象:{"gags":["..."],"threads":["..."]}`,
+    },
+    { role: 'user', content: text },
+  ]
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(new DOMException('超时', 'TimeoutError')), 8_000)
+  try {
+    const raw = await chatRaw(messages, ctrl.signal)
+    const m = raw.match(/\{[\s\S]*\}/)
+    if (!m) return { gags: [], threads: [] }
+    const obj = JSON.parse(m[0]) as { gags?: unknown; threads?: unknown }
+    const pick = (v: unknown): string[] =>
+      Array.isArray(v)
+        ? v
+            .filter((x): x is string => typeof x === 'string' && x.trim().length > 3)
+            .map((x) => x.trim().slice(0, 60))
+            .slice(0, 2)
+        : []
+    return { gags: pick(obj.gags), threads: pick(obj.threads) }
   } finally {
     clearTimeout(timer)
   }

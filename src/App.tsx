@@ -19,12 +19,13 @@ import {
   type Speaker,
 } from './performer/player'
 import { MODES, modeList, modeOf, type Mode } from './performer/modes'
-import { generateDialog, generateShortChat, improvPokeLine, describeLlmError, generateUserChatReply, extractFacts } from './engine/llmClient'
+import { generateDialog, generateShortChat, improvPokeLine, describeLlmError, generateUserChatReply, extractFacts, distillStory } from './engine/llmClient'
 import { isQuietHours } from './engine/timeAware'
 import { speak, prefetchVoice, stopSpeaking, VOICES, cloneVoice, listCustomVoices, type ClonedVoice } from './engine/tts'
 import { prefetchNext } from './engine/dialogPrefetch'
 import { TOPIC_SEEDS, pickTopic } from './engine/topicSeeds'
 import { bumpTopicSeen, bumpTopicFavored, bumpTopicReplays, bumpTopicWatched, bumpTopicSkipped, bumpMode, bumpPoke, getTopicWeights, getMemory, clearMemory, deleteFact, togglePinFact, topFacts, mergeFacts, type MemoryFact } from './storage/memoryStore'
+import { getStory, mergeStory, removeStoryItem, type StoryData } from './storage/storyStore'
 import { VENDORS, CUSTOM_VENDOR_ID, vendorIdOfBaseUrl } from './engine/vendors'
 import { takePrefetch } from './storage/prefetchStore'
 import { appendHistory, loadRecentHistory, listEpisodes, deleteEpisodes, toggleFavorite, type Episode } from './storage/historyStore'
@@ -83,6 +84,14 @@ const MEM_CAT_LABEL: Record<string, string> = {
 
 /** 语气→说话节奏(秒/循环):deadpan 慢半拍、excited 加速、slow 拖沓;与 TTS 语速同向 */
 const DELIVERY_TALK_DUR: Record<string, number> = { deadpan: 1.05, excited: 0.38, slow: 0.9 }
+
+/** 保底收底留白:未走二遍节奏标注的集,最后一句自动补 1s 停顿,给响底包袱留笑的时间 */
+function withFinalePause(lines: DialogLine[]): DialogLine[] {
+  if (lines.length === 0) return lines
+  const last = lines[lines.length - 1]!
+  if (last.pauseAfter !== undefined) return lines
+  return [...lines.slice(0, -1), { ...last, pauseAfter: 1000 }]
+}
 
 /** apiKeys 的存储键:预设厂商用 id,自定义端点按 baseUrl 区分(与 configStore 注释约定一致) */
 function vendorKeyOf(id: string, baseUrl: string): string {
@@ -357,6 +366,8 @@ function App() {
   // 记忆系统的机器事实列表(设置"记忆"页展示/管理)
   const [memoryFacts, setMemoryFacts] = useState<MemoryFact[]>([])
   const [clearMemArmed, setClearMemArmed] = useState(false)
+  // 角色世界(两人之间的老梗/未了结事件),记忆页展示管理
+  const [storyData, setStoryData] = useState<StoryData | null>(null)
   // 聊天通道:输入框开合/草稿/应答中;用户气泡(区别于角色气泡)
   const [chatOpen, setChatOpen] = useState(false)
   const [chatDraft, setChatDraft] = useState('')
@@ -640,7 +651,7 @@ function App() {
     setAction({ A: 'idle', B: 'idle' })
     setPhase('performing')
     playingLines.current = ep.lines
-    player.current!.play(ep.lines, { gap: modeOf(ep.mode).gap })
+    player.current!.play(withFinalePause(ep.lines), { gap: modeOf(ep.mode).gap })
   }
 
   /** 加权随机抽一集历史重放(收藏权重 5):不调 LLM、不写历史 */
@@ -790,8 +801,9 @@ function App() {
       void appendHistory(hit.lines, hit.mode, hit.topic) // 使用后移入 history(fire-and-forget)
       setPhase('performing')
       playingLines.current = hit.lines
-      player.current!.play(hit.lines, { gap: modeOf(hit.mode).gap })
+      player.current!.play(withFinalePause(hit.lines), { gap: modeOf(hit.mode).gap })
       void prefetchNext(m, hit.lines, fixedTopic ?? undefined) // 补货下一轮(静默)
+      distillStoryInBackground(hit.lines) // 后台蒸馏角色世界素材
       return
     }
 
@@ -810,8 +822,9 @@ function App() {
       void appendHistory(lines, m, topic) // 落盘（fire-and-forget，失败不阻断演出）
       setPhase('performing')
       playingLines.current = lines
-      player.current!.play(lines, { gap: MODES[m].gap })
+      player.current!.play(withFinalePause(lines), { gap: MODES[m].gap })
       void prefetchNext(m, lines, fixedTopic ?? undefined) // 请求生成两轮：当前轮 + 后台预生成
+      distillStoryInBackground(lines) // 后台蒸馏角色世界素材
     } catch (e) {
       if (ctrl.signal.aborted) return
       console.error('LLM 生成失败，回退硬编码脚本', e)
@@ -909,6 +922,22 @@ function App() {
   /** 记忆页:刷新事实列表 */
   async function refreshMemoryFacts() {
     setMemoryFacts((await getMemory()).facts)
+  }
+
+  /** 记忆页:刷新角色世界列表 */
+  async function refreshStory() {
+    setStoryData(await getStory())
+  }
+
+  /** 后台蒸馏本集的角色世界素材(老梗/未了结事件),静默失败不阻塞演出 */
+  function distillStoryInBackground(lines: DialogLine[]) {
+    void (async () => {
+      try {
+        await mergeStory(await distillStory(lines))
+      } catch {
+        // 静默:蒸馏宁可错过
+      }
+    })()
   }
 
   /** 打开设置：读当前配置回填表单，加载历史分集 */
@@ -1375,6 +1404,7 @@ function App() {
                 onClick={() => {
                   setSettingsTab('memory')
                   void refreshMemoryFacts()
+                  void refreshStory()
                 }}
               >
                 记忆
@@ -1746,6 +1776,38 @@ function App() {
                 className="mem-btn"
                 title="忘记这条"
                 onClick={() => void (async () => { await deleteFact(f.id); await refreshMemoryFacts() })()}
+              >
+                ✕
+              </button>
+            </div>
+          ))}
+          <div className="settings-sep">
+            <span>角色世界(两人之间的老梗/未了结事件,演出中会偶尔回收)</span>
+          </div>
+          {(storyData?.gags.length ?? 0) === 0 && (storyData?.threads.length ?? 0) === 0 && (
+            <div className="settings-tip">还没有角色共同记忆 — 演出几集后会自动积累</div>
+          )}
+          {storyData?.gags.map((g) => (
+            <div className="mem-fact" key={g.id}>
+              <span className="mem-cat">老梗</span>
+              <span className="mem-content">{g.text}</span>
+              <button
+                className="mem-btn"
+                title="删掉这条老梗"
+                onClick={() => void (async () => { await removeStoryItem('gags', g.id); await refreshStory() })()}
+              >
+                ✕
+              </button>
+            </div>
+          ))}
+          {storyData?.threads.map((t) => (
+            <div className="mem-fact" key={t.id}>
+              <span className="mem-cat">未了结</span>
+              <span className="mem-content">{t.text}</span>
+              <button
+                className="mem-btn"
+                title="删掉这条事件线"
+                onClick={() => void (async () => { await removeStoryItem('threads', t.id); await refreshStory() })()}
               >
                 ✕
               </button>

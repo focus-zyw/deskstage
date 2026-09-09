@@ -11,13 +11,15 @@ export interface ChatMessage {
   content: string
 }
 
-/** 使用者上下文:画像(手填)+ 口味摘要 + 记忆事实(机器提取),由调用方组装后注入 */
+/** 使用者上下文:画像(手填)+ 口味摘要 + 记忆事实(机器提取) + 角色世界,由调用方组装后注入 */
 export interface UserContext {
   profile?: UserProfile
   /** 口味摘要,如"减肥、上班摸鱼"(来自行为偏好统计) */
   taste?: string
   /** 记忆事实内容列表(pinned 优先) */
   facts?: string[]
+  /** 角色世界:两人之间的老梗与未了结事件(与观众隐私无关,适合制造 callbacks) */
+  story?: { gags: string[]; threads: string[] }
 }
 
 /** 把画像/口味/记忆事实渲染成一段"观众画像"文本,空字段自动省略 */
@@ -32,6 +34,8 @@ export function renderUserContext(ctx: UserContext): string {
   if (bits.length) parts.push(`我们的观众朋友${bits.join(';')}。聊天中可以自然地带到这些(不要刻意每句都提)。`)
   if (p?.banTopics) parts.push(`雷区(绝对不要聊):${p.banTopics}。`)
   if (ctx.taste) parts.push(`观众最近爱听的话题:${ctx.taste}。`)
+  if (ctx.story?.gags.length) parts.push(`可回收的老梗(最多自然回收 1 个,别强行):${ctx.story.gags.join(';')}。`)
+  if (ctx.story?.threads.length) parts.push(`未了结的事件(适合在包袱里了结):${ctx.story.threads.join(';')}。`)
   if (ctx.facts?.length) parts.push(`你已经记住的关于观众的事:\n${ctx.facts.map((f, i) => `${i + 1}. ${f}`).join('\n')}`)
   return parts.length ? `\n\n使用者画像：${parts.join(' ')}` : ''
 }
@@ -82,10 +86,9 @@ export function buildMessages(
 - dialog 必须逐拍实现 card.escalation；secret 在结尾反转揭晓；callback 必须回收本集前面埋的线
 - speaker 只能是 "A" 或 "B"
 - action 只能是这些词之一（禁止用 card 的字段名或其他词）：${ACTIONS}
-- 演出信息必须有，至少 3 句带：
-  铺垫句带 "pauseBefore":300~600(抖包袱前蓄势)；响底的最后一句必带 "pauseAfter":900~1500(留白给笑)；情绪转折处给听者配 "listenerAction"(词表同 action)；语气是面瘫/兴奋/慢条斯理的句子标 "delivery":"deadpan|excited|slow"
 - 一段共 14~22 句，两人交替说话
-- 每句口语化，不超过 25 个字`
+- 每句口语化，不超过 25 个字
+- 台词只写 text/action 两个字段,不要附加任何其他字段`
 
   const history = recentLines.length
     ? `上一段的结尾（新的一段要自然衔接，不要重复内容）：\n${recentLines
