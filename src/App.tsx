@@ -9,7 +9,7 @@ import { Bubble } from './stage/Bubble'
 import { EyeIcon, EyeOffIcon, PlayIcon, StopIcon, GearIcon, PowerIcon, TargetIcon, PokeballIcon, ChatIcon, CropIcon } from './stage/icons'
 import { startScreenshot, applyScreenshotHotkey } from './capture'
 import { defaultPersonaText, setCharacterNames, setPersonaOverride } from './engine/persona'
-import { startEnvPolling, stopEnvPolling, isFullscreenApp, isUserActive } from './engine/envAware'
+import { startEnvPolling, stopEnvPolling, isFullscreenApp } from './engine/envAware'
 import { setCaptureMode } from './input/pointerManager'
 import { CaptureOverlay } from './CaptureOverlay'
 import { SPRITE_SETS, preloadSprites } from './stage/spriteSets'
@@ -27,11 +27,11 @@ import {
 } from './performer/player'
 import { MODES, modeList, modeOf, type Mode } from './performer/modes'
 import { generateDialog, generateShortChat, improvPokeLine, describeLlmError, generateUserChatReply, extractFacts, distillStory, memoReminderLine } from './engine/llmClient'
-import { isQuietHours } from './engine/timeAware'
 import { react, reactBonded, distanceBands } from './engine/interactionRules'
 import { bondTierOf } from './engine/interactionRules'
 import { getBond, shiftBond } from './storage/storyStore'
-import { logInteraction, logInterrupt, logDrag } from './storage/interactionStore'
+import { logInteraction, logInterrupt, logDrag, logDismiss, resetDismissals, type DismissableKind } from './storage/interactionStore'
+import { startScheduler, noteActivity, noteSpontaneous } from './runtime/proactiveScheduler'
 import { speak, prefetchVoice, stopSpeaking, VOICES, cloneVoice, listCustomVoices, type ClonedVoice } from './engine/tts'
 import { prefetchNext } from './engine/dialogPrefetch'
 import { WEBCHAT_SITES, webchatLogin, webchatProbe, webchatRestoreMain } from './engine/webchat'
@@ -497,8 +497,15 @@ function App() {
   const topicOpen = rt.overlays.includes('topic')
   const [topicQuery, setTopicQuery] = useState('')
   // 空闲自动重放:频率来自配置,activeTick 用于用户互动后重置计时
-  const [autoReplayMin, setAutoReplayMin] = useState(DEFAULT_CONFIG.autoReplayMin)
   const [activeTick, setActiveTick] = useState(0)
+  // 正在播的主动行为(供"提前掐断 = 负反馈"记账);onDone/stopEverything 清
+  const proactiveAct = useRef<{ kind: DismissableKind; since: number } | null>(null)
+  /** 用户主动互动:重置空闲/自动重放计时 + 清降频连击(还在陪玩的观众不该被降频) */
+  function noteUserActive() {
+    setActiveTick((t) => t + 1)
+    noteActivity()
+    void resetDismissals()
+  }
   const [episodes, setEpisodes] = useState<Episode[]>([])
   // 网页版生成:窗口/就绪状态的一行展示文本
   const [webchatStatusText, setWebchatStatusText] = useState('')
@@ -540,10 +547,8 @@ function App() {
   // 远距离喊话:气泡加大加粗
   const [loudBubble, setLoudBubble] = useState<Record<Speaker, boolean>>({ A: false, B: false, C: false })
   const distLastAt = useRef<Record<string, number>>({})
-  // 时间感知:启动问候 + 空闲自发短聊天
-  const [spontTick, setSpontTick] = useState(0)
+  // 时间感知:启动问候 + 空闲自发短聊天(时序状态在 proactiveScheduler 内)
   const phaseRef = useRef(phase)
-  const lastSpontAt = useRef(0)
   const greeted = useRef(false)
   const dragRef = useRef<{ who: Speaker; startX: number; startY: number; orig: CharPos; moved: boolean } | null>(null)
   const draggingWho = useRef<Speaker | null>(null)
@@ -617,6 +622,7 @@ function App() {
           nowPlaying.current = { topic: p.topic, lines: branchLines, total: branchLines.length, index: -1, source: 'gen' }
         }
         pendingEpisode.current = null
+        proactiveAct.current = null // 自然播完不算忽略
         setRuntimeMode({ type: 'idle' })
         setSpeaking(null)
         setDelivery({ A: undefined, B: undefined, C: undefined })
@@ -751,7 +757,6 @@ function App() {
     preloadSprites(Object.values(SPRITE_SETS)) // 预热立绘,演出中切换动作零延迟
     void getConfig().then((c) => {
       setForm(c) // form 与磁盘配置同步:兴趣/画像等在播放流程里也会读,不能等打开设置才回填
-      setAutoReplayMin(c.autoReplayMin)
       applyChars(c.characters)
       setRuntimeCharHidden(c.charactersHidden)
       setRuntimeDnd(c.dnd) // 勿扰状态进运行时(工具栏按钮/TTS 同步)
@@ -910,21 +915,23 @@ function App() {
     player.current!.play(withFinalePause(ep.lines), { gap: modeOf(ep.mode).gap })
   }
 
-  /** 加权随机抽一集历史重放(收藏权重 5):不调 LLM、不写历史 */
-  async function autoReplay() {
-    if (player.current!.playing) return
-    if (isFullscreenApp()) return // 用户在全屏应用(视频/游戏/演示)里,别打扰
+  /** 加权随机抽一集历史重放(收藏权重 5):不调 LLM、不写历史。返回是否真的播了(调度器记账用) */
+  async function autoReplay(): Promise<boolean> {
+    if (player.current!.playing) return false
+    if (isFullscreenApp()) return false // 用户在全屏应用(视频/游戏/演示)里,别打扰
     const eps = await listEpisodes(100)
     // 读历史(可能数百 ms)期间用户点了生成/聊天 → 不抢场
-    if (phaseRef.current !== 'idle' || player.current!.playing) return
-    if (eps.length === 0) return
+    if (phaseRef.current !== 'idle' || player.current!.playing) return false
+    if (eps.length === 0) return false
     const pool = eps.length > 1 ? eps.filter((e) => e.ts !== lastReplayTs.current) : eps
     const bag: Episode[] = []
     for (const e of pool) {
       for (let i = 0; i < (e.fav ? 5 : 1); i++) bag.push(e)
     }
     const ep = bag[Math.floor(Math.random() * bag.length)]
+    proactiveAct.current = { kind: 'replay', since: Date.now() }
     playEpisode(ep, 'auto')
+    return true
   }
 
   /** 点击历史行:关闭面板并回放该集 */
@@ -932,13 +939,6 @@ function App() {
     closeOverlay('settings')
     playEpisode(ep, 'manual')
   }
-
-  /** 空闲自动重放:仅在没有生成/演出、没开面板/聊天框、角色未隐藏时计时;任何依赖变化都会重置计时 */
-  useEffect(() => {
-    if (phase !== 'idle' || settingsOpen || chatOpen || charHidden || autoReplayMin <= 0) return
-    const t = window.setTimeout(() => void autoReplay(), autoReplayMin * 60_000)
-    return () => window.clearTimeout(t)
-  }, [phase, settingsOpen, chatOpen, charHidden, autoReplayMin, activeTick])
 
   /** 观众选边:播对应分支并补记历史;30s 未选由 effect 自动随机 */
   function pickOption(option: ChoiceOption) {
@@ -982,34 +982,46 @@ function App() {
     }, 900)
   }
 
-  /** 自发短聊天调度:连续空闲 2.5~5 分钟后尝试一次;各守卫不过就静默跳过 */
-  useEffect(() => {
-    if (phase !== 'idle' || settingsOpen || topicOpen || chatOpen || charHidden || autoReplayMin <= 0) return
-    const t = window.setTimeout(() => void trySpontaneous(), 150_000 + Math.random() * 150_000)
-    return () => window.clearTimeout(t)
-
-    async function trySpontaneous() {
-      setSpontTick((n) => n + 1) // 本次尝试结束 → 调度 effect 重新武装
-      if (phaseRef.current !== 'idle' || player.current!.playing) return
-      if (isQuietHours()) return // 凌晨免打扰,角色也该睡觉
-      if (isFullscreenApp()) return // 全屏应用(视频/游戏/演示)自动闭麦
-      if (autoReplayMin <= 0) return // 用户关了自动内容,自发聊天一并尊重
-      const now = Date.now()
-      if (now - lastSpontAt.current < 15 * 60_000) return // 最小间隔
-      if (Math.random() > 0.4) return // 这次不聊
-      const cfg = await getConfig()
-      if (!cfg.apiKey.trim()) return
-      lastSpontAt.current = now
-      try {
-        const lines = await generateShortChat('spontaneous', lastLines.current)
-        if (phaseRef.current !== 'idle' || player.current!.playing) return
-        if (lines.length === 0) return
-        playShortChat(lines)
-      } catch {
-        // 生成失败静默——自发内容宁可错过
-      }
+  /** 自发短聊天:调度器闸门(空闲时长/冷却/配额/勿扰)已过,这里只做最后防御检查与执行。返回是否真的播了 */
+  async function spontaneous(): Promise<boolean> {
+    if (phaseRef.current !== 'idle' || player.current!.playing) return false
+    const cfg = await getConfig()
+    if (!cfg.apiKey.trim()) return false
+    try {
+      const lines = await generateShortChat('spontaneous', lastLines.current)
+      if (phaseRef.current !== 'idle' || player.current!.playing) return false
+      if (lines.length === 0) return false
+      proactiveAct.current = { kind: 'spontaneous', since: Date.now() }
+      playShortChat(lines)
+      return true
+    } catch {
+      return false // 生成失败静默——自发内容宁可错过
     }
-  }, [phase, settingsOpen, topicOpen, chatOpen, charHidden, autoReplayMin, activeTick, spontTick])
+  }
+
+  /** 久坐提醒:调度器已算好工作时长/冷却/守卫,这里只负责生成提醒并播出。返回是否提醒了 */
+  async function breakRemind(): Promise<boolean> {
+    if (phaseRef.current !== 'idle' || player.current!.playing) return false
+    try {
+      const lines = await generateShortChat('break', lastLines.current)
+      if (phaseRef.current !== 'idle' || player.current!.playing || lines.length === 0) return false
+      lastLines.current = lines
+      playingLines.current = lines
+      proactiveAct.current = { kind: 'break', since: Date.now() }
+      beginPerforming()
+      player.current!.play(lines, { gap: 700 })
+      return true
+    } catch {
+      return false // 静默:提醒宁可错过
+    }
+  }
+
+  // 主动行为调度器:备忘扫描/久坐/重放/自发的统一定时、优先级与配额(替代原先 4 个散装定时器)
+  useEffect(() => {
+    return startScheduler({ sweepMemos, breakRemind, autoReplay, spontaneous })
+    // deps 是组件内函数声明,行为恒定;首帧闭包即可(内部只依赖 ref 与模块函数)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // 空闲 3 分钟无互动 → 角色打瞌睡(sleepy);任何互动/演出/面板恢复
   const [sleepyOn, setSleepyOn] = useState(false)
@@ -1021,42 +1033,7 @@ function App() {
       setSleepyOn(false)
     }
   }, [phase, settingsOpen, topicOpen, chatOpen, charHidden, activeTick])
-  // 久坐提醒(番茄钟):启用后,连续活跃 X 分钟且中间没歇过,两人用角色口吻提醒;
-  // 提醒后重新计时;休息(键鼠空闲≥5分钟)清零。提醒不写历史(不是剧情)
-  const workStart = useRef<number | null>(null)
-  const lastBreakRemindAt = useRef(0)
-  useEffect(() => {
-    const t = window.setInterval(() => {
-      void (async () => {
-        try {
-          if (isFullscreenApp()) return // 全屏应用时不提醒
-          const cfg = await getConfig()
-          if (!cfg.breakReminder.enabled) return
-          if (phaseRef.current !== 'idle' || player.current!.playing) return
-          if (charHidden) return
-          const need = Math.min(120, Math.max(15, cfg.breakReminder.minutes || 45))
-          if (!isUserActive()) {
-            workStart.current = null // 用户在休息,计时清零
-            return
-          }
-          if (workStart.current === null) workStart.current = Date.now()
-          const workedMin = (Date.now() - workStart.current) / 60000
-          if (workedMin < need || Date.now() - lastBreakRemindAt.current < 30 * 60_000) return
-          lastBreakRemindAt.current = Date.now()
-          workStart.current = Date.now()
-          const lines = await generateShortChat('break', lastLines.current)
-          if (phaseRef.current !== 'idle' || player.current!.playing || lines.length === 0) return
-          lastLines.current = lines
-          playingLines.current = lines
-          beginPerforming()
-          player.current!.play(lines, { gap: 700 })
-        } catch {
-          // 静默:提醒宁可错过
-        }
-      })()
-    }, 60_000)
-    return () => window.clearInterval(t)
-  }, [])
+  // 久坐提醒(番茄钟)的计时/冷却/守卫已迁入 proactiveScheduler;breakRemind 只管执行
 
   /** 启动问候:打开应用时按当前时段打招呼(失败静默);占用自发聊天的预算 */
   useEffect(() => {
@@ -1069,7 +1046,7 @@ function App() {
         const lines = await generateShortChat('greeting', lastLines.current)
         if (phaseRef.current !== 'idle' || player.current!.playing) return
         if (lines.length === 0) return
-        lastSpontAt.current = Date.now() - 14 * 60_000 // 问候后约 1 分钟起,自发聊天才可用
+        noteSpontaneous(Date.now() - 14 * 60_000) // 问候后约 1 分钟起,自发聊天才可用
         playShortChat(lines)
       } catch {
         // 问候失败静默
@@ -1182,6 +1159,10 @@ function App() {
     // 中途按停止 = 负反馈(演过 80% 以上视为看完,不罚);正在生成时无账可记
     const np = nowPlaying.current
     if (np && np.total > 0 && np.index / np.total < 0.8) bumpTopicSkipped(np.topic)
+    // 主动行为(重放/自发/久坐提醒)开播 15s 内就被掐 → 记一次忽略;连续 3 次该类冷却翻倍
+    const act = proactiveAct.current
+    if (act && Date.now() - act.since < 15_000) void logDismiss(act.kind)
+    proactiveAct.current = null
     nowPlaying.current = null
     generateAbort.current?.abort()
     generateAbort.current = null
@@ -1215,7 +1196,7 @@ function App() {
     setChatDraft('')
     setChatBusy(true)
     setTopActor(who)
-    setActiveTick((t) => t + 1)
+    noteUserActive()
     try {
       const reply = await generateUserChatReply(who, text)
       setBubble((b) => ({ ...b, [who]: reply }))
@@ -1327,7 +1308,6 @@ function App() {
   async function commitSettings(partial: Partial<AppConfig>) {
     try {
       const next = await saveConfig(partial)
-      setAutoReplayMin(next.autoReplayMin) // 空闲计时按新频率重新武装
       void applyScreenshotHotkey() // 快捷键按新配置换绑
       void invoke('set_capture_excluded', { enable: next.screenshot.hideSelf }).catch(() => {})
       if (next.envSense) startEnvPolling()
@@ -1410,42 +1390,38 @@ function App() {
     return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
   }
 
-  // 30 秒扫一次到点备忘:触发画外音提醒(常驻卡片)+ 甲乙讨论;重启后过期未触发的也会补一次
-  useEffect(() => {
-    const t = window.setInterval(() => {
-      void (async () => {
-        if (memoSweepBusy.current) return
-        memoSweepBusy.current = true
-        try {
-          const cfg = await getConfig()
-          const due = await getDueMemos(Date.now(), cfg.memo.advanceMin)
-          for (const memo of due) {
-            await updateMemo(memo.id, { fired: true })
-            setMemoAlerts((list) => [...list, { id: memo.id, text: memo.text }])
-            if (phaseRef.current === 'idle') {
-              try {
-                speak('C', await memoReminderLine(memo.text), undefined, 'proactive')
-              } catch {
-                speak('C', `叮——该「${memo.text}」了`, undefined, 'proactive')
-              }
-            }
-            try {
-              const lines = await generateShortChat('memo', lastLines.current, memo.text)
-              if (phaseRef.current === 'idle' && !player.current!.playing && lines.length) {
-                lastLines.current = lines
-                playingLines.current = lines
-                beginPerforming()
-                player.current!.play(lines, { gap: 700 })
-              }
-            } catch { /* 讨论失败静默 */ }
+  /** 到点备忘扫描(调度器每 tick 调一次,内部幂等):卡片永远即时;
+   *  画外音与甲乙讨论仅在空闲时追加,勿扰时 TTS 自静、卡片照弹 */
+  async function sweepMemos(): Promise<void> {
+    if (memoSweepBusy.current) return
+    memoSweepBusy.current = true
+    try {
+      const cfg = await getConfig()
+      const due = await getDueMemos(Date.now(), cfg.memo.advanceMin)
+      for (const memo of due) {
+        await updateMemo(memo.id, { fired: true })
+        setMemoAlerts((list) => [...list, { id: memo.id, text: memo.text }])
+        if (phaseRef.current === 'idle') {
+          try {
+            speak('C', await memoReminderLine(memo.text), undefined, 'proactive')
+          } catch {
+            speak('C', `叮——该「${memo.text}」了`, undefined, 'proactive')
           }
-        } finally {
-          memoSweepBusy.current = false
         }
-      })()
-    }, 30_000)
-    return () => window.clearInterval(t)
-  }, [])
+        try {
+          const lines = await generateShortChat('memo', lastLines.current, memo.text)
+          if (phaseRef.current === 'idle' && !player.current!.playing && lines.length) {
+            lastLines.current = lines
+            playingLines.current = lines
+            beginPerforming()
+            player.current!.play(lines, { gap: 700 })
+          }
+        } catch { /* 讨论失败静默 */ }
+      }
+    } finally {
+      memoSweepBusy.current = false
+    }
+  }
 
   // ---------- 网页版生成:Edge 窗口与状态 ----------
 
@@ -1766,7 +1742,7 @@ function App() {
   }
 
   function poke(who: 'A' | 'B') {
-    setActiveTick((t) => t + 1) // 用户互动,重置自动重放计时
+    noteUserActive()
     setTopActor(who)
     bumpPoke() // 行为信号:互动频率
 
@@ -2252,6 +2228,25 @@ function App() {
                 saveField({ autoReplayMin: v })
               }}
             />
+          </div>
+          <div className="settings-row">
+            <label>主动程度(自发闲聊/提醒/重放的频率上限,每小时)</label>
+            <div className="tr-styles">
+              {([['quiet', '安静(3)'], ['balanced', '平衡(6)'], ['lively', '热闹(12)']] as const).map(
+                ([v, label]) => (
+                  <button
+                    key={v}
+                    className={`tr-style-btn${form.proactivity === v ? ' on' : ''}`}
+                    onClick={() => {
+                      setForm({ ...form, proactivity: v })
+                      saveField({ proactivity: v }, true)
+                    }}
+                  >
+                    {label}
+                  </button>
+                ),
+              )}
+            </div>
           </div>
           <div className="settings-row">
             <div className="settings-hint">使用者的兴趣爱好在"记忆"页维护 — 日常闲聊会偶尔聊到</div>
@@ -3029,7 +3024,7 @@ function App() {
               setCaptureMode(false)
               setCaptureShot(null)
               if (ok) {
-                setActiveTick((t) => t + 1)
+                noteUserActive()
                 // 截图翻译入口的框选刚落定:OCR 识别后自动填入翻译面板并翻译
                 if (pendingOcrTranslate.current) {
                   pendingOcrTranslate.current = false

@@ -13,11 +13,19 @@ export interface InteractionStats {
   interrupts: number
   drags: number
   sinceInject: number
+  /** 主动行为被用户打断的连击计数(按行为分桶):连续 >=3 次 → 该类行为冷却翻倍 */
+  dismissSpontaneous: number
+  dismissReplay: number
+  dismissBreak: number
 }
 
-const DEFAULTS: InteractionStats = { pokeA: 0, pokeB: 0, interrupts: 0, drags: 0, sinceInject: 0 }
+const DEFAULTS: InteractionStats = {
+  pokeA: 0, pokeB: 0, interrupts: 0, drags: 0, sinceInject: 0,
+  dismissSpontaneous: 0, dismissReplay: 0, dismissBreak: 0,
+}
 const LS_KEY = 'vc-interactions'
 const INJECT_THRESHOLD = 3
+const DISMISS_THRESHOLD = 3
 
 let cache: InteractionStats | null = null
 
@@ -28,6 +36,9 @@ function sanitize(v: unknown): InteractionStats {
     pokeA: num(o.pokeA), pokeB: num(o.pokeB),
     interrupts: num(o.interrupts), drags: num(o.drags),
     sinceInject: num(o.sinceInject),
+    dismissSpontaneous: num(o.dismissSpontaneous),
+    dismissReplay: num(o.dismissReplay),
+    dismissBreak: num(o.dismissBreak),
   }
 }
 
@@ -98,4 +109,34 @@ export async function logInterrupt(target: 'A' | 'B'): Promise<void> {
 export async function logDrag(): Promise<void> {
   const stats = await readAll()
   await writeAll(sanitize({ ...stats, drags: stats.drags + 1, sinceInject: stats.sinceInject + 1 }))
+}
+
+// ---------- 主动行为降频记账 ----------
+// 用户提前掐断某类主动行为(自发闲聊/自动重放/久坐提醒) → 连击 +1;
+// 用户做出任何主动互动(戳/聊天/点播) → 连击清零。连击满 3 该类冷却翻倍。
+
+export type DismissableKind = 'spontaneous' | 'replay' | 'break'
+
+export async function logDismiss(kind: DismissableKind): Promise<void> {
+  const key = `dismiss${kind.charAt(0).toUpperCase()}${kind.slice(1)}` as
+    | 'dismissSpontaneous' | 'dismissReplay' | 'dismissBreak'
+  const stats = await readAll()
+  await writeAll(sanitize({ ...stats, [key]: stats[key] + 1 }))
+}
+
+/** 用户主动互动:所有降频连击清零(还在陪玩的观众不该被降频) */
+export async function resetDismissals(): Promise<void> {
+  const stats = await readAll()
+  if (stats.dismissSpontaneous === 0 && stats.dismissReplay === 0 && stats.dismissBreak === 0) return
+  await writeAll(sanitize({ ...stats, dismissSpontaneous: 0, dismissReplay: 0, dismissBreak: 0 }))
+}
+
+/** 该类主动行为的冷却倍率:连击满 3 翻倍,满 6 再翻(封顶 4 倍) */
+export async function dismissCooldownMultiplier(kind: DismissableKind): Promise<number> {
+  const stats = await readAll()
+  const key = `dismiss${kind.charAt(0).toUpperCase()}${kind.slice(1)}` as
+    | 'dismissSpontaneous' | 'dismissReplay' | 'dismissBreak'
+  if (stats[key] >= 6) return 4
+  if (stats[key] >= DISMISS_THRESHOLD) return 2
+  return 1
 }
