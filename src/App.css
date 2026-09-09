@@ -1014,3 +1014,8 @@
   align-items: center;
   gap: 8px;
 }
+
+/* 久坐提醒行:开关 + 分钟数输入 */
+.break-min-input {
+  width: 64px;
+}

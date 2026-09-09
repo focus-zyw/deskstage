@@ -8,6 +8,7 @@ import { CharacterSprite } from './stage/CharacterSprite'
 import { Bubble } from './stage/Bubble'
 import { EyeIcon, EyeOffIcon, PlayIcon, StopIcon, GearIcon, PowerIcon, TargetIcon, PokeballIcon, ChatIcon, CropIcon } from './stage/icons'
 import { startScreenshot, applyScreenshotHotkey } from './capture'
+import { startEnvPolling, stopEnvPolling, isFullscreenApp, isUserActive } from './engine/envAware'
 import { setCaptureMode } from './input/pointerManager'
 import { CaptureOverlay } from './CaptureOverlay'
 import { SPRITE_SETS, preloadSprites } from './stage/spriteSets'
@@ -628,6 +629,8 @@ function App() {
       // 截屏:应用全局快捷键 + 按配置把本窗口从系统级屏幕捕获中排除
       void applyScreenshotHotkey()
       void invoke('set_capture_excluded', { enable: c.screenshot.hideSelf }).catch(() => {})
+      // 环境感知:按配置低频轮询本机状态(电量/前台应用分类等)
+      if (c.envSense) startEnvPolling()
     })
     // 启动恢复：读最近历史，续集生成时衔接上次聊到的内容
     void loadRecentHistory(20).then((entries) => {
@@ -759,6 +762,7 @@ function App() {
   /** 加权随机抽一集历史重放(收藏权重 5):不调 LLM、不写历史 */
   async function autoReplay() {
     if (player.current!.playing) return
+    if (isFullscreenApp()) return // 用户在全屏应用(视频/游戏/演示)里,别打扰
     const eps = await listEpisodes(100)
     // 读历史(可能数百 ms)期间用户点了生成/聊天 → 不抢场
     if (phaseRef.current !== 'idle' || player.current!.playing) return
@@ -837,6 +841,7 @@ function App() {
       setSpontTick((n) => n + 1) // 本次尝试结束 → 调度 effect 重新武装
       if (phaseRef.current !== 'idle' || player.current!.playing) return
       if (isQuietHours()) return // 凌晨免打扰,角色也该睡觉
+      if (isFullscreenApp()) return // 全屏应用(视频/游戏/演示)自动闭麦
       if (autoReplayMin <= 0) return // 用户关了自动内容,自发聊天一并尊重
       const now = Date.now()
       if (now - lastSpontAt.current < 15 * 60_000) return // 最小间隔
@@ -865,6 +870,43 @@ function App() {
       setSleepyOn(false)
     }
   }, [phase, settingsOpen, topicOpen, chatOpen, charHidden, activeTick])
+  // 久坐提醒(番茄钟):启用后,连续活跃 X 分钟且中间没歇过,两人用角色口吻提醒;
+  // 提醒后重新计时;休息(键鼠空闲≥5分钟)清零。提醒不写历史(不是剧情)
+  const workStart = useRef<number | null>(null)
+  const lastBreakRemindAt = useRef(0)
+  useEffect(() => {
+    const t = window.setInterval(() => {
+      void (async () => {
+        try {
+          if (isFullscreenApp()) return // 全屏应用时不提醒
+          const cfg = await getConfig()
+          if (!cfg.breakReminder.enabled) return
+          if (phaseRef.current !== 'idle' || player.current!.playing) return
+          if (charHidden) return
+          const need = Math.min(120, Math.max(15, cfg.breakReminder.minutes || 45))
+          if (!isUserActive()) {
+            workStart.current = null // 用户在休息,计时清零
+            return
+          }
+          if (workStart.current === null) workStart.current = Date.now()
+          const workedMin = (Date.now() - workStart.current) / 60000
+          if (workedMin < need || Date.now() - lastBreakRemindAt.current < 30 * 60_000) return
+          lastBreakRemindAt.current = Date.now()
+          workStart.current = Date.now()
+          const lines = await generateShortChat('break', lastLines.current)
+          if (phaseRef.current !== 'idle' || player.current!.playing || lines.length === 0) return
+          lastLines.current = lines
+          playingLines.current = lines
+          setPhase('performing')
+          player.current!.play(lines, { gap: 700 })
+        } catch {
+          // 静默:提醒宁可错过
+        }
+      })()
+    }, 60_000)
+    return () => window.clearInterval(t)
+  }, [])
+
   /** 启动问候:打开应用时按当前时段打招呼(失败静默);占用自发聊天的预算 */
   useEffect(() => {
     if (greeted.current) return
@@ -1126,10 +1168,14 @@ function App() {
         screenshot: form.screenshot, // 截屏配置(快捷键/开关/角色排除)
         webchatEnabled: form.webchatEnabled,
         webchatSite: form.webchatSite,
+        envSense: form.envSense, // 环境感知开关
+        breakReminder: form.breakReminder, // 久坐提醒(番茄钟)
       })
       setAutoReplayMin(next.autoReplayMin) // 空闲计时按新频率重新武装
       void applyScreenshotHotkey() // 快捷键按新配置换绑
       void invoke('set_capture_excluded', { enable: next.screenshot.hideSelf }).catch(() => {})
+      if (next.envSense) startEnvPolling()
+      else stopEnvPolling()
       setSaveState('saved')
       window.setTimeout(() => setSettingsOpen(false), 900)
     } catch (e) {
@@ -1829,6 +1875,57 @@ function App() {
                 setForm({ ...form, userProfile: { ...form.userProfile, likes: e.target.value } })
               }
             />
+          </div>
+          <div className="settings-row">
+            <label htmlFor="cfg-env">桌面环境感知(电量/前台应用分类等,仅本机分类,不上传)</label>
+            <input
+              id="cfg-env"
+              type="checkbox"
+              checked={form.envSense}
+              onChange={(e) => {
+                const next = e.target.checked
+                setForm({ ...form, envSense: next })
+                saveConfig({ envSense: next }).catch((err) =>
+                  console.warn('环境感知开关保存失败(静默)', err),
+                )
+                next ? startEnvPolling() : stopEnvPolling()
+              }}
+            />
+          </div>
+          <div className="settings-row">
+            <label htmlFor="cfg-break-enable">久坐提醒(连续活跃 X 分钟后角色提醒休息)</label>
+            <div className="shot-key-row">
+              <input
+                id="cfg-break-enable"
+                type="checkbox"
+                checked={form.breakReminder.enabled}
+                onChange={(e) =>
+                  setForm({
+                    ...form,
+                    breakReminder: { ...form.breakReminder, enabled: e.target.checked },
+                  })
+                }
+              />
+              <input
+                type="number"
+                min={15}
+                max={120}
+                step={5}
+                className="break-min-input"
+                title="连续活跃多少分钟后提醒(15~120)"
+                value={form.breakReminder.minutes}
+                onChange={(e) =>
+                  setForm({
+                    ...form,
+                    breakReminder: {
+                      ...form.breakReminder,
+                      minutes: Math.min(120, Math.max(15, Number(e.target.value) || 45)),
+                    },
+                  })
+                }
+              />
+              <span>分钟后</span>
+            </div>
           </div>
           <div className="settings-row">
             <label htmlFor="cfg-mark">显示左上角水印</label>

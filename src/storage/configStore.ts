@@ -82,6 +82,8 @@ export interface AppConfig {
   webchatSite: 'deepseek' | 'doubao'
   /** 桌面环境感知(电量/前台应用分类等,仅本机分类不上传) */
   envSense: boolean
+  /** 久坐提醒(番茄钟):连续活跃 X 分钟后用角色口吻提醒休息 */
+  breakReminder: { enabled: boolean; minutes: number }
 }
 
 // 默认值（首启写入）。想换端点：改 appData/data/config.json 后重启。
@@ -113,6 +115,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   webchatEnabled: false,
   webchatSite: 'deepseek',
   envSense: true,
+  breakReminder: { enabled: false, minutes: 45 },
 }
 
 /** 清洗使用者画像:逐字段裁剪;likes 为空时回落旧 userInterests 字段(老配置平滑迁移) */
@@ -266,6 +269,13 @@ function sanitizeConfig(obj: unknown): AppConfig {
     webchatEnabled: o.webchatEnabled === true,
     webchatSite: o.webchatSite === 'doubao' ? 'doubao' : 'deepseek',
     envSense: o.envSense !== false,
+    breakReminder: ((): { enabled: boolean; minutes: number } => {
+      const b = (o.breakReminder ?? {}) as Record<string, unknown>
+      return {
+        enabled: b.enabled === true,
+        minutes: Math.min(120, Math.max(15, Number(b.minutes) || 45)),
+      }
+    })(),
   }
 }
 

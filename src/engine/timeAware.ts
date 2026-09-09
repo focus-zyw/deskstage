@@ -20,6 +20,12 @@ export function currentTimeSlot(now = new Date()): TimeSlot {
   return { id: 'lateNight', label: '深夜', scene: '深夜还没睡、四周都很安静的氛围' }
 }
 
+/** 深夜降音量窗口:23 点到次日 7 点(比免打扰宽:只降音量不闭嘴) */
+export function isLateNight(now = new Date()): boolean {
+  const h = now.getHours()
+  return h >= 23 || h < 7
+}
+
 /** 免打扰窗口:凌晨 0~7 点不发起自发聊天(角色也该睡觉) */
 export function isQuietHours(now = new Date()): boolean {
   const h = now.getHours()

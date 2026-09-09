@@ -206,7 +206,7 @@ export async function generateDialog(
  * 12s 超时、不重试——自发内容宁可错过也不能拖沓;失败由调用方静默处理。
  */
 export async function generateShortChat(
-  kind: 'greeting' | 'spontaneous',
+  kind: 'greeting' | 'spontaneous' | 'break',
   recentLines: DialogLine[],
 ): Promise<DialogLine[]> {
   const cfg = await getConfig()
@@ -228,7 +228,9 @@ export async function generateShortChat(
   const task =
     (kind === 'greeting'
       ? `观众刚打开应用。用一段符合当前时间的简短开场,两人互相招呼并带上点时间段的梗。`
-      : `两人空闲了一会儿,自发起一个小话题随便聊聊(像真人闲坐时随口开话头)。${interests}`) +
+      : kind === 'break'
+        ? `两人注意到观众已经连续忙了很久,用角色口吻提醒观众休息一下(可以伸懒腰、递杯水、劝两句话),温和一点,别唠叨,2~4 句。`
+        : `两人空闲了一会儿,自发起一个小话题随便聊聊(像真人闲坐时随口开话头)。${interests}`) +
     (prev ? `\n不要重复、要自然衔接刚才的结尾:${prev}` : '')
   const messages: { role: string; content: string }[] = [
     {

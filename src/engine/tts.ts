@@ -6,6 +6,7 @@ import { readTextFile, writeTextFile, exists, mkdir, readDir, remove, stat } fro
 import { appDataDir, join } from '@tauri-apps/api/path'
 import { deliverySpeed } from '../performer/dialogSchema'
 import { getConfig, inTauri, registerVoiceIds } from '../storage/configStore'
+import { isLateNight } from './timeAware'
 import type { Speaker } from '../performer/player'
 
 const TTS_URL = 'https://api.siliconflow.cn/v1/audio/speech'
@@ -29,7 +30,13 @@ function fullVoice(voice: string): string {
 }
 
 /** 合成一句,返回 mp3 二进制。失败抛错由调用方静默 */
-async function synth(text: string, voice: string, apiKey: string, speed = 1): Promise<ArrayBuffer> {
+async function synth(
+  text: string,
+  voice: string,
+  apiKey: string,
+  speed = 1,
+  gain = 0,
+): Promise<ArrayBuffer> {
   const resp = await fetch(TTS_URL, {
     method: 'POST',
     headers: {
@@ -44,7 +51,7 @@ async function synth(text: string, voice: string, apiKey: string, speed = 1): Pr
       sample_rate: 44100,
       stream: true,
       speed,
-      gain: 0,
+      gain,
     }),
   })
   if (!resp.ok) {
@@ -148,8 +155,8 @@ const memory = new Map<string, string>()
 /** 在飞合成去重:同一 hash 只发一次请求 */
 const inflight = new Map<string, Promise<string>>()
 
-async function hashOf(text: string, voice: string, speed = 1): Promise<string> {
-  const data = new TextEncoder().encode(`${voice}|${speed}|${text}`)
+async function hashOf(text: string, voice: string, speed = 1, gain = 0): Promise<string> {
+  const data = new TextEncoder().encode(`${voice}|${speed}|${gain}|${text}`)
   const digest = await crypto.subtle.digest('SHA-256', data)
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('')
 }
@@ -169,8 +176,8 @@ function remember(hash: string, bytes: ArrayBuffer): string {
 }
 
 /** 确保该句已合成并缓存,返回 blobUrl。失败抛错由调用方静默 */
-async function ensure(text: string, voice: string, apiKey: string, speed = 1): Promise<string> {
-  const hash = await hashOf(text, voice, speed)
+async function ensure(text: string, voice: string, apiKey: string, speed = 1, gain = 0): Promise<string> {
+  const hash = await hashOf(text, voice, speed, gain)
   const hit = memory.get(hash)
   if (hit) return hit
 
@@ -180,7 +187,7 @@ async function ensure(text: string, voice: string, apiKey: string, speed = 1): P
   const task = (async () => {
     if (!inTauri) {
       // 浏览器预览:无文件系统,只用内存缓存
-      return remember(hash, await synth(text, voice, apiKey, speed))
+      return remember(hash, await synth(text, voice, apiKey, speed, gain))
     }
     const file = await join(await cacheDir(), `${hash}.mp3.txt`)
     if (await exists(file)) {
@@ -191,7 +198,7 @@ async function ensure(text: string, voice: string, apiKey: string, speed = 1): P
       for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i)
       return remember(hash, bytes)
     }
-    const buf = await synth(text, voice, apiKey, speed)
+    const buf = await synth(text, voice, apiKey, speed, gain)
     // base64 落盘
     const u8 = new Uint8Array(buf)
     let s = ''
@@ -234,7 +241,9 @@ export function speak(speaker: Speaker, text: string, delivery?: string): void {
         return
       }
       const voice = cfg.voice[speaker]
-      const url = await ensure(text, voice, cfg.voice.apiKey, deliverySpeed(delivery))
+      // 深夜档自动降音量(CosyVoice2 gain,负值衰减)
+      const gain = isLateNight() ? -8 : 0
+      const url = await ensure(text, voice, cfg.voice.apiKey, deliverySpeed(delivery), gain)
       // 等待合成期间来了新句/停止指令 → 不起播
       if (my !== epoch) return
       current?.pause()
@@ -263,7 +272,8 @@ export function prefetchVoice(speaker: Speaker, text: string, delivery?: string)
     try {
       const cfg = await getConfig()
       if (!cfg.voice.enabled || !cfg.voice.apiKey.trim()) return
-      await ensure(text, cfg.voice[speaker], cfg.voice.apiKey, deliverySpeed(delivery))
+      const gain = isLateNight() ? -8 : 0
+      await ensure(text, cfg.voice[speaker], cfg.voice.apiKey, deliverySpeed(delivery), gain)
     } catch {
       // 静默
     }
