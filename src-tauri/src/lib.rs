@@ -4,6 +4,7 @@ use mouse_position::mouse_position::Mouse;
 use tauri::Emitter;
 
 mod audio_capture;
+mod capture;
 
 // 光标轮询线程：以约 80Hz 读取全局光标位置，位置变化时推送给前端。
 // 为什么轮询而不监听窗口鼠标事件：窗口开启鼠标穿透后收不到任何鼠标事件，
@@ -62,12 +63,17 @@ pub fn run() {
     .plugin(tauri_plugin_single_instance::init(|_app, _args, _cwd| {}))
     .plugin(tauri_plugin_fs::init())
     .plugin(tauri_plugin_http::init())
+    .plugin(tauri_plugin_clipboard_manager::init())
+    .plugin(tauri_plugin_global_shortcut::Builder::new().build())
     .manage(audio_capture::CaptureState::default())
     .invoke_handler(tauri::generate_handler![
       set_noactivate,
       audio_capture::list_audio_sessions,
       audio_capture::start_capture,
-      audio_capture::stop_capture
+      audio_capture::stop_capture,
+      capture::capture_screen,
+      capture::capture_finish,
+      capture::set_capture_excluded
     ])
     .setup(|app| {
       if cfg!(debug_assertions) {

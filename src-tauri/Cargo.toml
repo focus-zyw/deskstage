@@ -28,5 +28,8 @@ mouse_position = "0.1"
 tauri-plugin-http = "2"
 wasapi = "0.24.0"
 sysinfo = "0.36.1"
-windows = { version = "0.61.3", features = ["Win32_UI_WindowsAndMessaging", "Win32_Graphics_Dwm"] }
+windows = { version = "0.61.3", features = ["Win32_UI_WindowsAndMessaging", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi"] }
 tauri-plugin-single-instance = "2.4.4"
+image = { version = "0.25.6", default-features = false, features = ["png"] }
+tauri-plugin-clipboard-manager = "2.3.3"
+tauri-plugin-global-shortcut = "2.3.2"

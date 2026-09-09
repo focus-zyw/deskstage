@@ -3,7 +3,8 @@
   "identifier": "default",
   "description": "窗口控制与数据目录读写权限",
   "windows": [
-    "main"
+    "main",
+    "capture"
   ],
   "permissions": [
     "core:default",
@@ -14,6 +15,12 @@
     "core:window:allow-current-monitor",
     "core:window:allow-close",
     "core:window:allow-show",
+    "core:window:allow-hide",
+    "core:webview:allow-create-webview-window",
+    "clipboard-manager:allow-write-image",
+    "global-shortcut:allow-register",
+    "global-shortcut:allow-unregister",
+    "global-shortcut:allow-is-registered",
     "fs:allow-read-text-file",
     "fs:allow-read-file",
     "fs:allow-write-text-file",
