@@ -1294,3 +1294,52 @@
   font-size: 11px;
   color: rgba(255, 255, 255, 0.4);
 }
+
+/* ---------- 工具任务浮层卡(右下角,备忘提醒同款视觉语言) ---------- */
+.util-cards {
+  position: fixed;
+  right: 28px;
+  bottom: 96px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+  z-index: 70;
+}
+.util-card {
+  width: 280px;
+  padding: 12px 14px;
+  border: 1px solid rgba(160, 190, 255, 0.25);
+  border-radius: 12px;
+  background: rgba(24, 24, 32, 0.92);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.4);
+  animation: util-in 0.18s ease;
+}
+.util-card.error {
+  border-color: rgba(255, 120, 120, 0.45);
+}
+.util-card .util-tag {
+  display: block;
+  font-size: 11px;
+  color: #9fb4d8;
+  margin-bottom: 6px;
+}
+.util-card .util-text {
+  font-size: 13px;
+  line-height: 1.5;
+  color: #cdd7ea;
+  word-break: break-all;
+}
+.util-card .memo-ok {
+  margin-top: 8px;
+}
+@keyframes util-in {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}

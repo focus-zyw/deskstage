@@ -58,6 +58,8 @@ import {
   setDnd as setRuntimeDnd,
   setCharHidden as setRuntimeCharHidden,
 } from './runtime/runtimeMode'
+import { runUtilityTask } from './runtime/utilityTasks'
+import { UtilityCards } from './ui/UtilityCard'
 import {
   getConfig,
   saveConfig,
@@ -563,7 +565,6 @@ function App() {
   const btnTopic = useRef<HTMLButtonElement>(null)
   const btnShot = useRef<HTMLButtonElement>(null)
   const btnOcr = useRef<HTMLButtonElement>(null)
-  const [ocrBusy, setOcrBusy] = useState(false)
   const btnChat = useRef<HTMLButtonElement>(null)
   const btnExit = useRef<HTMLButtonElement>(null)
   const gripRef = useRef<HTMLSpanElement>(null)
@@ -676,43 +677,25 @@ function App() {
 
   // ---------- 翻译:OCR 链路对接与外围互动 ----------
 
-  /** 剪贴板图片 OCR → 填入翻译面板。auto=true(截图翻译入口)时面板填入后立即翻译;
-   *  工具栏"文"按钮只填入,让用户先看/改识别结果。识别文本不再复制到剪贴板,
-   *  由面板的"复制"按钮按需复制译文 */
-  async function runOcrIntoTranslation(auto: boolean) {
-    setOcrBusy(true)
-    setBubble({ A: '识别中…', B: null, C: null })
-    try {
+  /** 剪贴板图片 OCR → 填入翻译面板(工具循环:进度与结果走右上浮层卡,角色气泡不再播报)。
+   *  auto=true(截图翻译入口)时面板填入后立即翻译;命令/按钮入口只填入,让用户先看/改识别结果 */
+  function startOcrIntoTranslation(auto: boolean) {
+    void runUtilityTask(auto ? 'capture-translate' : 'ocr', auto ? '截图翻译' : '提取文字', async (report) => {
+      report('识别剪贴板图片中…')
       const r = await invoke<{ lines: string[]; lang: string }>('ocr_clipboard')
       if (r.lines.length === 0) {
-        setBubble({ A: '没识别出文字', B: null, C: null })
-        window.setTimeout(() => setBubble((b) => (b.A === '没识别出文字' ? { A: null, B: null, C: null } : b)), 2600)
-        return
+        throw new Error('没识别出文字(该区域可能没有可识别文本)')
       }
       openOverlayExclusive('translation')
       setTrInject({ text: r.lines.join('\n'), nonce: Date.now(), auto })
-      setBubble({
-        A: `已识别 ${r.lines.length} 行${auto ? ',翻译中…' : ',已填入翻译面板'}`,
-        B: null,
-        C: null,
-      })
-      window.setTimeout(() => {
-        setBubble((b) => (b.A?.startsWith('已识别') ? { A: null, B: null, C: null } : b))
-      }, 2600)
-    } catch (e) {
-      const msg = String(e).slice(0, 60)
-      setBubble({ A: msg, B: null, C: null })
-      window.setTimeout(() => {
-        setBubble((b) => (b.A === msg ? { A: null, B: null, C: null } : b))
-      }, 3000)
-    } finally {
-      setOcrBusy(false)
-    }
+      return auto
+        ? `已识别 ${r.lines.length} 行,翻译面板处理中`
+        : `已识别 ${r.lines.length} 行,已填入翻译面板`
+    })
   }
 
   /** 面板里的"截图翻译":框选完成(capture_finish 写入剪贴板)后自动 OCR+翻译 */
   function startScreenshotTranslate() {
-    if (ocrBusy) return
     pendingOcrTranslate.current = true
     startScreenshot().catch(() => {
       pendingOcrTranslate.current = false
@@ -1924,10 +1907,9 @@ function App() {
 
         <button
           ref={btnOcr}
-          className={`ctrl-btn icon${hovered === 'ocr' ? ' hot' : ''}${ocrBusy ? ' loading' : ''}`}
+          className={`ctrl-btn icon${hovered === 'ocr' ? ' hot' : ''}`}
           title="识别剪贴板图片文字,填入翻译面板(先截屏,再点我)"
-          disabled={ocrBusy}
-          onClick={() => void runOcrIntoTranslation(false)}
+          onClick={() => startOcrIntoTranslation(false)}
         >
           <span aria-hidden="true">文</span>
         </button>
@@ -3016,6 +2998,8 @@ function App() {
           </div>
         )}
 
+        <UtilityCards />
+
         {captureShot && (
           <CaptureOverlay
             path={captureShot}
@@ -3028,7 +3012,7 @@ function App() {
                 // 截图翻译入口的框选刚落定:OCR 识别后自动填入翻译面板并翻译
                 if (pendingOcrTranslate.current) {
                   pendingOcrTranslate.current = false
-                  void runOcrIntoTranslation(true)
+                  startOcrIntoTranslation(true)
                 }
               } else {
                 pendingOcrTranslate.current = false
