@@ -67,6 +67,8 @@ export function buildMessages(
   lastChoice?: string,
   /** 连续剧情节拍(可选):本集是多集剧情线的一拍,其他话题铺垫让位于它 */
   arc?: { title: string; hook: string; stage: number },
+  /** 环境感知语境(可选):电量/前台应用/连续工作时长,已在引擎侧做过冷却 */
+  envNote?: string,
 ): ChatMessage[] {
   const persona = `角色设定：
 - 甲（speaker 用 "A"）：精力充沛、爱吹牛、脑洞大、说话夸张，满嘴跑火车还特别得意，常用"我跟你说""好家伙"当口头禅
@@ -127,6 +129,11 @@ export function buildMessages(
 - 台词可在 text/action 外带可选演出字段(用在该用的地方,没有就省略,别每句都加)：
   "listenerAction":听者此刻的反应动作(词表同 action)、"delivery":"deadpan|excited|slow"(面瘫/兴奋/慢条斯理)、"pauseBefore":毫秒(包袱前 300~600 蓄势)、"pauseAfter":毫秒(只给响底的最后一句,900~1500 留白)`
 
+  const envBlock = envNote?.trim()
+    ? `现实环境(可作为素材自然带入,要有喜剧感,别播新闻):${envNote.trim()}。
+`
+    : ''
+
   const history = recentLines.length
     ? `上一段的结尾（新的一段要自然衔接，不要重复内容）：\n${recentLines
         .slice(-4)
@@ -145,7 +152,7 @@ export function buildMessages(
     },
     {
       role: 'user',
-      content: `${lastChoiceText}${recap}${history}${topicText}\n请先定场景卡,再输出这一段完整对话的 JSON。`,
+      content: `${lastChoiceText}${recap}${envBlock}${history}${topicText}\n请先定场景卡,再输出这一段完整对话的 JSON。`,
     },
   ]
 }

@@ -8,6 +8,7 @@ import { storyContext } from '../storage/storyStore'
 import { takeRecap } from '../storage/interactionStore'
 import { pickRelationship } from '../performer/modes/relationships'
 import { currentTimeSlot } from './timeAware'
+import { envContext } from './envAware'
 import {
   clampPauseMs,
   parseGeneratedDialog,
@@ -160,7 +161,8 @@ export async function generateDialog(
   // 本集临时关系:随机局势决定攻守姿态,场景卡据此构建(重试沿用同一关系,保持一致)
   const relationship = pickRelationship(mode)
   const interactionRecap = (await takeRecap()) ?? undefined
-  const messages = buildMessages(mode, topic, recentLines, topicFixed, cfg.userInterests, userCtx, relationship, interactionRecap, allowChoice, lastChoice ?? undefined, arc)
+  const envNote = cfg.envSense ? envContext() : undefined
+  const messages = buildMessages(mode, topic, recentLines, topicFixed, cfg.userInterests, userCtx, relationship, interactionRecap, allowChoice, lastChoice ?? undefined, arc, envNote)
   // 网页版生成(设置里开启):主演出改经隐藏网页窗口由网页模型生成。
   // 网页端没有 json_mode/temperature,格式服从度靠协议本身(手动验证 6/6 通过,
   // 见 docs/webchat-prompt-test.md)。生成慢(几十秒级),点播与预生成都有耐心等;

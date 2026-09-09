@@ -80,6 +80,8 @@ export interface AppConfig {
   webchatEnabled: boolean
   /** 网页模型站点 */
   webchatSite: 'deepseek' | 'doubao'
+  /** 桌面环境感知(电量/前台应用分类等,仅本机分类不上传) */
+  envSense: boolean
 }
 
 // 默认值（首启写入）。想换端点：改 appData/data/config.json 后重启。
@@ -110,6 +112,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   userProfile: { userName: '', occupation: '', likes: '', dislikes: '', banTopics: '' },
   webchatEnabled: false,
   webchatSite: 'deepseek',
+  envSense: true,
 }
 
 /** 清洗使用者画像:逐字段裁剪;likes 为空时回落旧 userInterests 字段(老配置平滑迁移) */
@@ -262,6 +265,7 @@ function sanitizeConfig(obj: unknown): AppConfig {
     userProfile: sanitizeUserProfile(o.userProfile, typeof o.userInterests === 'string' ? o.userInterests : ''),
     webchatEnabled: o.webchatEnabled === true,
     webchatSite: o.webchatSite === 'doubao' ? 'doubao' : 'deepseek',
+    envSense: o.envSense !== false,
   }
 }
 

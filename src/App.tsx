@@ -558,10 +558,12 @@ function App() {
         // 新生成的集自然播完后才蒸馏角色世界:没看完不记,回放不重复蒸馏
         if (np && np.source === 'gen' && np.lines) void distillStoryFrom(np.lines)
         nowPlaying.current = null
-        // 收底:一集演完两人一起大笑收场
-        setAction({ A: 'laugh', B: 'laugh' })
+        // 收底拍:响底台词与表情定格 2.6s 给观众笑的时间,然后全员放松回 idle
         window.clearTimeout(finaleTimer.current)
-        finaleTimer.current = window.setTimeout(() => setAction({ A: 'idle', B: 'idle' }), 2600)
+        finaleTimer.current = window.setTimeout(() => {
+          setAction({ A: 'idle', B: 'idle' })
+          setBubble({ A: null, B: null })
+        }, 2600)
       },
     })
   }
