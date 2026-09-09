@@ -146,6 +146,11 @@ export function pickTopic(mode?: DialogMode, opts?: PickTopicOptions): string {
   }
 
   const weights = opts?.weights
+  // 偏好过滤:被"跳过"打穿(权重≤0)的主题退出随机池;全灭则保留原池兜底
+  if (weights) {
+    const alive = candidates.filter((s) => (weights[s] ?? 1) > 0)
+    if (alive.length) candidates = alive
+  }
   const weightOf = (seed: string): number => weights?.[seed] ?? 1
 
   // 加权随机;若与上次相同则重抽一次(小池子/权重极端时保底换一个)

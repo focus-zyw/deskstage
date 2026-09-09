@@ -25,6 +25,10 @@ export interface TopicStat {
   seen: number
   favored: number
   replays: number
+  /** 看完一集的弱正信号(自动重放不计,防系统自播自我强化) */
+  watched: number
+  /** 演出中途按停止的负信号(播过 80% 以上不算) */
+  skipped: number
 }
 
 export interface MemoryData {
@@ -84,6 +88,8 @@ function sanitize(data: unknown): MemoryData {
         seen: Math.max(0, Number(s.seen) || 0),
         favored: Math.max(0, Number(s.favored) || 0),
         replays: Math.max(0, Number(s.replays) || 0),
+        watched: Math.max(0, Number(s.watched) || 0),
+        skipped: Math.max(0, Number(s.skipped) || 0),
       }
     }
   }
@@ -246,6 +252,12 @@ export function bumpTopicFavored(topic: string | undefined): void {
 export function bumpTopicReplays(topic: string | undefined): void {
   void bumpTopic(topic, 'replays').catch(() => {})
 }
+export function bumpTopicWatched(topic: string | undefined): void {
+  void bumpTopic(topic, 'watched').catch(() => {})
+}
+export function bumpTopicSkipped(topic: string | undefined): void {
+  void bumpTopic(topic, 'skipped').catch(() => {})
+}
 
 export function bumpPoke(): void {
   void withFileLock('memory', async () => {
@@ -263,12 +275,13 @@ export function bumpMode(mode: string): void {
   }).catch(() => {})
 }
 
-/** 话题权重表: favored×2 + replays + seen×0.1 + 1(基础),供 pickTopic 加权 */
+/** 话题权重表:正信号(收藏×2/手动重放/看完×0.3)与负信号(跳过×1.5)合成,
+ *  ≤0 表示该主题已被"跳过"打穿,由 pickTopic 剔除出随机池 */
 export async function getTopicWeights(): Promise<Record<string, number>> {
   const mem = await getMemory()
   const out: Record<string, number> = {}
   for (const [seed, s] of Object.entries(mem.topicStats)) {
-    out[seed] = 1 + s.favored * 2 + s.replays + s.seen * 0.1
+    out[seed] = 1 + s.favored * 2 + s.replays + s.watched * 0.3 - s.skipped * 1.5
   }
   return out
 }

@@ -24,7 +24,7 @@ import { isQuietHours } from './engine/timeAware'
 import { speak, prefetchVoice, stopSpeaking, VOICES, cloneVoice, listCustomVoices, type ClonedVoice } from './engine/tts'
 import { prefetchNext } from './engine/dialogPrefetch'
 import { TOPIC_SEEDS, pickTopic } from './engine/topicSeeds'
-import { bumpTopicSeen, bumpTopicFavored, bumpTopicReplays, bumpMode, bumpPoke, getTopicWeights, getMemory, clearMemory, deleteFact, togglePinFact, topFacts, mergeFacts, type MemoryFact } from './storage/memoryStore'
+import { bumpTopicSeen, bumpTopicFavored, bumpTopicReplays, bumpTopicWatched, bumpTopicSkipped, bumpMode, bumpPoke, getTopicWeights, getMemory, clearMemory, deleteFact, togglePinFact, topFacts, mergeFacts, type MemoryFact } from './storage/memoryStore'
 import { VENDORS, CUSTOM_VENDOR_ID, vendorIdOfBaseUrl } from './engine/vendors'
 import { takePrefetch } from './storage/prefetchStore'
 import { appendHistory, loadRecentHistory, listEpisodes, deleteEpisodes, toggleFavorite, type Episode } from './storage/historyStore'
@@ -436,6 +436,7 @@ function App() {
         const act = laughing ? 'laugh' : line.action || 'talk'
         setAction((a) => ({ ...a, [line.speaker]: act }))
         setSpeaking(line.speaker)
+        if (nowPlaying.current) nowPlaying.current.index = index
         speak(line.speaker, line.text) // 语音失败静默,不影响气泡
         const next = playingLines.current[index + 1]
         if (next) prefetchVoice(next.speaker, next.text)
@@ -455,6 +456,10 @@ function App() {
       onDone: () => {
         setPhase('idle')
         setSpeaking(null)
+        // 看完一集 = 弱正信号;自动重放是系统行为不计偏好,防"系统自播→自我强化"污染
+        const np = nowPlaying.current
+        if (np && np.source !== 'auto') bumpTopicWatched(np.topic)
+        nowPlaying.current = null
         // 收底:一集演完两人一起大笑收场
         setAction({ A: 'laugh', B: 'laugh' })
         window.clearTimeout(finaleTimer.current)
@@ -477,6 +482,13 @@ function App() {
   const lastLines = useRef<DialogLine[]>([])
   // 上一次自动重放的集,连续重放时避开
   const lastReplayTs = useRef(0)
+  // 正在播出的集:话题/进度/信号来源,供"看完/跳过"偏好记账(auto 重放不计)
+  const nowPlaying = useRef<{
+    topic?: string
+    total: number
+    index: number
+    source: 'auto' | 'manual' | 'gen'
+  } | null>(null)
 
   useEffect(() => {
     void initPointerManager()
@@ -599,13 +611,15 @@ function App() {
   }, [settingsOpen, topicOpen, chatOpen])
 
   /** 播放指定的一集(自动重放与历史行点击共用):不调 LLM、不写历史 */
-  function playEpisode(ep: Episode) {
+  function playEpisode(ep: Episode, source: 'auto' | 'manual') {
     generateAbort.current?.abort() // 若有生成在途,直接作废
     player.current!.stop()
     stopSpeaking()
     lastReplayTs.current = ep.ts
     lastLines.current = ep.lines // 衔接后续手动生成
-    bumpTopicReplays(ep.topic) // 重放(自动/手动) = 口味正信号
+    // 仅手动回放是口味正反馈;空闲自动重放是系统行为,计进去会让权重自我强化
+    if (source === 'manual') bumpTopicReplays(ep.topic)
+    nowPlaying.current = { topic: ep.topic, total: ep.lines.length, index: -1, source }
     setBubble({ A: null, B: null })
     setAction({ A: 'idle', B: 'idle' })
     setPhase('performing')
@@ -626,13 +640,13 @@ function App() {
       for (let i = 0; i < (e.fav ? 5 : 1); i++) bag.push(e)
     }
     const ep = bag[Math.floor(Math.random() * bag.length)]
-    playEpisode(ep)
+    playEpisode(ep, 'auto')
   }
 
   /** 点击历史行:关闭面板并回放该集 */
   function replayFromHistory(ep: Episode) {
     setSettingsOpen(false)
-    playEpisode(ep)
+    playEpisode(ep, 'manual')
   }
 
   /** 空闲自动重放:仅在没有生成/演出、没开面板/聊天框、角色未隐藏时计时;任何依赖变化都会重置计时 */
@@ -642,10 +656,12 @@ function App() {
     return () => window.clearTimeout(t)
   }, [phase, settingsOpen, chatOpen, charHidden, autoReplayMin, activeTick])
 
-  /** 播出一段短聊天(问候/自发),计入历史,静默失败;开场先挥手 */
+  /** 播出一段短聊天(问候/自发),计入历史,静默失败;开场先挥手。
+   *  短聊天无话题,不参与"看完/跳过"记账,清掉残留避免误记上一集 */
   function playShortChat(lines: DialogLine[]) {
     lastLines.current = lines
     playingLines.current = lines
+    nowPlaying.current = null
     setAction({ A: 'wave', B: 'wave' })
     window.setTimeout(() => {
       setPhase('performing')
@@ -753,6 +769,7 @@ function App() {
     const hit = await takePrefetch(m, fixedTopic ?? undefined)
     if (hit) {
       bumpTopicSeen(hit.topic) // 口味记账对齐实际播出的主题(命中缓冲时≠本次抽中的主题)
+      nowPlaying.current = { topic: hit.topic, total: hit.lines.length, index: -1, source: 'gen' }
       lastLines.current = hit.lines
       void appendHistory(hit.lines, hit.mode, hit.topic) // 使用后移入 history(fire-and-forget)
       setPhase('performing')
@@ -772,6 +789,7 @@ function App() {
       const lines = await generateDialog(m, topic, lastLines.current, ctrl.signal, fixedTopic != null)
       if (ctrl.signal.aborted) return
       bumpTopicSeen(topic) // 这轮真的播出了才记 seen,避免污染偏好加权
+      nowPlaying.current = { topic, total: lines.length, index: -1, source: 'gen' }
       lastLines.current = lines
       void appendHistory(lines, m, topic) // 落盘（fire-and-forget，失败不阻断演出）
       setPhase('performing')
@@ -782,6 +800,7 @@ function App() {
       if (ctrl.signal.aborted) return
       console.error('LLM 生成失败，回退硬编码脚本', e)
       lastLines.current = MODES[m].script
+      nowPlaying.current = null // 兜底剧本与抽中的话题无关,不参与看完/跳过记账
       setPhase('performing')
       // 先出提示气泡(带具体原因),短暂停留后再开播,避免被第一句台词立即覆盖
       const reason = await describeLlmError(e)
@@ -798,6 +817,10 @@ function App() {
 
   /** 停止一切：中止生成 + 停止演出 + 停语音 + 复位 */
   function stopEverything() {
+    // 中途按停止 = 负反馈(演过 80% 以上视为看完,不罚);正在生成时无账可记
+    const np = nowPlaying.current
+    if (np && np.total > 0 && np.index / np.total < 0.8) bumpTopicSkipped(np.topic)
+    nowPlaying.current = null
     generateAbort.current?.abort()
     generateAbort.current = null
     player.current!.stop()
