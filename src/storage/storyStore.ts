@@ -123,13 +123,37 @@ async function persist(next: StoryData): Promise<void> {
   await writeTextFile(await storyFile(), JSON.stringify(next, null, 2))
 }
 
-/** 合并蒸馏结果:同文去重(刷新 lastSeen/hits),超出上限按热度/新近度淘汰 */
-export async function mergeStory(candidates: { gags: string[]; threads: string[] }): Promise<void> {
-  if (candidates.gags.length === 0 && candidates.threads.length === 0) return
+/** 合并一次蒸馏结果:
+ *  - resolvedThreadIds:台词里已了结的事件线 → 结案移除,不再注入
+ *  - reusedGagIds:台词里实际回收了的老梗 → hits+1(真实"被用过"计数)
+ *  - newGags/newThreads:新素材,同文去重后入库,超上限按热度/新近度淘汰 */
+export interface DistilledStory {
+  newGags: string[]
+  newThreads: string[]
+  resolvedThreadIds: string[]
+  reusedGagIds: string[]
+}
+
+export async function mergeStory(result: DistilledStory): Promise<void> {
+  const hasNew = result.newGags.length > 0 || result.newThreads.length > 0
+  const hasBookkeeping = result.resolvedThreadIds.length > 0 || result.reusedGagIds.length > 0
+  if (!hasNew && !hasBookkeeping) return
   await withFileLock('story', async () => {
     const story = await getStory()
     const now = Date.now()
-    for (const raw of candidates.gags) {
+    // 结案:已了结的事件线移除
+    if (result.resolvedThreadIds.length > 0) {
+      story.threads = story.threads.filter((t) => !result.resolvedThreadIds.includes(t.id))
+    }
+    // 真实回收计数
+    for (const id of result.reusedGagIds) {
+      const gag = story.gags.find((g) => g.id === id)
+      if (gag) {
+        gag.hits += 1
+        gag.lastSeen = now
+      }
+    }
+    for (const raw of result.newGags) {
       const text = raw.trim().slice(0, 60)
       if (!text) continue
       const existing = story.gags.find((g) => g.text === text)
@@ -140,7 +164,7 @@ export async function mergeStory(candidates: { gags: string[]; threads: string[]
         story.gags.push({ id: newId('g'), text, lastSeen: now, hits: 0 })
       }
     }
-    for (const raw of candidates.threads) {
+    for (const raw of result.newThreads) {
       const text = raw.trim().slice(0, 60)
       if (!text) continue
       const existing = story.threads.find((t) => t.text === text)
@@ -173,12 +197,26 @@ export async function removeStoryItem(kind: 'gags' | 'threads', id: string): Pro
 
 /** 注入用:老梗按热度、事件线按新近度取前 n 条文本(空数组 = 没有素材) */
 export async function storyContext(maxEach = 2): Promise<{ gags: string[]; threads: string[] }> {
+  const inv = await storyInventory(maxEach)
+  return {
+    gags: inv.gags.map((g) => g.text),
+    threads: inv.threads.map((t) => t.text),
+  }
+}
+
+/** 蒸馏用:带 id 的已知素材清单(老梗按热度、事件线按新近度) */
+export async function storyInventory(
+  maxEach = 3,
+): Promise<{ gags: { id: string; text: string }[]; threads: { id: string; text: string }[] }> {
   const story = await getStory()
   return {
     gags: [...story.gags]
       .sort((a, b) => b.hits - a.hits || b.lastSeen - a.lastSeen)
       .slice(0, maxEach)
-      .map((g) => g.text),
-    threads: [...story.threads].sort((a, b) => b.lastSeen - a.lastSeen).slice(0, maxEach).map((t) => t.text),
+      .map((g) => ({ id: g.id, text: g.text })),
+    threads: [...story.threads]
+      .sort((a, b) => b.lastSeen - a.lastSeen)
+      .slice(0, maxEach)
+      .map((t) => ({ id: t.id, text: t.text })),
   }
 }

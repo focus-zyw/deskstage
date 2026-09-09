@@ -25,7 +25,7 @@ import { speak, prefetchVoice, stopSpeaking, VOICES, cloneVoice, listCustomVoice
 import { prefetchNext } from './engine/dialogPrefetch'
 import { TOPIC_SEEDS, pickTopic } from './engine/topicSeeds'
 import { bumpTopicSeen, bumpTopicFavored, bumpTopicReplays, bumpTopicWatched, bumpTopicSkipped, bumpMode, bumpPoke, getTopicWeights, getMemory, clearMemory, deleteFact, togglePinFact, topFacts, mergeFacts, type MemoryFact } from './storage/memoryStore'
-import { getStory, mergeStory, removeStoryItem, type StoryData } from './storage/storyStore'
+import { getStory, mergeStory, removeStoryItem, storyInventory, type StoryData } from './storage/storyStore'
 import { VENDORS, CUSTOM_VENDOR_ID, vendorIdOfBaseUrl } from './engine/vendors'
 import { takePrefetch } from './storage/prefetchStore'
 import { appendHistory, loadRecentHistory, listEpisodes, deleteEpisodes, toggleFavorite, type Episode } from './storage/historyStore'
@@ -486,6 +486,8 @@ function App() {
         // 看完一集 = 弱正信号;自动重放是系统行为不计偏好,防"系统自播→自我强化"污染
         const np = nowPlaying.current
         if (np && np.source !== 'auto') bumpTopicWatched(np.topic)
+        // 新生成的集自然播完后才蒸馏角色世界:没看完不记,回放不重复蒸馏
+        if (np && np.source === 'gen' && np.lines) void distillStoryFrom(np.lines)
         nowPlaying.current = null
         // 收底:一集演完两人一起大笑收场
         setAction({ A: 'laugh', B: 'laugh' })
@@ -509,9 +511,10 @@ function App() {
   const lastLines = useRef<DialogLine[]>([])
   // 上一次自动重放的集,连续重放时避开
   const lastReplayTs = useRef(0)
-  // 正在播出的集:话题/进度/信号来源,供"看完/跳过"偏好记账(auto 重放不计)
+  // 正在播出的集:话题/台词/进度/信号来源,供完播/跳过记账与完播后蒸馏(auto 重放不计)
   const nowPlaying = useRef<{
     topic?: string
+    lines?: DialogLine[]
     total: number
     index: number
     source: 'auto' | 'manual' | 'gen'
@@ -646,7 +649,7 @@ function App() {
     lastLines.current = ep.lines // 衔接后续手动生成
     // 仅手动回放是口味正反馈;空闲自动重放是系统行为,计进去会让权重自我强化
     if (source === 'manual') bumpTopicReplays(ep.topic)
-    nowPlaying.current = { topic: ep.topic, total: ep.lines.length, index: -1, source }
+    nowPlaying.current = { topic: ep.topic, lines: ep.lines, total: ep.lines.length, index: -1, source }
     setBubble({ A: null, B: null })
     setAction({ A: 'idle', B: 'idle' })
     setPhase('performing')
@@ -796,14 +799,13 @@ function App() {
     const hit = await takePrefetch(m, fixedTopic ?? undefined)
     if (hit) {
       bumpTopicSeen(hit.topic) // 口味记账对齐实际播出的主题(命中缓冲时≠本次抽中的主题)
-      nowPlaying.current = { topic: hit.topic, total: hit.lines.length, index: -1, source: 'gen' }
+      nowPlaying.current = { topic: hit.topic, lines: hit.lines, total: hit.lines.length, index: -1, source: 'gen' }
       lastLines.current = hit.lines
       void appendHistory(hit.lines, hit.mode, hit.topic) // 使用后移入 history(fire-and-forget)
       setPhase('performing')
       playingLines.current = hit.lines
       player.current!.play(withFinalePause(hit.lines), { gap: modeOf(hit.mode).gap })
       void prefetchNext(m, hit.lines, fixedTopic ?? undefined) // 补货下一轮(静默)
-      distillStoryInBackground(hit.lines) // 后台蒸馏角色世界素材
       return
     }
 
@@ -817,14 +819,13 @@ function App() {
       const lines = await generateDialog(m, topic, lastLines.current, ctrl.signal, fixedTopic != null)
       if (ctrl.signal.aborted) return
       bumpTopicSeen(topic) // 这轮真的播出了才记 seen,避免污染偏好加权
-      nowPlaying.current = { topic, total: lines.length, index: -1, source: 'gen' }
+      nowPlaying.current = { topic, lines, total: lines.length, index: -1, source: 'gen' }
       lastLines.current = lines
       void appendHistory(lines, m, topic) // 落盘（fire-and-forget，失败不阻断演出）
       setPhase('performing')
       playingLines.current = lines
       player.current!.play(withFinalePause(lines), { gap: MODES[m].gap })
       void prefetchNext(m, lines, fixedTopic ?? undefined) // 请求生成两轮：当前轮 + 后台预生成
-      distillStoryInBackground(lines) // 后台蒸馏角色世界素材
     } catch (e) {
       if (ctrl.signal.aborted) return
       console.error('LLM 生成失败，回退硬编码脚本', e)
@@ -929,15 +930,16 @@ function App() {
     setStoryData(await getStory())
   }
 
-  /** 后台蒸馏本集的角色世界素材(老梗/未了结事件),静默失败不阻塞演出 */
-  function distillStoryInBackground(lines: DialogLine[]) {
-    void (async () => {
-      try {
-        await mergeStory(await distillStory(lines))
-      } catch {
-        // 静默:蒸馏宁可错过
-      }
-    })()
+  /** 完播后蒸馏角色世界素材:对照库存记账(新素材入库/老梗回收计数/事件线结案)。
+   *  仅新生成集(gen)自然播完后调用——用户没看完的集不蒸馏,回放不重复蒸馏;静默失败 */
+  async function distillStoryFrom(lines: DialogLine[]) {
+    try {
+      const inv = await storyInventory(3)
+      await mergeStory(await distillStory(lines, inv))
+      await refreshStory() // 记忆页若开着,列表顺带刷新
+    } catch {
+      // 静默:蒸馏宁可错过
+    }
   }
 
   /** 打开设置：读当前配置回填表单，加载历史分集 */

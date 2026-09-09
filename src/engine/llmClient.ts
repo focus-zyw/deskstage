@@ -400,23 +400,45 @@ export async function addPerformanceCues(lines: DialogLine[]): Promise<DialogLin
   }
 }
 
+/** 蒸馏时的已知素材清单(带 id,供模型报 resolved/reused) */
+export interface StoryInventory {
+  gags: { id: string; text: string }[]
+  threads: { id: string; text: string }[]
+}
+
+export interface DistilledStory {
+  newGags: string[]
+  newThreads: string[]
+  /** 台词里已经了结的已知事件线 id(结案后不再注入) */
+  resolvedThreadIds: string[]
+  /** 台词里实际回收了的已知老梗 id(真实"被用过"计数) */
+  reusedGagIds: string[]
+}
+
 /**
- * 角色世界蒸馏:从一集台词里提炼可长期复用的素材——
- * gags = 两人之间的固定笑点(自包含短语,如"冰箱是甲的健身器材"),
- * threads = 还没了结的事件线(如"乙还欠甲一杯奶茶")。
+ * 角色世界蒸馏:从一集台词里提炼可长期复用的素材,并对已知素材记账——
+ * newGags/newThreads:新形成的固定笑点/还没了结的事件线(自包含短语);
+ * reusedGagIds/resolvedThreadIds:已知素材在本集被回收/了结的记账。
  * 8s 超时、不重试;失败由调用方静默——蒸馏宁可错过也不能拖累演出。
  */
 export async function distillStory(
   lines: DialogLine[],
-): Promise<{ gags: string[]; threads: string[] }> {
+  known: StoryInventory = { gags: [], threads: [] },
+): Promise<DistilledStory> {
   const text = lines.map((l) => `${l.speaker === 'A' ? '甲' : '乙'}:${l.text}`).join('\n')
+  const knownGags = known.gags.map((g) => `${g.id}:${g.text}`).join(';') || '(无)'
+  const knownThreads = known.threads.map((t) => `${t.id}:${t.text}`).join(';') || '(无)'
   const messages: { role: string; content: string }[] = [
     {
       role: 'system',
-      content: `从这段双人情景喜剧台词里,提炼可长期复用的"角色世界"素材。
-- gags:两人之间形成的固定笑点/称呼/歪理,必须是自包含短语(10~25 字,如"冰箱是甲的健身器材"),最多 2 条,没有就给空数组
-- threads:还没了结的事件线(某人欠某人东西/某事没交代完),必须是自包含短语,最多 2 条,没有就给空数组
-只提炼台词里明确出现的,不要编造。只输出一个 JSON 对象:{"gags":["..."],"threads":["..."]}`,
+      content: `维护桌面双人情景剧的"角色世界"素材库。当前库存:
+老梗(编号:内容):${knownGags}
+事件线(编号:内容):${knownThreads}
+
+对照刚播出的台词,只输出一个 JSON 对象:
+{"newGags":["新形成的固定笑点,自包含短语10~25字,如冰箱是甲的健身器材"],"newThreads":["新出现的、还没了结的事件线,自包含短语"],"resolvedThreadIds":["台词里已经了结的已知事件线编号"],"reusedGagIds":["台词里实际回收了的已知老梗编号"]}
+- newGags/newThreads 各最多 2 条,只提炼台词里明确出现的,不要编造;已知素材原文再现时不要重复放进 new*
+- resolvedThreadIds/reusedGagIds 只能填上面列出的编号,没有就给空数组`,
     },
     { role: 'user', content: text },
   ]
@@ -425,16 +447,27 @@ export async function distillStory(
   try {
     const raw = await chatRaw(messages, ctrl.signal)
     const m = raw.match(/\{[\s\S]*\}/)
-    if (!m) return { gags: [], threads: [] }
-    const obj = JSON.parse(m[0]) as { gags?: unknown; threads?: unknown }
-    const pick = (v: unknown): string[] =>
+    if (!m) return { newGags: [], newThreads: [], resolvedThreadIds: [], reusedGagIds: [] }
+    const obj = JSON.parse(m[0]) as Record<string, unknown>
+    const knownGagIds = new Set(known.gags.map((g) => g.id))
+    const knownThreadIds = new Set(known.threads.map((t) => t.id))
+    const texts = (v: unknown): string[] =>
       Array.isArray(v)
         ? v
             .filter((x): x is string => typeof x === 'string' && x.trim().length > 3)
             .map((x) => x.trim().slice(0, 60))
             .slice(0, 2)
         : []
-    return { gags: pick(obj.gags), threads: pick(obj.threads) }
+    const ids = (v: unknown, allowed: Set<string>): string[] =>
+      Array.isArray(v)
+        ? v.filter((x): x is string => typeof x === 'string' && allowed.has(x)).slice(0, 3)
+        : []
+    return {
+      newGags: texts(obj.newGags),
+      newThreads: texts(obj.newThreads),
+      resolvedThreadIds: ids(obj.resolvedThreadIds, knownThreadIds),
+      reusedGagIds: ids(obj.reusedGagIds, knownGagIds),
+    }
   } finally {
     clearTimeout(timer)
   }
