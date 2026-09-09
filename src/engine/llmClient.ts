@@ -148,6 +148,10 @@ export async function generateDialog(
   const mem = await getMemory()
   // 约 30% 的集数包含观众抉择点(由应用侧掷骰,重试保持一致)
   const allowChoice = Math.random() < 0.3
+  // 约 25% 的集数允许场外角色乱入(与抉择点互斥,重试保持一致):
+  // 打破双人固定结构,第三人只用画外音/电话,不占立绘
+  const GUESTS = ['房东', '快递员', '老板', '甲的神秘朋友', '乙的债主', '邻居的猫(只会喵呜)']
+  const guest = !allowChoice && Math.random() < 0.25 ? GUESTS[Math.floor(Math.random() * GUESTS.length)] : undefined
   // 上一集的观众选择:注入一次即清除
   let lastChoice: string | null = null
   try { lastChoice = localStorage.getItem('vc-lastChoice') } catch { /* ignore */ }
@@ -162,7 +166,7 @@ export async function generateDialog(
   const relationship = pickRelationship(mode)
   const interactionRecap = (await takeRecap()) ?? undefined
   const envNote = cfg.envSense ? envContext() : undefined
-  const messages = buildMessages(mode, topic, recentLines, topicFixed, cfg.userInterests, userCtx, relationship, interactionRecap, allowChoice, lastChoice ?? undefined, arc, envNote)
+  const messages = buildMessages(mode, topic, recentLines, topicFixed, cfg.userInterests, userCtx, relationship, interactionRecap, allowChoice, lastChoice ?? undefined, arc, envNote, guest)
   // 网页版生成(设置里开启):主演出改经隐藏网页窗口由网页模型生成。
   // 网页端没有 json_mode/temperature,格式服从度靠协议本身(手动验证 6/6 通过,
   // 见 docs/webchat-prompt-test.md)。生成慢(几十秒级),点播与预生成都有耐心等;
@@ -223,7 +227,7 @@ export async function generateShortChat(
   const interests = profileBits ? `${profileBits}\n` : ''
   const prev = recentLines
     .slice(-2)
-    .map((l) => `${l.speaker === 'A' ? '甲' : '乙'}:${l.text}`)
+    .map((l) => `${l.speaker === 'A' ? '甲' : l.speaker === 'C' ? '丙(场外)' : '乙'}:${l.text}`)
     .join('\n')
   const task =
     (kind === 'greeting'
@@ -263,7 +267,7 @@ export async function improvPokeLine(
       : '乙:冷静毒舌、专拆台、话少但一针见血'
   const ctx = recentLines
     .slice(-4)
-    .map((l) => `${l.speaker === 'A' ? '甲' : '乙'}:${l.text}`)
+    .map((l) => `${l.speaker === 'A' ? '甲' : l.speaker === 'C' ? '丙(场外)' : '乙'}:${l.text}`)
     .join('\n')
   const messages: { role: string; content: string }[] = [
     {
@@ -391,7 +395,7 @@ export async function extractFacts(
  * 输出是按行号的编辑表(~100 token),合并时钳位校验;8s 超时,失败原样返回。
  */
 export async function addPerformanceCues(lines: DialogLine[]): Promise<DialogLine[]> {
-  const script = lines.map((l, i) => `${i}.${l.speaker === 'A' ? '甲' : '乙'}:${l.text}`).join('\n')
+  const script = lines.map((l, i) => `${i}.${l.speaker === 'A' ? '甲' : l.speaker === 'C' ? '丙(场外)' : '乙'}:${l.text}`).join('\n')
   const messages: { role: string; content: string }[] = [
     {
       role: 'system',
@@ -473,7 +477,7 @@ export async function distillStory(
   lines: DialogLine[],
   known: StoryInventory = { gags: [], threads: [], arcs: [] },
 ): Promise<DistilledStory> {
-  const text = lines.map((l) => `${l.speaker === 'A' ? '甲' : '乙'}:${l.text}`).join('\n')
+  const text = lines.map((l) => `${l.speaker === 'A' ? '甲' : l.speaker === 'C' ? '丙(场外)' : '乙'}:${l.text}`).join('\n')
   const knownGags = known.gags.map((g) => `${g.id}:${g.text}`).join(';') || '(无)'
   const knownThreads = known.threads.map((t) => `${t.id}:${t.text}`).join(';') || '(无)'
   const knownArcs =

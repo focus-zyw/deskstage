@@ -32,6 +32,8 @@ export interface VoiceConfig {
   /** 音色名(如 bella,完整 voice = 模型名:音色名) */
   A: string
   B: string
+  /** 场外角色(客串)音色 */
+  C: string
 }
 
 /** 使用者画像:手填的"角色认识你"信息(多值字段逗号/顿号/换行分隔) */
@@ -98,6 +100,7 @@ export const DEFAULT_CONFIG: AppConfig = {
     apiKey: '',
     A: 'bella', // 女声·轻快 → 便利店店员
     B: 'alex', // 男声·沉稳 → 程序员
+    C: 'david', // 场外客串(房东/快递员/老板等画外音)
   },
   autoReplayMin: 10,
   characters: {
@@ -163,6 +166,7 @@ function sanitizeVoice(v: unknown): VoiceConfig {
     apiKey: typeof o.apiKey === 'string' ? o.apiKey.slice(0, 200) : d.apiKey,
     A: name(o.A, d.A),
     B: name(o.B, d.B),
+    C: name(o.C, d.C),
   }
 }
 

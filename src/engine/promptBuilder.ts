@@ -69,6 +69,8 @@ export function buildMessages(
   arc?: { title: string; hook: string; stage: number },
   /** 环境感知语境(可选):电量/前台应用/连续工作时长,已在引擎侧做过冷却 */
   envNote?: string,
+  /** 场外角色乱入(可选):身份名,以电话/画外音形式出现,打破双人固定结构 */
+  guest?: string,
 ): ChatMessage[] {
   const persona = `角色设定：
 - 甲（speaker 用 "A"）：精力充沛、爱吹牛、脑洞大、说话夸张，满嘴跑火车还特别得意，常用"我跟你说""好家伙"当口头禅
@@ -107,6 +109,13 @@ export function buildMessages(
   // 连续剧情节拍:本集是多集剧情线的一拍,话题让位,结尾留下一拍的钩子
   const arcCtx = arc
     ? `\n\n连续剧情（本集属于多集剧情线的一拍,话题铺垫让位于它）：《${arc.title}》已演出 ${arc.stage} 拍。本拍必须演出的进展：${arc.hook}。结尾不收死,留下引向下一拍的新悬念/新进展。`
+    : ''
+
+  // 场外角色乱入:电话/门外画外音形式,只占 C 的台词,不抢甲乙的场景卡
+  const guestRule = guest
+    ? `
+
+场外角色乱入(本段允许):${guest} 以“打电话/门外喊话”的画外音形式乱入 1~3 句,出现位置在中段或临近结尾;这些台词的 speaker 用 "C";C 不进场景卡,只搅局不接管剧情。`
     : ''
 
   // 观众抉择点:由调用方掷骰决定(约 30% 的集数),中段安排一次站队,两分支各 3~5 句,结尾汇合同一包袱
@@ -148,7 +157,7 @@ export function buildMessages(
   return [
     {
       role: 'system',
-      content: `你是一位擅长传统相声和网络脱口秀的资深喜剧编剧,给桌面双人情景剧写段子。${persona}${relCtx}${arcCtx}${profile}${storyCtx}${timeCtx}${choiceRule}\n\n${craft}\n\n${protocol}\n\n${modeOf(mode).prompt}`,
+      content: `你是一位擅长传统相声和网络脱口秀的资深喜剧编剧,给桌面双人情景剧写段子。${persona}${relCtx}${arcCtx}${guestRule}${profile}${storyCtx}${timeCtx}${choiceRule}\n\n${craft}\n\n${protocol}\n\n${modeOf(mode).prompt}`,
     },
     {
       role: 'user',

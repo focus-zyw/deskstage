@@ -388,19 +388,23 @@ function App() {
   const [reacting, setReacting] = useState<Record<Speaker, boolean>>({
     A: false,
     B: false,
+    C: false,
   })
   const [bubble, setBubble] = useState<Record<Speaker, string | null>>({
     A: null,
     B: null,
+    C: null,
   })
   const [action, setAction] = useState<Record<Speaker, string>>({
     A: 'idle',
     B: 'idle',
+    C: 'idle',
   })
   // 台词语气(delivery):驱动 sprite 修饰类与说话节奏
   const [delivery, setDelivery] = useState<Record<Speaker, string | undefined>>({
     A: undefined,
     B: undefined,
+    C: undefined,
   })
   const [phase, setPhase] = useState<Phase>('idle')
   // 分段选择器当前选中模式；生成按钮按它点播
@@ -413,6 +417,7 @@ function App() {
   // 记忆系统的机器事实列表(设置"记忆"页展示/管理)
   const [memoryFacts, setMemoryFacts] = useState<MemoryFact[]>([])
   const [clearMemArmed, setClearMemArmed] = useState(false)
+  const [clearHistArmed, setClearHistArmed] = useState(false)
   // 角色世界(两人之间的老梗/未了结事件),记忆页展示管理
   const [storyData, setStoryData] = useState<StoryData | null>(null)
   // 聊天通道:输入框开合/草稿/应答中;用户气泡(区别于角色气泡)
@@ -473,7 +478,7 @@ function App() {
   const [dragUi, setDragUi] = useState<Speaker | null>(null)
   const finaleTimer = useRef(0)
   // 远距离喊话:气泡加大加粗
-  const [loudBubble, setLoudBubble] = useState<Record<Speaker, boolean>>({ A: false, B: false })
+  const [loudBubble, setLoudBubble] = useState<Record<Speaker, boolean>>({ A: false, B: false, C: false })
   const distLastAt = useRef<Record<string, number>>({})
   // 时间感知:启动问候 + 空闲自发短聊天
   const [spontTick, setSpontTick] = useState(0)
@@ -498,7 +503,7 @@ function App() {
   const panelRef = useRef<HTMLDivElement>(null)
   const topicPanelRef = useRef<HTMLDivElement>(null)
   const chatBoxRef = useRef<HTMLDivElement>(null)
-  const timers = useRef<Record<Speaker, number>>({ A: 0, B: 0 })
+  const timers = useRef<Record<Speaker, number>>({ A: 0, B: 0, C: 0 })
 
   // 演出播放器：LLM 生成的 DialogLine[] 与硬编码脚本走同一条路
   const player = useRef<PerformancePlayer | null>(null)
@@ -552,7 +557,7 @@ function App() {
         pendingEpisode.current = null
         setPhase('idle')
         setSpeaking(null)
-        setDelivery({ A: undefined, B: undefined })
+        setDelivery({ A: undefined, B: undefined, C: undefined })
         // 看完一集 = 弱正信号;自动重放是系统行为不计偏好,防"系统自播→自我强化"污染
         const np = nowPlaying.current
         if (np && np.source !== 'auto') bumpTopicWatched(np.topic)
@@ -562,8 +567,8 @@ function App() {
         // 收底拍:响底台词与表情定格 2.6s 给观众笑的时间,然后全员放松回 idle
         window.clearTimeout(finaleTimer.current)
         finaleTimer.current = window.setTimeout(() => {
-          setAction({ A: 'idle', B: 'idle' })
-          setBubble({ A: null, B: null })
+          setAction({ A: 'idle', B: 'idle', C: 'idle' })
+          setBubble({ A: null, B: null, C: null })
         }, 2600)
       },
     })
@@ -584,9 +589,9 @@ function App() {
     })
     const fail = listen('capture-error', ({ payload }) => {
       const msg = String(payload).slice(0, 50)
-      setBubble({ A: `截图失败:${msg}`, B: null })
+      setBubble({ A: `截图失败:${msg}`, B: null, C: null })
       window.setTimeout(() => {
-        setBubble((b) => (b.A?.startsWith('截图失败') ? { A: null, B: null } : b))
+        setBubble((b) => (b.A?.startsWith('截图失败') ? { A: null, B: null, C: null } : b))
       }, 5000)
     })
     return () => {
@@ -752,8 +757,8 @@ function App() {
     // 仅手动回放是口味正反馈;空闲自动重放是系统行为,计进去会让权重自我强化
     if (source === 'manual') bumpTopicReplays(ep.topic)
     nowPlaying.current = { topic: ep.topic, lines: ep.lines, total: ep.lines.length, index: -1, source }
-    setBubble({ A: null, B: null })
-    setAction({ A: 'idle', B: 'idle' })
+    setBubble({ A: null, B: null, C: null })
+    setAction({ A: 'idle', B: 'idle', C: 'idle' })
     setPhase('performing')
     playingLines.current = ep.lines
     player.current!.play(withFinalePause(ep.lines), { gap: modeOf(ep.mode).gap })
@@ -823,7 +828,7 @@ function App() {
     lastLines.current = lines
     playingLines.current = lines
     nowPlaying.current = null
-    setAction({ A: 'wave', B: 'wave' })
+    setAction({ A: 'wave', B: 'wave', C: 'idle' })
     window.setTimeout(() => {
       setPhase('performing')
       player.current!.play(lines, { gap: 700 })
@@ -932,10 +937,10 @@ function App() {
     // 未配置 API Key:不进生成流程,气泡引导去设置
     const { apiKey } = await getConfig()
     if (!apiKey.trim()) {
-      setBubble({ A: '还没填 API Key,点 ⚙ 去设置里填一下~', B: null })
-      setAction({ A: 'surprise', B: 'idle' })
+      setBubble({ A: '还没填 API Key,点 ⚙ 去设置里填一下~', B: null, C: null })
+      setAction({ A: 'surprise', B: 'idle', C: 'idle' })
       window.setTimeout(() => {
-        setBubble((b) => (b.A?.startsWith('还没填') ? { A: null, B: null } : b))
+        setBubble((b) => (b.A?.startsWith('还没填') ? { A: null, B: null, C: null } : b))
         setAction((a) => ({ ...a, A: 'idle' }))
       }, 2600)
       return
@@ -945,8 +950,8 @@ function App() {
     player.current!.stop()
     stopSpeaking()
     window.clearTimeout(finaleTimer.current)
-    setBubble({ A: null, B: null })
-    setAction({ A: 'idle', B: 'idle' })
+    setBubble({ A: null, B: null, C: null })
+    setAction({ A: 'idle', B: 'idle', C: 'idle' })
 
     // 主题:手动锁定 > 按模式概率聊使用者画像/兴趣 > 话题池随机(雷区过滤+偏好加权)
     const fixedTopic = topicOverride
@@ -984,7 +989,7 @@ function App() {
     }
 
     // 未命中：生成当前轮(等待期两人进入思考姿势)
-    setAction({ A: 'thinking', B: 'thinking' })
+    setAction({ A: 'thinking', B: 'thinking', C: 'thinking' })
     setPhase('generating')
     const ctrl = new AbortController()
     generateAbort.current = ctrl
@@ -1016,10 +1021,10 @@ function App() {
       // 先出提示气泡(带具体原因),短暂停留后再开播,避免被第一句台词立即覆盖
       const reason = await describeLlmError(e)
       if (ctrl.signal.aborted) return
-      setBubble({ A: `${reason},先来段内置的~`, B: null })
+      setBubble({ A: `${reason},先来段内置的~`, B: null, C: null })
       window.setTimeout(() => {
         if (ctrl.signal.aborted) return // 停止/切换期间不续播
-        setBubble({ A: null, B: null })
+        setBubble({ A: null, B: null, C: null })
         playingLines.current = MODES[m].script
         player.current!.play(MODES[m].script, { gap: MODES[m].gap })
       }, 1800)
@@ -1038,12 +1043,12 @@ function App() {
     stopSpeaking()
     setPhase('idle')
     setSpeaking(null)
-    setDelivery({ A: undefined, B: undefined })
+    setDelivery({ A: undefined, B: undefined, C: undefined })
     setChoice(null)
     window.clearTimeout(choiceTimer.current)
     window.clearTimeout(finaleTimer.current)
-    setBubble({ A: null, B: null })
-    setAction({ A: 'idle', B: 'idle' })
+    setBubble({ A: null, B: null, C: null })
+    setAction({ A: 'idle', B: 'idle', C: 'idle' })
     setUserBubble(null)
   }
 
@@ -1243,10 +1248,14 @@ function App() {
     }
   }
 
+  async function refreshEpisodes() {
+    setEpisodes(await listEpisodes())
+  }
+
   async function onToggleFav(ep: Episode) {
     const nowFav = await toggleFavorite(ep)
     if (nowFav) bumpTopicFavored(ep.topic) // 收藏 = 口味正信号
-    setEpisodes(await listEpisodes())
+    await refreshEpisodes()
   }
 
   async function onDeleteEpisode(ep: Episode) {
@@ -1256,7 +1265,7 @@ function App() {
 
   async function onClearUnfavorited() {
     await deleteEpisodes(new Set(episodes.filter((e) => !e.fav).map((e) => e.ts)))
-    setEpisodes(await listEpisodes())
+    await refreshEpisodes()
   }
 
   // ---------- 角色布局:拖动移动(各自独立)/ 滚轮缩放(全局一致) ----------
@@ -1273,7 +1282,7 @@ function App() {
     else charSaveTimer.current = window.setTimeout(write, 500)
   }
 
-  function onCharPointerDown(e: ReactPointerEvent, who: Speaker) {
+  function onCharPointerDown(e: ReactPointerEvent, who: 'A' | 'B') {
     setTopActor(who) // 最近交互的角色置顶
     setDragUi(who) // 拎起态(轻微缩小提亮)
     dragRef.current = {
@@ -1290,7 +1299,7 @@ function App() {
     }
   }
 
-  function onCharPointerMove(e: ReactPointerEvent, who: Speaker) {
+  function onCharPointerMove(e: ReactPointerEvent, who: 'A' | 'B') {
     const d = dragRef.current
     if (!d || d.who !== who) return
     const dx = e.clientX - d.startX
@@ -1316,7 +1325,7 @@ function App() {
     )
   }
 
-  function onCharPointerUp(who: Speaker) {
+  function onCharPointerUp(who: 'A' | 'B') {
     const d = dragRef.current
     dragRef.current = null
     setDragUi(null)
@@ -1334,7 +1343,7 @@ function App() {
   }
 
   /** 拖拽结束后的距离演出:贴近/远离/叠一起(本地规则,12s 冷却) */
-  function maybeDistancePlay(who: Speaker) {
+  function maybeDistancePlay(who: 'A' | 'B') {
     if (phaseRef.current !== 'idle') return
     const other: Speaker = who === 'A' ? 'B' : 'A'
     const ax = (charCfg.A.xPct / 100) * window.innerWidth
@@ -1472,10 +1481,10 @@ function App() {
   }
 
   /** 连戳计数(60s 滑动窗口),决定反应强度 */
-  const pokeCounts = useRef<Record<Speaker, number[]>>({ A: [], B: [] })
+  const pokeCounts = useRef<Record<Speaker, number[]>>({ A: [], B: [], C: [] })
   const improvLastAt = useRef(0)
 
-  function showPoke(who: Speaker, line: string, action: string, ms = 1600, loud = false) {
+  function showPoke(who: 'A' | 'B', line: string, action: string, ms = 1600, loud = false) {
     setBubble((b) => ({ ...b, [who]: line }))
     setLoudBubble((l) => ({ ...l, [who]: loud }))
     setAction((a) => ({ ...a, [who]: action }))
@@ -1489,7 +1498,7 @@ function App() {
     }, ms)
   }
 
-  function poke(who: Speaker) {
+  function poke(who: 'A' | 'B') {
     setActiveTick((t) => t + 1) // 用户互动,重置自动重放计时
     setTopActor(who)
     bumpPoke() // 行为信号:互动频率
@@ -1666,9 +1675,9 @@ function App() {
             setChatOpen(false)
             startScreenshot().catch((e) => {
               const msg = String((e as Error)?.message ?? e).slice(0, 50)
-              setBubble({ A: `截图失败:${msg}`, B: null })
+              setBubble({ A: `截图失败:${msg}`, B: null, C: null })
               window.setTimeout(() => {
-                setBubble((b) => (b.A?.startsWith('截图失败') ? { A: null, B: null } : b))
+                setBubble((b) => (b.A?.startsWith('截图失败') ? { A: null, B: null, C: null } : b))
               }, 2400)
             })
           }}
@@ -1731,7 +1740,10 @@ function App() {
               </button>
               <button
                 className={`panel-tab${settingsTab === 'history' ? ' on' : ''}`}
-                onClick={() => setSettingsTab('history')}
+                onClick={() => {
+                  setSettingsTab('history')
+                  void refreshEpisodes()
+                }}
               >
                 历史
               </button>
@@ -2141,6 +2153,29 @@ function App() {
                   ))}</optgroup>}
                 </select>
               </div>
+              <div className="settings-row">
+                <label htmlFor="cfg-voice-c">场外客串音色(第三人乱入时用)</label>
+                <select
+                  id="cfg-voice-c"
+                  value={voice.C}
+                  onChange={(e) => {
+                    const next = { ...voice, C: e.target.value }
+                    setVoice(next)
+                    saveConfig({ voice: next }).catch((err) =>
+                      console.warn('客串音色保存失败(静默)', err),
+                    )
+                  }}
+                >
+                  {VOICES.map((v) => (
+                    <option key={v.id} value={v.id}>
+                      {v.label}
+                    </option>
+                  ))}
+                  {clonedVoices.length > 0 && <optgroup label="我的克隆音色">{clonedVoices.map((v) => (
+                    <option key={v.uri} value={v.uri}>{v.name}</option>
+                  ))}</optgroup>}
+                </select>
+              </div>
               <CloneVoiceRow
                 apiKey={voice.apiKey}
                 onRecordingChange={(rec) => (voiceRecording.current = rec)}
@@ -2307,11 +2342,19 @@ function App() {
           <div className="settings-sep">
             <span>历史记录（{episodes.length}）</span>
             <button
-              className="hist-clear"
+              className={`hist-clear${clearHistArmed ? ' danger' : ''}`}
               disabled={episodes.every((e) => e.fav) || episodes.length === 0}
-              onClick={() => void onClearUnfavorited()}
+              onClick={() => {
+                if (!clearHistArmed) {
+                  setClearHistArmed(true)
+                  window.setTimeout(() => setClearHistArmed(false), 3000)
+                  return
+                }
+                setClearHistArmed(false)
+                void onClearUnfavorited()
+              }}
             >
-              清空未收藏
+              {clearHistArmed ? '确认清空?' : '清空未收藏'}
             </button>
           </div>
           <div className="hist-list">
@@ -2507,6 +2550,13 @@ function App() {
                 {chatBusy ? '…' : '发送'}
               </button>
             </div>
+          </div>
+        )}
+
+        {bubble.C && (
+          <div className="guest-bubble">
+            <span className="guest-tag">📞 画外音</span>
+            {bubble.C}
           </div>
         )}
 

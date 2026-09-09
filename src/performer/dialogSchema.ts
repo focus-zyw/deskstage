@@ -19,7 +19,7 @@ export const VALID_ACTIONS = new Set([
   'jump',
 ])
 
-export type Speaker = 'A' | 'B'
+export type Speaker = 'A' | 'B' | 'C' // C = 场外角色(电话/画外音乱入,无立绘)
 
 /** 语气词表:deadpan 面瘫 / excited 兴奋 / slow 慢条斯理;缺省 normal(不标注) */
 export const DELIVERIES = ['deadpan', 'excited', 'slow'] as const
@@ -100,7 +100,7 @@ export function deliverySpeed(delivery?: string): number {
  *  可选演出字段逐一钳位/校验,来源不限(LLM 输出/JSONL/收藏/预取缓冲) */
 export function sanitizeDialogLine(raw: unknown): DialogLine | null {
   const o = (raw ?? {}) as Record<string, unknown>
-  if (o.speaker !== 'A' && o.speaker !== 'B') return null
+  if (o.speaker !== 'A' && o.speaker !== 'B' && o.speaker !== 'C') return null
   const text = typeof o.text === 'string' ? o.text.trim() : ''
   if (!text) return null
   const listenerAction =
