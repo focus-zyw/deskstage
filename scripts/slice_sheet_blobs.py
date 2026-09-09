@@ -1,13 +1,12 @@
 # -*- coding: utf-8 -*-
-"""表情表切图:固定网格粗切 + 格内主色块提取。
+"""表情表切图:固定网格粗切 + 格内最大色块提取 + 邻近特效吸收。
 
-长发会跨越格子边界(上一行角色的头发垂进下一行),固定网格切出来会带上
-邻居的发丝。处理:粗切后对格内做连通域标记,只保留与主体相连的最大色块
-(邻居垂落的发丝是独立色块,直接丢弃),再按邻近原则吸收自己的表情特效。
+长发会跨越格子边界,固定网格切出来会带上邻居的发丝;连通域取最大色块
+即可只保留主体,再按"中心落在主体邻域"吸收自己的表情特效。
+个别构图特殊的格子(如 sleepy 揉眼,头手与身体断开)用 MANUAL_BBOX 手工指定。
 """
 
 import os
-import sys
 
 from PIL import Image
 
@@ -19,12 +18,37 @@ CANVAS_H = 640
 TARGET_H = 615
 STAND_CELL = 512
 JUMP_GAP = 46
-DS = 2  # 连通域分析的下采样倍数
+DS = 2
 
 SHEETS = {
     "girl-sheet1.png": ("a", ["idle", "talk", "happy", "laugh", "angry", "sad"]),
     "girl-sheet2.png": ("a", ["surprise", "shy", "sleepy", "wave", "thinking", "jump"]),
     "boy-sheet2.png": ("b", ["surprise", "shy", "sleepy", "wave", "thinking", "jump"]),
+}
+
+# 人工标注的每格 bbox(全尺寸坐标):布局特殊的表(如 girl-sheet2 的 3×2)必须手工标
+MANUAL_SHEET_BBOX = {
+    "girl-sheet1.png": [
+        (120, 10, 450, 512),    # idle
+        (570, 15, 960, 512),    # talk(含对话气泡)
+        (105, 520, 445, 1015),  # happy(含星星)
+        (550, 500, 940, 1024),  # laugh(含感叹号)
+        (140, 1025, 435, 1536), # angry(含怒筋)
+        (595, 1030, 885, 1536), # sad(含汗珠)
+    ],
+    "girl-sheet2.png": [    # 3 列 × 2 行布局
+        (20, 10, 340, 760),     # surprise(含惊叹号)
+        (385, 8, 665, 762),     # shy
+        (695, 12, 1015, 762),   # sleepy(含 Zzz)
+        (20, 780, 340, 1536),   # wave(含闪光)
+        (437, 785, 670, 1536),  # thinking(含灯泡问号)
+        (675, 770, 1015, 1495), # jump(腾空,脚底不含画布底)
+    ],
+}
+
+# 手工 bbox 覆盖(cell 内全尺寸坐标):(sheet 文件, 表情) -> (x0, y0, x1, y1)
+MANUAL_BBOX = {
+    ("girl-sheet2.png", "sleepy"): (14, 0, 400, 512),  # 揉眼姿势头手与身体断开,自动提取只得半身
 }
 
 
@@ -57,7 +81,6 @@ def label(mask, w, h):
 
 
 def extract_cell(cell):
-    """返回格内主体 bbox(全尺寸坐标):格内连通域取最大,邻近小色块(特效)吸收。"""
     sw, sh = cell.size[0] // DS, cell.size[1] // DS
     small = cell.resize((sw, sh), Image.BILINEAR)
     alpha = small.getchannel("A").point(lambda v: 255 if v > 4 else 0)
@@ -66,41 +89,32 @@ def extract_cell(cell):
         return None
     comps.sort(key=lambda c: -c["area"])
     body = list(comps[0]["bbox"])
-    rest = comps[1:]
-    # 方向性吸收(防邻居入侵):凡接触格子顶/左/右边缘的色块都是邻格入侵,绝不吸收。
-    # 吸收两类:①特效——中心落在主体邻域,且不触顶/左/右边;②断开的下半身——
-    # x 范围与主体重叠、且紧贴主体底边之下(揉眼等姿势的头身断开)。
-    edge_t, edge_s = 1, 2  # 下采样坐标的边缘判定(全尺寸 2px/4px)
-    g = 2
-    for _ in range(3):
-        changed = False
-        for c in rest[:]:
-            cx0, cy0, cx1, cy1 = c["bbox"]
-            touches_edge = cy0 <= edge_t or cx0 <= edge_s or cx1 >= sw - edge_s
-            cx, cy = (cx0 + cx1) / 2, (cy0 + cy1) / 2
-            near = (body[0] - g <= cx <= body[2] + g and body[1] - g <= cy <= body[3] + g)
-            below = (cx0 < body[2] + g and cx1 > body[0] - g and body[1] - 2 <= cy0 <= body[3] + 12)
-            if not touches_edge and (near or below):
-                body = [min(body[0], cx0), min(body[1], cy0), max(body[2], cx1), max(body[3], cy1)]
-                rest.remove(c)
-                changed = True
-        if not changed:
-            break
+    for c in comps[1:]:
+        cx0, cy0, cx1, cy1 = c["bbox"]
+        cx, cy = (cx0 + cx1) / 2, (cy0 + cy1) / 2
+        if body[0] - 3 <= cx <= body[2] + 3 and body[1] - 3 <= cy <= body[3] + 3:
+            body = [min(body[0], cx0), min(body[1], cy0), max(body[2], cx1), max(body[3], cy1)]
     return (body[0] * DS, body[1] * DS, body[2] * DS, body[3] * DS)
 
 
 def process(sheet_file, ch, acts):
     sheet = Image.open(os.path.join(TEMP, sheet_file)).convert("RGBA")
     w, h = sheet.size
+    manual = MANUAL_SHEET_BBOX.get(sheet_file)
+    # 表级缩放基准:按单元格实际高度折算到 TARGET_H
+    cell_h = (h // 3) if manual is None else (h // 2 if sheet_file == "girl-sheet2.png" else h // 3)
     for idx, act in enumerate(acts):
-        row, col = divmod(idx, 2)
-        cell = sheet.crop((col * w // 2, row * h // 3, (col + 1) * w // 2, (row + 1) * h // 3))
-        bbox = extract_cell(cell)
+        if manual is not None:
+            bbox = manual[idx]
+        else:
+            row, col = divmod(idx, 2)
+            cell = sheet.crop((col * w // 2, row * h // 3, (col + 1) * w // 2, (row + 1) * h // 3))
+            bbox = extract_cell(cell)
         if bbox is None:
             print(f"  {act}: 空格,跳过")
             continue
-        crop = cell.crop(bbox)
-        scale = TARGET_H / STAND_CELL
+        crop = sheet.crop(bbox)
+        scale = TARGET_H / cell_h
         nw, nh = round(crop.width * scale), round(crop.height * scale)
         crop = crop.resize((nw, nh), Image.LANCZOS)
         cw = max(CANVAS_W, nw + 16)
