@@ -8,6 +8,8 @@ import { CharacterSprite } from './stage/CharacterSprite'
 import { Bubble } from './stage/Bubble'
 import { EyeIcon, EyeOffIcon, PlayIcon, StopIcon, GearIcon, PowerIcon, TargetIcon, PokeballIcon, ChatIcon, CropIcon } from './stage/icons'
 import { startScreenshot, applyScreenshotHotkey } from './capture'
+import { setCaptureMode } from './input/pointerManager'
+import { CaptureOverlay } from './CaptureOverlay'
 import { SPRITE_SETS, preloadSprites } from './stage/spriteSets'
 import {
   initPointerManager,
@@ -542,9 +544,15 @@ function App() {
     phaseRef.current = phase
   }, [phase])
 
-  // 截屏流程的失败反馈(capture.ts 内部 catch 后 emit 过来)
+  // 截屏流程:capture-start 进入框选模式(主窗恢复交互,CaptureOverlay 铺满冻结图),
+  // 失败反馈(capture.ts 内部 catch 后 emit 过来)走气泡
+  const [captureShot, setCaptureShot] = useState<string | null>(null)
   useEffect(() => {
-    const un = listen('capture-error', ({ payload }) => {
+    const start = listen('capture-start', ({ payload }) => {
+      setCaptureMode(true)
+      setCaptureShot(String(payload))
+    })
+    const fail = listen('capture-error', ({ payload }) => {
       const msg = String(payload).slice(0, 50)
       setBubble({ A: `截图失败:${msg}`, B: null })
       window.setTimeout(() => {
@@ -552,15 +560,17 @@ function App() {
       }, 5000)
     })
     return () => {
-      void un.then((f) => f())
+      void start.then((f) => f())
+      void fail.then((f) => f())
     }
   }, [])
+
 
   // 看视频不被打扰:默认点击不抢焦点(WS_EX_NOACTIVATE);
   // 仅设置/主题面板打开时临时恢复激活(输入框需要键盘),关闭即恢复
   useEffect(() => {
-    void invoke('set_noactivate', { enable: !(settingsOpen || topicOpen || chatOpen) }).catch(() => {})
-  }, [settingsOpen, topicOpen, chatOpen])
+    void invoke('set_noactivate', { enable: !(settingsOpen || topicOpen || chatOpen || !!captureShot) }).catch(() => {})
+  }, [settingsOpen, topicOpen, chatOpen, captureShot])
   // 上一段台词（内存中），续播时喂给 LLM 做衔接
   const lastLines = useRef<DialogLine[]>([])
   // 上一次自动重放的集,连续重放时避开
@@ -2145,6 +2155,17 @@ function App() {
               </button>
             </div>
           </div>
+        )}
+
+        {captureShot && (
+          <CaptureOverlay
+            path={captureShot}
+            onDone={(ok) => {
+              setCaptureMode(false)
+              setCaptureShot(null)
+              if (ok) setActiveTick((t) => t + 1)
+            }}
+          />
         )}
 
         {showWatermark && (

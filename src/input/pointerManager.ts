@@ -19,6 +19,14 @@ let hovered: string | null = null
 let winOrigin = { x: 0, y: 0 } // 窗口左上角的物理像素坐标
 let scale = 1
 let initialized = false
+// 截屏框选模式:整窗恢复交互并暂停穿透切换(画布铺满全屏,热区判定无意义)
+let captureMode = false
+
+/** 截屏框选模式开关(App 在渲染 CaptureOverlay 期间开启,结束后关闭) */
+export function setCaptureMode(on: boolean): void {
+  captureMode = on
+  void setInteractive(on).catch(() => {})
+}
 
 /** 注册一个可命中区域（角色、按钮等），返回注销函数 */
 export function registerHitRegion(id: string, region: HitRegion): () => void {
@@ -83,6 +91,7 @@ export async function initPointerManager() {
   void win.onScaleChanged(() => void recomputeOrigin())
 
   await listen<[number, number]>('cursor-pos', (e) => {
+    if (captureMode) return // 框选期间整窗可交互,不做穿透切换
     const [px, py] = e.payload
     const id = hitTest(px, py)
     if (id !== hovered) {

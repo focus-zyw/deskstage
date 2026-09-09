@@ -1,17 +1,25 @@
-// 截屏框选覆盖窗:把冻结的主屏画面铺满全屏 + 变暗遮罩,
-// 鼠标拖出选区(边框+尺寸提示),松开确认 → Rust 裁剪写入剪贴板 → 关窗。Esc 取消。
+// 截屏框选层(渲染在主窗内,主窗临时切到可交互模式):
+// 冻结的主屏画面铺满全屏 + 变暗遮罩,鼠标拖出选区(边框+尺寸提示),
+// 松开确认 → Rust 裁剪写入剪贴板 → onDone(true);Esc 取消 → onDone(false)。
 // 坐标换算:窗口 CSS 像素 × (图像宽 / 窗口宽) = 图像物理像素,裁剪在 Rust 侧完成。
 
 import { useEffect, useRef } from 'react'
 import { invoke } from '@tauri-apps/api/core'
-import { getCurrentWindow } from '@tauri-apps/api/window'
 import { readFile } from '@tauri-apps/plugin-fs'
 
 const MIN_SELECT_PX = 8 // CSS 像素:小于此视为误点,取消
 const BORDER_PX = 2
 
-export function CaptureOverlay() {
+export function CaptureOverlay({
+  path,
+  onDone,
+}: {
+  path: string
+  onDone: (ok: boolean) => void
+}) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const doneRef = useRef(onDone)
+  doneRef.current = onDone
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -19,17 +27,16 @@ export function CaptureOverlay() {
     const ctx = canvas.getContext('2d')
     if (!ctx) return
 
-    const path = new URLSearchParams(window.location.search).get('p') ?? ''
     let bmp: ImageBitmap | null = null
     // 选区:CSS 像素(anchor 起点 + 当前点)
     let sel: { ax: number; ay: number; bx: number; by: number } | null = null
     let dragging = false
     let closed = false
 
-    const closeWindow = () => {
+    const finish = (ok: boolean) => {
       if (closed) return
       closed = true
-      void getCurrentWindow().close()
+      doneRef.current(ok)
     }
 
     const draw = () => {
@@ -88,7 +95,7 @@ export function CaptureOverlay() {
       const w = Math.abs(sel.bx - sel.ax)
       const h = Math.abs(sel.by - sel.ay)
       if (w < MIN_SELECT_PX || h < MIN_SELECT_PX || !bmp) {
-        closeWindow() // 误点取消
+        finish(false) // 误点取消
         return
       }
       const scale = bmp.width / window.innerWidth
@@ -98,13 +105,14 @@ export function CaptureOverlay() {
       const height = Math.min(bmp.height - y, Math.round(h * scale))
       try {
         await invoke('capture_finish', { x, y, width, height })
+        finish(true)
       } catch (e) {
         console.warn('[capture] 写入剪贴板失败', e)
+        finish(false)
       }
-      closeWindow()
     }
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') closeWindow()
+      if (e.key === 'Escape') finish(false)
     }
     const onContextMenu = (e: MouseEvent) => e.preventDefault()
 
@@ -116,8 +124,8 @@ export function CaptureOverlay() {
         canvas.height = bmp.height
         draw()
       } catch (e) {
-        console.warn('[capture] 冻结图加载失败,直接退出', e)
-        closeWindow()
+        console.warn('[capture] 冻结图加载失败,退出框选', e)
+        finish(false)
       }
     })()
 
@@ -133,8 +141,7 @@ export function CaptureOverlay() {
       window.removeEventListener('keydown', onKeyDown)
       window.removeEventListener('contextmenu', onContextMenu)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [path])
 
   return (
     <canvas
@@ -144,6 +151,7 @@ export function CaptureOverlay() {
         inset: 0,
         width: '100vw',
         height: '100vh',
+        zIndex: 9999,
         display: 'block',
         cursor: 'crosshair',
         background: '#111',
