@@ -5,7 +5,7 @@
 // 抓屏前的隐藏在 WDA 关闭时兜底,保证角色绝不进画面。
 
 import { invoke } from '@tauri-apps/api/core'
-import { getCurrentWindow, currentMonitor } from '@tauri-apps/api/window'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow'
 import { register, unregister } from '@tauri-apps/plugin-global-shortcut'
 import { getConfig } from './storage/configStore'
@@ -34,27 +34,22 @@ export async function startScreenshot(): Promise<void> {
       throw e
     }
 
-    const mon = await currentMonitor()
-    const width = mon ? Math.round(mon.size.width / mon.scaleFactor) : window.innerWidth
-    const height = mon ? Math.round(mon.size.height / mon.scaleFactor) : window.innerHeight
-
     // 残留覆盖窗(上次异常退出)先清掉,否则同 label 建窗会失败
     const stale = (await WebviewWindow.getAll()).find((w) => w.label === OVERLAY_LABEL)
     if (stale) await stale.destroy().catch(() => {})
-    if (stale) await stale.destroy().catch(() => {})
 
+    // 全屏交给系统 fullscreen:true:逻辑尺寸换算在多 DPI 下不可靠。
+    // 覆盖窗内部用 innerWidth 与图像宽的比值做坐标换算,不受窗口实际 DPI 影响
     const overlay = new WebviewWindow(OVERLAY_LABEL, {
       url: `index.html?capture=1&p=${encodeURIComponent(path)}`,
-      x: 0,
-      y: 0,
-      width,
-      height,
+      fullscreen: true,
       decorations: false,
       resizable: false,
       skipTaskbar: true,
       alwaysOnTop: true,
       shadow: false,
       focus: true,
+      title: '截屏框选',
     })
     overlay.once('tauri://destroyed', () => {
       void main.show().catch(() => {})
