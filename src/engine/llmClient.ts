@@ -8,6 +8,7 @@ import { storyContext, getBond } from '../storage/storyStore'
 import { takeRecap } from '../storage/interactionStore'
 import { pickRelationship } from '../performer/modes/relationships'
 import { currentTimeSlot } from './timeAware'
+import { duoShortPersona, soloShortPersona } from './persona'
 import { envContext } from './envAware'
 import {
   clampPauseMs,
@@ -16,7 +17,6 @@ import {
   VALID_ACTIONS,
   type DialogLine,
   type PerformanceScript,
-  type Speaker,
 } from '../performer/dialogSchema'
 import type { Mode } from '../performer/modes'
 
@@ -226,8 +226,7 @@ export async function generateShortChat(
   const cfg = await getConfig()
   const mem = await getMemory()
   const slot = currentTimeSlot()
-  const persona =
-    '甲:精力充沛、爱吹牛、脑洞大,满嘴跑火车还特别得意;乙:冷静毒舌、专拆台、话少但一针见血。两人是互怼但有默契的老搭档'
+  const persona = duoShortPersona()
   const userCtx: UserContext = {
     profile: cfg.userProfile,
     taste: (await tasteSummary(3)) || undefined,
@@ -271,10 +270,7 @@ export async function improvPokeLine(
   who: 'A' | 'B',
   recentLines: DialogLine[],
 ): Promise<string> {
-  const persona =
-    who === 'A'
-      ? '甲:精力充沛、爱吹牛、脑洞大、说话夸张'
-      : '乙:冷静毒舌、专拆台、话少但一针见血'
+  const persona = soloShortPersona(who)
   const ctx = recentLines
     .slice(-4)
     .map((l) => `${l.speaker === 'A' ? '甲' : l.speaker === 'C' ? '丙(场外)' : '乙'}:${l.text}`)
@@ -315,14 +311,11 @@ export async function improvPokeLine(
  * 聊天通道:观众对指定角色说了一句话,该角色用自己的口吻回一句(15~25 字)。
  * 注入称呼/画像/记忆事实,命中雷区的话题不接。8s 超时、不重试,失败由调用方静默兜底。
  */
-export async function generateUserChatReply(who: Speaker, userText: string): Promise<string> {
+export async function generateUserChatReply(who: 'A' | 'B', userText: string): Promise<string> {
   const cfg = await getConfig()
   const mem = await getMemory()
   const p: UserProfile = cfg.userProfile
-  const persona =
-    who === 'A'
-      ? '甲:精力充沛、爱吹牛、脑洞大、说话夸张,口头禅"我跟你说""好家伙"'
-      : '乙:冷静毒舌、专拆台、话少但一针见血,惯用反问和吐槽'
+  const persona = soloShortPersona(who)
   const bits: string[] = []
   if (p.userName) bits.push(`观众称呼"${p.userName}"`)
   if (p.occupation) bits.push(`身份:${p.occupation}`)

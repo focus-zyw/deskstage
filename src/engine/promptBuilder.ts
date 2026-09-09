@@ -2,6 +2,7 @@ import type { DialogLine } from '../performer/player'
 import { modeOf, type Mode } from '../performer/modes'
 import type { Relationship } from '../performer/modes/relationships'
 import { currentTimeSlot } from './timeAware'
+import { fullPersona } from './persona'
 import type { UserProfile } from '../storage/configStore'
 
 const ACTIONS = 'idle, talk, happy, laugh, shy, sleepy, wave, thinking, angry, sad, surprise, shake, jump'
@@ -74,10 +75,7 @@ export function buildMessages(
   /** 长期关系底色(可选):信任/摩擦的当前状态描述 */
   bondNote?: string,
 ): ChatMessage[] {
-  const persona = `角色设定：
-- 甲（speaker 用 "A"）：精力充沛、爱吹牛、脑洞大、说话夸张，满嘴跑火车还特别得意，常用"我跟你说""好家伙"当口头禅
-- 乙（speaker 用 "B"）：冷静毒舌、专拆台、话少但一针见血，惯用反问和吐槽拆穿甲的牛皮，偶尔冷幽默
-- 两人是老搭档，互怼但有默契，节奏像传统相声里的逗哏和捧哏`
+  const persona = fullPersona()
 
   // 手法说教刻意做减法:结构/节拍由场景卡的 escalation 承担,避免固定套路疲劳
   const craft = `创作要求（这是喜剧，好笑比什么都重要）：

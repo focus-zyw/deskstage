@@ -8,6 +8,7 @@ import { CharacterSprite } from './stage/CharacterSprite'
 import { Bubble } from './stage/Bubble'
 import { EyeIcon, EyeOffIcon, PlayIcon, StopIcon, GearIcon, PowerIcon, TargetIcon, PokeballIcon, ChatIcon, CropIcon } from './stage/icons'
 import { startScreenshot, applyScreenshotHotkey } from './capture'
+import { defaultPersonaText, setPersonaOverride } from './engine/persona'
 import { startEnvPolling, stopEnvPolling, isFullscreenApp, isUserActive } from './engine/envAware'
 import { setCaptureMode } from './input/pointerManager'
 import { CaptureOverlay } from './CaptureOverlay'
@@ -511,6 +512,8 @@ function App() {
   const btnEye = useRef<HTMLButtonElement>(null)
   const btnTopic = useRef<HTMLButtonElement>(null)
   const btnShot = useRef<HTMLButtonElement>(null)
+  const btnOcr = useRef<HTMLButtonElement>(null)
+  const [ocrBusy, setOcrBusy] = useState(false)
   const btnChat = useRef<HTMLButtonElement>(null)
   const btnExit = useRef<HTMLButtonElement>(null)
   const gripRef = useRef<HTMLSpanElement>(null)
@@ -648,6 +651,8 @@ function App() {
       // 截屏:应用全局快捷键 + 按配置把本窗口从系统级屏幕捕获中排除
       void applyScreenshotHotkey()
       void invoke('set_capture_excluded', { enable: c.screenshot.hideSelf }).catch(() => {})
+      // 用户自定义人设:先应用,后续所有生成即采纳
+      setPersonaOverride(c.persona.a, c.persona.b)
       // 环境感知:按配置低频轮询本机状态(电量/前台应用分类等)
       if (c.envSense) startEnvPolling()
     })
@@ -695,6 +700,9 @@ function App() {
       // 漏注册 = 入口彻底点不到(此前聊天入口即因此失效)
       registerHitRegion('shot', {
         getRect: () => btnShot.current!.getBoundingClientRect(),
+      }),
+      registerHitRegion('ocr', {
+        getRect: () => btnOcr.current!.getBoundingClientRect(),
       }),
       registerHitRegion('chat', {
         getRect: () => btnChat.current!.getBoundingClientRect(),
@@ -1161,7 +1169,14 @@ function App() {
     setSettingsOpen(true)
     setTopicOpen(false)
     const cfg = await getConfig()
-    setForm(cfg)
+    // 人设输入框显示生效中的全文(自定义或内置默认),编辑后保存即采纳
+    setForm({
+      ...cfg,
+      persona: {
+        a: cfg.persona.a || defaultPersonaText('A'),
+        b: cfg.persona.b || defaultPersonaText('B'),
+      },
+    })
     const id = vendorIdOfBaseUrl(cfg.baseUrl)
     setVendorId(id)
     // 各厂商 key 草稿 = 已保存的 apiKeys + 当前生效 key 归位到它的键
@@ -1193,6 +1208,7 @@ function App() {
       void invoke('set_capture_excluded', { enable: next.screenshot.hideSelf }).catch(() => {})
       if (next.envSense) startEnvPolling()
       else stopEnvPolling()
+      if (partial.persona) setPersonaOverride(partial.persona.a, partial.persona.b) // 新人设立即采纳
       setSavedTick(Date.now())
       window.setTimeout(() => setSavedTick(0), 2500)
     } catch (e) {
@@ -1733,6 +1749,36 @@ function App() {
         </button>
 
         <button
+          ref={btnOcr}
+          className={`ctrl-btn icon${hovered === 'ocr' ? ' hot' : ''}${ocrBusy ? ' loading' : ''}`}
+          title="提取剪贴板图片中的文字(复制到剪贴板)"
+          disabled={ocrBusy}
+          onClick={() => {
+            setOcrBusy(true)
+            setBubble({ A: '识别中…', B: null, C: null })
+            invoke<{ lines: string[] }>('ocr_clipboard')
+              .then(async (r) => {
+                const text = r.lines.join('\n')
+                try { await navigator.clipboard.writeText(text) } catch { /* 剪贴板写入失败也展示 */ }
+                setBubble({ A: `已提取 ${r.lines.length} 行,文字已复制到剪贴板`, B: null, C: null })
+                window.setTimeout(() => {
+                  setBubble((b) => (b.A?.startsWith('已提取') ? { A: null, B: null, C: null } : b))
+                }, 2600)
+              })
+              .catch((e) => {
+                const msg = String(e).slice(0, 60)
+                setBubble({ A: msg, B: null, C: null })
+                window.setTimeout(() => {
+                  setBubble((b) => (b.A === msg ? { A: null, B: null, C: null } : b))
+                }, 3000)
+              })
+              .finally(() => setOcrBusy(false))
+          }}
+        >
+          <span aria-hidden="true">文</span>
+        </button>
+
+        <button
           ref={btnChat}
           className={`ctrl-btn icon${hovered === 'chat' ? ' hot' : ''}${chatOpen ? ' on' : ''}`}
           title="和角色说话(@甲/@乙 指定谁回)"
@@ -1905,6 +1951,48 @@ function App() {
                 ))}
               </select>
             )}
+          </div>
+          <div className="settings-sep">
+            <span>人设(自由编辑,输入后自动保存并采纳;"还原默认"恢复出厂搭档)</span>
+          </div>
+          <div className="settings-row">
+            <label htmlFor="cfg-persona-a">甲的人设(性别/职业/性格/日常素材,自由发挥)</label>
+            <textarea
+              id="cfg-persona-a"
+              rows={3}
+              value={form.persona.a || defaultPersonaText('A')}
+              onChange={(e) => {
+                setForm({ ...form, persona: { ...form.persona, a: e.target.value } })
+                saveField({ persona: { ...form.persona, a: e.target.value } })
+              }}
+            />
+          </div>
+          <div className="settings-row">
+            <label htmlFor="cfg-persona-b">乙的人设</label>
+            <textarea
+              id="cfg-persona-b"
+              rows={3}
+              value={form.persona.b || defaultPersonaText('B')}
+              onChange={(e) => {
+                setForm({ ...form, persona: { ...form.persona, b: e.target.value } })
+                saveField({ persona: { ...form.persona, b: e.target.value } })
+              }}
+            />
+          </div>
+          <div className="settings-row">
+            <div className="settings-hint">清空输入框 = 恢复该角色的内置人设</div>
+            <button
+              className="panel-btn"
+              onClick={() => {
+                setForm({
+                  ...form,
+                  persona: { a: defaultPersonaText('A'), b: defaultPersonaText('B') },
+                })
+                saveField({ persona: { a: defaultPersonaText('A'), b: defaultPersonaText('B') } }, true)
+              }}
+            >
+              还原默认人设
+            </button>
           </div>
           <div className="settings-row">
             <label htmlFor="cfg-show">显示角色</label>

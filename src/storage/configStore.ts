@@ -86,6 +86,8 @@ export interface AppConfig {
   envSense: boolean
   /** 久坐提醒(番茄钟):连续活跃 X 分钟后用角色口吻提醒休息 */
   breakReminder: { enabled: boolean; minutes: number }
+  /** 用户自定义人设(甲/乙的生效文本;空串 = 内置默认) */
+  persona: { a: string; b: string }
 }
 
 // 默认值（首启写入）。想换端点：改 appData/data/config.json 后重启。
@@ -119,6 +121,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   webchatSite: 'deepseek',
   envSense: true,
   breakReminder: { enabled: false, minutes: 45 },
+  persona: { a: '', b: '' },
 }
 
 /** 清洗使用者画像:逐字段裁剪;likes 为空时回落旧 userInterests 字段(老配置平滑迁移) */
@@ -279,6 +282,11 @@ function sanitizeConfig(obj: unknown): AppConfig {
         enabled: b.enabled === true,
         minutes: Math.min(120, Math.max(15, Number(b.minutes) || 45)),
       }
+    })(),
+    persona: ((): { a: string; b: string } => {
+      const pr = (o.persona ?? {}) as Record<string, unknown>
+      const cap = (x: unknown): string => (typeof x === 'string' ? x.trim().slice(0, 600) : '')
+      return { a: cap(pr.a), b: cap(pr.b) }
     })(),
   }
 }
