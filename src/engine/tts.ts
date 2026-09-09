@@ -4,6 +4,7 @@
 import { fetch } from '@tauri-apps/plugin-http'
 import { readTextFile, writeTextFile, exists, mkdir, readDir, remove, stat } from '@tauri-apps/plugin-fs'
 import { appDataDir, join } from '@tauri-apps/api/path'
+import { deliverySpeed } from '../performer/dialogSchema'
 import { getConfig, inTauri, registerVoiceIds } from '../storage/configStore'
 import type { Speaker } from '../performer/player'
 
@@ -25,13 +26,6 @@ export const VOICES: { id: string; label: string }[] = [
 /** 合成用的完整 voice 参数:内置音色拼 模型:名,自定义音色已是 speech: 开头的 uri */
 function fullVoice(voice: string): string {
   return voice.startsWith('speech:') ? voice : `${TTS_MODEL}:${voice}`
-}
-
-/** 语气→语速映射:deadpan 面瘫略慢 / excited 兴奋略快 / slow 慢条斯理 */
-const DELIVERY_SPEED: Record<string, number> = { deadpan: 0.92, excited: 1.15, slow: 0.85 }
-
-export function deliverySpeed(delivery?: string): number {
-  return (delivery && DELIVERY_SPEED[delivery]) || 1
 }
 
 /** 合成一句,返回 mp3 二进制。失败抛错由调用方静默 */

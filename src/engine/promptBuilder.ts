@@ -97,7 +97,8 @@ export function buildMessages(
 - action 只能是这些词之一（禁止用 card 的字段名或其他词）：${ACTIONS}
 - 一段共 14~22 句，两人交替说话
 - 每句口语化，不超过 25 个字
-- 台词只写 text/action 两个字段,不要附加任何其他字段`
+- 台词可在 text/action 外带可选演出字段(用在该用的地方,没有就省略,别每句都加)：
+  "listenerAction":听者此刻的反应动作(词表同 action)、"delivery":"deadpan|excited|slow"(面瘫/兴奋/慢条斯理)、"pauseBefore":毫秒(包袱前 300~600 蓄势)、"pauseAfter":毫秒(只给响底的最后一句,900~1500 留白)`
 
   const history = recentLines.length
     ? `上一段的结尾（新的一段要自然衔接，不要重复内容）：\n${recentLines

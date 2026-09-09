@@ -3,7 +3,7 @@
 // 台词可带演出信息(停顿/听者动作/语气),节奏由喜剧时机决定而不只是字数。
 // 类型与清洗集中在 dialogSchema(唯一事实源),这里只管播放。
 
-import { clampPauseMs, type DialogLine, type Speaker } from './dialogSchema'
+import { clampPauseMs, deliverySpeed, type DialogLine, type Speaker } from './dialogSchema'
 
 export type { DialogLine, Delivery, Speaker } from './dialogSchema'
 
@@ -61,14 +61,17 @@ export class PerformancePlayer {
         if (before) await sleep(before, ctrl.signal)
         if (ctrl.signal.aborted) break
         this.cbs.onLine(line, i)
-        await sleep(bubbleDuration(line.text), ctrl.signal)
+        // 气泡时长按语速修正:slow 的语音更长,气泡停留等比加长,避免下一句打断语音
+        const dur = Math.round(bubbleDuration(line.text) / deliverySpeed(line.delivery))
+        await sleep(dur, ctrl.signal)
         if (ctrl.signal.aborted) break
-        this.cbs.onLineEnd(line.speaker)
-        // 句尾留白:响底包袱后多停一拍,给笑的时间
+        // 句尾留白:此间气泡与听者反应继续停留,响底包袱有笑的时间
         const after = clampPauseMs(line.pauseAfter)
         if (after) await sleep(after, ctrl.signal)
         if (ctrl.signal.aborted) break
-        await sleep(gap, ctrl.signal)
+        this.cbs.onLineEnd(line.speaker)
+        // 默认 gap 只在句与句之间;最后一句不叠加,收底留白已由 pauseAfter 承担
+        if (i < lines.length - 1) await sleep(gap, ctrl.signal)
       }
       if (!ctrl.signal.aborted) {
         this.ctrl = null
