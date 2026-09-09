@@ -5,6 +5,7 @@ use tauri::Emitter;
 
 mod audio_capture;
 mod capture;
+mod webchat;
 
 // 光标轮询线程：以约 80Hz 读取全局光标位置，位置变化时推送给前端。
 // 为什么轮询而不监听窗口鼠标事件：窗口开启鼠标穿透后收不到任何鼠标事件，
@@ -73,7 +74,10 @@ pub fn run() {
       audio_capture::stop_capture,
       capture::capture_screen,
       capture::capture_finish,
-      capture::set_capture_excluded
+      capture::set_capture_excluded,
+      webchat::webchat_edge_launch,
+      webchat::webchat_edge_kill,
+      webchat::webchat_main_visible
     ])
     .setup(|app| {
       if cfg!(debug_assertions) {

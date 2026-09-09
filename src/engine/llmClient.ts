@@ -2,8 +2,10 @@ import { fetch as rustFetch } from '@tauri-apps/plugin-http'
 import { getConfig, inTauri } from '../storage/configStore'
 import type { UserProfile } from '../storage/configStore'
 import { buildMessages, renderAudienceContext, type UserContext } from './promptBuilder'
+import { mergeMessages, webchatAsk } from './webchat'
 import { getMemory, topFacts, tasteSummary, type FactCategory } from '../storage/memoryStore'
 import { storyContext } from '../storage/storyStore'
+import { takeRecap } from '../storage/interactionStore'
 import { pickRelationship } from '../performer/modes/relationships'
 import { currentTimeSlot } from './timeAware'
 import {
@@ -12,6 +14,7 @@ import {
   sanitizeDelivery,
   VALID_ACTIONS,
   type DialogLine,
+  type PerformanceScript,
   type Speaker,
 } from '../performer/dialogSchema'
 import type { Mode } from '../performer/modes'
@@ -122,9 +125,9 @@ async function chatRaw(
 }
 
 /** 解析并规范化 LLM 输出:交给 dialogSchema 统一处理(容忍围栏/混杂文本,
- *  保留可选演出字段,非法 action 归一为 talk,丢弃坏行) */
-function parseDialog(raw: string, minLines = 4): DialogLine[] {
-  return parseGeneratedDialog(raw, minLines).lines
+ *  保留可选演出字段,非法 action 归一为 talk,丢弃坏行;choice 行单独提出) */
+function parseDialog(raw: string, minLines = 4): PerformanceScript {
+  return parseGeneratedDialog(raw, minLines)
 }
 
 /**
@@ -137,9 +140,14 @@ export async function generateDialog(
   recentLines: DialogLine[],
   signal?: AbortSignal,
   topicFixed?: boolean,
-): Promise<DialogLine[]> {
+): Promise<PerformanceScript> {
   const cfg = await getConfig()
   const mem = await getMemory()
+  // 约 30% 的集数包含观众抉择点(由应用侧掷骰,重试保持一致)
+  const allowChoice = Math.random() < 0.3
+  // 上一集的观众选择:注入一次即清除
+  let lastChoice: string | null = null
+  try { lastChoice = localStorage.getItem('vc-lastChoice') } catch { /* ignore */ }
   const userCtx: UserContext = {
     profile: cfg.userProfile,
     taste: await tasteSummary(3) || undefined,
@@ -149,14 +157,32 @@ export async function generateDialog(
   }
   // 本集临时关系:随机局势决定攻守姿态,场景卡据此构建(重试沿用同一关系,保持一致)
   const relationship = pickRelationship(mode)
-  const messages = buildMessages(mode, topic, recentLines, topicFixed, cfg.userInterests, userCtx, relationship)
+  const interactionRecap = (await takeRecap()) ?? undefined
+  const messages = buildMessages(mode, topic, recentLines, topicFixed, cfg.userInterests, userCtx, relationship, interactionRecap, allowChoice, lastChoice ?? undefined)
+  // 网页版生成(设置里开启):主演出改经隐藏网页窗口由网页模型生成。
+  // 网页端没有 json_mode/temperature,格式服从度靠协议本身(手动验证 6/6 通过,
+  // 见 docs/webchat-prompt-test.md)。生成慢(几十秒级),点播与预生成都有耐心等;
+  // 任何失败(未登录/超时/解析失败)都静默回退走下方 API 通道。
+  if (cfg.webchatEnabled) {
+    try {
+      const raw = await webchatAsk(mergeMessages(messages), signal, 180_000)
+      return parseDialog(raw)
+    } catch (e) {
+      if (signal?.aborted || (e as Error)?.name === 'AbortError') throw e
+      console.warn('[webchat] 网页生成失败,本次回退 API:', e)
+    }
+  }
   let lastErr: unknown = new Error('未知错误')
   let noJsonMode = false // 该端点不支持 response_format 时降级(400 判定)
   for (let attempt = 0; attempt < 2; attempt++) {
     if (signal?.aborted) throw new DOMException('已中止', 'AbortError')
     try {
       const raw = await chatRaw(messages, signal, !noJsonMode)
-      return parseDialog(raw)
+      const script = parseDialog(raw)
+      if (lastChoice) {
+        try { localStorage.removeItem('vc-lastChoice') } catch { /* ignore */ }
+      }
+      return script
     } catch (e) {
       // 用户主动中止不重试，直接抛
       if (signal?.aborted || (e as Error)?.name === 'AbortError') throw e
@@ -211,7 +237,7 @@ export async function generateShortChat(
   const timer = setTimeout(() => ctrl.abort(new DOMException('超时', 'TimeoutError')), 12_000)
   try {
     const raw = await chatRaw(messages, ctrl.signal)
-    return parseDialog(raw, 2)
+    return parseDialog(raw, 2).before
   } finally {
     clearTimeout(timer)
   }

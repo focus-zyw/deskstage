@@ -3,9 +3,9 @@
 // 台词可带演出信息(停顿/听者动作/语气),节奏由喜剧时机决定而不只是字数。
 // 类型与清洗集中在 dialogSchema(唯一事实源),这里只管播放。
 
-import { clampPauseMs, deliverySpeed, type DialogLine, type Speaker } from './dialogSchema'
+import { clampPauseMs, deliverySpeed, type ChoicePoint, type DialogLine, type Speaker } from './dialogSchema'
 
-export type { DialogLine, Delivery, Speaker } from './dialogSchema'
+export type { DialogLine, Delivery, Speaker, ChoicePoint, ChoiceOption } from './dialogSchema'
 
 /** 气泡显示时长：基础 1.2s + 每字 160ms */
 export function bubbleDuration(text: string): number {
@@ -19,6 +19,8 @@ export interface PlayerCallbacks {
   onLineEnd: (speaker: Speaker) => void
   /** 整段播完（自然结束，非 stop） */
   onDone: () => void
+  /** 播放到观众抉择点:暂停推进,等 resume(branchId) 继续 */
+  onChoice?: (choice: ChoicePoint) => void
 }
 
 const sleep = (ms: number, signal: AbortSignal) =>
@@ -46,8 +48,13 @@ export class PerformancePlayer {
     return this.ctrl !== null
   }
 
-  /** 播放一段脚本；重复调用会先停掉上一段 */
-  play(lines: DialogLine[], opts: { gap?: number } = {}) {
+  /** 播放一段脚本；重复调用会先停掉上一段。
+   *  choice+after 同时提供时:播完 before 后触发 onChoice 暂停,
+   *  等 resume(branchId) 播对应分支 */
+  play(
+    lines: DialogLine[],
+    opts: { gap?: number; choice?: ChoicePoint; after?: Record<string, DialogLine[]> } = {},
+  ) {
     this.stop()
     const ctrl = new AbortController()
     this.ctrl = ctrl
@@ -73,6 +80,32 @@ export class PerformancePlayer {
         // 默认 gap 只在句与句之间;最后一句不叠加,收底留白已由 pauseAfter 承担
         if (i < lines.length - 1) await sleep(gap, ctrl.signal)
       }
+      // 观众抉择点:暂停推进,窗体侧弹按钮;resume(branchId) 后播对应分支
+      if (!ctrl.signal.aborted && opts.choice && opts.after) {
+        this.ctrl = null // 暂停期间视作非播放态(守卫按空闲处理)
+        this.cbs.onChoice?.(opts.choice)
+        const branchId = await new Promise<string>((resolve) => {
+          this.choiceWaiter = resolve
+        })
+        this.ctrl = ctrl
+        const afterLines = branchId === '__aborted__' ? [] : opts.after[branchId] ?? []
+        for (let i = 0; i < afterLines.length; i++) {
+          const line = afterLines[i]
+          if (ctrl.signal.aborted) break
+          const before = clampPauseMs(line.pauseBefore)
+          if (before) await sleep(before, ctrl.signal)
+          if (ctrl.signal.aborted) break
+          this.cbs.onLine(line, i)
+          const dur = Math.round(bubbleDuration(line.text) / deliverySpeed(line.delivery))
+          await sleep(dur, ctrl.signal)
+          if (ctrl.signal.aborted) break
+          const after = clampPauseMs(line.pauseAfter)
+          if (after) await sleep(after, ctrl.signal)
+          if (ctrl.signal.aborted) break
+          this.cbs.onLineEnd(line.speaker)
+          if (i < afterLines.length - 1) await sleep(gap, ctrl.signal)
+        }
+      }
       if (!ctrl.signal.aborted) {
         this.ctrl = null
         this.cbs.onDone()
@@ -80,7 +113,17 @@ export class PerformancePlayer {
     })()
   }
 
+  /** 从抉择点继续:播指定分支 */
+  resume(branchId: string) {
+    this.choiceWaiter?.(branchId)
+    this.choiceWaiter = null
+  }
+
+  private choiceWaiter: ((branchId: string) => void) | null = null
+
   stop() {
+    this.choiceWaiter?.('__aborted__')
+    this.choiceWaiter = null
     this.ctrl?.abort()
     this.ctrl = null
   }

@@ -37,9 +37,29 @@ export interface DialogLine {
   listenerAction?: string
   /** 语气:驱动说话节奏(CSS)与 TTS 语速 */
   delivery?: Delivery
+  /** 抉择分支标记:choice 之后的台词标注所属分支 id */
+  branch?: string
 }
 
 /** 场景卡:先定前提再写台词的"戏剧前提",dialog 逐拍实现其 escalation */
+export interface ChoiceOption {
+  id: string
+  label: string
+}
+
+/** 剧集中段的观众抉择点 */
+export interface ChoicePoint {
+  prompt: string
+  options: ChoiceOption[]
+}
+
+/** 完整演出脚本:choice 前的台词、抉择点、按分支分组的后续台词 */
+export interface PerformanceScript {
+  before: DialogLine[]
+  choice?: ChoicePoint
+  after: Record<string, DialogLine[]>
+}
+
 export interface SceneCard {
   relationship: string
   scene: string
@@ -95,6 +115,7 @@ export function sanitizeDialogLine(raw: unknown): DialogLine | null {
     pauseAfter: clampPauseMs(o.pauseAfter),
     listenerAction,
     delivery: sanitizeDelivery(o.delivery),
+    branch: typeof o.branch === 'string' && o.branch.trim() ? o.branch.trim().slice(0, 24) : undefined,
   }
 }
 
@@ -124,12 +145,31 @@ export function sanitizeSceneCard(v: unknown): SceneCard | undefined {
   return { relationship, scene, goalA, goalB, secret, escalation, callback }
 }
 
+/** 清洗抉择点:prompt 与恰好两个带唯一 id 的选项 */
+export function sanitizeChoicePoint(v: unknown): ChoicePoint | undefined {
+  const o = (v ?? {}) as Record<string, unknown>
+  const prompt = typeof o.prompt === 'string' ? o.prompt.trim().slice(0, 60) : ''
+  if (!prompt || !Array.isArray(o.options)) return undefined
+  const options = o.options
+    .map((x) => {
+      const c = (x ?? {}) as Record<string, unknown>
+      const id = typeof c.id === 'string' ? c.id.trim().slice(0, 24) : ''
+      const label = typeof c.label === 'string' ? c.label.trim().slice(0, 30) : ''
+      return { id, label }
+    })
+    .filter((c) => c.id && c.label)
+    .slice(0, 2)
+  if (options.length !== 2 || options[0].id === options[1].id) return undefined
+  return { prompt, options }
+}
+
 /** 解析 LLM 生成的原始输出:容忍代码围栏/混杂文本;不合规抛错由调用方兜底。
- *  card 可缺(模型没写卡照常播),台词经 sanitizeDialogLine 保留演出字段 */
+ *  card 可缺(模型没写卡照常播),台词经 sanitizeDialogLine 保留演出字段。
+ *  choice 行(若模型生成了观众抉择点)单独提出,其后带 branch 标记的台词按分支分组 */
 export function parseGeneratedDialog(
   raw: string,
   minLines = 4,
-): { card?: SceneCard; lines: DialogLine[] } {
+): { card?: SceneCard; before: DialogLine[]; choice?: ChoicePoint; after: Record<string, DialogLine[]> } {
   let obj: unknown
   try {
     obj = JSON.parse(raw)
@@ -139,8 +179,31 @@ export function parseGeneratedDialog(
     obj = JSON.parse(m[0])
   }
   const o = (obj ?? {}) as Record<string, unknown>
-  return {
-    card: sanitizeSceneCard(o.card),
-    lines: sanitizeDialog(o.dialog, minLines),
+  const arr = Array.isArray(o.dialog) ? o.dialog : []
+  const card = sanitizeSceneCard(o.card)
+  const before: DialogLine[] = []
+  const after: Record<string, DialogLine[]> = {}
+  let choice: ChoicePoint | undefined
+  let total = 0
+  for (const item of arr) {
+    const co = (item ?? {}) as Record<string, unknown>
+    if (!choice && co.choice && typeof co.choice === 'object') {
+      const c = sanitizeChoicePoint(co.choice)
+      if (c) {
+        choice = c
+        continue
+      }
+    }
+    const line = sanitizeDialogLine(item)
+    if (!line) continue
+    total++
+    if (!choice) {
+      before.push(line)
+    } else {
+      const key = typeof line.branch === 'string' && line.branch ? line.branch : '__default__'
+      ;(after[key] ??= []).push(line)
+    }
   }
+  if (total < minLines) throw new Error('有效台词过少')
+  return { card, before, choice, after }
 }

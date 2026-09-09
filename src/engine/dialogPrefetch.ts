@@ -18,7 +18,7 @@ export function prefetchNext(mode: Mode, recentLines: DialogLine[], topic?: stri
   inFlightModes.add(mode)
   const actualTopic = topic?.trim() || pickTopic(modeOf(mode))
   void generateDialog(mode, actualTopic, recentLines, undefined, !!topic?.trim())
-    .then((lines) => addPerformanceCues(lines))
+    .then((script) => addPerformanceCues(script.before))
     .then((lines) => savePrefetchEntry({ mode, topic: actualTopic, lines }))
     .catch((e) => console.warn('预生成失败(静默)', e))
     .finally(() => inFlightModes.delete(mode))

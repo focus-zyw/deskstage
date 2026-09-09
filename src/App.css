@@ -370,6 +370,29 @@
   border-top: none;
   border-bottom-color: rgba(255, 255, 255, 0.96);
 }
+/* 选边面板:抉择问题 + 两个站队按钮 */
+.choice-panel {
+  width: 320px;
+}
+.choice-prompt {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.9);
+  line-height: 1.5;
+}
+.choice-opts {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+/* 远距离互相喊话:加大加粗 */
+.bubble.loud {
+  font-size: 17px;
+  font-weight: 600;
+  max-width: 360px;
+}
+
 @keyframes bubble-in {
   from {
     opacity: 0;

@@ -51,7 +51,9 @@ export function renderStoryContext(story?: UserContext['story']): string {
 /** 组装 prompt：人设 + 使用者画像 + 输出协议 + 模式指令 + 上段结尾衔接 + 话题。
  *  人设/协议是所有模式共享的"父类公共代码"，模式差异来自 DialogMode.prompt。
  *  topicFixed = 用户手动锁定的主题:措辞升级为硬约束,防跑题。
- *  relationship = 本集临时关系(可选):决定双方攻守姿态,写进场景卡 */
+ *  relationship = 本集临时关系(可选):决定双方攻守姿态,写进场景卡
+ *  interactionRecap = 互动账本摘录(可选):观众上集捣乱行为,注入为开场抱怨素材
+ *  allowChoice/lastChoice = 观众抉择点开关与上集观众的选择(可选) */
 export function buildMessages(
   mode: Mode,
   topic: string,
@@ -60,6 +62,9 @@ export function buildMessages(
   userInterests?: string,
   userCtx?: UserContext,
   relationship?: Relationship,
+  interactionRecap?: string,
+  allowChoice?: boolean,
+  lastChoice?: string,
 ): ChatMessage[] {
   const persona = `角色设定：
 - 甲（speaker 用 "A"）：精力充沛、爱吹牛、脑洞大、说话夸张，满嘴跑火车还特别得意，常用"我跟你说""好家伙"当口头禅
@@ -85,8 +90,23 @@ export function buildMessages(
   const slot = currentTimeSlot()
   const timeCtx = `\n\n现实时间：现在是${slot.label}，${slot.scene}。段子的场景和情绪可以贴合这个时间段。`
 
+  const recap = interactionRecap?.trim()
+    ? `另外,上一集演出时观众没少捣乱:${interactionRecap.trim()}。开场先让两人自然地抱怨一下这个观众,再进入正题。
+
+`
+    : ''
+
   const relCtx = relationship
     ? `\n\n本集关系状态（必须遵守,写进场景卡的 relationship 字段）：${relationship.label}——${relationship.desc}。关系只改变本集攻守,甲乙的基础性格与说话风格不变。`
+    : ''
+
+  // 观众抉择点:由调用方掷骰决定(约 30% 的集数),中段安排一次站队,两分支各 3~5 句,结尾汇合同一包袱
+  const choiceRule = allowChoice
+    ? '\n\n观众互动(本段必须包含,恰好在剧情冲突最激烈的中段安排一次):在 dialog 数组中插入恰好一个抉择对象:{"choice":{"prompt":"向观众提出的站队问题,15字内","options":[{"id":"<英文短id>","label":"<中文选项>"},{"id":"<英文短id2>","label":"<中文选项2>"}]}},共两个选项;choice 之后的每句台词都必须额外带 "branch":"<所支持选项id>" 字段,两个分支各 3~5 句,两个分支结尾收同一个底包袱;两个选项可以都不是好选择,喜剧效果更好。其余集数不要输出 choice。'
+    : ''
+
+  const lastChoiceText = lastChoice?.trim()
+    ? `\n上集观众做出了选择:"${lastChoice.trim()}"(可在开场回应这个选择)。`
     : ''
 
   const protocol = `输出协议（严格遵守）：
@@ -114,11 +134,11 @@ export function buildMessages(
   return [
     {
       role: 'system',
-      content: `你是一位擅长传统相声和网络脱口秀的资深喜剧编剧,给桌面双人情景剧写段子。${persona}${relCtx}${profile}${storyCtx}${timeCtx}\n\n${craft}\n\n${protocol}\n\n${modeOf(mode).prompt}`,
+      content: `你是一位擅长传统相声和网络脱口秀的资深喜剧编剧,给桌面双人情景剧写段子。${persona}${relCtx}${profile}${storyCtx}${timeCtx}${choiceRule}\n\n${craft}\n\n${protocol}\n\n${modeOf(mode).prompt}`,
     },
     {
       role: 'user',
-      content: `${history}${topicText}\n请先定场景卡,再输出这一段完整对话的 JSON。`,
+      content: `${lastChoiceText}${recap}${history}${topicText}\n请先定场景卡,再输出这一段完整对话的 JSON。`,
     },
   ]
 }

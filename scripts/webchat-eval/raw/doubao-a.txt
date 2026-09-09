@@ -1,0 +1,121 @@
+{
+    "card": {
+        "relationship": "子母哏——逗捧轮流换手:前半段甲吹乙拆,后半段乙吹甲拆",
+        "scene": "深夜万籁俱寂，两人熬夜瘫在桌前刷手机聊网购",
+        "goalA": "吹嘘自己深夜网购从不踩坑，主打精准省钱",
+        "goalB": "拆穿甲的嘴硬，吐槽其网购后悔常态，后半段反向吹嘘",
+        "secret": "甲刚偷偷退款了一堆深夜冲动下单的垃圾商品",
+        "escalation": [
+            "节拍1：甲吹嘘深夜网购眼光独到，从不冲动消费",
+            "节拍2：乙接连拆台，细数甲往期网购翻车黑历史",
+            "节拍3：乙反向吹嘘自己深夜网购稳赚不亏，最后反转揭底收包袱"
+        ],
+        "callback": "结尾回收开头甲吹嘘的「网购精准不踩坑」的吹牛梗"
+    },
+    "dialog": [
+        {
+            "speaker": "A",
+            "text": "我跟你说，深夜网购我从来不上当！",
+            "action": "talk",
+            "delivery": "excited"
+        },
+        {
+            "speaker": "B",
+            "text": "哦？熬夜刷淘宝还能不踩坑？",
+            "action": "thinking",
+            "listenerAction": "idle"
+        },
+        {
+            "speaker": "A",
+            "text": "好家伙，我主打一个理智精准薅羊毛！",
+            "action": "happy"
+        },
+        {
+            "speaker": "B",
+            "text": "就这？上次半夜买的网红发圈忘啦？",
+            "action": "shake",
+            "listenerAction": "surprise"
+        },
+        {
+            "speaker": "A",
+            "text": "那、那是偶然失手，这次绝对靠谱！",
+            "action": "shy"
+        },
+        {
+            "speaker": "B",
+            "text": "前几天熬夜买的零食不也全踩雷？",
+            "action": "talk"
+        },
+        {
+            "speaker": "A",
+            "text": "嗐，小失误而已，我大局把控贼稳！",
+            "action": "wave"
+        },
+        {
+            "speaker": "B",
+            "text": "合着你每次都靠失误安慰自己？",
+            "action": "laugh",
+            "listenerAction": "angry"
+        },
+        {
+            "speaker": "A",
+            "text": "别抬杠！我今晚压根没乱买东西！",
+            "action": "talk",
+            "delivery": "excited"
+        },
+        {
+            "speaker": "B",
+            "text": "行，不拆你台，说说我吧",
+            "action": "idle"
+        },
+        {
+            "speaker": "B",
+            "text": "我深夜网购才叫真的从不出错",
+            "action": "talk",
+            "delivery": "deadpan"
+        },
+        {
+            "speaker": "A",
+            "text": "嚯？你还有这本事？我咋不信呢",
+            "action": "surprise"
+        },
+        {
+            "speaker": "B",
+            "text": "熬夜下单全是刚需，一点不冲动",
+            "action": "talk"
+        },
+        {
+            "speaker": "A",
+            "text": "真的假的？别跟我一样嘴硬啊！",
+            "action": "thinking"
+        },
+        {
+            "speaker": "B",
+            "text": "那必须的，我从不买无用闲置",
+            "action": "happy"
+        },
+        {
+            "speaker": "A",
+            "text": "我看你就是吹牛，早晚得翻车！",
+            "action": "shake"
+        },
+        {
+            "speaker": "B",
+            "text": "我是不翻车，某人刚偷偷退款一堆货",
+            "action": "talk",
+            "pauseBefore": 500
+        },
+        {
+            "speaker": "A",
+            "text": "你、你怎么知道！",
+            "action": "surprise",
+            "listenerAction": "laugh"
+        },
+        {
+            "speaker": "B",
+            "text": "合着精准网购全靠半夜反悔退款啊",
+            "action": "laugh",
+            "pauseAfter": 1200
+        }
+    ]
+}

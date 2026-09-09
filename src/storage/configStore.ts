@@ -75,6 +75,11 @@ export interface AppConfig {
   screenshot: ScreenshotConfig
   /** 使用者的兴趣爱好(逗号/顿号/换行分隔);空 = 不介入对话 */
   userInterests: string
+  /** 网页版生成:开启后主演出(相声/日常段子)改经隐藏网页窗口由网页模型生成,
+   *  失败自动回退 API;其余小调用(记忆提取/演出标注/短聊)仍走 API */
+  webchatEnabled: boolean
+  /** 网页模型站点 */
+  webchatSite: 'deepseek' | 'doubao'
 }
 
 // 默认值（首启写入）。想换端点：改 appData/data/config.json 后重启。
@@ -103,6 +108,8 @@ export const DEFAULT_CONFIG: AppConfig = {
   screenshot: { hotkey: 'Ctrl+Alt+A', enabled: true, hideSelf: true },
   userInterests: '',
   userProfile: { userName: '', occupation: '', likes: '', dislikes: '', banTopics: '' },
+  webchatEnabled: false,
+  webchatSite: 'deepseek',
 }
 
 /** 清洗使用者画像:逐字段裁剪;likes 为空时回落旧 userInterests 字段(老配置平滑迁移) */
@@ -253,6 +260,8 @@ function sanitizeConfig(obj: unknown): AppConfig {
     screenshot: sanitizeScreenshot(o.screenshot),
     userInterests: typeof o.userInterests === 'string' ? o.userInterests.trim() : '',
     userProfile: sanitizeUserProfile(o.userProfile, typeof o.userInterests === 'string' ? o.userInterests : ''),
+    webchatEnabled: o.webchatEnabled === true,
+    webchatSite: o.webchatSite === 'doubao' ? 'doubao' : 'deepseek',
   }
 }
 

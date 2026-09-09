@@ -18,14 +18,19 @@ import {
 } from './input/pointerManager'
 import {
   PerformancePlayer,
+  type ChoiceOption,
+  type ChoicePoint,
   type DialogLine,
   type Speaker,
 } from './performer/player'
 import { MODES, modeList, modeOf, type Mode } from './performer/modes'
 import { generateDialog, generateShortChat, improvPokeLine, describeLlmError, generateUserChatReply, extractFacts, distillStory } from './engine/llmClient'
 import { isQuietHours } from './engine/timeAware'
+import { react, distanceBands } from './engine/interactionRules'
+import { logInteraction, logInterrupt, logDrag } from './storage/interactionStore'
 import { speak, prefetchVoice, stopSpeaking, VOICES, cloneVoice, listCustomVoices, type ClonedVoice } from './engine/tts'
 import { prefetchNext } from './engine/dialogPrefetch'
+import { WEBCHAT_SITES, webchatLogin, webchatProbe, webchatRestoreMain } from './engine/webchat'
 import { TOPIC_SEEDS, pickTopic } from './engine/topicSeeds'
 import { bumpTopicSeen, bumpTopicFavored, bumpTopicReplays, bumpTopicWatched, bumpTopicSkipped, bumpMode, bumpPoke, getTopicWeights, getMemory, clearMemory, deleteFact, togglePinFact, topFacts, mergeFacts, type MemoryFact } from './storage/memoryStore'
 import { getStory, mergeStory, removeStoryItem, storyInventory, type StoryData } from './storage/storyStore'
@@ -72,7 +77,7 @@ const ANGRY_AT = 5 // 第 5 次起 → 生气,并不再响应直到窗口清空
 const IMPROV_CHANCE = 0.3
 const IMPROV_COOLDOWN_MS = 30_000
 
-type Phase = 'idle' | 'generating' | 'performing'
+type Phase = 'idle' | 'generating' | 'performing' | 'choosing'
 type SaveState = 'idle' | 'saving' | 'saved' | 'error'
 
 /** 记忆事实分类的中文标签 */
@@ -429,6 +434,8 @@ function App() {
   const [autoReplayMin, setAutoReplayMin] = useState(DEFAULT_CONFIG.autoReplayMin)
   const [activeTick, setActiveTick] = useState(0)
   const [episodes, setEpisodes] = useState<Episode[]>([])
+  // 网页版生成:窗口/就绪状态的一行展示文本
+  const [webchatStatusText, setWebchatStatusText] = useState('')
   // 角色布局(位置各自独立/缩放共享)与隐藏开关;ref 供拖动/滚轮事件读最新值
   const [charCfg, setCharCfg] = useState<CharactersConfig>(DEFAULT_CONFIG.characters)
   const charCfgRef = useRef(charCfg)
@@ -457,8 +464,16 @@ function App() {
   const pulseTimer = useRef(0)
   const [dropFor, setDropFor] = useState<Speaker | null>(null)
   const dropTimer = useRef(0)
+  // 中途抉择:choice 点暂停后等待观众站队;30s 未选自动随机
+  const [choice, setChoice] = useState<ChoicePoint | null>(null)
+  const choiceTimer = useRef(0)
+  const pendingEpisode = useRef<{ before: DialogLine[]; after: Record<string, DialogLine[]>; mode: Mode; topic: string; chosen?: string } | null>(null)
+  // 中途抉择:choice 点暂停后等待观众站队;30s 未选自动随机
   const [dragUi, setDragUi] = useState<Speaker | null>(null)
   const finaleTimer = useRef(0)
+  // 远距离喊话:气泡加大加粗
+  const [loudBubble, setLoudBubble] = useState<Record<Speaker, boolean>>({ A: false, B: false })
+  const distLastAt = useRef<Record<string, number>>({})
   // 时间感知:启动问候 + 空闲自发短聊天
   const [spontTick, setSpontTick] = useState(0)
   const phaseRef = useRef(phase)
@@ -521,7 +536,19 @@ function App() {
         setDelivery((d) => ({ ...d, [speaker]: undefined }))
         setSpeaking(null)
       },
+      onChoice: (cp) => {
+        setChoice(cp)
+        setPhase('choosing')
+      },
       onDone: () => {
+        // 选边集:播完(含所选分支)后补记后半段历史
+        const p = pendingEpisode.current
+        if (p?.chosen) {
+          const branchLines = p.after[p.chosen] ?? []
+          if (branchLines.length) void appendHistory(branchLines, p.mode, p.topic)
+          nowPlaying.current = { topic: p.topic, lines: branchLines, total: branchLines.length, index: -1, source: 'gen' }
+        }
+        pendingEpisode.current = null
         setPhase('idle')
         setSpeaking(null)
         setDelivery({ A: undefined, B: undefined })
@@ -756,6 +783,34 @@ function App() {
     return () => window.clearTimeout(t)
   }, [phase, settingsOpen, chatOpen, charHidden, autoReplayMin, activeTick])
 
+  /** 观众选边:播对应分支并补记历史;30s 未选由 effect 自动随机 */
+  function pickOption(option: ChoiceOption) {
+    window.clearTimeout(choiceTimer.current)
+    setChoice(null)
+    setPhase('performing')
+    if (pendingEpisode.current) pendingEpisode.current.chosen = option.id
+    playingLines.current = pendingEpisode.current?.after[option.id] ?? []
+    nowPlaying.current = {
+      topic: pendingEpisode.current?.topic ?? '',
+      lines: playingLines.current,
+      total: playingLines.current.length,
+      index: -1,
+      source: 'gen',
+    }
+    player.current!.resume(option.id)
+    try { localStorage.setItem('vc-lastChoice', option.label) } catch { /* ignore */ }
+  }
+
+  // 抉择 30s 超时:自动随机选边,防止演出卡死
+  useEffect(() => {
+    if (phase !== 'choosing' || !choice) return
+    const t = window.setTimeout(() => {
+      const opt = choice.options[Math.floor(Math.random() * choice.options.length)]
+      pickOption(opt)
+    }, 30_000)
+    return () => window.clearTimeout(t)
+  }, [phase, choice])
+
   /** 播出一段短聊天(问候/自发),计入历史,静默失败;开场先挥手。
    *  短聊天无话题,不参与"看完/跳过"记账,清掉残留避免误记上一集 */
   function playShortChat(lines: DialogLine[]) {
@@ -886,16 +941,23 @@ function App() {
     generateAbort.current = ctrl
     const topic = actualTopic
     try {
-      const lines = await generateDialog(m, topic, lastLines.current, ctrl.signal, fixedTopic != null)
+      const script = await generateDialog(m, topic, lastLines.current, ctrl.signal, fixedTopic != null)
       if (ctrl.signal.aborted) return
       bumpTopicSeen(topic) // 这轮真的播出了才记 seen,避免污染偏好加权
-      nowPlaying.current = { topic, lines, total: lines.length, index: -1, source: 'gen' }
-      lastLines.current = lines
-      void appendHistory(lines, m, topic) // 落盘（fire-and-forget，失败不阻断演出）
+      nowPlaying.current = { topic, lines: script.before, total: script.before.length, index: -1, source: 'gen' }
+      lastLines.current = script.before
+      pendingEpisode.current = { before: script.before, after: script.after, mode: m, topic }
+      void appendHistory(script.before, m, topic) // 前半段落盘;选边后半在播完后补记
       setPhase('performing')
-      playingLines.current = lines
-      player.current!.play(withFinalePause(lines), { gap: MODES[m].gap })
-      void prefetchNext(m, lines, fixedTopic ?? undefined) // 请求生成两轮：当前轮 + 后台预生成
+      playingLines.current = script.before
+      player.current!.play(withFinalePause(script.before), {
+        gap: MODES[m].gap,
+        choice: script.choice,
+        after: Object.fromEntries(
+          Object.entries(script.after).map(([id, seg]) => [id, withFinalePause(seg)]),
+        ),
+      })
+      void prefetchNext(m, script.before, fixedTopic ?? undefined) // 请求生成两轮：当前轮 + 后台预生成
     } catch (e) {
       if (ctrl.signal.aborted) return
       console.error('LLM 生成失败，回退硬编码脚本', e)
@@ -928,6 +990,8 @@ function App() {
     setPhase('idle')
     setSpeaking(null)
     setDelivery({ A: undefined, B: undefined })
+    setChoice(null)
+    window.clearTimeout(choiceTimer.current)
     window.clearTimeout(finaleTimer.current)
     setBubble({ A: null, B: null })
     setAction({ A: 'idle', B: 'idle' })
@@ -1053,6 +1117,8 @@ function App() {
         autoReplayMin: form.autoReplayMin,
         voice, // 语音配置(key/音色/开关)与表单一起整体落盘
         screenshot: form.screenshot, // 截屏配置(快捷键/开关/角色排除)
+        webchatEnabled: form.webchatEnabled,
+        webchatSite: form.webchatSite,
       })
       setAutoReplayMin(next.autoReplayMin) // 空闲计时按新频率重新武装
       void applyScreenshotHotkey() // 快捷键按新配置换绑
@@ -1062,6 +1128,65 @@ function App() {
     } catch (e) {
       console.error('配置保存失败', e)
       setSaveState('error')
+    }
+  }
+
+  // ---------- 网页版生成:Edge 窗口与状态 ----------
+
+  // 登录就绪轮询句柄(登录成功自动恢复角色)
+  const webchatPollRef = useRef(0)
+
+  /** 打开 Edge 窗口给用户登录(角色暂时隐藏让路);轮询就绪后自动恢复角色 */
+  async function openWebchatWindow() {
+    try {
+      setWebchatStatusText('正在打开 Edge 窗口…')
+      await webchatLogin(form.webchatSite)
+      setWebchatStatusText('Edge 已打开:登录一次,成功后角色自动恢复')
+      startWebchatReadyPoll()
+    } catch (e) {
+      setWebchatStatusText(`打开失败:${String(e)}`)
+    }
+  }
+
+  /** 每 4 秒探测一次目标站点可否发消息,登录成功即恢复角色;最多等 5 分钟 */
+  function startWebchatReadyPoll() {
+    window.clearInterval(webchatPollRef.current)
+    const started = Date.now()
+    webchatPollRef.current = window.setInterval(() => {
+      if (Date.now() - started > 5 * 60_000) {
+        window.clearInterval(webchatPollRef.current)
+        setWebchatStatusText('等待登录超时:登录完成后可点「查状态」或「恢复角色」')
+        return
+      }
+      void webchatProbe()
+        .then((p) => {
+          if (!p.ready) {
+            setWebchatStatusText(`探测中:${p.detail}`)
+            return
+          }
+          window.clearInterval(webchatPollRef.current)
+          setWebchatStatusText('已就绪 ✓ 登录成功,角色已恢复——可以直接点播了')
+        })
+        .catch((e) => setWebchatStatusText(`探测异常:${String(e)}`))
+    }, 4000)
+  }
+
+  async function refreshWebchatStatus() {
+    try {
+      setWebchatStatusText('检查中…')
+      const p = await webchatProbe()
+      setWebchatStatusText(p.ready ? '已就绪 ✓(角色已恢复)' : `未就绪:${p.detail}`)
+    } catch (e) {
+      setWebchatStatusText(`状态获取失败:${String(e)}`)
+    }
+  }
+
+  async function restoreMain() {
+    try {
+      await webchatRestoreMain()
+      setWebchatStatusText('角色已恢复')
+    } catch (e) {
+      setWebchatStatusText(`恢复失败:${String(e)}`)
     }
   }
 
@@ -1149,8 +1274,45 @@ function App() {
       setDropFor(who) // 落地 squash 回弹
       window.clearTimeout(dropTimer.current)
       dropTimer.current = window.setTimeout(() => setDropFor(null), 500)
+      maybeDistancePlay(who)
     } else {
       poke(who) // 原地点一下 = 戳一戳
+    }
+  }
+
+  /** 拖拽结束后的距离演出:贴近/远离/叠一起(本地规则,12s 冷却) */
+  function maybeDistancePlay(who: Speaker) {
+    if (phaseRef.current !== 'idle') return
+    const other: Speaker = who === 'A' ? 'B' : 'A'
+    const ax = (charCfg.A.xPct / 100) * window.innerWidth
+    const bx = (charCfg.B.xPct / 100) * window.innerWidth
+    const dx = Math.abs(ax - bx)
+    const bands = distanceBands(charCfg.height)
+    const now = Date.now()
+    const cooled = (kind: string) => now - (distLastAt.current[kind] ?? 0) > 12_000
+    const mark = (kind: string) => { distLastAt.current[kind] = now }
+
+    if (dx < bands.overlap && cooled('overlap')) {
+      mark('overlap')
+      showPoke(other, react(other, 'overlap'), 'surprise', 2000)
+      // 推开:被拖者向远离方向挪 6%
+      const cfg = charCfgRef.current
+      const dir = cfg[who].xPct <= cfg[other].xPct ? -6 : 6
+      applyChars({ ...cfg, [who]: { ...cfg[who], xPct: Math.min(97, Math.max(3, cfg[who].xPct + dir)) } }, 'now')
+      void logDrag()
+      return
+    }
+    if (dx < bands.close && cooled('close')) {
+      mark('close')
+      showPoke(other, react(other, 'close'), 'surprise', 2200)
+      void logDrag()
+      return
+    }
+    if (dx > window.innerWidth * 0.6 && cooled('far')) {
+      mark('far')
+      showPoke('A', react('A', 'far'), 'talk', 2400, true)
+      showPoke('B', react('B', 'far'), 'talk', 2400, true)
+      void logDrag()
     }
   }
 
@@ -1260,8 +1422,9 @@ function App() {
   const pokeCounts = useRef<Record<Speaker, number[]>>({ A: [], B: [] })
   const improvLastAt = useRef(0)
 
-  function showPoke(who: Speaker, line: string, action: string, ms = 1600) {
+  function showPoke(who: Speaker, line: string, action: string, ms = 1600, loud = false) {
     setBubble((b) => ({ ...b, [who]: line }))
+    setLoudBubble((l) => ({ ...l, [who]: loud }))
     setAction((a) => ({ ...a, [who]: action }))
     setReacting((r) => ({ ...r, [who]: true }))
     window.clearTimeout(timers.current[who])
@@ -1269,6 +1432,7 @@ function App() {
       setBubble((b) => ({ ...b, [who]: null }))
       setAction((a) => ({ ...a, [who]: 'idle' }))
       setReacting((r) => ({ ...r, [who]: false }))
+      setLoudBubble((l) => ({ ...l, [who]: false }))
     }, ms)
   }
 
@@ -1276,6 +1440,14 @@ function App() {
     setActiveTick((t) => t + 1) // 用户互动,重置自动重放计时
     setTopActor(who)
     bumpPoke() // 行为信号:互动频率
+
+    // 正在说话的角色被戳:忘词/指责打断(本地即时,优先于连戳分级)
+    if (phase === 'performing' && speaking === who) {
+      showPoke(who, react(who, 'interrupt'), 'surprise', 2200)
+      void logInterrupt(who)
+      return
+    }
+    void logInteraction(who === 'A' ? 'pokeA' : 'pokeB')
 
     // 连戳分级:滑动窗口计数,生气期内不再响应
     const now = Date.now()
@@ -1665,6 +1837,64 @@ function App() {
               }}
             />
           </div>
+          <div className="settings-sep">
+            <span>网页版生成(实验)</span>
+          </div>
+          <div className="settings-row">
+            <label
+              htmlFor="cfg-webchat"
+              title="仅主演出(相声/日常段子)走网页模型,记忆提取等小调用仍走 API;失败自动回退"
+            >
+              主演出改用网页模型生成
+            </label>
+            <input
+              id="cfg-webchat"
+              type="checkbox"
+              checked={form.webchatEnabled}
+              onChange={(e) => setForm({ ...form, webchatEnabled: e.target.checked })}
+            />
+          </div>
+          {form.webchatEnabled && (
+            <>
+              <div className="settings-row">
+                <label htmlFor="cfg-webchat-site">网页模型站点</label>
+                <select
+                  id="cfg-webchat-site"
+                  value={form.webchatSite}
+                  onChange={(e) =>
+                    setForm({ ...form, webchatSite: e.target.value as AppConfig['webchatSite'] })
+                  }
+                >
+                  {WEBCHAT_SITES.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="settings-row">
+                <label htmlFor="cfg-webchat-login">网页窗口(首次需登录一次)</label>
+                <div className="shot-key-row">
+                  <button id="cfg-webchat-login" className="panel-btn" onClick={openWebchatWindow}>
+                    打开窗口
+                  </button>
+                  <button className="panel-btn" onClick={() => void refreshWebchatStatus()}>
+                    查状态
+                  </button>
+                  <button className="panel-btn" onClick={() => void restoreMain()}>
+                    恢复角色
+                  </button>
+                  <span className="settings-hint">{webchatStatusText}</span>
+                </div>
+              </div>
+              <div className="settings-row">
+                  <div className="settings-hint">
+                    生成用系统 Edge 的独立窗口(独立 profile,不影响日常浏览):登录一次长期有效;
+                    生成时会出现 Edge 标签页,可最小化,完成后自动关闭。
+                  </div>
+              </div>
+            </>
+          )}
           <div className="settings-sep">
             <span>截屏</span>
           </div>
@@ -2069,7 +2299,7 @@ function App() {
         onPointerUp={() => onCharPointerUp('A')}
         onWheel={(e) => onCharWheel(e)}
       >
-        {bubble.A && <Bubble text={bubble.A} below={charCfg.A.bottom + charCfg.height > window.innerHeight - 110} />}
+        {bubble.A && <Bubble text={bubble.A} below={charCfg.A.bottom + charCfg.height > window.innerHeight - 110} loud={loudBubble.A} />}
         <CharacterSprite
           ref={charA}
           sprite={SPRITE_SETS.A}
@@ -2105,7 +2335,7 @@ function App() {
         onPointerUp={() => onCharPointerUp('B')}
         onWheel={(e) => onCharWheel(e)}
       >
-        {bubble.B && <Bubble text={bubble.B} below={charCfg.B.bottom + charCfg.height > window.innerHeight - 110} />}
+        {bubble.B && <Bubble text={bubble.B} below={charCfg.B.bottom + charCfg.height > window.innerHeight - 110} loud={loudBubble.B} />}
         <CharacterSprite
           ref={charB}
           sprite={SPRITE_SETS.B}
