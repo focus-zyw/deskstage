@@ -3,6 +3,7 @@ import { getConfig, inTauri } from '../storage/configStore'
 import type { UserProfile } from '../storage/configStore'
 import { buildMessages, renderUserContext, type UserContext } from './promptBuilder'
 import { getMemory, topFacts, tasteSummary, type FactCategory } from '../storage/memoryStore'
+import { pickRelationship } from '../performer/modes/relationships'
 import { currentTimeSlot } from './timeAware'
 import type { DialogLine, Speaker } from '../performer/player'
 import type { Mode } from '../performer/modes'
@@ -173,7 +174,9 @@ export async function generateDialog(
     taste: await tasteSummary(3) || undefined,
     facts: topFacts(mem, 8),
   }
-  const messages = buildMessages(mode, topic, recentLines, topicFixed, cfg.userInterests, userCtx)
+  // 本集临时关系:随机局势决定攻守姿态,场景卡据此构建(重试沿用同一关系,保持一致)
+  const relationship = pickRelationship(mode)
+  const messages = buildMessages(mode, topic, recentLines, topicFixed, cfg.userInterests, userCtx, relationship)
   let lastErr: unknown = new Error('未知错误')
   let noJsonMode = false // 该端点不支持 response_format 时降级(400 判定)
   for (let attempt = 0; attempt < 2; attempt++) {
