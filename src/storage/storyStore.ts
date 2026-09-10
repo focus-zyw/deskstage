@@ -49,12 +49,31 @@ export interface StoryData {
   bond: Bond
 }
 
+/** 关系事件类别:先记具体事件,再小步聚合到 trust/rivalry(避免数值变化没有来由) */
+export type RelationshipEventKind = 'support' | 'betrayal' | 'repair' | 'rivalry' | 'user-sided'
+
+/** 一笔关系事件:台词里明确发生的和解/背叛/支持/较劲/观众站队 */
+export interface RelationshipEvent {
+  kind: RelationshipEventKind
+  /** 谁发起,对谁 */
+  actor: 'A' | 'B' | 'audience'
+  target: 'A' | 'B'
+  /** 程度 0.5~1,聚合时缩放数值变化 */
+  weight: number
+  /** 一句话:谁对谁做了什么 */
+  summary: string
+  ts: number
+  eid?: string
+}
+
 export interface Bond {
   /** 信任 -3(互相看不顺眼)..3(很铁) */
   trust: number
   /** 摩擦 0(相安无事)..5(天天较劲) */
   rivalry: number
   updatedAt: number
+  /** 最近的关系事件账本(新在前,最多 20 条) */
+  events?: RelationshipEvent[]
 }
 
 const MAX_GAGS = 30
@@ -154,6 +173,9 @@ function sanitize(data: unknown): StoryData {
     trust: clampTrust(Number(bo.trust) || 0) || 0,
     rivalry: clampRivalry(Number(bo.rivalry) || 0),
     updatedAt: Number(bo.updatedAt) || 0,
+    events: (Array.isArray(bo.events) ? bo.events : [])
+      .filter((ev): ev is RelationshipEvent => !!ev && typeof ev === 'object' && typeof (ev as RelationshipEvent).kind === 'string')
+      .slice(0, 20),
   }
   return { version: 2, gags, threads, arcs, bond }
 }
@@ -235,6 +257,8 @@ export interface DistilledStory {
   arcAdvance: ArcAdvance | null
   /** 本集冒出的值得多集延续的新剧情线(最多 1 条),closeThreadIds 为被它吸收的事件线 */
   newArc: (NewArc & { closeThreadIds: string[] }) | null
+  /** 台词里明确发生的关系事件(每集最多 1 笔,拿不准为 null) */
+  relationshipEvent: RelationshipEventCandidate | null
 }
 
 /** curator 产出、mergeStory 消费的入库补丁:候选已过证据/断言/语义去重关,
@@ -577,6 +601,41 @@ export async function shiftBond(dTrust: number, dRivalry: number): Promise<void>
     story.bond.trust = clampTrust(story.bond.trust + dTrust)
     story.bond.rivalry = clampRivalry(story.bond.rivalry + dRivalry)
     story.bond.updatedAt = Date.now()
+    await persist(story)
+  })
+}
+
+/** 关系事件 → 数值变化:单步都很小,方向由事件类别决定 */
+const RELATIONSHIP_DELTAS: Record<RelationshipEventKind, { dTrust: number; dRivalry: number }> = {
+  support: { dTrust: 0.25, dRivalry: 0 },
+  betrayal: { dTrust: -0.5, dRivalry: 0.25 },
+  repair: { dTrust: 0.5, dRivalry: -0.25 },
+  rivalry: { dTrust: 0, dRivalry: 0.3 },
+  'user-sided': { dTrust: 0.25, dRivalry: 0.15 },
+}
+
+/** 蒸馏产出的关系事件候选(未落账,缺 ts/eid) */
+export interface RelationshipEventCandidate {
+  kind: RelationshipEventKind
+  actor: 'A' | 'B' | 'audience'
+  target: 'A' | 'B'
+  weight: number
+  summary: string
+}
+
+/** 记一笔关系事件进账本(新在前,最多 20 条)并小步聚合到 trust/rivalry。
+ *  "一集最多一笔"由调用方(策展器)保证 */
+export async function applyRelationshipEvent(
+  event: RelationshipEventCandidate,
+  eid?: string,
+): Promise<void> {
+  await withFileLock('story', async () => {
+    const story = await getStory()
+    const delta = RELATIONSHIP_DELTAS[event.kind] ?? { dTrust: 0, dRivalry: 0 }
+    story.bond.trust = clampTrust(story.bond.trust + delta.dTrust * event.weight)
+    story.bond.rivalry = clampRivalry(story.bond.rivalry + delta.dRivalry * event.weight)
+    story.bond.updatedAt = Date.now()
+    story.bond.events = [{ ...event, ts: Date.now(), eid }, ...(story.bond.events ?? [])].slice(0, 20)
     await persist(story)
   })
 }

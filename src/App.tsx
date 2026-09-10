@@ -207,7 +207,7 @@ function App() {
       clearProps()
       setUserBubble(null)
     },
-    onEpisodeCompleted: (lines) => void distillStoryFrom(lines),
+    onEpisodeCompleted: (lines, meta) => void distillStoryFrom(lines, meta),
     sweepMemos: () => sweepMemos(),
   })
   const { choice } = director
@@ -603,9 +603,9 @@ function App() {
 
   /** 完播后蒸馏角色世界素材:对照库存记账(新素材入库/老梗回收计数/事件线结案)。
    *  仅新生成集(gen)自然播完后调用——用户没看完的集不蒸馏,回放不重复蒸馏;静默失败 */
-  async function distillStoryFrom(lines: DialogLine[]) {
+  async function distillStoryFrom(lines: DialogLine[], meta?: { eid?: string }) {
     try {
-      await curateEpisode(lines)
+      await curateEpisode(lines, { eid: meta?.eid })
     } catch {
       // 静默:蒸馏宁可错过
     }

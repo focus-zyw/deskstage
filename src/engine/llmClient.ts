@@ -12,6 +12,8 @@ import {
   type StoryAssertion,
   type StoryCandidate,
   type DistilledStory,
+  type RelationshipEventCandidate,
+  type RelationshipEventKind,
   type StoryInventory,
 } from '../storage/storyStore'
 import { peekRecap, takeRecap } from '../storage/interactionStore'
@@ -564,11 +566,12 @@ export async function distillStory(
 已完结剧情(编号:标题[结局],仅作背景,不得推进、不得报成新事件线):${knownDone}
 
 对照刚播出的台词,只输出一个 JSON 对象:
-{"newGags":[{"text":"...","evidence":["..."],"assertion":"established","sameAsId":null}],"newThreads":[同结构],"resolvedThreadIds":[],"reusedGagIds":[],"arcAdvance":null,"newArc":null}
+{"newGags":[{"text":"...","evidence":["..."],"assertion":"established","sameAsId":null}],"newThreads":[同结构],"resolvedThreadIds":[],"reusedGagIds":[],"relationshipEvent":null,"arcAdvance":null,"newArc":null}
 - newGags 每集最多 1 条:只收"脱离台词也能反复回收"的固定笑点,自包含、以甲/乙为主语、8~40字;一次性的普通包袱不要报。newThreads 最多 2 条(还没了结的具体事情)
 - evidence 必须逐字摘自台词(每段6~30字,最多2段);拿不出原句证据的候选不要报
 - assertion 只能是 established(台词确认的事实)/boast(甲吹牛)/excuse(甲找借口甩锅);text 要自带"自称/号称/甩锅/嘴硬"等语气,不得把吹牛、甩锅、反问写成事实;反问、疑问、猜测一律不要报
 - 同一个梗只是换了说法时报 sameAsId 为库存编号,并把 text 改写成更自包含的规范表述;本集确实回收了库存老梗则填 reusedGagIds
+- relationshipEvent 只在台词里出现明确的关系转折时给出:kind 是 repair(和解)/betrayal(背叛)/support(支持)/rivalry(较劲)/user-sided(观众站队)之一,actor 是谁发起(A/B/audience),target 对谁(A/B),summary 一句话点明谁对谁做了什么(≤40字),weight 0.5~1 表程度;拿不准就给 null,不要为了记账硬编
 - resolvedThreadIds/reusedGagIds/sameAsId 只能填上面列出的编号,没有就给空数组或 null
 - arcAdvance 只在本集确实演出了某条活跃剧情的"下一拍"时给出,并写出再下一拍的新进展或悬念(10~60字);newArc 只在本集冒出值得多集延续的新剧情线时给出(标题2~15字,第一拍悬念10~60字),并用 closeThreadIds 把被它吸收的已知事件线一并结案;各最多 1 条,不适用给 null`,
     },
@@ -586,6 +589,7 @@ export async function distillStory(
       reusedGagIds: [],
       arcAdvance: null,
       newArc: null,
+      relationshipEvent: null,
     }
     if (!m) return none
     const obj = JSON.parse(m[0]) as Record<string, unknown>
@@ -648,6 +652,27 @@ export async function distillStory(
           closeThreadIds: ids(na.closeThreadIds, knownThreadIds),
         }
       : null
+    // 关系事件:类别/方向/summary 任一不合法就整个丢弃(宁可漏记不可错记)
+    const REL_KINDS: ReadonlySet<unknown> = new Set(['support', 'betrayal', 'repair', 'rivalry', 'user-sided'])
+    const rel = arcObj(obj.relationshipEvent)
+    let relationshipEvent: RelationshipEventCandidate | null = null
+    if (
+      rel &&
+      REL_KINDS.has(rel.kind) &&
+      (rel.actor === 'A' || rel.actor === 'B' || rel.actor === 'audience') &&
+      (rel.target === 'A' || rel.target === 'B')
+    ) {
+      const summary = typeof rel.summary === 'string' ? rel.summary.trim().slice(0, 40) : ''
+      if (summary) {
+        relationshipEvent = {
+          kind: rel.kind as RelationshipEventKind,
+          actor: rel.actor,
+          target: rel.target,
+          weight: Math.min(1, Math.max(0.5, Number(rel.weight) || 1)),
+          summary,
+        }
+      }
+    }
     return {
       newGags: candidates(obj.newGags, 1),
       newThreads: candidates(obj.newThreads, 2),
@@ -655,6 +680,7 @@ export async function distillStory(
       reusedGagIds: ids(obj.reusedGagIds, knownGagIds),
       arcAdvance: arcAdvance && knownArcIds.has(arcAdvance.id) ? arcAdvance : null,
       newArc,
+      relationshipEvent,
     }
   } finally {
     clearTimeout(timer)

@@ -7,6 +7,7 @@
 import type { DialogLine } from '../performer/dialogSchema'
 import { distillStory, transcriptOf } from './llmClient'
 import {
+  applyRelationshipEvent,
   getStory,
   mergeStory,
   normalizeStoryText,
@@ -33,10 +34,14 @@ export interface CurateReport {
   /** 本集演完最后一拍、随之完结的剧情线 */
   arcCompleted: string | null
   newArc: string | null
+  /** 本集记入账本的关系事件(每集最多 1 笔) */
+  relationship?: { kind: string; actor: string; target: string; weight: number; summary: string }
 }
 
 export interface CuratorDeps {
   distill?: (lines: DialogLine[], known: StoryInventory) => Promise<DistilledStory>
+  /** 本集的稳定 id:关系事件记账用(来自导演层的单次提交体系) */
+  eid?: string
 }
 
 /** 引文规范化后至少要剩这么多字才算有效台词证据 */
@@ -151,6 +156,13 @@ export async function curateEpisode(
     !!patch.newArc
   if (touched) {
     await mergeStory(patch)
+  }
+  if (d.relationshipEvent) {
+    // 每集最多 1 笔关系事件:蒸馏协议已约束为单对象,这里直接记账并小步聚合
+    await applyRelationshipEvent(d.relationshipEvent, deps.eid)
+    report.relationship = { ...d.relationshipEvent }
+  }
+  if (touched || d.relationshipEvent) {
     const after = await getStory()
     if (d.arcAdvance) {
       const arc = after.arcs.find((a) => a.id === d.arcAdvance!.id)

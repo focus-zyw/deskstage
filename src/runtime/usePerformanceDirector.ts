@@ -72,8 +72,8 @@ export interface PerformanceDirectorDeps {
   onLive(): void
   /** 停止时的外围清场:下播、道具清空、用户气泡等 */
   teardown(): void
-  /** 新生成的集自然播完后的蒸馏(没看完不蒸馏,回放不重复蒸馏) */
-  onEpisodeCompleted(lines: DialogLine[]): void
+  /** 新生成的集自然播完后的蒸馏(没看完不蒸馏,回放不重复蒸馏);meta.eid 供关系事件记账 */
+  onEpisodeCompleted(lines: DialogLine[], meta?: { eid?: string }): void
   /** 到点备忘扫描(调度器每 tick 调,幂等) */
   sweepMemos(): Promise<void>
 }
@@ -170,7 +170,7 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
         const np = nowPlaying.current
         if (np && np.source !== 'auto') bumpTopicWatched(np.topic)
         // 新生成的集自然播完后才蒸馏角色世界:没看完不记,回放不重复蒸馏
-        if (np && np.source === 'gen' && np.lines) deps.onEpisodeCompleted(fullPath ?? np.lines)
+        if (np && np.source === 'gen' && np.lines) deps.onEpisodeCompleted(fullPath ?? np.lines, p ? { eid: p.eid } : undefined)
         nowPlaying.current = null
         // 收底拍:响底台词与表情定格 2.6s 给观众笑的时间,然后全员放松回 idle
         deps.presenter.settle(2600)
