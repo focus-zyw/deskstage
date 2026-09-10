@@ -18,12 +18,12 @@ import {
 import { deliverySpeed, type SceneCard } from '../performer/dialogSchema'
 import { MODES, modeOf, type Mode } from '../performer/modes'
 import {
-  generateDialog,
   generateShortChat,
   describeLlmError,
-  adoptDeferredContext,
 } from '../engine/llmClient'
-import { appendHistory, listEpisodes, loadRecentHistory, newEpisodeId, type Episode } from '../storage/historyStore'
+import { dialogue, newEpisodeId } from '../dialogue/director'
+import type { CurateReport } from '../engine/storyCurator'
+import { listEpisodes, loadRecentHistory, type Episode } from '../storage/historyStore'
 import { takePrefetch, listPrefetchedArcIds } from '../storage/prefetchStore'
 import { reserveArcBeat } from '../engine/arcReservation'
 import { getStory } from '../storage/storyStore'
@@ -72,8 +72,8 @@ export interface PerformanceDirectorDeps {
   onLive(): void
   /** 停止时的外围清场:下播、道具清空、用户气泡等 */
   teardown(): void
-  /** 新生成的集自然播完后的蒸馏(没看完不蒸馏,回放不重复蒸馏);meta.eid 供关系事件记账 */
-  onEpisodeCompleted(lines: DialogLine[], meta?: { eid?: string }): void
+  /** 新生成的集自然播完并由 DialogueDirector 提交(历史+蒸馏)后的 UI 刷新(可选) */
+  onEpisodeCommitted?(report: CurateReport): void
   /** 到点备忘扫描(调度器每 tick 调,幂等) */
   sweepMemos(): Promise<void>
 }
@@ -160,8 +160,12 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
           fullPath = p.before
         }
         if (p && fullPath) {
-          void appendHistory(fullPath, p.mode, { topic: p.topic, card: p.card, eid: p.eid })
           lastLines.current = fullPath // 续播衔接上下文升级为完整路径(选边集原先是前半段)
+          void dialogue
+            .commitEpisode({ eid: p.eid, mode: p.mode, topic: p.topic, card: p.card, played: fullPath, natural: true })
+            .then((report) => {
+              if (report) deps.onEpisodeCommitted?.(report)
+            })
         }
         pendingEpisode.current = null
         proactiveAct.current = null // 自然播完不算忽略
@@ -169,8 +173,6 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
         // 看完一集 = 弱正信号;自动重放是系统行为不计偏好,防"系统自播→自我强化"污染
         const np = nowPlaying.current
         if (np && np.source !== 'auto') bumpTopicWatched(np.topic)
-        // 新生成的集自然播完后才蒸馏角色世界:没看完不记,回放不重复蒸馏
-        if (np && np.source === 'gen' && np.lines) deps.onEpisodeCompleted(fullPath ?? np.lines, p ? { eid: p.eid } : undefined)
         nowPlaying.current = null
         // 收底拍:响底台词与表情定格 2.6s 给观众笑的时间,然后全员放松回 idle
         deps.presenter.settle(2600)
@@ -180,7 +182,7 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
         // 回放/短聊天被打断时 pendingEpisode 为空,自然跳过
         const p = pendingEpisode.current
         if (p && played.length > 0) {
-          void appendHistory(played, p.mode, { topic: p.topic, card: p.card, eid: p.eid })
+          void dialogue.commitEpisode({ eid: p.eid, mode: p.mode, topic: p.topic, card: p.card, played, natural: false })
           lastLines.current = played
         }
         pendingEpisode.current = null
@@ -282,7 +284,7 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
     window.setTimeout(() => {
       beginPerforming()
       player.current!.play(lines, { gap: 700 })
-      if (opts.history) void appendHistory(lines, 'daily')
+      if (opts.history) dialogue.commitShortChat(lines)
     }, 900)
   }
 
@@ -402,7 +404,7 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
         bumpTopicSeen(hit.topic) // 口味记账对齐实际播出的主题(命中缓冲时≠本次抽中的主题)
       }
       // 真正开播:采纳预生成时暂缓的上下文副作用(注入冷却补记/recap 消费)
-      if (hitScript.adoption) void adoptDeferredContext(hitScript.adoption)
+      dialogue.adoptDeferred(hitScript)
       nowPlaying.current = { topic: hit.topic, lines: hitScript.before, total: hitScript.before.length, index: -1, source: 'gen' }
       lastLines.current = hitScript.before
       // 使用后即移出预取缓存;历史在完播/中止时按 eid 一次性提交(onDone/onStopped)
@@ -451,13 +453,20 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
     generateAbort.current = ctrl
     const topic = actualTopic
     try {
-      const script = await generateDialog(m, topic, lastLines.current, ctrl.signal, fixedTopic != null, arcBeat ?? undefined)
+      const { script, eid } = await dialogue.prepareEpisode({
+        mode: m,
+        topic,
+        recentLines: lastLines.current,
+        signal: ctrl.signal,
+        topicFixed: fixedTopic != null,
+        arc: arcBeat ?? undefined,
+      })
       if (ctrl.signal.aborted) return
       if (!arcBeat) bumpTopicSeen(topic) // 这轮真的播出了才记 seen;剧情线拍不入话题账
       nowPlaying.current = { topic, lines: script.before, total: script.before.length, index: -1, source: 'gen' }
       lastLines.current = script.before
       // 单次落盘:不再生成时先记前半段;完播提交完整路径,中止提交已播前缀(onDone/onStopped)
-      pendingEpisode.current = { eid: newEpisodeId(), card: script.card, before: script.before, after: script.after, mode: m, topic }
+      pendingEpisode.current = { eid, card: script.card, before: script.before, after: script.after, mode: m, topic }
       beginPerforming()
       playingLines.current = script.before
       player.current!.play(withFinalePause(script.before), {

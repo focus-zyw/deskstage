@@ -1,7 +1,8 @@
 // 预生成编排:后台静默生成"下一轮"对话并存入 prefetchStore。
 // 失败一律静默(console.warn),绝不影响演出/交互状态;
 // 与用户主动请求相互独立、可并行(90s 超时由 llmClient 兜底)。
-import { addPerformanceCues, generateDialog } from './llmClient'
+import { addPerformanceCues } from './llmClient'
+import { dialogue } from '../dialogue/director'
 import { pickTopic } from './topicSeeds'
 import { modeOf, type Mode } from '../performer/modes'
 import { getStory } from '../storage/storyStore'
@@ -35,17 +36,16 @@ export async function prefetchNext(
     topic?.trim() ||
     (arcBeat ? `连续剧情《${arcBeat.title}》:${arcBeat.hook}` : pickTopic(modeOf(mode)))
   // 预生成零副作用:上下文只预览,注入冷却/recap 消费随 script.adoption 推迟到开播采纳
-  void generateDialog(
-    mode,
-    actualTopic,
-    recentLines,
-    undefined,
-    !!topic?.trim(),
-    arcBeat ?? undefined,
-    undefined, // continueFromPrevious:预取总是新主题结构
-    { deferContextAdoption: true },
-  )
-    .then(async (script) => ({
+  void dialogue
+    .prepareEpisode({
+      mode,
+      topic: actualTopic,
+      recentLines,
+      topicFixed: !!topic?.trim(),
+      arc: arcBeat ?? undefined,
+      deferContextAdoption: true,
+    })
+    .then(async ({ script }) => ({
       ...script,
       before: await addPerformanceCues(script.before),
     }))

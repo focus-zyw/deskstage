@@ -10,10 +10,9 @@ import { startEnvPolling } from './engine/envAware'
 import { setCaptureMode, initPointerManager, registerHitRegion, onHoverChange } from './input/pointerManager'
 import { CaptureOverlay } from './CaptureOverlay'
 import { SPRITE_SETS, preloadSprites } from './stage/spriteSets'
-import type { DialogLine, Speaker } from './performer/player'
+import type { Speaker } from './performer/player'
 import type { Mode } from './performer/modes'
 import { generateShortChat, improvPokeLine, generateUserChatReply, extractFacts, memoReminderLine } from './engine/llmClient'
-import { curateEpisode } from './engine/storyCurator'
 import { react } from './engine/interactionRules'
 import { logInteraction, logInterrupt, resetDismissals } from './storage/interactionStore'
 import { noteActivity } from './runtime/proactiveScheduler'
@@ -207,7 +206,6 @@ function App() {
       clearProps()
       setUserBubble(null)
     },
-    onEpisodeCompleted: (lines, meta) => void distillStoryFrom(lines, meta),
     sweepMemos: () => sweepMemos(),
   })
   const { choice } = director
@@ -599,16 +597,6 @@ function App() {
     onReplay: replayFromHistory,
     onResetLayout: resetLayout,
     onPrivacyTip: showPrivacyTip,
-  }
-
-  /** 完播后蒸馏角色世界素材:对照库存记账(新素材入库/老梗回收计数/事件线结案)。
-   *  仅新生成集(gen)自然播完后调用——用户没看完的集不蒸馏,回放不重复蒸馏;静默失败 */
-  async function distillStoryFrom(lines: DialogLine[], meta?: { eid?: string }) {
-    try {
-      await curateEpisode(lines, { eid: meta?.eid })
-    } catch {
-      // 静默:蒸馏宁可错过
-    }
   }
 
   // ---------- 备忘录:调度与常驻提醒 ----------
