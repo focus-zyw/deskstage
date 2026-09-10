@@ -392,6 +392,60 @@ export async function generateUserChatReply(who: 'A' | 'B', userText: string): P
   }
 }
 
+/** TurnBatch 轻校验(纯函数,导出供测试):1~3 句、speaker 只能 A/B、被@角色必须首答。
+ *  不合格返回 null,由调用方回落单句应答 */
+export function validateTurnBatch(lines: DialogLine[], target: 'A' | 'B'): DialogLine[] | null {
+  if (lines.length < 1 || lines.length > 3) return null
+  if (lines.some((l) => l.speaker !== 'A' && l.speaker !== 'B')) return null
+  if (lines[0].speaker !== target) return null
+  return lines
+}
+
+/** 用户聊天 TurnBatch(P3):观众对角色说了一句话,生成 1~3 句双角色回合。
+ *  被 @ 的角色必须先答;另一位确有新信息或包袱才补 1 句;带短期会话窗口。
+ *  12s 超时、不重试;失败由调用方回落 generateUserChatReply 单句应答 */
+export async function generateTurnBatch(input: {
+  userText: string
+  /** 被 @ 的角色(显式或轮换决定);该角色必须第一句先答 */
+  target: 'A' | 'B'
+  /** 短期会话窗口(最近若干句,含观众) */
+  window: { who: 'user' | 'A' | 'B'; text: string }[]
+}): Promise<DialogLine[]> {
+  const cfg = await getConfig()
+  const mem = await getMemory()
+  const persona = duoShortPersona()
+  const p: UserProfile = cfg.userProfile
+  const facts = topFacts(mem, 3)
+  const windowText = input.window.length
+    ? input.window
+        .map((t) => `${t.who === 'user' ? p.userName || '观众' : nameOf(t.who)}:${t.text}`)
+        .join('\n')
+    : ''
+  const targetName = nameOf(input.target)
+  const otherName = nameOf(input.target === 'A' ? 'B' : 'A')
+  const messages: { role: string; content: string }[] = [
+    {
+      role: 'system',
+      content: `桌面双人情景剧的聊天编剧。角色:${persona}。${p.userName ? `观众称呼"${p.userName}"。` : ''}口语化、有梗、像真说话。
+输出协议(严格遵守):只输出一个 JSON 对象,格式 {"dialog":[{"speaker":"A","text":"台词","target":"B"},...]}
+- 一共 1~3 句:观众这句话是对${targetName}说的,${targetName}(speaker "${input.target}")必须第一句先答;${otherName}只有确实有新信息或好包袱时才补 1 句,没有就只回 1 句
+- 每句不超过 25 字,不要引号;speaker 只能是 A 或 B 且不连续同一人;"target" 填这句对谁说("A"/"B"/"audience" 对观众)${facts.length ? `\n- 记住的观众的事:${facts.join(';')}` : ''}`,
+    },
+    {
+      role: 'user',
+      content: `${windowText ? `最近对话:\n${windowText}\n\n` : ''}观众说:${input.userText}`,
+    },
+  ]
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(new DOMException('超时', 'TimeoutError')), 12_000)
+  try {
+    const raw = await chatRaw(messages, ctrl.signal)
+    return validateTurnBatch(parseDialog(raw, 1).before, input.target) ?? []
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 // ---------- 主播模式:弹幕 → 单句回复的 AI 决策 ----------
 
 export interface LiveDanmakuBrief {

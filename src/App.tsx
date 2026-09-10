@@ -10,9 +10,10 @@ import { startEnvPolling } from './engine/envAware'
 import { setCaptureMode, initPointerManager, registerHitRegion, onHoverChange } from './input/pointerManager'
 import { CaptureOverlay } from './CaptureOverlay'
 import { SPRITE_SETS, preloadSprites } from './stage/spriteSets'
-import type { Speaker } from './performer/player'
+import type { DialogLine, Speaker } from './performer/player'
 import type { Mode } from './performer/modes'
-import { generateShortChat, improvPokeLine, generateUserChatReply, extractFacts, memoReminderLine } from './engine/llmClient'
+import { generateShortChat, generateTurnBatch, improvPokeLine, generateUserChatReply, extractFacts, memoReminderLine } from './engine/llmClient'
+import { pushTurn, chatWindow } from './dialogue/turnWindow'
 import { react } from './engine/interactionRules'
 import { logInteraction, logInterrupt, resetDismissals } from './storage/interactionStore'
 import { noteActivity } from './runtime/proactiveScheduler'
@@ -146,7 +147,6 @@ function App() {
   const overlaysOpen = rt.overlays.length > 0
   const [trInject, setTrInject] = useState<TranslationInject | null>(null)
   const trPanelRef = useRef<HTMLDivElement>(null)
-  const pendingOcrTranslate = useRef(false)
   const trQuipAt = useRef(0)
   // 最近打开的面板由 runtime overlays 栈决定(escapeTarget),不再单独记 ref
   // 手动锁定主题;null = 随机。主题面板弹/收与搜索词
@@ -226,12 +226,12 @@ function App() {
   useEffect(() => {
     const start = listen('capture-start', ({ payload }) => {
       setCaptureMode(true)
-      // 框选是临时态:记住底下正在做的事(演出继续播),结束后恢复
-      beginCapture(pendingOcrTranslate.current ? 'translate' : 'save')
+      // 框选是临时态:记住底下正在做的事(演出继续播),结束后恢复;
+      // 动作(保存/识字/翻译/复制)由松手后的工具条决定
+      beginCapture()
       setCaptureShot(String(payload))
     })
     const fail = listen('capture-error', ({ payload }) => {
-      pendingOcrTranslate.current = false // 本次框选没走完,别让下一次截图莫名触发翻译
       endCapture() // 冻结屏没拿到也恢复底下状态
       presenterSay('A', `截图失败:${String(payload).slice(0, 50)}`, { ms: 5000 })
     })
@@ -287,17 +287,8 @@ function App() {
     })
   }
 
-  /** 面板里的"截图翻译":框选完成(capture_finish 写入剪贴板)后自动 OCR+翻译 */
-  function startScreenshotTranslate() {
-    pendingOcrTranslate.current = true
-    startScreenshot().catch(() => {
-      pendingOcrTranslate.current = false
-    })
-  }
-
-  /** 普通截屏(命令面板入口):框选→复制到剪贴板,不触发翻译 */
-  function startPlainScreenshot() {
-    pendingOcrTranslate.current = false
+  /** 启动框选(快捷键/命令面板/翻译面板共用):松手后出工具条,动作由用户在工具条上选 */
+  function startScreenshotFlow() {
     startScreenshot().catch((e) => {
       presenterSay('A', `截图失败:${String((e as Error)?.message ?? e).slice(0, 50)}`, { ms: 2400 })
     })
@@ -388,9 +379,8 @@ function App() {
   const commands: Command[] = [
     { id: 'clipboard-translate', label: '把剪贴板图片翻译出来(先截屏)', keywords: ['剪贴板'], run: () => startOcrIntoTranslation(true) },
     { id: 'translate', label: '翻译文字(打开翻译面板)', keywords: ['翻译', 'translate'], run: () => openOverlayExclusive('translation') },
-    { id: 'capture-translate', label: '截图翻译(框选→识别→翻译)', keywords: ['截图翻译', '截屏翻译'], run: startScreenshotTranslate },
     { id: 'ocr', label: '提取文字(剪贴板图片,AI 识别+本地兜底)', keywords: ['提取', '识别', 'ocr'], run: () => startOcrIntoTranslation(false) },
-    { id: 'screenshot', label: '截屏(框选→复制到剪贴板)', keywords: ['截屏', '截图'], run: startPlainScreenshot },
+    { id: 'screenshot', label: '截屏(框选→保存/识字/翻译)', keywords: ['截屏', '截图', '截图翻译', '截屏翻译'], run: startScreenshotFlow },
     { id: 'memo', label: '添加提醒(打开备忘页)', keywords: ['备忘页'], run: openMemoSettings },
     { id: 'topic', label: '设置聊天主题', keywords: ['话题', '主题'], run: () => openOverlayExclusive('topic') },
     { id: 'toggle-chars', label: charHidden ? '显示角色' : '隐藏角色', keywords: ['隐藏角色', '显示角色'], run: () => setCharsHidden(!charHidden) },
@@ -535,8 +525,8 @@ function App() {
     director.replay(ep, 'manual')
   }
 
-  /** 聊天通道:解析 @角色 → 被指定角色回一句 → 后台提取记忆入库。
-   *  无 @ 时甲乙轮换;演出进行中禁发(避免气泡互相打架) */
+  /** 聊天通道:解析 @角色 → TurnBatch(被@角色先答,另一位有料才补,共 1~3 句) → 顺序播报。
+   *  短期会话窗口入列(下轮聊天/演出插话共用);无 @ 时按上次目标轮换;演出进行中禁发(P4 解锁) */
   async function sendUserChat() {
     const text = chatDraft.trim()
     if (!text || chatBusy || phase !== 'idle') return
@@ -553,14 +543,30 @@ function App() {
     setChatBusy(true)
     setTopActor(who)
     noteUserActive()
+    pushTurn({ who: 'user', text })
     try {
-      const reply = await generateUserChatReply(who, text)
-      presenterSay(who, reply, { action: 'talk', ms: 2200 + reply.length * 160, speaking: true })
-      pulse(who === 'A' ? 'B' : 'A')
-      speak(who, reply, undefined, 'chat')
+      // TurnBatch:被@角色先答,另一位有料才补;生成失败回落单句应答(原行为)
+      let batch: DialogLine[] | null = null
+      try {
+        batch = await generateTurnBatch({ userText: text, target: who, window: chatWindow() })
+      } catch {
+        batch = null // 静默回落
+      }
+      if (!batch || batch.length === 0) {
+        const reply = await generateUserChatReply(who, text)
+        batch = [{ speaker: who, text: reply, action: 'talk' }]
+      }
+      for (const l of batch) {
+        if (l.speaker !== 'A' && l.speaker !== 'B') continue // 校验层已保证,防御兜底
+        presenterSay(l.speaker, l.text, { action: 'talk', ms: 2200 + l.text.length * 160, speaking: true })
+        pulse(l.speaker === 'A' ? 'B' : 'A')
+        speak(l.speaker, l.text, undefined, 'chat')
+        pushTurn({ who: l.speaker, text: l.text })
+        await new Promise((r) => window.setTimeout(r, 2200 + l.text.length * 160))
+      }
       window.setTimeout(() => {
         setUserBubble((u) => (u === text ? null : u)) // 应答结束,你说的这句一并收走
-      }, 2200 + reply.length * 160)
+      }, 400)
     } catch {
       setUserBubble(null)
       presenterSay(who, '（信号不好，没听清…再说一遍？）', { ms: 2200 })
@@ -995,19 +1001,19 @@ function App() {
         {captureShot && (
           <CaptureOverlay
             path={captureShot}
-            onDone={(ok) => {
+            onDone={(ok, action, savedPath) => {
               endCapture() // 无论成败都恢复框选前的演出态
               setCaptureMode(false)
               setCaptureShot(null)
-              if (ok) {
-                noteUserActive()
-                // 截图翻译入口的框选刚落定:OCR 识别后自动填入翻译面板并翻译
-                if (pendingOcrTranslate.current) {
-                  pendingOcrTranslate.current = false
-                  startOcrIntoTranslation(true)
-                }
-              } else {
-                pendingOcrTranslate.current = false
+              if (!ok) return
+              noteUserActive()
+              // 工具条选的动作:识字只填面板,识字+翻译自动翻,保存上报路径卡片
+              if (action === 'translate') {
+                startOcrIntoTranslation(true)
+              } else if (action === 'ocr') {
+                startOcrIntoTranslation(false)
+              } else if (action === 'save' && savedPath) {
+                void runUtilityTask('save', '保存截图', 'A', async () => `已保存:${savedPath}`)
               }
             }}
           />
@@ -1019,7 +1025,7 @@ function App() {
             pos={ctrlBar}
             inject={trInject}
             onClose={() => closeOverlay('translation')}
-            onScreenshotTranslate={startScreenshotTranslate}
+            onScreenshotTranslate={startScreenshotFlow}
             onTranslated={translateQuip}
             onState={onTranslateState}
           />
