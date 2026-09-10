@@ -679,10 +679,10 @@
 }
 .panel-tabs {
   display: flex;
-  gap: 4px;
+  gap: 3px;
 }
 .panel-tab {
-  padding: 4px 14px;
+  padding: 4px 9px;
   border: none;
   border-radius: 12px;
   background: transparent;
