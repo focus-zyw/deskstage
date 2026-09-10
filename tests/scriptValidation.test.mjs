@@ -97,3 +97,56 @@ test('端到端:模型漏写一个分支的原始输出,解析通过但校验 fa
   const v = schema.validatePerformanceScript(script)
   assert.ok(v.fatal.some((f) => f.includes('帮乙')))
 })
+
+test('节拍覆盖:有场景卡时,漏拍/未知 beatId/乱序都给 warning', () => {
+  const good = {
+    card: { relationship: 'r', scene: 's', goalA: 'a', goalB: 'b', secret: 'x', escalation: ['铺垫', '升级', '反转'], callback: 'c' },
+    before: [
+      line('A', '一'), line('B', '二'),
+      { ...line('A', '三'), beatId: '铺垫' },
+      { ...line('B', '四'), beatId: '升级' },
+      { ...line('A', '五'), beatId: '反转' },
+      line('B', '六'),
+    ],
+    after: {},
+  }
+  const v = schema.validatePerformanceScript(good)
+  assert.deepEqual(v.fatal, [])
+  assert.equal(v.warnings.filter((w) => w.includes('节拍')).length, 0)
+  assert.equal(v.warnings.filter((w) => w.includes('beatId')).length, 0)
+
+  // 漏掉「升级」这一拍
+  const missingBeat = {
+    ...good,
+    before: [
+      line('A', '一'), line('B', '二'),
+      { ...line('A', '三'), beatId: '铺垫' },
+      { ...line('B', '四'), beatId: '反转' },
+      { ...line('A', '五'), beatId: '反转' },
+      line('B', '六'),
+    ],
+  }
+  assert.ok(schema.validatePerformanceScript(missingBeat).warnings.some((w) => w.includes('没有台词承载')))
+
+  // beatId 不在场景卡里
+  const unknownBeat = { ...good, before: [...good.before.slice(0, 5), { ...line('B', '六'), beatId: '不存在的拍' }] }
+  assert.ok(schema.validatePerformanceScript(unknownBeat).warnings.some((w) => w.includes('不在场景卡节拍里')))
+
+  // 乱序:反转出现在升级之前
+  const outOfOrder = {
+    ...good,
+    before: [
+      line('A', '一'), line('B', '二'),
+      { ...line('A', '三'), beatId: '反转' },
+      { ...line('B', '四'), beatId: '升级' },
+      { ...line('A', '五'), beatId: '铺垫' },
+      line('B', '六'),
+    ],
+  }
+  assert.ok(schema.validatePerformanceScript(outOfOrder).warnings.some((w) => w.includes('不一致')))
+})
+
+test('无场景卡的剧本不做节拍覆盖检查(向后兼容)', () => {
+  const v = schema.validatePerformanceScript({ before: [LINE_A(), LINE_B(), LINE_A(), LINE_B()], after: {} })
+  assert.deepEqual(v.warnings, [])
+})

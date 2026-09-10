@@ -39,6 +39,10 @@ export interface DialogLine {
   delivery?: Delivery
   /** 抉择分支标记:choice 之后的台词标注所属分支 id */
   branch?: string
+  /** DialogueTurn 字段:这句对谁说——A/B(对方)/audience(对观众直说)/room(对全场);缺省按说话交替理解 */
+  target?: 'A' | 'B' | 'audience' | 'room'
+  /** DialogueTurn 字段:承载的场景卡节拍(逐字引用 card.escalation 的一项),结构校验据此查覆盖 */
+  beatId?: string
 }
 
 /** 场景卡:先定前提再写台词的"戏剧前提",dialog 逐拍实现其 escalation */
@@ -171,6 +175,8 @@ export function sanitizeDialogLine(raw: unknown): DialogLine | null {
     listenerAction,
     delivery: sanitizeDelivery(o.delivery),
     branch: typeof o.branch === 'string' && o.branch.trim() ? o.branch.trim().slice(0, 24) : undefined,
+    target: o.target === 'A' || o.target === 'B' || o.target === 'audience' || o.target === 'room' ? o.target : undefined,
+    beatId: typeof o.beatId === 'string' && o.beatId.trim() ? o.beatId.trim().slice(0, 40) : undefined,
   }
 }
 
@@ -276,6 +282,31 @@ export function validatePerformanceScript(script: PerformanceScript, minLines = 
       const branchStreak = speakerStreakWarning(branch)
       if (branchStreak) warnings.push(`分支「${opt.label}」${branchStreak}`)
     }
+  }
+  // 节拍覆盖(有场景卡时):每拍都要有台词承载,出现顺序应符合 escalation 顺序
+  const beats = script.card?.escalation ?? []
+  if (beats.length > 0) {
+    const beatLines = [...lines, ...Object.values(script.after).flat()]
+    const used = new Set<string>()
+    const unknown = new Set<string>()
+    let lastIdx = -1
+    let orderBroken = false
+    for (const l of beatLines) {
+      if (!l.beatId) continue
+      const idx = beats.indexOf(l.beatId)
+      if (idx === -1) {
+        unknown.add(l.beatId)
+        continue
+      }
+      used.add(l.beatId)
+      if (idx < lastIdx) orderBroken = true
+      else lastIdx = idx
+    }
+    for (const b of beats) {
+      if (!used.has(b)) warnings.push(`节拍「${b}」没有台词承载`)
+    }
+    for (const u of unknown) warnings.push(`beatId「${u}」不在场景卡节拍里`)
+    if (orderBroken) warnings.push('节拍出现顺序与 escalation 不一致')
   }
   return { fatal, warnings }
 }

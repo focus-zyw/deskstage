@@ -5,23 +5,28 @@
 // 所有操作静默容错——存储失败不影响演出主流程。
 import { readTextFile, writeTextFile, exists, mkdir, readDir, remove } from '@tauri-apps/plugin-fs'
 import { appDataDir, join } from '@tauri-apps/api/path'
-import { sanitizeDialogLine, type DialogLine } from '../performer/dialogSchema'
+import { sanitizeDialogLine, sanitizeSceneCard, type DialogLine, type SceneCard } from '../performer/dialogSchema'
 import { withFileLock } from './writeLock'
 
-/** 一条历史 = 台词 + 集元数据;台词字段(含可选演出信息)整体继承 */
+/** 一条历史 = 台词 + 集元数据;台词字段(含可选演出信息)整体继承。
+ *  card(场景卡)与 eid(稳定集 id)是集级元数据,eid 随本集每一行落盘 */
 export interface HistoryEntry extends DialogLine {
   ts: number
   mode: string
   topic?: string
+  card?: SceneCard
+  eid?: string
 }
 
-/** 一集对话：历史按 ts 聚合；fav 来自收藏库 */
+/** 一集对话：新数据按 eid 聚合,旧文件退回按 ts;fav 来自收藏库 */
 export interface Episode {
   ts: number
   mode: string
   lines: DialogLine[]
   fav: boolean
   topic?: string
+  card?: SceneCard
+  eid?: string
 }
 
 type FavRecord = Omit<Episode, 'fav'>
@@ -57,19 +62,38 @@ function todayFileId(): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
 }
 
+/** 集提交元数据:topic(手动锁定主题时记录)、card(场景卡)与稳定集 id */
+export interface EpisodeCommitMeta {
+  topic?: string
+  card?: SceneCard
+  /** 同一集的所有行共享;缺省自动生成 */
+  eid?: string
+}
+
+/** 新集 id:e+时间戳+随机后缀(同 storyStore.newId 风格) */
+export function newEpisodeId(): string {
+  return `e${Date.now()}${Math.random().toString(36).slice(2, 8)}`
+}
+
 function entryToLine(e: HistoryEntry): string {
   return JSON.stringify({
     ts: e.ts,
     mode: e.mode,
+    eid: e.eid,
     speaker: e.speaker,
     text: e.text,
     action: e.action,
     topic: e.topic,
+    // 场景卡:集级元数据,只随本集第一行落盘(旧文件无此字段,读取天然兼容)
+    card: e.card,
     // 演出信息:停顿/听者动作/语气,回放时还原节奏
     pauseBefore: e.pauseBefore,
     pauseAfter: e.pauseAfter,
     listenerAction: e.listenerAction,
     delivery: e.delivery,
+    // DialogueTurn 字段:对谁说/承载的节拍(回放与研究用)
+    target: e.target,
+    beatId: e.beatId,
   })
 }
 
@@ -85,7 +109,9 @@ function parseEntries(raw: string): HistoryEntry[] {
         ...lineData,
         ts: Number(obj.ts) || 0,
         mode: String(obj.mode || 'daily'),
+        eid: typeof obj.eid === 'string' && obj.eid ? obj.eid.slice(0, 48) : undefined,
         topic: typeof obj.topic === 'string' && obj.topic ? obj.topic : undefined,
+        card: sanitizeSceneCard(obj.card),
       })
     } catch {
       // 跳过坏行
@@ -102,18 +128,33 @@ async function listHistoryFiles(dir: string): Promise<string[]> {
     .sort()
 }
 
-/** 一集生成成功后整段落盘;topic 可选(手动锁定主题时记录)。
+/** 一集播出结果确定后一次性提交(完播=完整路径;中止=已播前缀,由调用方决定)。
+ *  同一集的所有行共享 eid;topic/card 为可选集元数据,card 盖在首行。
  *  台词整体(含可选演出字段)展开写入,与 deleteEpisodes 的"读-重写"互斥,
  *  避免追加的行被重写吞掉 */
-export async function appendHistory(lines: DialogLine[], mode: string, topic?: string): Promise<void> {
+export async function appendHistory(
+  lines: DialogLine[],
+  mode: string,
+  meta: EpisodeCommitMeta = {},
+): Promise<void> {
   try {
     await withFileLock('history', async () => {
       const dir = await getHistoryDir()
       const file = await join(dir, `${todayFileId()}.jsonl`)
       const ts = Date.now()
+      const eid = meta.eid ?? newEpisodeId()
       const chunk =
         lines
-          .map((l) => entryToLine({ ...l, ts, mode, topic }))
+          .map((l, i) =>
+            entryToLine({
+              ...l,
+              ts,
+              mode,
+              eid,
+              topic: meta.topic,
+              ...(i === 0 && meta.card ? { card: meta.card } : {}),
+            }),
+          )
           .join('\n') + '\n'
       await writeTextFile(file, chunk, { append: true })
     })
@@ -158,7 +199,13 @@ async function readFavorites(): Promise<FavRecord[]> {
         if (line) lines.push(line)
       }
       if (lines.length > 0)
-        out.push({ ts, mode: String(it.mode || 'daily'), lines, topic: String(it.topic || '') || undefined })
+        out.push({
+          ts,
+          mode: String(it.mode || 'daily'),
+          lines,
+          topic: String(it.topic || '') || undefined,
+          card: sanitizeSceneCard(it.card),
+        })
     }
     return out
   } catch (e) {
@@ -184,7 +231,7 @@ export async function toggleFavorite(ep: FavRecord): Promise<boolean> {
         await writeFavorites(favs)
         return false
       }
-      favs.push({ ts: ep.ts, mode: ep.mode, lines: ep.lines, topic: ep.topic })
+      favs.push({ ts: ep.ts, mode: ep.mode, lines: ep.lines, topic: ep.topic, card: ep.card })
       await writeFavorites(favs)
       return true
     })
@@ -197,29 +244,43 @@ export async function toggleFavorite(ep: FavRecord): Promise<boolean> {
 // ---------- 分集 / 删除 ----------
 
 /**
+ * 台词条目按集聚合成分集(纯函数,导出供测试)。
+ * 新数据按稳定 eid 聚合(同一集跨 ts 也归并);旧文件无 eid 退回按 ts,零迁移兼容。
+ * 场景卡盖在本集首行,聚合时清洗还原到集上。
+ */
+export function aggregateEpisodes(entries: HistoryEntry[]): Episode[] {
+  const byKey = new Map<string, Episode>()
+  for (const e of entries) {
+    const key = e.eid ?? `ts:${e.ts}`
+    let ep = byKey.get(key)
+    if (!ep) {
+      ep = { ts: e.ts, mode: e.mode, lines: [], fav: false, topic: e.topic, eid: e.eid }
+      byKey.set(key, ep)
+    }
+    if (!ep.topic && e.topic) ep.topic = e.topic
+    if (!ep.card && e.card) ep.card = sanitizeSceneCard(e.card)
+    const { ts: _t, mode: _m, topic: _tp, card: _c, eid: _e, ...line } = e
+    ep.lines.push(line)
+  }
+  return [...byKey.values()]
+}
+
+/**
  * 全部历史按 ts 聚合成分集（倒序），合并收藏库中已不在历史里的集，
  * 最多返回 limit 集。收藏集以 fav 标记。
  */
 export async function listEpisodes(limit = 50): Promise<Episode[]> {
   try {
     const dir = await getHistoryDir()
-    const byTs = new Map<number, Episode>()
+    const entries: HistoryEntry[] = []
     for (const name of await listHistoryFiles(dir)) {
-      for (const e of parseEntries(await readTextFile(await join(dir, name)))) {
-        let ep = byTs.get(e.ts)
-        if (!ep) {
-          ep = { ts: e.ts, mode: e.mode, lines: [], fav: false, topic: e.topic }
-          byTs.set(e.ts, ep)
-        }
-        if (!ep.topic && e.topic) ep.topic = e.topic
-        const { ts: _t, mode: _m, topic: _tp, ...line } = e
-        ep.lines.push(line)
-      }
+      entries.push(...parseEntries(await readTextFile(await join(dir, name))))
     }
+    const byTs = new Map<number, Episode>(aggregateEpisodes(entries).map((ep) => [ep.ts, ep]))
     for (const f of await readFavorites()) {
       const ep = byTs.get(f.ts)
       if (ep) ep.fav = true
-      else byTs.set(f.ts, { ts: f.ts, mode: f.mode, lines: f.lines, fav: true, topic: f.topic })
+      else byTs.set(f.ts, { ts: f.ts, mode: f.mode, lines: f.lines, fav: true, topic: f.topic, card: f.card })
     }
     return [...byTs.values()].sort((a, b) => b.ts - a.ts).slice(0, limit)
   } catch (e) {

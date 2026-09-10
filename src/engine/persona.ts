@@ -10,6 +10,49 @@ export interface PersonaDefaults {
   world: string
 }
 
+/** 四维行为画像(doc §6.3):角色差异不靠口头禅堆砌,靠稳定的注意力/判断/风险/防御方式 */
+export interface PersonaDimensions {
+  /** 注意力偏好:先看什么 */
+  attention: string
+  /** 判断方式:怎么下结论 */
+  judgment: string
+  /** 风险姿态 */
+  risk: string
+  /** 情感防御:掩饰什么、用什么掩饰 */
+  defense: string
+}
+
+const DIMENSIONS: Record<'A' | 'B', PersonaDimensions> = {
+  A: {
+    attention: '先看人和机会——谁有意思、哪里有便宜可占',
+    judgment: '联想、夸张、先下结论再找理由',
+    risk: '冒进,先干了再找补',
+    defense: '用热闹和自嘲掩饰心虚',
+  },
+  B: {
+    attention: '先看规则和漏洞——哪里不对劲、成本是多少',
+    judgment: '求证、拆前提、一针见血,后发制人',
+    risk: '保守,但会被激将上头',
+    defense: '用冷淡和毒舌掩饰关心',
+  },
+}
+
+export function personaDimensions(id: 'A' | 'B'): PersonaDimensions {
+  return DIMENSIONS[id]
+}
+
+/** 四维画像提示词块:主演出注入。措辞围绕行为维度而非"像甲/像乙" */
+export function dimensionsPrompt(): string {
+  const row = (id: 'A' | 'B') => {
+    const d = DIMENSIONS[id]
+    return `- ${nameOf(id)}(speaker "${id}"):注意力——${d.attention};判断——${d.judgment};风险——${d.risk};情绪防御——${d.defense}`
+  }
+  return `行为底色(台词的判断方式与反应速度要符合它,比口头禅更重要):
+${row('A')}
+${row('B')}
+- 口头禅/标志性语气词每集合计最多 1~2 次:角色差异靠上面的行为底色体现,不靠口头禅堆砌`
+}
+
 const DEFAULTS: Record<'A' | 'B', PersonaDefaults> = {
   A: {
     gender: '女',
@@ -70,7 +113,9 @@ export function fullPersona(): string {
   return `角色设定：
 - 甲（speaker 用 "A"）：${personaText('A')}
 - 乙（speaker 用 "B"）：${personaText('B')}
-${namesLine}- 两人是老搭档,互怼但有默契,节奏像传统相声里的逗哏和捧哏;各自的生活片段都可以自然变成段子的舞台`
+${namesLine}- 两人是老搭档,互怼但有默契,节奏像传统相声里的逗哏和捧哏;各自的生活片段都可以自然变成段子的舞台
+
+${dimensionsPrompt()}`
 }
 
 /** 双人简版:短聊两人同框用 */

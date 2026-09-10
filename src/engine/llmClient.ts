@@ -181,12 +181,26 @@ export async function generateDialog(
   }
   let lastErr: unknown = new Error('未知错误')
   let noJsonMode = false // 该端点不支持 response_format 时降级(400 判定)
+  let repairedOnce = false // 每次生成只做一次定点修复
   for (let attempt = 0; attempt < 2; attempt++) {
     if (signal?.aborted) throw new DOMException('已中止', 'AbortError')
     try {
       const raw = await chatRaw(messages, signal, !noJsonMode)
-      const script = parseDialog(raw)
-      // 结构不合格视同生成失败:吃掉一次重试机会重新生成;仍不合格走调用方兜底剧本
+      let script = parseDialog(raw)
+      // 结构不合格先做一次定点修复(最小改动,不整体重写);拿不回可播放结构才吃掉重试/走兜底
+      let v = validatePerformanceScript(script)
+      if (v.fatal.length > 0 && !repairedOnce) {
+        repairedOnce = true
+        try {
+          console.warn('[剧本校验] 定点修复:', v.fatal)
+          script = await repairPerformanceScript(script, v.fatal, signal)
+          v = validatePerformanceScript(script)
+        } catch (e) {
+          if (signal?.aborted || (e as Error)?.name === 'AbortError') throw e
+          console.warn('[剧本修复] 失败,按原剧本继续判定', e)
+        }
+      }
+      if (v.fatal.length > 0) throw new Error(`剧本结构不合格:${v.fatal.join(';')}`)
       return finish(script)
     } catch (e) {
       // 用户主动中止不重试，直接抛
@@ -207,6 +221,35 @@ export async function generateDialog(
 export async function adoptDeferredContext(adoption: ContextAdoption): Promise<void> {
   await commitStoryInjection(adoption.gagIds, adoption.threadIds)
   if (adoption.hasRecap) await takeRecap()
+}
+
+/** 定点修复(P2 局部修复循环):结构校验 fatal 时不整体重写,只把缺陷清单和原剧本
+ *  交给模型做最小改动;修复结果仍要过结构校验,不过则由调用方走重试/兜底 */
+export async function repairPerformanceScript(
+  script: PerformanceScript,
+  issues: string[],
+  signal?: AbortSignal,
+): Promise<PerformanceScript> {
+  const dialog = [
+    ...script.before,
+    ...Object.entries(script.after).flatMap(([id, ls]) => ls.map((l) => ({ ...l, branch: id }))),
+  ]
+  const messages = [
+    {
+      role: 'system',
+      content: `修复桌面双人情景剧剧本的结构缺陷。只修复"结构缺陷"清单里列出的问题,不改其他台词的措辞、人设口吻与剧情走向;保持原有 speaker 交替与场景卡。只输出一个 JSON 对象,协议与生成一致:{"card":{...},"dialog":[{"speaker":"A","text":"...","action":"...","target":"B","beatId":"节拍"},...]}(choice 行与 branch 字段规则同生成;分支每句都要带 branch)。`,
+    },
+    {
+      role: 'user',
+      content: `结构缺陷:\n${issues.map((s) => `- ${s}`).join('\n')}\n\n原剧本 JSON:\n${JSON.stringify({
+        card: script.card,
+        choice: script.choice,
+        dialog,
+      })}`,
+    },
+  ]
+  const raw = await chatRaw(messages, signal, true)
+  return parseDialog(raw)
 }
 
 /**

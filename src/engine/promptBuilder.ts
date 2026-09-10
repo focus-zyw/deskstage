@@ -137,8 +137,9 @@ export function buildMessages(
 
   const protocol = `输出协议（严格遵守）：
 - 只输出一个 JSON 对象，不要输出任何其他文字
-- 先写场景卡再写台词，格式：{"card":{"relationship":"关系标签","scene":"具体场景一句话","goalA":"甲想要什么","goalB":"乙想要什么","secret":"被隐瞒的关键信息(一方或双方知道)","escalation":["节拍1","节拍2","节拍3"],"callback":"结尾回收的本集铺垫"},"dialog":[{"speaker":"A","text":"台词","action":"动作"},...]}
+- 先写场景卡再写台词，格式：{"card":{"relationship":"关系标签","scene":"具体场景一句话","goalA":"甲想要什么","goalB":"乙想要什么","secret":"被隐瞒的关键信息(一方或双方知道)","escalation":["节拍1","节拍2","节拍3"],"callback":"结尾回收的本集铺垫"},"dialog":[{"speaker":"A","text":"台词","action":"动作","target":"B","beatId":"节拍1"},...]}
 - dialog 必须逐拍实现 card.escalation；secret 在结尾反转揭晓；callback 必须回收本集前面埋的线
+- 每句必填 "target"（这句对谁说："A"/"B"=对方；"audience"=对观众直说；"room"=对全场）和 "beatId"（这句话实现 card.escalation 的哪一拍,逐字引用该项；收底回收 callback 的句子标最后一拍）
 - speaker 只能是 "A" 或 "B"
 - action 只能是这些词之一（禁止用 card 的字段名或其他词）：${ACTIONS}
 - 一段共 14~22 句，两人交替说话
