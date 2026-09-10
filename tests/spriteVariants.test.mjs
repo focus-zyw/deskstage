@@ -86,6 +86,9 @@ test('两名角色注册的所有变体都有对应素材文件', () => {
       'happy-proud.png',
       'angry-pout.png',
       'surprise-flustered.png',
+      'laugh-belly.png',
+      'laugh-clap.png',
+      'laugh-cheer.png',
     ],
     B: [
       'idle-phone.png',
@@ -95,6 +98,9 @@ test('两名角色注册的所有变体都有对应素材文件', () => {
       'happy-smirk.png',
       'angry-glare.png',
       'surprise-freeze.png',
+      'laugh-hold.png',
+      'laugh-break.png',
+      'laugh-wave.png',
     ],
   }
 

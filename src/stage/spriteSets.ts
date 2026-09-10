@@ -73,6 +73,12 @@ export const SPRITE_SETS: Record<'A' | 'B', SpriteSet> = {
         { file: 'surprise.png', weight: 6 },
         { file: 'surprise-flustered.png', weight: 1, cooldownMs: VARIANT_COOLDOWN_MS, transitionMode: 'dip' },
       ],
+      laugh: [
+        { file: 'laugh.png', weight: 8 },
+        { file: 'laugh-belly.png', weight: 1, cooldownMs: 60_000, transitionMode: 'dip' },
+        { file: 'laugh-clap.png', weight: 1, cooldownMs: 60_000, transitionMode: 'dip' },
+        { file: 'laugh-cheer.png', weight: 0.5, cooldownMs: 90_000, transitionMode: 'dip' },
+      ],
     },
   },
   B: {
@@ -116,6 +122,12 @@ export const SPRITE_SETS: Record<'A' | 'B', SpriteSet> = {
       surprise: [
         { file: 'surprise.png', weight: 6 },
         { file: 'surprise-freeze.png', weight: 1, cooldownMs: VARIANT_COOLDOWN_MS, transitionMode: 'dip' },
+      ],
+      laugh: [
+        { file: 'laugh.png', weight: 8 },
+        { file: 'laugh-hold.png', weight: 1, cooldownMs: 60_000, transitionMode: 'dip' },
+        { file: 'laugh-break.png', weight: 0.75, cooldownMs: 90_000, transitionMode: 'dip' },
+        { file: 'laugh-wave.png', weight: 0.5, cooldownMs: 90_000, transitionMode: 'dip' },
       ],
     },
   },
