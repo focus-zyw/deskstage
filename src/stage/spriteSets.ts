@@ -28,7 +28,8 @@ export const ART_ACTIONS = ['idle', 'talk', 'happy', 'angry', 'sad', 'surprise']
 export const UTILITY_ACTIONS = ['reading', 'present'] as const
 
 const VARIANT_COOLDOWN_MS = 45_000
-const IDLE_VARIANT_DELAY_MS = 6_500
+const IDLE_VARIANT_DELAY_MS = 8_000
+const RARE_IDLE_COOLDOWN_MS = 180_000
 
 export const SPRITE_SETS: Record<'A' | 'B', SpriteSet> = {
   A: {
@@ -42,16 +43,42 @@ export const SPRITE_SETS: Record<'A' | 'B', SpriteSet> = {
         { file: 'idle.png', weight: 1 },
         {
           file: 'idle-look.png',
-          weight: 1,
-          cooldownMs: VARIANT_COOLDOWN_MS,
+          weight: 2,
+          cooldownMs: 60_000,
           activationDelayMs: IDLE_VARIANT_DELAY_MS,
+          holdMs: 3_500,
+          transitionMode: 'dip',
+        },
+        {
+          file: 'idle-bag.png',
+          weight: 2,
+          cooldownMs: 75_000,
+          activationDelayMs: IDLE_VARIANT_DELAY_MS,
+          holdMs: 4_000,
+          transitionMode: 'dip',
+        },
+        {
+          file: 'idle-hair.png',
+          weight: 1.5,
+          cooldownMs: 60_000,
+          activationDelayMs: IDLE_VARIANT_DELAY_MS,
+          holdMs: 3_200,
           transitionMode: 'dip',
         },
         {
           file: 'idle-proud.png',
-          weight: 1,
-          cooldownMs: VARIANT_COOLDOWN_MS,
+          weight: 0.35,
+          cooldownMs: RARE_IDLE_COOLDOWN_MS,
           activationDelayMs: IDLE_VARIANT_DELAY_MS,
+          holdMs: 3_000,
+          transitionMode: 'dip',
+        },
+        {
+          file: 'idle-stretch.png',
+          weight: 0.45,
+          cooldownMs: RARE_IDLE_COOLDOWN_MS,
+          activationDelayMs: IDLE_VARIANT_DELAY_MS,
+          holdMs: 3_500,
           transitionMode: 'dip',
         },
       ],
@@ -92,16 +119,42 @@ export const SPRITE_SETS: Record<'A' | 'B', SpriteSet> = {
         { file: 'idle.png', weight: 1 },
         {
           file: 'idle-phone.png',
-          weight: 1,
-          cooldownMs: VARIANT_COOLDOWN_MS,
+          weight: 2,
+          cooldownMs: 90_000,
           activationDelayMs: IDLE_VARIANT_DELAY_MS,
+          holdMs: 4_500,
           transitionMode: 'dip',
         },
         {
           file: 'idle-glasses.png',
-          weight: 1,
-          cooldownMs: VARIANT_COOLDOWN_MS,
+          weight: 2,
+          cooldownMs: 60_000,
           activationDelayMs: IDLE_VARIANT_DELAY_MS,
+          holdMs: 3_000,
+          transitionMode: 'dip',
+        },
+        {
+          file: 'idle-headphones.png',
+          weight: 1.5,
+          cooldownMs: 75_000,
+          activationDelayMs: IDLE_VARIANT_DELAY_MS,
+          holdMs: 3_500,
+          transitionMode: 'dip',
+        },
+        {
+          file: 'idle-pocket.png',
+          weight: 1.5,
+          cooldownMs: 75_000,
+          activationDelayMs: IDLE_VARIANT_DELAY_MS,
+          holdMs: 4_000,
+          transitionMode: 'dip',
+        },
+        {
+          file: 'idle-yawn.png',
+          weight: 0.45,
+          cooldownMs: RARE_IDLE_COOLDOWN_MS,
+          activationDelayMs: IDLE_VARIANT_DELAY_MS,
+          holdMs: 3_200,
           transitionMode: 'dip',
         },
       ],

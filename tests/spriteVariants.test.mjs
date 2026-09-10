@@ -81,6 +81,9 @@ test('两名角色注册的所有变体都有对应素材文件', () => {
     A: [
       'idle-look.png',
       'idle-proud.png',
+      'idle-bag.png',
+      'idle-hair.png',
+      'idle-stretch.png',
       'talk-point.png',
       'talk-boast.png',
       'happy-proud.png',
@@ -93,6 +96,9 @@ test('两名角色注册的所有变体都有对应素材文件', () => {
     B: [
       'idle-phone.png',
       'idle-glasses.png',
+      'idle-headphones.png',
+      'idle-pocket.png',
+      'idle-yawn.png',
       'talk-explain.png',
       'talk-deadpan.png',
       'happy-smirk.png',
@@ -110,6 +116,21 @@ test('两名角色注册的所有变体都有对应素材文件', () => {
     for (const file of expectedFiles) {
       assert.ok(registered.includes(file), `${speaker} 未注册 ${file}`)
       assert.ok(existsSync(path.join(process.cwd(), 'public', set.dir, file)), `${file} 不存在`)
+    }
+  }
+})
+
+test('待机姿势统一使用延迟、停留时长和 dip 切图', () => {
+  for (const set of Object.values(SPRITE_SETS)) {
+    const specials = set.variants.idle.filter((variant) => variant.file !== 'idle.png')
+    assert.ok(specials.length >= 5)
+    for (const variant of specials) {
+      assert.equal(variant.activationDelayMs, 8_000, `${variant.file} 的首次延迟不一致`)
+      assert.ok(
+        variant.holdMs >= 3_000 && variant.holdMs <= 5_000,
+        `${variant.file} 的停留时长超出范围`,
+      )
+      assert.equal(variant.transitionMode, 'dip', `${variant.file} 应使用 dip 切图`)
     }
   }
 })
