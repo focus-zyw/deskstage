@@ -144,7 +144,8 @@ export async function startLiveSession(
     for (const [k, t] of s.seen) if (now - t > DEDUP_MS) s.seen.delete(k)
   }, 60_000)
   s.pumpTimer = window.setInterval(() => void pump(s), PUMP_MS)
-  providerFor(platform).connect(roomId, (m) => handleDanmaku(s, m), hooks.onStatus)
+  // cookie 选填:带登录态才能拿未打码的观众名(接口第 4 参 = 平台凭证位)
+  providerFor(platform).connect(roomId, (m) => handleDanmaku(s, m), hooks.onStatus, cfg.live.cookie || undefined)
 }
 
 /** 下播:断开连接、停泵、清会话;幂等 */

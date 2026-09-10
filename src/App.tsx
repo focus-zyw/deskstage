@@ -45,6 +45,8 @@ import { appendHistory, loadRecentHistory, listEpisodes, deleteEpisodes, toggleF
 import { TranslationPanel, type TranslationInject } from './translation/TranslationPanel'
 import { extractTextFromClipboard } from './translation/ocr'
 import { startLiveSession, stopLiveSession, type LiveReply } from './runtime/liveDanmaku'
+import { startQrLogin, type QrLoginHandle } from './live/biliLogin'
+import QRCode from 'qrcode'
 import { CommandPanel } from './ui/CommandPanel'
 import { ChoicePanel } from './ui/ChoicePanel'
 import type { Command } from './features/commands/commands'
@@ -472,7 +474,7 @@ function App() {
   const [savedTick, setSavedTick] = useState(0)
   const [saveError, setSaveError] = useState(false)
   // 设置面板分页:常规 / 语音 / 记忆 / 历史
-  const [settingsTab, setSettingsTab] = useState<'general' | 'voice' | 'memory' | 'memo' | 'history'>('general')
+  const [settingsTab, setSettingsTab] = useState<'general' | 'model' | 'persona' | 'voice' | 'memory' | 'memo' | 'history'>('general')
   // 记忆系统的机器事实列表(设置"记忆"页展示/管理)
   const [memoryFacts, setMemoryFacts] = useState<MemoryFact[]>([])
   const [clearMemArmed, setClearMemArmed] = useState(false)
@@ -747,6 +749,55 @@ function App() {
 
   /** 下播句柄:stopEverything 时结束会话并让直播任务卡落定 */
   const liveStopRef = useRef<(() => void) | null>(null)
+
+  // ---------- 主播模式:B站扫码登录(免手贴 cookie) ----------
+  const qrHandleRef = useRef<QrLoginHandle | null>(null)
+  const [qrLogin, setQrLogin] = useState<{
+    phase: QrPhase | 'generating'
+    qrDataUrl?: string
+    hint?: string
+  } | null>(null)
+
+  /** 面板关闭/切走时停掉轮询,防止后台空转 */
+  useEffect(() => {
+    if (!settingsOpen) {
+      qrHandleRef.current?.cancel()
+      qrHandleRef.current = null
+      setQrLogin(null)
+    }
+  }, [settingsOpen])
+
+  function beginQrLogin() {
+    qrHandleRef.current?.cancel()
+    setQrLogin({ phase: 'generating', hint: '正在生成二维码…' })
+    qrHandleRef.current = startQrLogin({
+      onQr: (url) => {
+        void QRCode.toDataURL(url, { width: 176, margin: 1 }).then((dataUrl) => {
+          setQrLogin((s) => (s ? { ...s, phase: 'waiting', qrDataUrl: dataUrl } : s))
+        })
+      },
+      onPhase: (p, message) => {
+        // 过期自动刷新中:保留二维码,仅提示;error/ok 文案由 onPhase/message 带出
+        setQrLogin((s) => (s ? { ...s, phase: p, hint: message } : s))
+      },
+      onSuccess: ({ cookie, uid }) => {
+        // 从配置源取最新 live(闭包里的 form 可能过期),合并后落盘并同步表单
+        void (async () => {
+          const current = await getConfig()
+          const live = { ...current.live, cookie }
+          setForm((f) => ({ ...f, live }))
+          saveField({ live })
+        })()
+        setQrLogin({ phase: 'ok', hint: `登录成功(UID ${uid}),Cookie 已回填并保存` })
+      },
+    })
+  }
+
+  function cancelQrLogin() {
+    qrHandleRef.current?.cancel()
+    qrHandleRef.current = null
+    setQrLogin(null)
+  }
 
   /** 开播:前置校验(密钥/直播间号/平台)→ 清场 → streaming 态 → 连接弹幕源 + 启动管线 */
   function startStreaming() {
@@ -1942,6 +1993,18 @@ function App() {
                 常规
               </button>
               <button
+                className={`panel-tab${settingsTab === 'model' ? ' on' : ''}`}
+                onClick={() => setSettingsTab('model')}
+              >
+                模型
+              </button>
+              <button
+                className={`panel-tab${settingsTab === 'persona' ? ' on' : ''}`}
+                onClick={() => setSettingsTab('persona')}
+              >
+                人设
+              </button>
+              <button
                 className={`panel-tab${settingsTab === 'voice' ? ' on' : ''}`}
                 onClick={() => setSettingsTab('voice')}
               >
@@ -1984,8 +2047,11 @@ function App() {
               {exitArmed ? '确认退出' : '退出'}
             </button>
           </div>
-          {settingsTab === 'general' && (
+          {settingsTab === 'model' && (
             <>
+          <div className="settings-sep">
+            <span>主模型(对话/演出/台词生成)</span>
+          </div>
           <div className="settings-row">
             <label htmlFor="cfg-vendor">厂商</label>
             <select
@@ -2088,6 +2154,10 @@ function App() {
               </select>
             )}
           </div>
+            </>
+          )}
+          {settingsTab === 'persona' && (
+            <>
           <div className="settings-row">
             <label htmlFor="cfg-name-a">角色A的名字(名牌与台词称呼)</label>
             <input
@@ -2114,6 +2184,10 @@ function App() {
               }}
             />
           </div>
+            </>
+          )}
+          {settingsTab === 'model' && (
+            <>
           <div className="settings-sep">
             <span>提取文字(AI 视觉模型优先,失败自动本地兜底;智谱 glm-4.6v-flash 免费,与主模型相互独立)</span>
           </div>
@@ -2155,41 +2229,10 @@ function App() {
               }}
             />
           </div>
-          <div className="settings-sep">
-            <span>主播模式(直播弹幕互动;点"主播"→"开播"启动,平台 v1 仅B站可用)</span>
-          </div>
-          <div className="settings-row">
-            <label htmlFor="cfg-live-platform">直播平台</label>
-            <select
-              id="cfg-live-platform"
-              value={form.live.platform}
-              onChange={(e) => {
-                const live = { ...form.live, platform: e.target.value as 'bilibili' | 'douyin' }
-                setForm({ ...form, live })
-                saveField({ live })
-              }}
-            >
-              <option value="bilibili">B站</option>
-              <option value="douyin" disabled>
-                抖音(即将支持)
-              </option>
-            </select>
-          </div>
-          <div className="settings-row">
-            <label htmlFor="cfg-live-room" title="直播间网址 live.bilibili.com/ 后面的数字">直播间号(B站房间号)</label>
-            <input
-              id="cfg-live-room"
-              value={form.live.roomId}
-              placeholder="如 21452505"
-              inputMode="numeric"
-              onChange={(e) => {
-                const roomId = e.target.value.replace(/\D/g, '').slice(0, 32)
-                const live = { ...form.live, roomId }
-                setForm({ ...form, live })
-                saveField({ live })
-              }}
-            />
-          </div>
+            </>
+          )}
+          {settingsTab === 'persona' && (
+            <>
           <div className="settings-sep">
             <span>人设(自由编辑,输入后自动保存并采纳;"还原默认"恢复出厂搭档)</span>
           </div>
@@ -2232,6 +2275,10 @@ function App() {
               还原默认人设
             </button>
           </div>
+            </>
+          )}
+          {settingsTab === 'general' && (
+            <>
           <div className="settings-row">
             <label htmlFor="cfg-show">显示角色</label>
             <input
@@ -2252,6 +2299,9 @@ function App() {
             >
               恢复默认布局
             </button>
+          </div>
+          <div className="settings-sep">
+            <span>演出与主动行为</span>
           </div>
           <div className="settings-row">
             <label htmlFor="cfg-replay">空闲自动重放(分钟,留空 = 关闭)</label>
@@ -2353,6 +2403,93 @@ function App() {
             />
           </div>
           <div className="settings-sep">
+            <span>主播模式(直播弹幕互动;点"主播"→"开播"启动,平台 v1 仅B站可用)</span>
+          </div>
+          <div className="settings-row">
+            <label htmlFor="cfg-live-platform">直播平台</label>
+            <select
+              id="cfg-live-platform"
+              value={form.live.platform}
+              onChange={(e) => {
+                const live = { ...form.live, platform: e.target.value as 'bilibili' | 'douyin' }
+                setForm({ ...form, live })
+                saveField({ live })
+              }}
+            >
+              <option value="bilibili">B站</option>
+              <option value="douyin" disabled>
+                抖音(即将支持)
+              </option>
+            </select>
+          </div>
+          <div className="settings-row">
+            <label htmlFor="cfg-live-room" title="直播间网址 live.bilibili.com/ 后面的数字">直播间号(B站房间号)</label>
+            <input
+              id="cfg-live-room"
+              value={form.live.roomId}
+              placeholder="如 21452505"
+              inputMode="numeric"
+              onChange={(e) => {
+                const roomId = e.target.value.replace(/\D/g, '').slice(0, 32)
+                const live = { ...form.live, roomId }
+                setForm({ ...form, live })
+                saveField({ live })
+              }}
+            />
+          </div>
+          <div className="settings-row">
+            <label htmlFor="cfg-live-cookie" title="浏览器登录B站后 F12 → 应用 → Cookie 里的 SESSDATA;只填值或整串 Cookie 都行。建议用小号">B站 Cookie(选填,不填观众名被打码)</label>
+            <input
+              id="cfg-live-cookie"
+              type="password"
+              value={form.live.cookie}
+              placeholder="SESSDATA 值或完整 Cookie 串,建议小号"
+              onChange={(e) => {
+                const live = { ...form.live, cookie: e.target.value.trim().slice(0, 600) }
+                setForm({ ...form, live })
+                saveField({ live })
+              }}
+            />
+          </div>
+          <div className="settings-row">
+            <div className="settings-hint">填 Cookie 后以该账号身份连弹幕服务器,可看到观众真实用户名与舰长等级;不填功能照常,只是名字显示为"某***"打码样式</div>
+          </div>
+          <div className="settings-row">
+            <div className="settings-hint">不想手贴?点下方扫码,用手机B站App扫一下即可自动回填</div>
+            {qrLogin ? (
+              <button className="panel-btn" onClick={cancelQrLogin}>
+                取消扫码
+              </button>
+            ) : (
+              <button className="panel-btn" onClick={beginQrLogin}>
+                扫码登录B站
+              </button>
+            )}
+          </div>
+          {qrLogin && (
+            <div className="settings-row">
+              <div className="settings-hint">
+                {qrLogin.qrDataUrl && (
+                  <img
+                    src={qrLogin.qrDataUrl}
+                    alt="B站登录二维码(手机B站App扫一扫)"
+                    width={176}
+                    height={176}
+                    style={{ display: 'block', marginBottom: 6 }}
+                  />
+                )}
+                <span>
+                  {qrLogin.hint ??
+                    (qrLogin.phase === 'waiting' ? '请用手机B站App"扫一扫"并确认登录' : '')}
+                </span>
+              </div>
+            </div>
+          )}
+            </>
+          )}
+          {settingsTab === 'model' && (
+            <>
+          <div className="settings-sep">
             <span>网页版生成(实验)</span>
           </div>
           <div className="settings-row">
@@ -2414,6 +2551,10 @@ function App() {
               </div>
             </>
           )}
+            </>
+          )}
+          {settingsTab === 'general' && (
+            <>
           <div className="settings-sep">
             <span>截屏</span>
           </div>
@@ -2453,11 +2594,6 @@ function App() {
               }}
             />
           </div>
-          {(savedTick !== 0 || saveError) && (
-            <div className={`settings-tip ${saveError ? 'err' : 'ok'}`}>
-              {saveError ? '保存失败，详见控制台日志' : '✓ 已自动保存，即时生效'}
-            </div>
-          )}
             </>
           )}
 
@@ -2582,7 +2718,7 @@ function App() {
                 </>
               )}
               <div className="settings-row">
-                <label htmlFor="cfg-voice-emotion" title="把 deadpan/excited/slow 语气映射为自然语言情感指令(CosyVoice2)或情绪参数(MiniMax),角色差异更可听;若指令被念出来可关闭">
+                <label htmlFor="cfg-voice-emotion" title="把 deadpan/excited/slow 语气映射为情感指令(CosyVoice2 经 <|endofprompt|> 引导,不会被朗读;MiniMax 走情绪参数),角色差异更可听">
                   情感指令
                 </label>
                 <input
@@ -2978,6 +3114,12 @@ function App() {
             })}
           </div>
             </>
+          )}
+
+          {(savedTick !== 0 || saveError) && (
+            <div className={`settings-tip ${saveError ? 'err' : 'ok'}`}>
+              {saveError ? '保存失败，详见控制台日志' : '✓ 已自动保存，即时生效'}
+            </div>
           )}
         </div>
       )}

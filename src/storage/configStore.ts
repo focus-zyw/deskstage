@@ -139,11 +139,14 @@ export interface OcrConfig {
   model: string
 }
 
-/** 主播模式(直播弹幕互动):平台 + 直播间号。
- *  roomId 留空 = 点"开播"时气泡引导去设置;platform v1 只有 bilibili 可用(douyin 为桩) */
+/** 主播模式(直播弹幕互动):平台 + 直播间号 + 登录凭证。
+ *  roomId 留空 = 点"开播"时气泡引导去设置;platform v1 只有 bilibili 可用(douyin 为桩)。
+ *  cookie 选填:B站任意已登录账号的 SESSDATA(或完整 Cookie 串),不带则观众名被打码
+ *  (如"张***"),带了解锁真实用户名与舰长等级;建议用小号 */
 export interface LiveConfig {
   platform: 'bilibili' | 'douyin'
   roomId: string
+  cookie: string
 }
 
 // 默认值（首启写入）。想换端点：改 appData/data/config.json 后重启。
@@ -194,7 +197,7 @@ export const DEFAULT_CONFIG: AppConfig = {
     baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
     model: 'glm-4.6v-flash',
   },
-  live: { platform: 'bilibili', roomId: '' },
+  live: { platform: 'bilibili', roomId: '', cookie: '' },
 }
 
 /** 清洗使用者画像:逐字段裁剪;likes 为空时回落旧 userInterests 字段(老配置平滑迁移) */
@@ -436,11 +439,12 @@ function sanitizeConfig(obj: unknown): AppConfig {
     })(),
     live: ((): LiveConfig => {
       const c = (o.live ?? {}) as Record<string, unknown>
-      // platform 只认白名单值(抖音为桩,v1 恒回 bilibili);roomId 纯数字校验
+      // platform 只认白名单值(抖音为桩,v1 恒回 bilibili);roomId 纯数字校验;cookie 截断防膨胀
       const roomId = typeof c.roomId === 'string' ? c.roomId.trim().slice(0, 32) : ''
       return {
         platform: c.platform === 'douyin' ? 'douyin' : 'bilibili',
         roomId: /^\d*$/.test(roomId) ? roomId : '',
+        cookie: typeof c.cookie === 'string' ? c.cookie.trim().slice(0, 600) : '',
       }
     })(),
   }

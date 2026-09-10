@@ -45,6 +45,8 @@
         { "url": "https://ark.cn-beijing.volces.com/*" },
         { "url": "https://api.openai.com/*" },
         { "url": "https://api.live.bilibili.com/*" },
+        { "url": "https://api.bilibili.com/*" },
+        { "url": "https://passport.bilibili.com/*" },
         { "url": "http://*" },
         { "url": "http://127.0.0.1:9223/*" },
         { "url": "http://localhost:9223/*" }

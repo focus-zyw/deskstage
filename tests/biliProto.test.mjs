@@ -89,11 +89,12 @@ test('parseDanmuMsg 提取归一化字段,结构不符返回 null', () => {
   assert.equal(proto.parseDanmuMsg([[], 'x']), null)
 })
 
-test('authBody 为匿名 protover2 认证 JSON', () => {
-  const body = new TextDecoder().decode(proto.authBody(23058, 'tok123'))
-  const o = JSON.parse(body)
-  assert.equal(o.uid, 0)
-  assert.equal(o.roomid, 23058)
-  assert.equal(o.protover, 2)
-  assert.equal(o.key, 'tok123')
+test('authBody 为匿名 protover2 认证 JSON,uid 可带登录态', () => {
+  const anon = JSON.parse(new TextDecoder().decode(proto.authBody(23058, 'tok123')))
+  assert.equal(anon.uid, 0)
+  assert.equal(anon.roomid, 23058)
+  assert.equal(anon.protover, 2)
+  assert.equal(anon.key, 'tok123')
+  const logged = JSON.parse(new TextDecoder().decode(proto.authBody(23058, 'tok123', 12345)))
+  assert.equal(logged.uid, 12345)
 })

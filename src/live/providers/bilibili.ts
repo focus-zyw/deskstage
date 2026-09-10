@@ -34,11 +34,15 @@ interface ApiResult<T> {
   data?: T
 }
 
-async function apiGet<T>(path: string): Promise<T> {
+async function apiGet<T>(path: string, cookie?: string): Promise<T> {
   // Tauri 内走 Rust 转发(免 CORS);浏览器 dev 直连(CORS 不通时冒烟改走注入,不阻塞开发)
   const f = inTauri ? rustFetch : fetch
   const res = await f(`${API}${path}`, {
-    headers: { 'User-Agent': UA, Referer: 'https://live.bilibili.com/' },
+    headers: {
+      'User-Agent': UA,
+      Referer: 'https://live.bilibili.com/',
+      ...(cookie ? { Cookie: cookie } : {}),
+    },
   })
   if (!res.ok) throw new Error(`B站接口 HTTP ${res.status}`)
   const json = (await res.json()) as ApiResult<T>
@@ -46,10 +50,42 @@ async function apiGet<T>(path: string): Promise<T> {
   return json.data as T
 }
 
-async function resolveRealRoom(roomId: string): Promise<number> {
+/** 规整用户凭证:只贴了 SESSDATA 值时补上键名;完整 Cookie 串原样用 */
+function normalizeCookie(credential: string): string {
+  const c = credential.trim()
+  return c.includes('=') ? c : `SESSDATA=${c}`
+}
+
+interface BiliCredential {
+  cookie: string
+  /** 登录账号的 uid(cookie 的 DedeUserID;拿不到回落 0) */
+  uid: number
+}
+
+/** 解析登录凭证:cookie 里带 DedeUserID 直接用;只有 SESSDATA 时问一次 nav 接口拿自己的 uid
+ *  (带 cookie 无风控)。失败不致命——回落匿名 uid=0,只是观众名可能仍被打码 */
+async function prepareCredential(credential?: string): Promise<BiliCredential | null> {
+  if (!credential?.trim()) return null
+  const cookie = normalizeCookie(credential)
+  const dede = cookie.match(/DedeUserID=(\d+)/i)
+  if (dede) return { cookie, uid: Number(dede[1]) }
+  try {
+    const f = inTauri ? rustFetch : fetch
+    const res = await f('https://api.bilibili.com/x/web-interface/nav', {
+      headers: { 'User-Agent': UA, Referer: 'https://live.bilibili.com/', Cookie: cookie },
+    })
+    const mid = ((await res.json()) as { data?: { mid?: number } })?.data?.mid
+    if (typeof mid === 'number' && mid > 0) return { cookie, uid: mid }
+  } catch (e) {
+    console.warn('[live] nav 取 uid 失败,回落匿名连接', e)
+  }
+  return { cookie, uid: 0 }
+}
+
+async function resolveRealRoom(roomId: string, cookie?: string): Promise<number> {
   const id = Number(roomId)
   if (!Number.isFinite(id) || id <= 0) throw new Error('房间号应为数字')
-  const data = await apiGet<{ room_id: number }>(`/room/v1/Room/room_init?id=${id}`)
+  const data = await apiGet<{ room_id: number }>(`/room/v1/Room/room_init?id=${id}`, cookie)
   if (!data?.room_id) throw new Error('房间不存在或已封禁')
   return data.room_id
 }
@@ -59,13 +95,14 @@ interface DanmuInfo {
   host_list: { host: string; wss_port: number }[]
 }
 
-async function getDanmuInfo(realRoomId: number): Promise<DanmuInfo> {
+async function getDanmuInfo(realRoomId: number, cookie?: string): Promise<DanmuInfo> {
   // 注意:getDanmuInfo 已上 gaia 风控(裸请求 -352);老接口 getConf 同样返回
   // token + 主机表且无风控,故用它(社区 blivedm 系 2025 起的通行做法之一)。
-  // 两接口字段名不同:host_list vs host_server_list,此处归一
+  // 两接口字段名不同:host_list vs host_server_list,此处归一。
+  // 带登录 cookie 请求时 token 绑定该会话,弹幕服务器才会回真实用户名(否则打码)
   const data = await apiGet<
     DanmuInfo & { host_server_list?: { host: string; wss_port: number }[] }
-  >(`/room/v1/Danmu/getConf?room_id=${realRoomId}&platform=web&player=web`)
+  >(`/room/v1/Danmu/getConf?room_id=${realRoomId}&platform=web&player=web`, cookie)
   const hosts = data?.host_list ?? data?.host_server_list ?? []
   const host = hosts.find((h) => h.wss_port > 0)
   if (!data?.token || !host) throw new Error('拿不到弹幕服务器信息')
@@ -83,10 +120,15 @@ class BilibiliProvider implements LiveDanmakuProvider {
   /** 流式分帧的残包缓冲(decodeStream 返回 ArrayBufferLike 视图,字段放宽避免赋值冲突) */
   private pending: Uint8Array<ArrayBufferLike> = new Uint8Array(0)
 
-  connect(roomId: string, onMessage: (m: DanmakuMessage) => void, onStatus: (s: LiveStatus) => void): void {
+  connect(
+    roomId: string,
+    onMessage: (m: DanmakuMessage) => void,
+    onStatus: (s: LiveStatus) => void,
+    credential?: string,
+  ): void {
     this.disconnect()
     const gen = ++this.gen
-    void this.run(gen, roomId, onMessage, onStatus)
+    void this.run(gen, roomId, onMessage, onStatus, credential)
   }
 
   disconnect(): void {
@@ -109,19 +151,26 @@ class BilibiliProvider implements LiveDanmakuProvider {
     roomId: string,
     onMessage: (m: DanmakuMessage) => void,
     onStatus: (s: LiveStatus) => void,
+    credential?: string,
   ): Promise<void> {
     const alive = () => gen === this.gen
+    // 凭证每次 connect 解析一次(重连复用);登录态 token 才能拿到未打码的观众名
+    const cred = await prepareCredential(credential)
+    if (!alive()) return
     let attempts = 0
     for (;;) {
       if (!alive()) return
-      onStatus({ state: 'connecting', detail: attempts > 0 ? `第 ${attempts + 1} 次尝试连接` : undefined })
+      onStatus({
+        state: 'connecting',
+        detail: attempts > 0 ? `第 ${attempts + 1} 次尝试连接` : cred ? `已登录(UID ${cred.uid})` : undefined,
+      })
       try {
-        const realRoomId = await resolveRealRoom(roomId)
+        const realRoomId = await resolveRealRoom(roomId, cred?.cookie)
         if (!alive()) return
-        const info = await getDanmuInfo(realRoomId)
+        const info = await getDanmuInfo(realRoomId, cred?.cookie)
         if (!alive()) return
         const host = info.host_list.find((h) => h.wss_port > 0)!
-        await this.openSocket(gen, roomId, realRoomId, info.token, `wss://${host.host}:${host.wss_port}/sub`, onMessage, onStatus)
+        await this.openSocket(gen, roomId, realRoomId, info.token, cred?.uid ?? 0, `wss://${host.host}:${host.wss_port}/sub`, onMessage, onStatus)
         attempts = 0 // 成功连过一轮,重置退避
       } catch (e) {
         if (!alive()) return
@@ -143,6 +192,7 @@ class BilibiliProvider implements LiveDanmakuProvider {
     roomId: string,
     realRoomId: number,
     token: string,
+    uid: number,
     url: string,
     onMessage: (m: DanmakuMessage) => void,
     onStatus: (s: LiveStatus) => void,
@@ -161,7 +211,7 @@ class BilibiliProvider implements LiveDanmakuProvider {
           ws.close()
           return
         }
-        ws.send(encodePacket(OP_AUTH, authBody(realRoomId, token)).buffer as ArrayBuffer)
+        ws.send(encodePacket(OP_AUTH, authBody(realRoomId, token, uid)).buffer as ArrayBuffer)
         // 立即一跳 + 周期心跳
         ws.send(encodePacket(OP_HEARTBEAT).buffer as ArrayBuffer)
         this.heartbeatTimer = window.setInterval(() => {

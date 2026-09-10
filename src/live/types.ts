@@ -27,13 +27,17 @@ export interface LiveStatus {
 }
 
 /** 弹幕源提供方。connect 后异步上报状态与消息;disconnect 后不得再回调。
- *  同一实例同一时间只服务一个房间(由 session 层保证,重复 connect 视为重新连接) */
+ *  同一实例同一时间只服务一个房间(由 session 层保证,重复 connect 视为重新连接)。
+ *  credential = 平台登录凭证(不透明字符串,由设置面板配置):
+ *  B站 = SESSDATA 或完整 Cookie 串(不填则观众名被打码,如"张***");
+ *  抖音(v2) = ttwid 等。各平台自行解析,上游不感知格式 */
 export interface LiveDanmakuProvider {
   readonly platform: LivePlatform
   connect(
     roomId: string,
     onMessage: (m: DanmakuMessage) => void,
     onStatus: (s: LiveStatus) => void,
+    credential?: string,
   ): void
   disconnect(): void
 }

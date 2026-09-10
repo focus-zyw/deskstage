@@ -6,7 +6,7 @@ import type { LiveDanmakuProvider } from '../types'
 
 export const douyinProvider: LiveDanmakuProvider = {
   platform: 'douyin',
-  connect(_roomId, _onMessage, onStatus) {
+  connect(_roomId, _onMessage, onStatus, _credential) {
     onStatus({ state: 'error', detail: '抖音弹幕即将支持,当前请选择B站平台' })
   },
   disconnect() {

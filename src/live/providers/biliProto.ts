@@ -87,10 +87,10 @@ export function parseDanmuMsg(info: unknown): BiliDanmu | null {
   }
 }
 
-/** 构造认证包正文(uid=0 匿名;protover 2 = zlib,免 brotli 依赖) */
-export function authBody(realRoomId: number, token: string): Uint8Array {
+/** 构造认证包正文(uid 取自 cookie 的 DedeUserID,匿名=0;protover 2 = zlib,免 brotli 依赖) */
+export function authBody(realRoomId: number, token: string, uid = 0): Uint8Array {
   const json = JSON.stringify({
-    uid: 0,
+    uid,
     roomid: realRoomId,
     protover: 2,
     platform: 'web',
