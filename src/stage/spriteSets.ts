@@ -1,3 +1,5 @@
+import type { SpriteVariant } from './spriteVariants'
+
 // 立绘注册表:每个角色的贴图目录、强调色与显示参数。
 // 素材位于 public/sprites/{dir}/{action}.png,文件名与动作词表严格一致;
 // 同角色各表情必须同画布、头脚对齐(规格见 scripts/gen_placeholder_sprites.py)。
@@ -15,6 +17,8 @@ export interface SpriteSet {
   offsetY?: number
   /** 已有贴图的动作;缺图动作运行时回退 idle 图 */
   actions: string[]
+  /** 同一语义动作的候选图片；未配置时仍使用 {action}.png */
+  variants?: Partial<Record<string, readonly SpriteVariant[]>>
 }
 
 // 有独立贴图的六个表情;shake/jump 不出图,复用 idle 图 + CSS 位移动画
@@ -40,16 +44,26 @@ export const SPRITE_SETS: Record<'A' | 'B', SpriteSet> = {
   },
 }
 
+export function spriteFileSrc(set: SpriteSet, file: string): string {
+  return `${import.meta.env.BASE_URL}${set.dir}/${file}`
+}
+
 export function spriteSrc(set: SpriteSet, action: string): string {
-  return `${import.meta.env.BASE_URL}${set.dir}/${action}.png`
+  return spriteFileSrc(set, `${action}.png`)
 }
 
 /** 启动预热全部贴图,避免演出中首次切换动作时闪一下 */
 export function preloadSprites(sets: SpriteSet[]): void {
   for (const set of sets) {
     for (const action of set.actions) {
-      const img = new Image()
-      img.src = spriteSrc(set, action)
+      const files = [
+        `${action}.png`,
+        ...(set.variants?.[action]?.map((variant) => variant.file) ?? []),
+      ]
+      for (const file of new Set(files)) {
+        const img = new Image()
+        img.src = spriteFileSrc(set, file)
+      }
     }
   }
 }

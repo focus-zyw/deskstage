@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import type { CSSProperties, Ref } from 'react'
-import { spriteSrc, type SpriteSet } from './spriteSets'
+import { spriteFileSrc, type SpriteSet } from './spriteSets'
 import { motionForAction } from './spriteMotion'
+import { SpriteVariantPicker } from './spriteVariants'
 
 export interface CharacterSpriteProps {
   /** 立绘配置(素材目录、强调色、显示高、基线微调) */
@@ -83,7 +84,23 @@ export function CharacterSprite({
 }: CharacterSpriteProps) {
   // shake/jump 等无独立贴图的动作复用 idle 图，表现由 CSS 动画承担
   const artAction = sprite.actions.includes(action) ? action : 'idle'
-  const src = spriteSrc(sprite, artAction)
+  const baseFile = `${artAction}.png`
+  const variantKey = `${sprite.dir}:${action}`
+  const [variantPicker] = useState(() => new SpriteVariantPicker())
+  const [variant, setVariant] = useState(() => ({
+    key: variantKey,
+    file: variantPicker.pick(
+      action,
+      baseFile,
+      action === artAction ? sprite.variants?.[artAction] : undefined,
+    ),
+  }))
+  if (variant.key !== variantKey) {
+    // 回退动作(shake 等)只复用基础 idle 图，避免把普通待机变体误当成语义动作。
+    const candidates = action === artAction ? sprite.variants?.[artAction] : undefined
+    setVariant({ key: variantKey, file: variantPicker.pick(action, baseFile, candidates) })
+  }
+  const src = spriteFileSrc(sprite, variant.file)
   const fidget = useIdleFidget(artAction === 'idle')
   const motion = motionForAction(action)
 
