@@ -7,8 +7,29 @@ export interface SpriteVariant {
   weight?: number
   /** 本候选被抽中后，在该时长内不再参与抽取 */
   cooldownMs?: number
+  /** 进入动作后至少保持多久才允许使用；适合避免 idle 变体在对白间隙闪现 */
+  activationDelayMs?: number
   /** 姿势轮廓变化大时可覆盖动作的默认切图方式 */
   transitionMode?: TransitionMode
+}
+
+export function immediateSpriteVariants(
+  variants: readonly SpriteVariant[] | undefined,
+): readonly SpriteVariant[] | undefined {
+  const immediate = variants?.filter((variant) => (variant.activationDelayMs ?? 0) <= 0)
+  return immediate?.length ? immediate : undefined
+}
+
+export function firstDelayedVariantGroup(
+  variants: readonly SpriteVariant[] | undefined,
+): { delayMs: number; variants: readonly SpriteVariant[] } | undefined {
+  const delayed = variants?.filter((variant) => (variant.activationDelayMs ?? 0) > 0)
+  if (!delayed?.length) return undefined
+  const delayMs = Math.min(...delayed.map((variant) => variant.activationDelayMs ?? 0))
+  return {
+    delayMs,
+    variants: delayed.filter((variant) => (variant.activationDelayMs ?? 0) === delayMs),
+  }
 }
 
 /**

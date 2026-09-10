@@ -27,6 +27,9 @@ export const ART_ACTIONS = ['idle', 'talk', 'happy', 'angry', 'sad', 'surprise']
 // 工具任务专用姿势:由 OCR/翻译/提醒等本地流程触发,不加入 LLM 对话动作词表
 export const UTILITY_ACTIONS = ['reading', 'present'] as const
 
+const VARIANT_COOLDOWN_MS = 45_000
+const IDLE_VARIANT_DELAY_MS = 6_500
+
 export const SPRITE_SETS: Record<'A' | 'B', SpriteSet> = {
   A: {
     dir: 'sprites/a',
@@ -35,10 +38,40 @@ export const SPRITE_SETS: Record<'A' | 'B', SpriteSet> = {
     height: 320,
     actions: [...ART_ACTIONS, ...UTILITY_ACTIONS, 'laugh', 'shy', 'sleepy', 'wave', 'thinking', 'jump'],
     variants: {
+      idle: [
+        { file: 'idle.png', weight: 1 },
+        {
+          file: 'idle-look.png',
+          weight: 1,
+          cooldownMs: VARIANT_COOLDOWN_MS,
+          activationDelayMs: IDLE_VARIANT_DELAY_MS,
+          transitionMode: 'dip',
+        },
+        {
+          file: 'idle-proud.png',
+          weight: 1,
+          cooldownMs: VARIANT_COOLDOWN_MS,
+          activationDelayMs: IDLE_VARIANT_DELAY_MS,
+          transitionMode: 'dip',
+        },
+      ],
       talk: [
         { file: 'talk.png', weight: 6 },
-        { file: 'talk-point.png', weight: 1, cooldownMs: 45_000, transitionMode: 'dip' },
-        { file: 'talk-aside.png', weight: 1, cooldownMs: 45_000, transitionMode: 'dip' },
+        { file: 'talk-point.png', weight: 1, cooldownMs: VARIANT_COOLDOWN_MS, transitionMode: 'dip' },
+        { file: 'talk-boast.png', weight: 1, cooldownMs: VARIANT_COOLDOWN_MS, transitionMode: 'dip' },
+        { file: 'talk-aside.png', weight: 1, cooldownMs: VARIANT_COOLDOWN_MS, transitionMode: 'dip' },
+      ],
+      happy: [
+        { file: 'happy.png', weight: 6 },
+        { file: 'happy-proud.png', weight: 1, cooldownMs: VARIANT_COOLDOWN_MS, transitionMode: 'dip' },
+      ],
+      angry: [
+        { file: 'angry.png', weight: 6 },
+        { file: 'angry-pout.png', weight: 1, cooldownMs: VARIANT_COOLDOWN_MS, transitionMode: 'dip' },
+      ],
+      surprise: [
+        { file: 'surprise.png', weight: 6 },
+        { file: 'surprise-flustered.png', weight: 1, cooldownMs: VARIANT_COOLDOWN_MS, transitionMode: 'dip' },
       ],
     },
   },
@@ -49,10 +82,40 @@ export const SPRITE_SETS: Record<'A' | 'B', SpriteSet> = {
     height: 320,
     actions: [...ART_ACTIONS, ...UTILITY_ACTIONS, 'shy', 'laugh', 'sleepy', 'wave', 'thinking', 'jump'],
     variants: {
+      idle: [
+        { file: 'idle.png', weight: 1 },
+        {
+          file: 'idle-phone.png',
+          weight: 1,
+          cooldownMs: VARIANT_COOLDOWN_MS,
+          activationDelayMs: IDLE_VARIANT_DELAY_MS,
+          transitionMode: 'dip',
+        },
+        {
+          file: 'idle-glasses.png',
+          weight: 1,
+          cooldownMs: VARIANT_COOLDOWN_MS,
+          activationDelayMs: IDLE_VARIANT_DELAY_MS,
+          transitionMode: 'dip',
+        },
+      ],
       talk: [
         { file: 'talk.png', weight: 6 },
-        { file: 'talk-deadpan.png', weight: 1, cooldownMs: 45_000, transitionMode: 'dip' },
-        { file: 'talk-glasses.png', weight: 1, cooldownMs: 45_000, transitionMode: 'dip' },
+        { file: 'talk-explain.png', weight: 1, cooldownMs: VARIANT_COOLDOWN_MS, transitionMode: 'dip' },
+        { file: 'talk-deadpan.png', weight: 1, cooldownMs: VARIANT_COOLDOWN_MS, transitionMode: 'dip' },
+        { file: 'talk-glasses.png', weight: 1, cooldownMs: VARIANT_COOLDOWN_MS, transitionMode: 'dip' },
+      ],
+      happy: [
+        { file: 'happy.png', weight: 6 },
+        { file: 'happy-smirk.png', weight: 1, cooldownMs: VARIANT_COOLDOWN_MS, transitionMode: 'dip' },
+      ],
+      angry: [
+        { file: 'angry.png', weight: 6 },
+        { file: 'angry-glare.png', weight: 1, cooldownMs: VARIANT_COOLDOWN_MS, transitionMode: 'dip' },
+      ],
+      surprise: [
+        { file: 'surprise.png', weight: 6 },
+        { file: 'surprise-freeze.png', weight: 1, cooldownMs: VARIANT_COOLDOWN_MS, transitionMode: 'dip' },
       ],
     },
   },

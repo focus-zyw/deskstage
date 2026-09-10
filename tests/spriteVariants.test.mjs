@@ -1,9 +1,14 @@
 import assert from 'node:assert/strict'
+import { existsSync } from 'node:fs'
+import path from 'node:path'
 import { after, before, test } from 'node:test'
 import { createServer } from 'vite'
 
 let server
 let SpriteVariantPicker
+let firstDelayedVariantGroup
+let immediateSpriteVariants
+let SPRITE_SETS
 
 before(async () => {
   server = await createServer({
@@ -11,7 +16,9 @@ before(async () => {
     appType: 'custom',
     logLevel: 'silent',
   })
-  ;({ SpriteVariantPicker } = await server.ssrLoadModule('/src/stage/spriteVariants.ts'))
+  ;({ SpriteVariantPicker, firstDelayedVariantGroup, immediateSpriteVariants } =
+    await server.ssrLoadModule('/src/stage/spriteVariants.ts'))
+  ;({ SPRITE_SETS } = await server.ssrLoadModule('/src/stage/spriteSets.ts'))
 })
 
 after(async () => {
@@ -53,4 +60,50 @@ test('所有候选都在冷却时安全回退基础图片', () => {
 
   assert.equal(picker.pick('talk', 'talk.png', variants, 100, () => 0), 'talk-special.png')
   assert.equal(picker.pick('talk', 'talk.png', variants, 200, () => 0), 'talk.png')
+})
+
+test('延迟待机变体不会进入动作时立即出现', () => {
+  const variants = [
+    { file: 'idle.png', weight: 1 },
+    { file: 'idle-look.png', weight: 1, activationDelayMs: 6_500 },
+    { file: 'idle-proud.png', weight: 1, activationDelayMs: 6_500 },
+  ]
+
+  assert.deepEqual(immediateSpriteVariants(variants).map((variant) => variant.file), ['idle.png'])
+  assert.deepEqual(firstDelayedVariantGroup(variants), {
+    delayMs: 6_500,
+    variants: variants.slice(1),
+  })
+})
+
+test('两名角色注册的所有变体都有对应素材文件', () => {
+  const expected = {
+    A: [
+      'idle-look.png',
+      'idle-proud.png',
+      'talk-point.png',
+      'talk-boast.png',
+      'happy-proud.png',
+      'angry-pout.png',
+      'surprise-flustered.png',
+    ],
+    B: [
+      'idle-phone.png',
+      'idle-glasses.png',
+      'talk-explain.png',
+      'talk-deadpan.png',
+      'happy-smirk.png',
+      'angry-glare.png',
+      'surprise-freeze.png',
+    ],
+  }
+
+  for (const [speaker, expectedFiles] of Object.entries(expected)) {
+    const set = SPRITE_SETS[speaker]
+    const registered = Object.values(set.variants).flat().map((variant) => variant.file)
+    for (const file of expectedFiles) {
+      assert.ok(registered.includes(file), `${speaker} 未注册 ${file}`)
+      assert.ok(existsSync(path.join(process.cwd(), 'public', set.dir, file)), `${file} 不存在`)
+    }
+  }
 })
