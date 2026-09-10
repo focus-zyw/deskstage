@@ -60,6 +60,10 @@
   position: relative;
   display: flex;
 }
+.char-transition-shell {
+  display: flex;
+  transform-origin: 50% 85%;
+}
 
 .char-img {
   display: block;
@@ -70,8 +74,20 @@
 .char-img.main {
   opacity: 0;
 }
-.char-img.main.ready {
+.transition-crossfade .char-img.main.ready {
   animation: sprite-in 0.14s ease forwards;
+}
+.transition-dip .char-img.under {
+  animation: sprite-dip-out 0.11s ease forwards;
+}
+.transition-dip .char-img.main.ready {
+  animation: sprite-dip-in 0.13s 0.1s ease both;
+}
+.transition-impact .char-img.under {
+  opacity: 0;
+}
+.transition-impact .char-img.main.ready {
+  animation: sprite-impact-in 0.08s ease-out forwards;
 }
 /* 下层：旧立绘，新图淡入完成前兜底显示 */
 .char-img.under {
@@ -87,6 +103,67 @@
   to {
     opacity: 1;
   }
+}
+@keyframes sprite-dip-out {
+  to {
+    opacity: 0;
+  }
+}
+@keyframes sprite-dip-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes sprite-impact-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* 动作起势放在独立外壳上，不与说话、倾听、脉冲等 char/char-body 动画抢 transform。 */
+.char-transition-shell.motion-soft {
+  animation: motion-soft 0.22s ease-out;
+}
+.char-transition-shell.motion-pop {
+  animation: motion-pop 0.28s cubic-bezier(0.2, 0.9, 0.25, 1.25);
+}
+.char-transition-shell.motion-snap {
+  animation: motion-snap 0.2s ease-out;
+}
+.char-transition-shell.motion-sink {
+  animation: motion-sink 0.28s ease-out;
+}
+.char-transition-shell.motion-recoil {
+  animation: motion-recoil 0.3s ease-out;
+}
+@keyframes motion-soft {
+  from { opacity: 0.88; scale: 0.99; }
+  to { opacity: 1; scale: 1; }
+}
+@keyframes motion-pop {
+  0% { scale: 0.96; translate: 0 4px; }
+  65% { scale: 1.025; translate: 0 -3px; }
+  100% { scale: 1; translate: 0 0; }
+}
+@keyframes motion-snap {
+  0% { scale: 0.92 1.06; translate: 0 5px; }
+  55% { scale: 1.035 0.98; translate: 0 -5px; }
+  100% { scale: 1 1; translate: 0 0; }
+}
+@keyframes motion-sink {
+  from { opacity: 0.82; translate: 0 -5px; }
+  to { opacity: 1; translate: 0 0; }
+}
+@keyframes motion-recoil {
+  0% { rotate: -1.8deg; translate: 0 2px; }
+  45% { rotate: 1.2deg; translate: 0 -2px; }
+  100% { rotate: 0deg; translate: 0 0; }
 }
 
 /* 动作动画：表情由贴图切换承担，节奏与幅度由位移动画承担 */

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { CSSProperties, Ref } from 'react'
 import { spriteSrc, type SpriteSet } from './spriteSets'
+import { motionForAction } from './spriteMotion'
 
 export interface CharacterSpriteProps {
   /** 立绘配置(素材目录、强调色、显示高、基线微调) */
@@ -84,6 +85,7 @@ export function CharacterSprite({
   const artAction = sprite.actions.includes(action) ? action : 'idle'
   const src = spriteSrc(sprite, artAction)
   const fidget = useIdleFidget(artAction === 'idle')
+  const motion = motionForAction(action)
 
   // 渲染期检测动作切换：旧图挪到下层兜底，新图重新走加载→淡入流程；
   // 淡入结束后卸载旧图 —— 各形态姿态差异大,旧图宽出的部分会从新图边缘露出形成重影
@@ -143,18 +145,22 @@ export function CharacterSprite({
 
   return (
     <div ref={ref} className={cls} style={style}>
-      <div className={`char-body${fidget ? ` ${fidget}` : ''}`}>
-        {prev && !underGone && <img className="char-img under" src={prev} alt="" />}
-        <img
-          key={curr}
-          className={`char-img main${ready ? ' ready' : ''}`}
-          src={curr}
-          alt={nameOverride ?? sprite.name}
-          draggable={false}
-          onLoad={() => setFade((f) => ({ ...f, ready: true }))}
-          onError={() => setFade((f) => ({ ...f, broken: true }))}
-          onAnimationEnd={() => setFade((f) => ({ ...f, underGone: true }))}
-        />
+      <div
+        key={`${curr}:${action}`}
+        className={`char-transition-shell transition-${motion.mode} motion-${motion.style}`}
+      >
+        <div className={`char-body${fidget ? ` ${fidget}` : ''}`}>
+          {prev && !underGone && <img className="char-img under" src={prev} alt="" />}
+          <img
+            className={`char-img main${ready ? ' ready' : ''}`}
+            src={curr}
+            alt={nameOverride ?? sprite.name}
+            draggable={false}
+            onLoad={() => setFade((f) => ({ ...f, ready: true }))}
+            onError={() => setFade((f) => ({ ...f, broken: true }))}
+            onAnimationEnd={() => setFade((f) => ({ ...f, underGone: true }))}
+          />
+        </div>
       </div>
       <div className="char-name">{nameOverride ?? sprite.name}</div>
     </div>
