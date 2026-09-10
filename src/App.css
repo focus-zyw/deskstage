@@ -1991,3 +1991,24 @@
     animation: prop-out 0.36s ease both;
   }
 }
+
+/* 截图框选工具条按钮(样式内联在 CaptureOverlay,这里只补 hover/active 反馈) */
+.cap-tool {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #e8e8ee;
+  cursor: pointer;
+}
+.cap-tool:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+.cap-tool:active {
+  background: rgba(255, 255, 255, 0.22);
+}

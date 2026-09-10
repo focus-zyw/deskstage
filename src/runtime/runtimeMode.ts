@@ -12,7 +12,7 @@ export type RuntimeMode =
   | { type: 'performing'; episodeId: number } // 演出中(含短聊/回放)
   | { type: 'streaming' } // 主播模式:直播弹幕互动中(独占,弹幕即互动源)
   | { type: 'choosing'; choiceId: string } // 中途选边等待
-  | { type: 'capturing'; intent: 'save' | 'translate' } // 框选截图中
+  | { type: 'capturing' } // 框选截图中(动作由松手后的工具条决定)
   | { type: 'recording' } // 音色克隆录音中
 
 export type OverlayId = 'settings' | 'topic' | 'chat' | 'tools' | 'translation'
@@ -132,9 +132,9 @@ export function beginStreaming(): void {
 }
 
 /** 进入框选截图:记住底下正在做的事,结束后恢复(演出在遮罩下继续播,不能丢) */
-export function beginCapture(intent: 'save' | 'translate'): void {
+export function beginCapture(): void {
   if (state.mode.type !== 'capturing') restoreMode = state.mode
-  set({ mode: { type: 'capturing', intent } })
+  set({ mode: { type: 'capturing' } })
 }
 
 export function endCapture(): void {

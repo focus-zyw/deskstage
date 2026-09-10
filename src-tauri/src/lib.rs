@@ -73,6 +73,7 @@ pub fn run() {
     .plugin(tauri_plugin_http::init())
     .plugin(tauri_plugin_clipboard_manager::init())
     .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+    .plugin(tauri_plugin_dialog::init())
     .manage(audio_capture::CaptureState::default())
     .invoke_handler(tauri::generate_handler![
       set_noactivate,
@@ -81,6 +82,8 @@ pub fn run() {
       audio_capture::stop_capture,
       capture::capture_screen,
       capture::capture_finish,
+      capture::capture_save,
+      capture::capture_cleanup,
       capture::set_capture_excluded,
       env::env_snapshot,
       webchat::webchat_edge_launch,

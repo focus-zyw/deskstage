@@ -115,6 +115,29 @@ pub fn capture_screen(_app: AppHandle) -> Result<String, String> {
     Err("仅支持 Windows".into())
 }
 
+/// 按物理像素从冻结图裁出选区;用途(剪贴板/落盘)与临时文件清理由调用方决定。
+fn crop_frozen(
+    app: &AppHandle,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+) -> Result<image::RgbaImage, String> {
+    if width < 1 || height < 1 {
+        return Err("选区太小".into());
+    }
+    let path = temp_capture_path(app)?;
+    let img = image::open(&path).map_err(|e| format!("读取冻结图失败:{e}"))?;
+    let img = img.crop_imm(x.max(0) as u32, y.max(0) as u32, width as u32, height as u32);
+    Ok(img.to_rgba8())
+}
+
+fn cleanup_frozen(app: &AppHandle) {
+    if let Ok(path) = temp_capture_path(app) {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
 /// 覆盖窗框选完成:按物理像素裁剪冻结图 → RGBA 写入系统剪贴板 → 清理临时文件。
 #[tauri::command]
 pub fn capture_finish(
@@ -124,18 +147,39 @@ pub fn capture_finish(
     width: i32,
     height: i32,
 ) -> Result<(), String> {
-    if width < 1 || height < 1 {
-        return Err("选区太小".into());
-    }
-    let path = temp_capture_path(&app)?;
-    let img = image::open(&path).map_err(|e| format!("读取冻结图失败:{e}"))?;
-    let img = img.crop_imm(x.max(0) as u32, y.max(0) as u32, width as u32, height as u32);
-    let rgba = img.to_rgba8();
+    let rgba = crop_frozen(&app, x, y, width, height)?;
     let (w, h) = rgba.dimensions();
     let image = tauri::image::Image::new_owned(rgba.into_raw(), w, h);
     app.clipboard()
         .write_image(&image)
         .map_err(|e| format!("写入剪贴板失败:{e}"))?;
-    let _ = std::fs::remove_file(&path);
+    cleanup_frozen(&app);
+    Ok(())
+}
+
+/// 框选另存为:裁剪冻结图 → PNG 写入用户在保存对话框选定的路径 → 清理临时文件。
+#[tauri::command]
+pub fn capture_save(
+    app: AppHandle,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    path: String,
+) -> Result<(), String> {
+    let rgba = crop_frozen(&app, x, y, width, height)?;
+    if let Some(dir) = std::path::Path::new(&path).parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    rgba.save_with_format(&path, image::ImageFormat::Png)
+        .map_err(|e| format!("保存截图失败:{e}"))?;
+    cleanup_frozen(&app);
+    Ok(())
+}
+
+/// 丢弃冻结图(取消框选时前端调用,避免临时文件残留)。
+#[tauri::command]
+pub fn capture_cleanup(app: AppHandle) -> Result<(), String> {
+    cleanup_frozen(&app);
     Ok(())
 }

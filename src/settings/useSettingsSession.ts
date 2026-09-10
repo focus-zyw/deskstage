@@ -28,8 +28,9 @@ export function vendorKeyOf(id: string, baseUrl: string): string {
 
 export interface QrLoginState {
   phase: QrPhase | 'generating'
-  qrOfficial?: string
-  qrClassic?: string
+  /** 二维码轮次号:每次过期刷新递增,UI 凭它丢弃旧轮迟到的渲染结果 */
+  round: number
+  qrDataUrl?: string
   hint?: string
 }
 
@@ -93,6 +94,8 @@ export function useSettingsSession(): SettingsSessionState {
   // B站扫码登录(免手贴 cookie):句柄与展示状态
   const qrHandleRef = useRef<QrLoginHandle | null>(null)
   const [qrLogin, setQrLogin] = useState<QrLoginState | null>(null)
+  // 二维码轮次号:丢弃旧轮迟到的渲染结果,防止新一轮被旧图覆盖
+  const qrRoundRef = useRef(0)
 
   // 即存管线:字段变更 → saveField(队列合并) → commitSettings(落盘+副作用)
   const saveQueue = useMemo(
@@ -156,24 +159,31 @@ export function useSettingsSession(): SettingsSessionState {
 
   function beginQrLogin() {
     qrHandleRef.current?.cancel()
-    setQrLogin({ phase: 'generating', hint: '正在生成二维码…' })
+    setQrLogin({ phase: 'generating', round: qrRoundRef.current, hint: '正在生成二维码…' })
     qrHandleRef.current = startQrLogin({
-      onQr: (urls) => {
-        // 渲染失败必须可见:吞掉 rejection 会永远停在"生成中"
-        const render = (u: string) =>
-          QRCode.toDataURL(u, { width: 148, margin: 1 }).catch((e) =>
-            Promise.reject(String(e?.message ?? e)),
-          )
-        Promise.all([render(urls.official), render(urls.classic)])
-          .then(([official, classic]) => {
-            setQrLogin((s) => (s ? { ...s, phase: 'waiting', qrOfficial: official, qrClassic: classic } : s))
+      onQr: (round, url) => {
+        // 旧轮迟到的渲染结果不覆盖新一轮
+        if (round < qrRoundRef.current) return
+        qrRoundRef.current = round
+        // 渲染失败必须可见:吞掉 rejection 会永远停在"生成中";176px/4模块白边为稳妥扫码尺寸
+        QRCode.toDataURL(url, { width: 220, margin: 1 })
+          .then((dataUrl) => {
+            setQrLogin((s) => (s && s.round === round ? { ...s, phase: 'waiting', qrDataUrl: dataUrl } : s))
           })
           .catch((e) => {
-            setQrLogin((s) => (s ? { ...s, phase: 'error', hint: `二维码渲染失败:${String(e).slice(0, 80)}` } : s))
+            setQrLogin((s) =>
+              s && s.round === round
+                ? { ...s, phase: 'error', hint: `二维码渲染失败:${String(e?.message ?? e).slice(0, 80)}` }
+                : s,
+            )
           })
       },
       onPhase: (p, message) => {
-        // 过期自动刷新中:保留二维码,仅提示;error/ok 文案由 onPhase/message 带出
+        // 过期刷新开始即隐藏旧码,防止用户扫到临界失效图;error/ok 文案由 onPhase/message 带出
+        if (p === 'expired') {
+          setQrLogin((s) => (s ? { ...s, phase: p, qrDataUrl: undefined, hint: message } : s))
+          return
+        }
         setQrLogin((s) => (s ? { ...s, phase: p, hint: message } : s))
       },
       onSuccess: ({ cookie, uid }) => {
@@ -184,7 +194,12 @@ export function useSettingsSession(): SettingsSessionState {
           setForm((f) => ({ ...f, live }))
           saveField({ live })
         })()
-        setQrLogin({ phase: 'ok', hint: `登录成功(UID ${uid}),Cookie 已回填并保存` })
+        // 保留当前轮次号:UI 的旧轮结果丢弃守卫在 ok 态同样生效
+        setQrLogin((s) => ({
+          phase: 'ok',
+          round: s?.round ?? qrRoundRef.current,
+          hint: `登录成功(UID ${uid}),Cookie 已回填并保存`,
+        }))
       },
     })
   }

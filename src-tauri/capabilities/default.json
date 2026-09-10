@@ -19,6 +19,7 @@
     "core:window:allow-hide",
     "core:webview:allow-create-webview-window",
     "clipboard-manager:allow-write-image",
+    "dialog:default",
     "global-shortcut:allow-register",
     "global-shortcut:allow-unregister",
     "global-shortcut:allow-is-registered",

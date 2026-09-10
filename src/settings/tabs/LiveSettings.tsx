@@ -89,27 +89,17 @@ export function LiveSettings() {
         </SetLine>
         {qrLogin && (
           <div className="qr-row">
-            {(qrLogin.qrOfficial || qrLogin.qrClassic) && (
-              <div style={{ display: 'flex', gap: 10 }}>
-                {qrLogin.qrOfficial && (
-                  <div style={{ textAlign: 'center' }}>
-                    <img src={qrLogin.qrOfficial} alt="二维码A(新版App)" width={148} height={148} />
-                    <div className="set-note">格式A(新版App)</div>
-                  </div>
-                )}
-                {qrLogin.qrClassic && (
-                  <div style={{ textAlign: 'center' }}>
-                    <img src={qrLogin.qrClassic} alt="二维码B(旧版App)" width={148} height={148} />
-                    <div className="set-note">格式B(旧版App)</div>
-                  </div>
-                )}
-              </div>
+            {qrLogin.qrDataUrl && (
+              <img
+                src={qrLogin.qrDataUrl}
+                alt="B站登录二维码(手机B站App扫一扫)"
+                width={176}
+                height={176}
+              />
             )}
             <span className="set-note">
               {qrLogin.hint ??
-                (qrLogin.phase === 'waiting'
-                  ? '两个码各扫一次:哪个在手机上弹出登录确认就点确认(两码同一会话);都报错请升级手机B站App'
-                  : '')}
+                (qrLogin.phase === 'waiting' ? '请用手机B站App「扫一扫」并确认登录' : '')}
             </span>
           </div>
         )}

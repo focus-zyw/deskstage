@@ -43,6 +43,11 @@ test('cookieFromSetCookie 提取 Set-Cookie 行中的登录三件套', () => {
   // 缺关键字段
   assert.equal(mod.cookieFromSetCookie(['buvid3=x; Path=/']), null)
   assert.equal(mod.cookieFromSetCookie([]), null)
+  // 插件把多条 Set-Cookie 合并成一行的场景:启发式切分后可解析
+  const joined = mod.cookieFromSetCookie([
+    'SESSDATA=aa%2Cbb,cc; Path=/; Domain=.bilibili.com; HttpOnly, DedeUserID=77; Path=/; Domain=.bilibili.com, bili_jct=tok; Path=/',
+  ])
+  assert.deepEqual(joined, { cookie: 'DedeUserID=77; SESSDATA=aa%2Cbb,cc; bili_jct=tok', uid: 77 })
 })
 
 test('缺 SESSDATA / 缺 DedeUserID / 坏链接 返回 null', () => {

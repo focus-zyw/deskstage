@@ -3,7 +3,7 @@
 // 卡片负责结果,角色气泡只负责外围吐槽(ui/UtilityCard 渲染)。
 import { useSyncExternalStore } from 'react'
 
-export type UtilityKind = 'translate' | 'ocr' | 'capture-translate' | 'live'
+export type UtilityKind = 'translate' | 'ocr' | 'capture-translate' | 'save' | 'live'
 
 export interface UtilityTask {
   id: string
