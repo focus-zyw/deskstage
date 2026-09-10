@@ -6,7 +6,7 @@
 
 import { fetch as rustFetch } from '@tauri-apps/plugin-http'
 import { inTauri } from '../../storage/configStore'
-import type { DanmakuMessage, LiveDanmakuProvider, LiveStatus } from '../types'
+import type { LiveDanmakuProvider, LiveEvent, LiveStatus } from '../types'
 import {
   authBody,
   decodeCompressed,
@@ -17,6 +17,7 @@ import {
   OP_HEARTBEAT,
   OP_MESSAGE,
   parseDanmuMsg,
+  parseSendGift,
   type BiliPacket,
 } from './biliProto'
 
@@ -122,13 +123,13 @@ class BilibiliProvider implements LiveDanmakuProvider {
 
   connect(
     roomId: string,
-    onMessage: (m: DanmakuMessage) => void,
+    onEvent: (e: LiveEvent) => void,
     onStatus: (s: LiveStatus) => void,
     credential?: string,
   ): void {
     this.disconnect()
     const gen = ++this.gen
-    void this.run(gen, roomId, onMessage, onStatus, credential)
+    void this.run(gen, roomId, onEvent, onStatus, credential)
   }
 
   disconnect(): void {
@@ -149,7 +150,7 @@ class BilibiliProvider implements LiveDanmakuProvider {
   private async run(
     gen: number,
     roomId: string,
-    onMessage: (m: DanmakuMessage) => void,
+    onEvent: (e: LiveEvent) => void,
     onStatus: (s: LiveStatus) => void,
     credential?: string,
   ): Promise<void> {
@@ -170,7 +171,7 @@ class BilibiliProvider implements LiveDanmakuProvider {
         const info = await getDanmuInfo(realRoomId, cred?.cookie)
         if (!alive()) return
         const host = info.host_list.find((h) => h.wss_port > 0)!
-        await this.openSocket(gen, roomId, realRoomId, info.token, cred?.uid ?? 0, `wss://${host.host}:${host.wss_port}/sub`, onMessage, onStatus)
+        await this.openSocket(gen, roomId, realRoomId, info.token, cred?.uid ?? 0, `wss://${host.host}:${host.wss_port}/sub`, onEvent, onStatus)
         attempts = 0 // 成功连过一轮,重置退避
       } catch (e) {
         if (!alive()) return
@@ -194,7 +195,7 @@ class BilibiliProvider implements LiveDanmakuProvider {
     token: string,
     uid: number,
     url: string,
-    onMessage: (m: DanmakuMessage) => void,
+    onEvent: (e: LiveEvent) => void,
     onStatus: (s: LiveStatus) => void,
   ): Promise<void> {
     const alive = () => gen === this.gen
@@ -221,7 +222,7 @@ class BilibiliProvider implements LiveDanmakuProvider {
       ws.onmessage = (ev) => {
         if (!alive()) return
         try {
-          this.feed(new Uint8Array(ev.data as ArrayBuffer), roomId, onMessage, onStatus)
+          this.feed(new Uint8Array(ev.data as ArrayBuffer), roomId, onEvent, onStatus)
         } catch (e) {
           console.warn('[live] 弹幕包解析失败(忽略)', e)
         }
@@ -242,7 +243,7 @@ class BilibiliProvider implements LiveDanmakuProvider {
   private feed(
     chunk: Uint8Array,
     roomId: string,
-    onMessage: (m: DanmakuMessage) => void,
+    onEvent: (e: LiveEvent) => void,
     onStatus: (s: LiveStatus) => void,
   ): void {
     const merged = new Uint8Array(this.pending.length + chunk.length)
@@ -260,11 +261,12 @@ class BilibiliProvider implements LiveDanmakuProvider {
       }
       if (p.op === OP_MESSAGE) {
         const text = new TextDecoder().decode(p.body)
-        const json = JSON.parse(text) as { cmd?: string; info?: unknown }
+        const json = JSON.parse(text) as { cmd?: string; info?: unknown; data?: unknown }
         if (json.cmd === 'DANMU_MSG') {
           const d = parseDanmuMsg(json.info)
           if (d && d.content.trim()) {
-            onMessage({
+            onEvent({
+              kind: 'danmaku',
               platform: 'bilibili',
               roomId,
               userId: d.userId,
@@ -274,8 +276,23 @@ class BilibiliProvider implements LiveDanmakuProvider {
               guard: d.guard,
             })
           }
+        } else if (json.cmd === 'SEND_GIFT') {
+          // 礼物事件(连击按每次 SEND_GIFT 计):归一化为 GiftEvent 走免 AI 旁路。
+          // COMBO_SEND 等聚合消息与 INTERACT_WORD v1 仍忽略
+          const g = parseSendGift(json.data)
+          if (g) {
+            onEvent({
+              kind: 'gift',
+              platform: 'bilibili',
+              roomId,
+              userId: g.userId,
+              username: g.username,
+              timestamp: Date.now(),
+              gift: { name: g.giftName, count: g.count, coinType: g.coinType, totalCoin: g.totalCoin },
+            })
+          }
         }
-        // 其他 cmd(GIFT/INTERACT_WORD/…)v1 忽略
+        // 其他 cmd(GIFT 旧版/INTERACT_WORD/…)v1 忽略
       }
       // op3 人气值 / op8 认证应答:v1 只用来确认连通(onopen 后第一跳的应答),不单独上报
       if (p.op === OP_AUTH_REPLY) onStatus({ state: 'live' })

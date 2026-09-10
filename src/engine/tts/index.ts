@@ -59,6 +59,32 @@ const CHANNEL_PRIORITY: Record<TtsChannel, number> = {
 }
 
 let epoch = 0
+/** 已结束(播完/被打断/失败/静音)的最大 epoch */
+let endedEpoch = 0
+const endWaiters = new Set<{ at: number; resolve: () => void }>()
+
+function markEnded(my: number): void {
+  if (my > endedEpoch) endedEpoch = my
+  flushEndWaiters()
+}
+
+function flushEndWaiters(): void {
+  for (const w of endWaiters) {
+    // 被更新的句抢占(epoch 前移)或自身已结束,都算"这句完了"
+    if (w.at <= endedEpoch || w.at < epoch) {
+      endWaiters.delete(w)
+      w.resolve()
+    }
+  }
+}
+
+/** 等待某句语音结束:播完/被新句抢占/停止 都会放行 */
+function waitSpokenEnd(at: number): Promise<void> {
+  return new Promise((resolve) => {
+    endWaiters.add({ at, resolve })
+    flushEndWaiters()
+  })
+}
 let activeChannel: TtsChannel | null = null
 let activeSession: StreamSession | null = null
 let currentEl: HTMLAudioElement | null = null
@@ -242,6 +268,7 @@ function playViaElement(bytes: ArrayBuffer, my: number, channel: TtsChannel, gai
   currentEl = audio
   audio.onended = () => {
     URL.revokeObjectURL(url)
+    markEnded(my)
     if (currentEl === audio) {
       currentEl = null
       activeChannel = null
@@ -254,6 +281,7 @@ function playViaElement(bytes: ArrayBuffer, my: number, channel: TtsChannel, gai
     })
     .catch((err) => {
       console.warn('[tts] play 被拒(自动播放策略?)', err)
+      markEnded(my)
       if (currentEl === audio) {
         currentEl = null
         activeChannel = null
@@ -267,25 +295,36 @@ function streamingSupported(): boolean {
 }
 
 /** 说一句:停掉当前语音,起播这句。fire-and-forget,失败静默。
- *  channel 决定仲裁优先级(chat<performance<utility<proactive);勿扰时全静 */
-export function speak(speaker: Speaker, text: string, delivery?: string, channel: TtsChannel = 'chat'): void {
+ *  channel 决定仲裁优先级(chat<performance<utility<proactive);勿扰时全静。
+ *  返回领取的句序号(配合 speakTracked/waitSpokenEnd);-1 = 被更高优先级压制,本轮无声 */
+export function speak(speaker: Speaker, text: string, delivery?: string, channel: TtsChannel = 'chat'): number {
   // 低优先级不打断高优先级在播:直接丢弃本次请求(不改 epoch,不惊动当前语音)
   if (isBusy() && activeChannel && CHANNEL_PRIORITY[channel] < CHANNEL_PRIORITY[activeChannel]) {
     if (!warnedDemoted) {
       warnedDemoted = true
       console.warn(`[tts] ${channel} 请求被在播的 ${activeChannel} 压制,本次无声`)
     }
-    return
+    return -1
   }
   // 进函数即领序号:若先发的句子合成慢,完成时序号已落后,不会反向覆盖新句
   const my = ++epoch
+  flushEndWaiters()
   void (async () => {
     try {
       const cfg = await getConfig()
-      if (cfg.dnd) return // 勿扰:全静(提醒走常驻卡片兜底)
-      if (!cfg.voice.enabled) return
+      if (cfg.dnd) {
+        markEnded(my)
+        return // 勿扰:全静(提醒走常驻卡片兜底)
+      }
+      if (!cfg.voice.enabled) {
+        markEnded(my)
+        return
+      }
       const spec = await resolveLine(cfg, speaker, text, delivery)
-      if (!spec || my !== epoch) return
+      if (!spec || my !== epoch) {
+        markEnded(my)
+        return
+      }
       const gainDb = isLateNight() ? -8 : 0
 
       // 缓存命中 / 预取在途:整段 wav 直接播,零流式开销(演出逐句主要走这里)
@@ -324,6 +363,7 @@ export function speak(speaker: Speaker, text: string, delivery?: string, channel
       let sess: StreamSession | null = null
       try {
         sess = await streamPlayer.session(stream.meta, gainDb, () => {
+          markEnded(my)
           if (sess && activeSession === sess && epoch === my) {
             activeSession = null
             activeChannel = null
@@ -341,6 +381,7 @@ export function speak(speaker: Speaker, text: string, delivery?: string, channel
       } catch (e) {
         console.warn('[tts] 流式播放中断(静默降级)', e)
         sess.stop()
+        markEnded(my)
       }
       if (full) {
         memPut(spec.hash, full)
@@ -348,12 +389,15 @@ export function speak(speaker: Speaker, text: string, delivery?: string, channel
       } else if (activeSession === sess) {
         // 中断收尾:被顶掉时通道已归新 speak;异常中断时把"在播"状态归还
         activeSession = null
+        markEnded(my)
         if (epoch === my) activeChannel = null
       }
     } catch (e) {
       console.warn('[tts] 语音合成/播放失败(静默降级)', e)
+      markEnded(my)
     }
   })()
+  return my
 }
 
 /** 只合成不播放:预合成下一句,开播即有声 */
@@ -375,7 +419,17 @@ export function prefetchVoice(speaker: Speaker, text: string, delivery?: string)
 /** 停止当前语音(演出停止/切换时) */
 export function stopSpeaking(): void {
   epoch++
+  flushEndWaiters()
   clearActive()
+}
+
+/** 说一句并返回「这句语音结束」的信号:播完/被新句抢占/停止/静音/失败 都会放行。
+ *  返回 null = 被更高优先级压制,本轮无声(调用方按无语音节奏走)。
+ *  演出播放器用它做语音驱动的台词推进:文本停留到语音真正说完 */
+export function speakTracked(speaker: Speaker, text: string, delivery?: string, channel: TtsChannel = 'chat'): Promise<void> | null {
+  const my = speak(speaker, text, delivery, channel)
+  if (my < 0) return null
+  return waitSpokenEnd(my)
 }
 
 /** 设置页试听:固定台词走完整链路(含情感指令),channel=utility,可与切换供应商配合做同台词 A/B */

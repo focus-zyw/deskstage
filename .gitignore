@@ -38,3 +38,4 @@ scripts/diag_*.png
 public/sprites/b/_backup_old/
 scripts/*.wav
 scripts/*.mp3
+tmp/shots/

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent } from 'react'
+import type { ReactElement, ReactNode } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { listen } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
@@ -31,7 +32,7 @@ import { bondTierOf } from './engine/interactionRules'
 import { getBond, shiftBond } from './storage/storyStore'
 import { logInteraction, logInterrupt, logDrag, logDismiss, resetDismissals, type DismissableKind } from './storage/interactionStore'
 import { startScheduler, noteActivity, noteSpontaneous } from './runtime/proactiveScheduler'
-import { speak, prefetchVoice, stopSpeaking, cloneVoice, listCustomVoices, previewSample, providerById, PROVIDER_OPTIONS, type ClonedVoice } from './engine/tts'
+import { speak, speakTracked, prefetchVoice, stopSpeaking, cloneVoice, listCustomVoices, previewSample, providerById, PROVIDER_OPTIONS, type ClonedVoice } from './engine/tts'
 import { prefetchNext } from './engine/dialogPrefetch'
 import { WEBCHAT_SITES, webchatLogin, webchatProbe, webchatRestoreMain } from './engine/webchat'
 import { TOPIC_SEEDS, pickTopic } from './engine/topicSeeds'
@@ -45,7 +46,7 @@ import { appendHistory, loadRecentHistory, listEpisodes, deleteEpisodes, toggleF
 import { TranslationPanel, type TranslationInject } from './translation/TranslationPanel'
 import { extractTextFromClipboard } from './translation/ocr'
 import { startLiveSession, stopLiveSession, type LiveReply } from './runtime/liveDanmaku'
-import { startQrLogin, type QrLoginHandle } from './live/biliLogin'
+import { startQrLogin, type QrLoginHandle, type QrPhase } from './live/biliLogin'
 import QRCode from 'qrcode'
 import { CommandPanel } from './ui/CommandPanel'
 import { ChoicePanel } from './ui/ChoicePanel'
@@ -66,7 +67,10 @@ import {
   setDnd as setRuntimeDnd,
   setCharHidden as setRuntimeCharHidden,
 } from './runtime/runtimeMode'
-import { runUtilityTask } from './runtime/utilityTasks'
+import { runUtilityTask, useUtilityTasks } from './runtime/utilityTasks'
+import { showProp, dismissProps, clearProps } from './runtime/propEffects'
+import { preloadProps } from './stage/props'
+import { StageProps } from './stage/StageProps'
 import { ControlBar } from './ui/ControlBar'
 import { UtilityCards } from './ui/UtilityCard'
 import {
@@ -143,6 +147,280 @@ function withFinalePause(lines: DialogLine[]): DialogLine[] {
 /** apiKeys 的存储键:预设厂商用 id,自定义端点按 baseUrl 区分(与 configStore 注释约定一致) */
 function vendorKeyOf(id: string, baseUrl: string): string {
   return id === CUSTOM_VENDOR_ID ? `custom:${baseUrl.trim()}` : id
+}
+
+// ---------- 设置窗口:分页导航与搜索索引 ----------
+
+type SettingsTab =
+  | 'general'
+  | 'model'
+  | 'persona'
+  | 'voice'
+  | 'live'
+  | 'privacy'
+  | 'memory'
+  | 'memo'
+  | 'history'
+
+/** 左侧导航:偏好设置 / 数据管理 两组 */
+const SETTINGS_NAV: { group: string; items: { id: SettingsTab; label: string; icon: ReactElement }[] }[] = [
+  {
+    group: '偏好设置',
+    items: [
+      {
+        id: 'general',
+        label: '基础设置',
+        icon: (
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+            <line x1="4" y1="21" x2="4" y2="14" />
+            <line x1="4" y1="10" x2="4" y2="3" />
+            <line x1="12" y1="21" x2="12" y2="12" />
+            <line x1="12" y1="8" x2="12" y2="3" />
+            <line x1="20" y1="21" x2="20" y2="16" />
+            <line x1="20" y1="12" x2="20" y2="3" />
+            <line x1="1" y1="14" x2="7" y2="14" />
+            <line x1="9" y1="8" x2="15" y2="8" />
+            <line x1="17" y1="16" x2="23" y2="16" />
+          </svg>
+        ),
+      },
+      {
+        id: 'model',
+        label: 'AI 模型',
+        icon: (
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="5" y="5" width="14" height="14" rx="2" />
+            <rect x="9.5" y="9.5" width="5" height="5" />
+            <line x1="9" y1="2" x2="9" y2="5" />
+            <line x1="15" y1="2" x2="15" y2="5" />
+            <line x1="9" y1="19" x2="9" y2="22" />
+            <line x1="15" y1="19" x2="15" y2="22" />
+            <line x1="19" y1="9" x2="22" y2="9" />
+            <line x1="19" y1="15" x2="22" y2="15" />
+            <line x1="2" y1="9" x2="5" y2="9" />
+            <line x1="2" y1="15" x2="5" y2="15" />
+          </svg>
+        ),
+      },
+      {
+        id: 'persona',
+        label: '角色人设',
+        icon: (
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+            <circle cx="12" cy="7" r="4" />
+          </svg>
+        ),
+      },
+      {
+        id: 'voice',
+        label: '角色语音',
+        icon: (
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z" />
+            <path d="M19 11v1a7 7 0 0 1-14 0v-1" />
+            <line x1="12" y1="19" x2="12" y2="22" />
+          </svg>
+        ),
+      },
+      {
+        id: 'live',
+        label: '直播设置',
+        icon: (
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+            <circle cx="12" cy="12" r="2" />
+            <path d="M16.24 7.76a6 6 0 0 1 0 8.49M7.76 16.25a6 6 0 0 1 0-8.49M19.07 4.93a10 10 0 0 1 0 14.14M4.93 19.07a10 10 0 0 1 0-14.14" />
+          </svg>
+        ),
+      },
+      {
+        id: 'privacy',
+        label: '工具与隐私',
+        icon: (
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+          </svg>
+        ),
+      },
+    ],
+  },
+  {
+    group: '数据管理',
+    items: [
+      {
+        id: 'memory',
+        label: '记忆',
+        icon: (
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
+          </svg>
+        ),
+      },
+      {
+        id: 'memo',
+        label: '备忘',
+        icon: (
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="9 11 12 14 22 4" />
+            <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
+          </svg>
+        ),
+      },
+      {
+        id: 'history',
+        label: '历史',
+        icon: (
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="10" />
+            <polyline points="12 6 12 12 16 14" />
+          </svg>
+        ),
+      },
+    ],
+  },
+]
+
+/** 分页 → 所属分组(标题栏眉标与搜索结果面包屑用) */
+const TAB_GROUP: Record<SettingsTab, string> = {
+  general: '偏好设置',
+  model: '偏好设置',
+  persona: '偏好设置',
+  voice: '偏好设置',
+  live: '偏好设置',
+  privacy: '偏好设置',
+  memory: '数据管理',
+  memo: '数据管理',
+  history: '数据管理',
+}
+
+/** 搜索索引:每个可搜索的设置项 → 所在分页 + 卡片(点击结果跳转并高亮卡片) */
+const SETTINGS_SEARCH_INDEX: { tab: SettingsTab; card: string; label: string; keywords?: string }[] = [
+  // 基础设置
+  { tab: 'general', card: '显示与布局', label: '显示角色', keywords: '隐藏 角色 立绘 桌面' },
+  { tab: 'general', card: '显示与布局', label: '恢复默认布局', keywords: '位置 缩放 重置 拖动' },
+  { tab: 'general', card: '演出与主动行为', label: '空闲自动重放', keywords: '重放 历史 自动 分钟' },
+  { tab: 'general', card: '演出与主动行为', label: '主动程度', keywords: '频率 安静 平衡 热闹 闲聊' },
+  { tab: 'general', card: '演出与主动行为', label: '久坐提醒', keywords: '休息 番茄 健康 分钟' },
+  { tab: 'general', card: '环境与桌面', label: '桌面环境感知', keywords: '电量 应用 感知 分类' },
+  { tab: 'general', card: '环境与桌面', label: '显示左上角水印', keywords: '水印 直播 录屏' },
+  // AI 模型
+  { tab: 'model', card: '主模型', label: '厂商', keywords: 'deepseek 智谱 ollama 供应商' },
+  { tab: 'model', card: '主模型', label: 'API Key', keywords: '密钥 鉴权 token' },
+  { tab: 'model', card: '主模型', label: '接口地址', keywords: 'baseUrl 端点 地址' },
+  { tab: 'model', card: '主模型', label: '模型', keywords: 'deepseek-chat 模型名' },
+  { tab: 'model', card: '提取文字', label: 'OCR API Key', keywords: '视觉 识别 截图 文字 免费' },
+  { tab: 'model', card: '提取文字', label: 'OCR 接口地址', keywords: '视觉 识别 地址' },
+  { tab: 'model', card: '提取文字', label: 'OCR 视觉模型', keywords: 'glm 视觉 识别' },
+  // 角色人设
+  { tab: 'persona', card: '角色名字', label: '角色A的名字', keywords: '名字 称呼 名牌' },
+  { tab: 'persona', card: '角色名字', label: '角色B的名字', keywords: '名字 称呼 名牌' },
+  { tab: 'persona', card: '角色人设', label: '角色A的人设', keywords: '人设 性格 职业 背景' },
+  { tab: 'persona', card: '角色人设', label: '角色B的人设', keywords: '人设 性格 职业 背景' },
+  { tab: 'persona', card: '角色人设', label: '还原默认人设', keywords: '重置 出厂 内置' },
+  // 角色语音
+  { tab: 'voice', card: '语音与供应商', label: '角色语音开关', keywords: '朗读 配音 开关' },
+  { tab: 'voice', card: '语音与供应商', label: '语音供应商', keywords: '硅基流动 minimax cosyvoice' },
+  { tab: 'voice', card: '语音与供应商', label: '语音 API Key', keywords: 'siliconflow 密钥' },
+  { tab: 'voice', card: '语音与供应商', label: 'MiniMax API Key', keywords: 'minimax 密钥' },
+  { tab: 'voice', card: '语音与供应商', label: 'MiniMax GroupId', keywords: 'minimax 分组' },
+  { tab: 'voice', card: '语音与供应商', label: 'MiniMax 模型', keywords: 'turbo hd 高质' },
+  { tab: 'voice', card: '音色与表现', label: '情感指令', keywords: '情感 语气 情绪' },
+  { tab: 'voice', card: '音色与表现', label: '角色甲音色', keywords: '声音 音色 分配' },
+  { tab: 'voice', card: '音色与表现', label: '角色乙音色', keywords: '声音 音色 分配' },
+  { tab: 'voice', card: '音色与表现', label: '场外客串音色', keywords: '第三人 画外音' },
+  { tab: 'voice', card: '音色与表现', label: '克隆音色', keywords: '克隆 录音 样本' },
+  { tab: 'voice', card: '音色与表现', label: '试听', keywords: '预览 试听' },
+  // 直播设置
+  { tab: 'live', card: '直播间', label: '直播平台', keywords: 'bilibili B站 抖音' },
+  { tab: 'live', card: '直播间', label: '直播间号', keywords: '房间号 开播 弹幕' },
+  { tab: 'live', card: 'B站登录', label: 'B站 Cookie', keywords: 'sessdata 登录 凭证 舰长 打码' },
+  { tab: 'live', card: 'B站登录', label: '扫码登录B站', keywords: '二维码 扫码 登录' },
+  // 工具与隐私
+  { tab: 'privacy', card: '截屏', label: '全局截屏快捷键', keywords: '截图 快捷键 热键 框选' },
+  { tab: 'privacy', card: '截屏', label: '截屏/录屏时排除角色', keywords: '隐私 排除 录屏 隐藏' },
+  { tab: 'privacy', card: '网页版生成', label: '主演出改用网页模型生成', keywords: '实验 网页 deepseek 豆包' },
+  { tab: 'privacy', card: '网页版生成', label: '网页模型站点', keywords: 'deepseek 豆包 站点' },
+  { tab: 'privacy', card: '网页版生成', label: '网页窗口登录', keywords: 'edge 登录 窗口' },
+  { tab: 'privacy', card: '隐私与数据', label: '隐私与数据说明', keywords: '本机 上传 隐私 安全' },
+  // 记忆
+  { tab: 'memory', card: '使用者画像', label: '你的称呼', keywords: '画像 称呼 名字' },
+  { tab: 'memory', card: '使用者画像', label: '职业/身份', keywords: '画像 职业 身份' },
+  { tab: 'memory', card: '使用者画像', label: '喜欢/不喜欢', keywords: '画像 喜好 偏好' },
+  { tab: 'memory', card: '使用者画像', label: '雷区', keywords: '禁聊 话题 避免' },
+  { tab: 'memory', card: '记住的事', label: '记住的事', keywords: '事实 置顶 遗忘 清空' },
+  { tab: 'memory', card: '角色世界', label: '角色世界', keywords: '老梗 事件线 共同记忆' },
+  { tab: 'memory', card: '连续剧情', label: '连续剧情', keywords: '剧情线 多集 下一拍' },
+  // 备忘
+  { tab: 'memo', card: '添加备忘', label: '添加备忘', keywords: '待办 提醒 截止时间' },
+  { tab: 'memo', card: '备忘列表', label: '备忘列表', keywords: '已完成 清除 待办' },
+  // 历史
+  { tab: 'history', card: '演出历史', label: '演出历史', keywords: '回放 收藏 删除 历史' },
+]
+
+// ---------- 设置窗口的小部件 ----------
+
+/** 卡片:同组设置项的容器;card 是搜索跳转的定位键(同页内唯一),flash 时高亮 */
+function SettingsCard(props: {
+  card: string
+  flash?: string | null
+  title: string
+  desc?: string
+  action?: ReactNode
+  children: ReactNode
+}) {
+  const { card, flash, title, desc, action, children } = props
+  return (
+    <section className={`set-card${flash === card ? ' flash' : ''}`} data-card={card}>
+      <div className="set-card-head">
+        <h2>{title}</h2>
+        {desc && <span className="set-card-desc">{desc}</span>}
+        {action && <span className="set-card-action">{action}</span>}
+      </div>
+      {children}
+    </section>
+  )
+}
+
+/** 一行设置:左侧标题+说明,右侧控件 */
+function SetLine(props: { title: string; hint?: string; children: ReactNode }) {
+  const { title, hint, children } = props
+  return (
+    <div className="set-line">
+      <div className="set-copy">
+        <span className="set-label">{title}</span>
+        {hint && <span className="set-hint">{hint}</span>}
+      </div>
+      <div className="set-control">{children}</div>
+    </div>
+  )
+}
+
+/** 竖排字段:标签在上,控件在下(文本输入/下拉/文本域) */
+function SetField(props: { label: string; htmlFor?: string; hint?: string; children: ReactNode }) {
+  const { label, htmlFor, hint, children } = props
+  return (
+    <div className="set-field">
+      <label htmlFor={htmlFor}>{label}</label>
+      {children}
+      {hint && <span className="set-hint">{hint}</span>}
+    </div>
+  )
+}
+
+/** 开关:紫色仅用于开关等交互强调态 */
+function SetSwitch(props: { checked: boolean; label?: string; onChange: (v: boolean) => void }) {
+  const { checked, label, onChange } = props
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      title={label}
+      className={`set-switch${checked ? ' on' : ''}`}
+      onClick={() => onChange(!checked)}
+    />
+  )
 }
 
 function fmtTime(ts: number): string {
@@ -473,8 +751,13 @@ function App() {
   // 即存反馈:最近一次自动保存/失败的时间戳(渲染 2.5s 后自动消失)
   const [savedTick, setSavedTick] = useState(0)
   const [saveError, setSaveError] = useState(false)
-  // 设置面板分页:常规 / 语音 / 记忆 / 历史
-  const [settingsTab, setSettingsTab] = useState<'general' | 'model' | 'persona' | 'voice' | 'memory' | 'memo' | 'history'>('general')
+  // 设置窗口分页:偏好设置(基础/模型/人设/语音/直播/工具隐私)+ 数据管理(记忆/备忘/历史)
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>('general')
+  // 设置搜索:关键词非空时右侧改为搜索结果列表,点击结果跳转分页并高亮卡片
+  const [settingsQuery, setSettingsQuery] = useState('')
+  const [flashCard, setFlashCard] = useState<string | null>(null)
+  const flashTimer = useRef(0)
+  const setBodyRef = useRef<HTMLDivElement>(null)
   // 记忆系统的机器事实列表(设置"记忆"页展示/管理)
   const [memoryFacts, setMemoryFacts] = useState<MemoryFact[]>([])
   const [clearMemArmed, setClearMemArmed] = useState(false)
@@ -588,7 +871,8 @@ function App() {
         setSpeaking(line.speaker)
         setDelivery((d) => ({ ...d, [line.speaker]: line.delivery }))
         if (nowPlaying.current) nowPlaying.current.index = index
-        speak(line.speaker, line.text, line.delivery, 'performance') // 语音失败静默,不影响气泡
+        // 语音结束信号交给播放器:等语音真正说完再推进下一句(静音/失败自动回退估算节奏)
+        const audioDone = speakTracked(line.speaker, line.text, line.delivery, 'performance')
         const next = playingLines.current[index + 1]
         if (next) prefetchVoice(next.speaker, next.text, next.delivery)
         // 听者同步反应:LLM 指定听者动作(害羞/大笑/欲言又止…),对手戏更活
@@ -601,6 +885,7 @@ function App() {
           window.clearTimeout(pulseTimer.current)
           pulseTimer.current = window.setTimeout(() => setPulseFor(null), 600)
         }
+        return audioDone
       },
       onLineEnd: (speaker) => {
         const listener: Speaker = speaker === 'A' ? 'B' : 'A'
@@ -677,11 +962,38 @@ function App() {
 
   // ---------- 翻译:OCR 链路对接与外围互动 ----------
 
+  // ---------- 道具桥:任务/翻译状态 → 角色旁工具卡片道具 ----------
+  // 单一 seam:订阅 utilityTasks 与翻译面板 onState,统一映射为 'utility' 单槽道具;
+  // 不在各 runUtilityTask 调用点散布 showProp。截图翻译的任务 done 只代表 OCR 完成,
+  // 翻译阶段由面板 onState 接力(running=翻译卡),真正完成才上 success。
+  const utilityTasks = useUtilityTasks()
+  const utilPropSeen = useRef(new Map<string, string>())
+  useEffect(() => {
+    for (const t of utilityTasks) {
+      if (utilPropSeen.current.get(t.id) === t.status) continue
+      utilPropSeen.current.set(t.id, t.status)
+      if (t.kind === 'capture-translate' && t.status === 'done') continue // 翻译还在跑,接力给面板
+      if (t.kind === 'live') continue // 直播是常驻状态卡,不挂道具
+      const prop = t.status === 'running' ? 'magnifier' : t.status === 'error' ? 'question' : 'success'
+      showProp(t.actor, prop, { key: 'utility', durationMs: t.status === 'running' ? 0 : undefined })
+    }
+  }, [utilityTasks])
+
+  /** 翻译面板状态 → 工具卡道具:running=翻译卡(常驻),done=success,error=question,取消=idle 撤卡 */
+  function onTranslateState(s: 'running' | 'done' | 'error' | 'idle') {
+    if (s === 'idle') {
+      dismissProps('utility')
+      return
+    }
+    const prop = s === 'running' ? 'translation-card' : s === 'error' ? 'question' : 'success'
+    showProp('A', prop, { key: 'utility', durationMs: s === 'running' ? 0 : undefined })
+  }
+
   /** 剪贴板图片 OCR → 填入翻译面板(工具循环:进度与结果走右上浮层卡,角色气泡不再播报)。
    *  AI 视觉模型优先、本地 OCR 兜底(链路在 translation/ocr.ts)。
    *  auto=true(截图翻译入口)时面板填入后立即翻译;命令/按钮入口只填入,让用户先看/改识别结果 */
   function startOcrIntoTranslation(auto: boolean) {
-    void runUtilityTask(auto ? 'capture-translate' : 'ocr', auto ? '截图翻译' : '提取文字', async (report) => {
+    void runUtilityTask(auto ? 'capture-translate' : 'ocr', auto ? '截图翻译' : '提取文字', 'A', async (report) => {
       const r = await extractTextFromClipboard(report)
       openOverlayExclusive('translation')
       setTrInject({ text: r.lines.join('\n'), nonce: Date.now(), auto })
@@ -731,6 +1043,7 @@ function App() {
   /** 弹幕回复呈现:复用聊天通道的气泡+动作+TTS 节奏(stream 通道) */
   const liveReplyTimer = useRef(0)
   function presentLiveReply(r: LiveReply) {
+    setTopActor(r.speaker) // 呈现者置顶:气泡与道具不被另一角色压住
     setBubble(r.speaker === 'A' ? { A: r.text, B: null, C: null } : { A: null, B: r.text, C: null })
     setAction((a) => ({ ...a, [r.speaker]: r.action || 'talk' }))
     setSpeaking(r.speaker)
@@ -799,21 +1112,14 @@ function App() {
     setQrLogin(null)
   }
 
-  /** 开播:前置校验(密钥/直播间号/平台)→ 清场 → streaming 态 → 连接弹幕源 + 启动管线 */
+  /** 开播:前置校验(直播间号/平台)→ 清场 → streaming 态 → 连接弹幕源 + 启动管线。
+   *  API Key 不再拦截:礼物互动完全免 AI,无 Key 照常收礼物;只有弹幕 AI 回复不可用 */
   function startStreaming() {
     void (async () => {
       const cfg = await getConfig()
-      if (!cfg.apiKey.trim()) {
-        setBubble({ A: '还没填 API Key,点 ⚙ 去设置里填一下~', B: null, C: null })
-        setAction({ A: 'surprise', B: 'idle', C: 'idle' })
-        window.setTimeout(() => {
-          setBubble((b) => (b.A?.startsWith('还没填') ? { A: null, B: null, C: null } : b))
-          setAction((a) => ({ ...a, A: 'idle' }))
-        }, 2600)
-        return
-      }
+      const hasApiKey = Boolean(cfg.apiKey.trim())
       if (!cfg.live.roomId.trim()) {
-        setBubble({ A: '先到 设置 → 常规 → 主播模式 里填直播间号~', B: null, C: null })
+        setBubble({ A: '先到 设置 → 直播设置 里填直播间号~', B: null, C: null })
         setAction({ A: 'surprise', B: 'idle', C: 'idle' })
         window.setTimeout(() => {
           setBubble((b) => (b.A?.startsWith('先到 设置') ? { A: null, B: null, C: null } : b))
@@ -836,8 +1142,12 @@ function App() {
       setAction({ A: 'idle', B: 'idle', C: 'idle' })
 
       beginStreaming()
+      // 无 Key 提示一句:礼物互动照常,弹幕 AI 回复不可用(管线侧同步静默禁用)
+      if (!hasApiKey) {
+        showPoke('A', '还没填 API Key,读弹幕回复先关掉,礼物互动照常~', 'talk', 3200)
+      }
       // 连接状态走常驻任务卡(exec 挂起到下播才落定,done 卡 6s 后自动消失)
-      void runUtilityTask('live', '直播', (report) => {
+      void runUtilityTask('live', '直播', 'A', (report) => {
         return new Promise<string>((resolve) => {
           liveStopRef.current = () => {
             liveStopRef.current = null
@@ -864,7 +1174,7 @@ function App() {
 
   /** 命令面板:跳到备忘页手填(时间没解析出来时的兜底入口) */
   function openMemoSettings() {
-    setSettingsTab('memo')
+    switchSettingsTab('memo')
     void openSettings()
   }
 
@@ -920,6 +1230,7 @@ function App() {
   useEffect(() => {
     void initPointerManager()
     preloadSprites(Object.values(SPRITE_SETS)) // 预热立绘,演出中切换动作零延迟
+    preloadProps() // 预热道具 SVG,首次礼物/工具流程不闪
     void getConfig().then((c) => {
       setForm(c) // form 与磁盘配置同步:兴趣/画像等在播放流程里也会读,不能等打开设置才回填
       applyChars(c.characters)
@@ -1334,9 +1645,10 @@ function App() {
 
   /** 停止一切：中止生成 + 停止演出 + 停语音 + 复位 */
   function stopEverything() {
-    // 主播模式在播:先下播(断弹幕源 + 直播任务卡落定)
+    // 主播模式在播:先下播(断弹幕源 + 直播任务卡落定);道具层一并清空(不留残影与 timer)
     liveStopRef.current?.()
     stopLiveSession()
+    clearProps()
     // 中途按停止 = 负反馈(演过 80% 以上视为看完,不罚);正在生成时无账可记
     const np = nowPlaying.current
     if (np && np.total > 0 && np.index / np.total < 0.8) bumpTopicSkipped(np.topic)
@@ -1476,6 +1788,38 @@ function App() {
         .catch((e) => console.warn('克隆音色列表拉取失败(静默)', e))
     }
   }
+
+  /** 切换分页:数据管理三页的列表需要现拉最新数据 */
+  function switchSettingsTab(tab: SettingsTab) {
+    setSettingsTab(tab)
+    if (tab === 'memory') {
+      void refreshMemoryFacts()
+      void refreshStory()
+    } else if (tab === 'memo') {
+      void refreshMemos()
+    } else if (tab === 'history') {
+      void refreshEpisodes()
+    }
+  }
+
+  /** 搜索结果跳转:清关键词 → 切分页 → 高亮目标卡片并滚动到位 */
+  function jumpToSetting(tab: SettingsTab, card: string) {
+    setSettingsQuery('')
+    switchSettingsTab(tab)
+    setFlashCard(card)
+    window.clearTimeout(flashTimer.current)
+    flashTimer.current = window.setTimeout(() => setFlashCard(null), 2200)
+  }
+
+  // 高亮卡片渲染完成后滚动到可视区(切分页时内容尚未挂载,稍等一拍)
+  useEffect(() => {
+    if (!flashCard) return
+    const t = window.setTimeout(() => {
+      const el = setBodyRef.current?.querySelector(`[data-card="${CSS.escape(flashCard)}"]`)
+      el?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+    }, 40)
+    return () => window.clearTimeout(t)
+  }, [flashCard])
 
   /** 保存配置：落盘 + 刷新缓存，下一次生成即生效。
    *  只写设置面板拥有的字段(连接信息/画像/自动重放/语音),布局、主题等
@@ -1938,6 +2282,15 @@ function App() {
   // 显示用动作:打瞌睡仅覆盖 idle 态,任何明确动作优先
   const displayAction = (who: Speaker) =>
     sleepyOn && action[who] === 'idle' ? 'sleepy' : action[who]
+  // 设置搜索:标签/卡片/关键词任一包含即命中(不区分大小写)
+  const settingsQueryNorm = settingsQuery.trim().toLowerCase()
+  const searchHits = settingsQueryNorm
+    ? SETTINGS_SEARCH_INDEX.filter((e) =>
+        `${e.label} ${e.card} ${e.keywords ?? ''}`.toLowerCase().includes(settingsQueryNorm),
+      )
+    : []
+  const currentTabLabel =
+    SETTINGS_NAV.flatMap((g) => g.items).find((i) => i.id === settingsTab)?.label ?? '设置'
 
   return (
     <div
@@ -1979,1148 +2332,1200 @@ function App() {
       />
 
       {settingsOpen && (
-        <div
-          ref={panelRef}
-          className="settings-panel"
-          style={{ left: `${Math.min(88, Math.max(12, ctrlBar.xPct))}%`, top: ctrlBar.top + 46 }}
-        >
-          <div className="panel-head">
-            <div className="panel-tabs">
-              <button
-                className={`panel-tab${settingsTab === 'general' ? ' on' : ''}`}
-                onClick={() => setSettingsTab('general')}
-              >
-                常规
-              </button>
-              <button
-                className={`panel-tab${settingsTab === 'model' ? ' on' : ''}`}
-                onClick={() => setSettingsTab('model')}
-              >
-                模型
-              </button>
-              <button
-                className={`panel-tab${settingsTab === 'persona' ? ' on' : ''}`}
-                onClick={() => setSettingsTab('persona')}
-              >
-                人设
-              </button>
-              <button
-                className={`panel-tab${settingsTab === 'voice' ? ' on' : ''}`}
-                onClick={() => setSettingsTab('voice')}
-              >
-                语音
-              </button>
-              <button
-                className={`panel-tab${settingsTab === 'memory' ? ' on' : ''}`}
-                onClick={() => {
-                  setSettingsTab('memory')
-                  void refreshMemoryFacts()
-                  void refreshStory()
-                }}
-              >
-                记忆
-              </button>
-              <button
-                className={`panel-tab${settingsTab === 'memo' ? ' on' : ''}`}
-                onClick={() => {
-                  setSettingsTab('memo')
-                  void refreshMemos()
-                }}
-              >
-                备忘
-              </button>
-              <button
-                className={`panel-tab${settingsTab === 'history' ? ' on' : ''}`}
-                onClick={() => {
-                  setSettingsTab('history')
-                  void refreshEpisodes()
-                }}
-              >
-                历史
-              </button>
+        <div ref={panelRef} className="settings-window">
+          <aside className="set-side">
+            <div className="set-brand">
+              <span className="set-brand-mark" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="3" />
+                  <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33 1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82 1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+                </svg>
+              </span>
+              <strong>设置</strong>
             </div>
-            <button
-              className={`panel-btn danger${exitArmed ? ' armed' : ''}`}
-              title={exitArmed ? '再点一次确认退出' : '退出程序(3 秒内再点确认)'}
-              onClick={requestExit}
-            >
-              {exitArmed ? '确认退出' : '退出'}
-            </button>
-          </div>
-          {settingsTab === 'model' && (
-            <>
-          <div className="settings-sep">
-            <span>主模型(对话/演出/台词生成)</span>
-          </div>
-          <div className="settings-row">
-            <label htmlFor="cfg-vendor">厂商</label>
-            <select
-              id="cfg-vendor"
-              value={vendorId}
-              onChange={(e) => {
-                const id = e.target.value
-                // 当前输入的 key 存回旧厂商的键,再从新厂商的键带出(没有则空)
-                const drafts = { ...keyDrafts, [vendorKeyOf(vendorId, form.baseUrl)]: form.apiKey }
-                setKeyDrafts(drafts)
-                setVendorId(id)
-                let baseUrl = form.baseUrl
-                let model = form.model
-                if (id !== CUSTOM_VENDOR_ID) {
-                  const v = VENDORS.find((x) => x.id === id)!
-                  baseUrl = v.baseUrl
-                  model = v.models[0] ?? ''
-                }
-                const apiKey = drafts[vendorKeyOf(id, baseUrl)] ?? ''
-                setForm({ ...form, baseUrl, model, apiKey })
-                saveField(
-                  {
-                    baseUrl,
-                    model,
-                    apiKey,
-                    apiKeys: { ...form.apiKeys, ...drafts },
-                  },
-                  true,
-                )
-              }}
-            >
-              {VENDORS.map((v) => (
-                <option key={v.id} value={v.id}>
-                  {v.label}
-                </option>
-              ))}
-              <option value={CUSTOM_VENDOR_ID}>本地 / 自定义</option>
-            </select>
-          </div>
-          <div className="settings-row">
-            <label htmlFor="cfg-key" title="每个厂商(自定义按接口地址)分别记忆,切换自动带出">
-              API Key{vendorId === CUSTOM_VENDOR_ID ? '(本地服务可为空)' : ''}
-            </label>
-            <input
-              id="cfg-key"
-              type="password"
-              value={form.apiKey}
-              onChange={(e) => {
-                const v = e.target.value
-                setForm({ ...form, apiKey: v })
-                setKeyDrafts((d) => ({ ...d, [vendorKeyOf(vendorId, form.baseUrl)]: v }))
-                saveField({ apiKey: v, apiKeys: { ...form.apiKeys, [vendorKeyOf(vendorId, form.baseUrl)]: v } })
-              }}
-              onBlur={() => saveField({}, true)}
-            />
-          </div>
-          <div className="settings-row">
-            <label htmlFor="cfg-url">接口地址</label>
-            <input
-              id="cfg-url"
-              value={form.baseUrl}
-              placeholder={
-                vendorId === CUSTOM_VENDOR_ID ? 'http://localhost:11434/v1' : 'https://api.deepseek.com/v1'
-              }
-              onChange={(e) => {
-                // 自定义端点键含 baseUrl:先把 key 存回旧地址的键,换地址互不串
-                const drafts = { ...keyDrafts, [vendorKeyOf(vendorId, form.baseUrl)]: form.apiKey }
-                setKeyDrafts(drafts)
-                setForm({ ...form, baseUrl: e.target.value })
-                saveField({ baseUrl: e.target.value, apiKeys: { ...form.apiKeys, ...drafts } })
-              }}
-            />
-          </div>
-          <div className="settings-row">
-            <label htmlFor="cfg-model">模型</label>
-            {vendorId === CUSTOM_VENDOR_ID ? (
+            <div className="set-search">
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+                <circle cx="11" cy="11" r="7" />
+                <line x1="16.5" y1="16.5" x2="21" y2="21" />
+              </svg>
               <input
-                id="cfg-model"
-                value={form.model}
-                placeholder="如 qwen2.5:7b(Ollama 模型名)"
-                onChange={(e) => {
-                  setForm({ ...form, model: e.target.value })
-                  saveField({ model: e.target.value })
-                }}
-              />
-            ) : (
-              <select
-                id="cfg-model"
-                value={form.model}
-                onChange={(e) => {
-                  setForm({ ...form, model: e.target.value })
-                  saveField({ model: e.target.value }, true)
-                }}
-              >
-                {(VENDORS.find((v) => v.id === vendorId)?.models ?? []).map((m) => (
-                  <option key={m} value={m}>
-                    {m}
-                  </option>
-                ))}
-              </select>
-            )}
-          </div>
-            </>
-          )}
-          {settingsTab === 'persona' && (
-            <>
-          <div className="settings-row">
-            <label htmlFor="cfg-name-a">角色A的名字(名牌与台词称呼)</label>
-            <input
-              id="cfg-name-a"
-              value={form.names.a}
-              maxLength={12}
-              onChange={(e) => {
-                const next = { ...form.names, a: e.target.value }
-                setForm({ ...form, names: next })
-                saveField({ names: next })
-              }}
-            />
-          </div>
-          <div className="settings-row">
-            <label htmlFor="cfg-name-b">角色B的名字</label>
-            <input
-              id="cfg-name-b"
-              value={form.names.b}
-              maxLength={12}
-              onChange={(e) => {
-                const next = { ...form.names, b: e.target.value }
-                setForm({ ...form, names: next })
-                saveField({ names: next })
-              }}
-            />
-          </div>
-            </>
-          )}
-          {settingsTab === 'model' && (
-            <>
-          <div className="settings-sep">
-            <span>提取文字(AI 视觉模型优先,失败自动本地兜底;智谱 glm-4.6v-flash 免费,与主模型相互独立)</span>
-          </div>
-          <div className="settings-row">
-            <label htmlFor="cfg-ocr-key" title="bigmodel.cn 注册即得;留空 = 只用本地识别">OCR API Key(留空 = 只用本地识别)</label>
-            <input
-              id="cfg-ocr-key"
-              type="password"
-              value={form.ocr.apiKey}
-              onChange={(e) => {
-                const ocr = { ...form.ocr, apiKey: e.target.value }
-                setForm({ ...form, ocr })
-                saveField({ ocr })
-              }}
-            />
-          </div>
-          <div className="settings-row">
-            <label htmlFor="cfg-ocr-url">OCR 接口地址(OpenAI 兼容)</label>
-            <input
-              id="cfg-ocr-url"
-              value={form.ocr.baseUrl}
-              onChange={(e) => {
-                const ocr = { ...form.ocr, baseUrl: e.target.value }
-                setForm({ ...form, ocr })
-                saveField({ ocr })
-              }}
-            />
-          </div>
-          <div className="settings-row">
-            <label htmlFor="cfg-ocr-model">OCR 视觉模型</label>
-            <input
-              id="cfg-ocr-model"
-              value={form.ocr.model}
-              placeholder="glm-4.6v-flash"
-              onChange={(e) => {
-                const ocr = { ...form.ocr, model: e.target.value }
-                setForm({ ...form, ocr })
-                saveField({ ocr })
-              }}
-            />
-          </div>
-            </>
-          )}
-          {settingsTab === 'persona' && (
-            <>
-          <div className="settings-sep">
-            <span>人设(自由编辑,输入后自动保存并采纳;"还原默认"恢复出厂搭档)</span>
-          </div>
-          <div className="settings-row">
-            <label htmlFor="cfg-persona-a">{charNames.A} 的人设(性别/职业/性格/日常素材,自由发挥)</label>
-            <textarea
-              id="cfg-persona-a"
-              rows={3}
-              value={form.persona.a || defaultPersonaText('A')}
-              onChange={(e) => {
-                setForm({ ...form, persona: { ...form.persona, a: e.target.value } })
-                saveField({ persona: { ...form.persona, a: e.target.value } })
-              }}
-            />
-          </div>
-          <div className="settings-row">
-            <label htmlFor="cfg-persona-b">{charNames.B} 的人设</label>
-            <textarea
-              id="cfg-persona-b"
-              rows={3}
-              value={form.persona.b || defaultPersonaText('B')}
-              onChange={(e) => {
-                setForm({ ...form, persona: { ...form.persona, b: e.target.value } })
-                saveField({ persona: { ...form.persona, b: e.target.value } })
-              }}
-            />
-          </div>
-          <div className="settings-row">
-            <div className="settings-hint">清空输入框 = 恢复该角色的内置人设</div>
-            <button
-              className="panel-btn"
-              onClick={() => {
-                setForm({
-                  ...form,
-                  persona: { a: defaultPersonaText('A'), b: defaultPersonaText('B') },
-                })
-                saveField({ persona: { a: defaultPersonaText('A'), b: defaultPersonaText('B') } }, true)
-              }}
-            >
-              还原默认人设
-            </button>
-          </div>
-            </>
-          )}
-          {settingsTab === 'general' && (
-            <>
-          <div className="settings-row">
-            <label htmlFor="cfg-show">显示角色</label>
-            <input
-              id="cfg-show"
-              type="checkbox"
-              checked={!charHidden}
-              onChange={(e) => setCharsHidden(!e.target.checked)}
-            />
-          </div>
-          <div className="settings-row">
-            <div className="settings-hint">拖动角色可移动 · 悬停滚轮缩放(两角色同步)</div>
-            <button
-              className="panel-btn"
-              onClick={() => {
-                applyChars(DEFAULT_CONFIG.characters, 'now')
-                applyCtrlBar(DEFAULT_CONFIG.ctrlBar, 'now')
-              }}
-            >
-              恢复默认布局
-            </button>
-          </div>
-          <div className="settings-sep">
-            <span>演出与主动行为</span>
-          </div>
-          <div className="settings-row">
-            <label htmlFor="cfg-replay">空闲自动重放(分钟,留空 = 关闭)</label>
-            <input
-              id="cfg-replay"
-              type="number"
-              min={1}
-              max={1440}
-              step={1}
-              placeholder="留空则不自动重放"
-              value={form.autoReplayMin || ''}
-              onChange={(e) => {
-                const raw = e.target.value
-                // 空串/非法输入按 0(关闭)存,不往输入框里塞 0 硬占位
-                const v = raw.trim() === '' ? 0 : Math.max(0, Number(raw) || 0)
-                setForm({ ...form, autoReplayMin: v })
-                saveField({ autoReplayMin: v })
-              }}
-            />
-          </div>
-          <div className="settings-row">
-            <label>主动程度(自发闲聊/提醒/重放的频率上限,每小时)</label>
-            <div className="tr-styles">
-              {([['quiet', '安静(3)'], ['balanced', '平衡(6)'], ['lively', '热闹(12)']] as const).map(
-                ([v, label]) => (
-                  <button
-                    key={v}
-                    className={`tr-style-btn${form.proactivity === v ? ' on' : ''}`}
-                    onClick={() => {
-                      setForm({ ...form, proactivity: v })
-                      saveField({ proactivity: v }, true)
-                    }}
-                  >
-                    {label}
-                  </button>
-                ),
-              )}
-            </div>
-          </div>
-          <div className="settings-row">
-            <div className="settings-hint">使用者的兴趣爱好在"记忆"页维护 — 日常闲聊会偶尔聊到</div>
-          </div>
-          <div className="settings-row">
-            <label htmlFor="cfg-env">桌面环境感知(电量/前台应用分类等,仅本机分类,不上传)</label>
-            <input
-              id="cfg-env"
-              type="checkbox"
-              checked={form.envSense}
-              onChange={(e) => {
-                const next = e.target.checked
-                setForm({ ...form, envSense: next })
-                saveField({ envSense: next }, true)
-              }}
-            />
-          </div>
-          <div className="settings-row">
-            <label htmlFor="cfg-break-enable">久坐提醒(连续活跃 X 分钟后角色提醒休息)</label>
-            <div className="shot-key-row">
-              <input
-                id="cfg-break-enable"
-                type="checkbox"
-                checked={form.breakReminder.enabled}
-                onChange={(e) => {
-                  const next = { ...form.breakReminder, enabled: e.target.checked }
-                  setForm({ ...form, breakReminder: next })
-                  saveField({ breakReminder: next }, true)
-                }}
-              />
-              <input
-                type="number"
-                min={15}
-                max={120}
-                step={5}
-                className="break-min-input"
-                title="连续活跃多少分钟后提醒(15~120)"
-                value={form.breakReminder.minutes}
-                onChange={(e) => {
-                  const next = {
-                    ...form.breakReminder,
-                    minutes: Math.min(120, Math.max(15, Number(e.target.value) || 45)),
+                type="text"
+                value={settingsQuery}
+                placeholder="搜索设置…"
+                onChange={(e) => setSettingsQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') {
+                    e.stopPropagation() // 先清搜索词,别把整个设置窗口关了
+                    setSettingsQuery('')
+                  } else if (e.key === 'Enter' && searchHits[0]) {
+                    jumpToSetting(searchHits[0].tab, searchHits[0].card)
                   }
-                  setForm({ ...form, breakReminder: next })
-                  saveField({ breakReminder: next })
                 }}
               />
-              <span>分钟后</span>
             </div>
-          </div>
-          <div className="settings-row">
-            <label htmlFor="cfg-mark">显示左上角水印</label>
-            <input
-              id="cfg-mark"
-              type="checkbox"
-              checked={showWatermark}
-              onChange={(e) => {
-                setShowWatermark(e.target.checked)
-                saveField({ showWatermark: e.target.checked }, true)
-              }}
-            />
-          </div>
-          <div className="settings-sep">
-            <span>主播模式(直播弹幕互动;点"主播"→"开播"启动,平台 v1 仅B站可用)</span>
-          </div>
-          <div className="settings-row">
-            <label htmlFor="cfg-live-platform">直播平台</label>
-            <select
-              id="cfg-live-platform"
-              value={form.live.platform}
-              onChange={(e) => {
-                const live = { ...form.live, platform: e.target.value as 'bilibili' | 'douyin' }
-                setForm({ ...form, live })
-                saveField({ live })
-              }}
-            >
-              <option value="bilibili">B站</option>
-              <option value="douyin" disabled>
-                抖音(即将支持)
-              </option>
-            </select>
-          </div>
-          <div className="settings-row">
-            <label htmlFor="cfg-live-room" title="直播间网址 live.bilibili.com/ 后面的数字">直播间号(B站房间号)</label>
-            <input
-              id="cfg-live-room"
-              value={form.live.roomId}
-              placeholder="如 21452505"
-              inputMode="numeric"
-              onChange={(e) => {
-                const roomId = e.target.value.replace(/\D/g, '').slice(0, 32)
-                const live = { ...form.live, roomId }
-                setForm({ ...form, live })
-                saveField({ live })
-              }}
-            />
-          </div>
-          <div className="settings-row">
-            <label htmlFor="cfg-live-cookie" title="浏览器登录B站后 F12 → 应用 → Cookie 里的 SESSDATA;只填值或整串 Cookie 都行。建议用小号">B站 Cookie(选填,不填观众名被打码)</label>
-            <input
-              id="cfg-live-cookie"
-              type="password"
-              value={form.live.cookie}
-              placeholder="SESSDATA 值或完整 Cookie 串,建议小号"
-              onChange={(e) => {
-                const live = { ...form.live, cookie: e.target.value.trim().slice(0, 600) }
-                setForm({ ...form, live })
-                saveField({ live })
-              }}
-            />
-          </div>
-          <div className="settings-row">
-            <div className="settings-hint">填 Cookie 后以该账号身份连弹幕服务器,可看到观众真实用户名与舰长等级;不填功能照常,只是名字显示为"某***"打码样式</div>
-          </div>
-          <div className="settings-row">
-            <div className="settings-hint">不想手贴?点下方扫码,用手机B站App扫一下即可自动回填</div>
-            {qrLogin ? (
-              <button className="panel-btn" onClick={cancelQrLogin}>
-                取消扫码
-              </button>
-            ) : (
-              <button className="panel-btn" onClick={beginQrLogin}>
-                扫码登录B站
-              </button>
-            )}
-          </div>
-          {qrLogin && (
-            <div className="settings-row">
-              <div className="settings-hint">
-                {qrLogin.qrDataUrl && (
-                  <img
-                    src={qrLogin.qrDataUrl}
-                    alt="B站登录二维码(手机B站App扫一扫)"
-                    width={176}
-                    height={176}
-                    style={{ display: 'block', marginBottom: 6 }}
-                  />
-                )}
-                <span>
-                  {qrLogin.hint ??
-                    (qrLogin.phase === 'waiting' ? '请用手机B站App"扫一扫"并确认登录' : '')}
+            {SETTINGS_NAV.map((group) => (
+              <div key={group.group} className="set-nav-group">
+                <div className="set-nav-caption">{group.group}</div>
+                <nav className="set-nav">
+                  {group.items.map((item) => (
+                    <button
+                      key={item.id}
+                      className={`set-nav-item${settingsTab === item.id ? ' on' : ''}`}
+                      onClick={() => {
+                        setSettingsQuery('')
+                        switchSettingsTab(item.id)
+                      }}
+                    >
+                      <span className="set-nav-icon">{item.icon}</span>
+                      {item.label}
+                    </button>
+                  ))}
+                </nav>
+              </div>
+            ))}
+            <div className="set-side-note">所有设置自动保存,仅保存在本机。</div>
+          </aside>
+          <section className="set-main">
+            <header className="set-head">
+              <div className="set-head-title">
+                <span className="set-eyebrow">{TAB_GROUP[settingsTab]}</span>
+                <h1>{currentTabLabel}</h1>
+              </div>
+              <div className="set-head-actions">
+                <span
+                  className={`set-save${saveError ? ' err' : savedTick !== 0 ? ' ok' : ''}`}
+                  title={saveError ? '保存失败,详见控制台日志' : '所有更改自动保存,即时生效'}
+                >
+                  {saveError ? '保存失败' : savedTick !== 0 ? '已保存' : '自动保存'}
                 </span>
-              </div>
-            </div>
-          )}
-            </>
-          )}
-          {settingsTab === 'model' && (
-            <>
-          <div className="settings-sep">
-            <span>网页版生成(实验)</span>
-          </div>
-          <div className="settings-row">
-            <label
-              htmlFor="cfg-webchat"
-              title="仅主演出(相声/日常段子)走网页模型,记忆提取等小调用仍走 API;失败自动回退"
-            >
-              主演出改用网页模型生成
-            </label>
-            <input
-              id="cfg-webchat"
-              type="checkbox"
-              checked={form.webchatEnabled}
-              onChange={(e) => {
-                setForm({ ...form, webchatEnabled: e.target.checked })
-                saveField({ webchatEnabled: e.target.checked }, true)
-              }}
-            />
-          </div>
-          {form.webchatEnabled && (
-            <>
-              <div className="settings-row">
-                <label htmlFor="cfg-webchat-site">网页模型站点</label>
-                <select
-                  id="cfg-webchat-site"
-                  value={form.webchatSite}
-                  onChange={(e) => {
-                    setForm({ ...form, webchatSite: e.target.value as AppConfig['webchatSite'] })
-                    saveField({ webchatSite: e.target.value as AppConfig['webchatSite'] }, true)
-                  }}
+                <button
+                  className={`set-exit${exitArmed ? ' armed' : ''}`}
+                  title={exitArmed ? '再点一次确认退出' : '退出程序(3 秒内再点确认)'}
+                  onClick={requestExit}
                 >
-                  {WEBCHAT_SITES.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.label}
-                    </option>
-                  ))}
-                </select>
+                  {exitArmed ? '确认退出' : '退出程序'}
+                </button>
               </div>
-              <div className="settings-row">
-                <label htmlFor="cfg-webchat-login">网页窗口(首次需登录一次)</label>
-                <div className="shot-key-row">
-                  <button id="cfg-webchat-login" className="panel-btn" onClick={openWebchatWindow}>
-                    打开窗口
-                  </button>
-                  <button className="panel-btn" onClick={() => void refreshWebchatStatus()}>
-                    查状态
-                  </button>
-                  <button className="panel-btn" onClick={() => void restoreMain()}>
-                    恢复角色
-                  </button>
-                  <span className="settings-hint">{webchatStatusText}</span>
-                </div>
-              </div>
-              <div className="settings-row">
-                  <div className="settings-hint">
-                    生成用系统 Edge 的独立窗口(独立 profile,不影响日常浏览):登录一次长期有效;
-                    生成时会出现 Edge 标签页,可最小化,完成后自动关闭。
+            </header>
+            <div ref={setBodyRef} className="set-body">
+              {settingsQuery.trim() !== '' ? (
+                <div className="set-results">
+                  <div className="set-note">
+                    {searchHits.length > 0
+                      ? `找到 ${searchHits.length} 个设置项,点击跳转`
+                      : `没有找到与「${settingsQuery.trim()}」相关的设置`}
                   </div>
-              </div>
-            </>
-          )}
-            </>
-          )}
-          {settingsTab === 'general' && (
-            <>
-          <div className="settings-sep">
-            <span>截屏</span>
-          </div>
-          <div className="settings-row">
-            <label htmlFor="cfg-shot-enable">全局截屏快捷键(框选→复制到剪贴板)</label>
-            <div className="shot-key-row">
-              <input
-                id="cfg-shot-enable"
-                type="checkbox"
-                checked={form.screenshot.enabled}
-                onChange={(e) => {
-                  const next = { ...form.screenshot, enabled: e.target.checked }
-                  setForm({ ...form, screenshot: next })
-                  saveField({ screenshot: next }, true)
-                }}
-              />
-              <HotkeyRecorder
-                value={form.screenshot.hotkey}
-                onChange={(hotkey) => {
-                  const next = { ...form.screenshot, hotkey }
-                  setForm({ ...form, screenshot: next })
-                  saveField({ screenshot: next }, true)
-                }}
-              />
-            </div>
-          </div>
-          <div className="settings-row">
-            <label htmlFor="cfg-shot-hide">截屏/录屏时排除角色(角色不进任何截图与录屏,Win10 2004+)</label>
-            <input
-              id="cfg-shot-hide"
-              type="checkbox"
-              checked={form.screenshot.hideSelf}
-              onChange={(e) => {
-                const next = { ...form.screenshot, hideSelf: e.target.checked }
-                setForm({ ...form, screenshot: next })
-                saveField({ screenshot: next }, true) // commit 内统一执行角色排除
-              }}
-            />
-          </div>
-            </>
-          )}
-
-          {settingsTab === 'voice' && (
-            <>
-          <div className="settings-row">
-            <label htmlFor="cfg-voice">角色语音</label>
-            <input
-              id="cfg-voice"
-              type="checkbox"
-              checked={voice.enabled}
-              onChange={(e) => {
-                const next = { ...voice, enabled: e.target.checked }
-                setVoice(next)
-                saveField({ voice: next }, true)
-              }}
-            />
-          </div>
-          {voice.enabled && (
-            <>
-              <div className="settings-row">
-                <label htmlFor="cfg-voice-provider" title="硅基流动 CosyVoice2:流式快、便宜稳定;MiniMax Speech 2.8:情绪与语气表现力更强,按量价格更高">
-                  语音供应商
-                </label>
-                <select
-                  id="cfg-voice-provider"
-                  value={voice.provider}
-                  onChange={(e) => {
-                    const next = { ...voice, provider: e.target.value as typeof voice.provider }
-                    setVoice(next)
-                    saveField({ voice: next }, true)
-                  }}
-                >
-                  {PROVIDER_OPTIONS.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.label}
-                    </option>
+                  {searchHits.map((hit) => (
+                    <button
+                      key={`${hit.tab}-${hit.card}-${hit.label}`}
+                      className="set-result"
+                      onClick={() => jumpToSetting(hit.tab, hit.card)}
+                    >
+                      <span className="set-result-label">{hit.label}</span>
+                      <span className="set-result-crumb">
+                        {TAB_GROUP[hit.tab]} · {hit.card}
+                      </span>
+                    </button>
                   ))}
-                </select>
-              </div>
-              {voice.provider === 'siliconflow' ? (
-                <div className="settings-row">
-                  <label htmlFor="cfg-voice-key" title="siliconflow.cn 的 API Key,与常规页 LLM 的 key 相互独立">
-                    语音 API Key
-                  </label>
-                  <input
-                    id="cfg-voice-key"
-                    type="password"
-                    placeholder="sk-...(siliconflow.cn)"
-                    value={voice.apiKey}
-                    onChange={(e) => {
-                      const next = { ...voice, apiKey: e.target.value }
-                      setVoice(next)
-                      saveField({ voice: next })
-                    }}
-                    onBlur={(e) => {
-                      const next = { ...voice, apiKey: e.target.value }
-                      setVoice(next)
-                      saveField({ voice: next }, true)
-                    }}
-                  />
                 </div>
               ) : (
                 <>
-                  <div className="settings-row">
-                    <label htmlFor="cfg-mm-key" title="MiniMax 开放平台的 API Key,与硅基流动相互独立">
-                      MiniMax API Key
-                    </label>
-                    <input
-                      id="cfg-mm-key"
-                      type="password"
-                      placeholder="eyJ...(MiniMax)"
-                      value={voice.minimax.apiKey}
-                      onChange={(e) => {
-                        const next = { ...voice, minimax: { ...voice.minimax, apiKey: e.target.value } }
-                        setVoice(next)
-                        saveField({ voice: next })
-                      }}
-                      onBlur={(e) => {
-                        const next = { ...voice, minimax: { ...voice.minimax, apiKey: e.target.value } }
-                        setVoice(next)
-                        saveField({ voice: next }, true)
-                      }}
-                    />
-                  </div>
-                  <div className="settings-row">
-                    <label htmlFor="cfg-mm-group" title="MiniMax 开放平台账号的 GroupId">
-                      MiniMax GroupId
-                    </label>
-                    <input
-                      id="cfg-mm-group"
-                      value={voice.minimax.groupId}
-                      onChange={(e) => {
-                        const next = { ...voice, minimax: { ...voice.minimax, groupId: e.target.value } }
-                        setVoice(next)
-                        saveField({ voice: next })
-                      }}
-                      onBlur={(e) => {
-                        const next = { ...voice, minimax: { ...voice.minimax, groupId: e.target.value } }
-                        setVoice(next)
-                        saveField({ voice: next }, true)
-                      }}
-                    />
-                  </div>
-                  <div className="settings-row">
-                    <label htmlFor="cfg-mm-model" title="turbo:便宜、流式快;hd:质量优先,价格更高">
-                      MiniMax 模型
-                    </label>
-                    <select
-                      id="cfg-mm-model"
-                      value={voice.minimax.model}
-                      onChange={(e) => {
-                        const next = { ...voice, minimax: { ...voice.minimax, model: e.target.value as typeof voice.minimax.model } }
-                        setVoice(next)
-                        saveField({ voice: next }, true)
-                      }}
+                  {settingsTab === 'general' && (
+                    <>
+                      <SettingsCard card="显示与布局" flash={flashCard} title="显示与布局">
+                        <SetLine title="显示角色" hint="在桌面上显示两位角色立绘">
+                          <SetSwitch checked={!charHidden} onChange={(v) => setCharsHidden(!v)} />
+                        </SetLine>
+                        <SetLine title="角色与控制栏位置" hint="拖动角色可移动,悬停滚轮可同步缩放">
+                          <button
+                            className="panel-btn"
+                            onClick={() => {
+                              applyChars(DEFAULT_CONFIG.characters, 'now')
+                              applyCtrlBar(DEFAULT_CONFIG.ctrlBar, 'now')
+                            }}
+                          >
+                            恢复默认布局
+                          </button>
+                        </SetLine>
+                      </SettingsCard>
+                      <SettingsCard card="演出与主动行为" flash={flashCard} title="演出与主动行为">
+                        <SetField
+                          label="空闲自动重放"
+                          htmlFor="cfg-replay"
+                          hint="空闲多少分钟后自动重放一集历史,留空 = 关闭"
+                        >
+                          <input
+                            id="cfg-replay"
+                            type="number"
+                            min={1}
+                            max={1440}
+                            step={1}
+                            placeholder="留空则不自动重放"
+                            value={form.autoReplayMin || ''}
+                            onChange={(e) => {
+                              const raw = e.target.value
+                              // 空串/非法输入按 0(关闭)存,不往输入框里塞 0 硬占位
+                              const v = raw.trim() === '' ? 0 : Math.max(0, Number(raw) || 0)
+                              setForm({ ...form, autoReplayMin: v })
+                              saveField({ autoReplayMin: v })
+                            }}
+                          />
+                        </SetField>
+                        <SetLine title="主动程度" hint="自发闲聊/提醒/重放的频率上限(每小时)">
+                          <div className="seg-group">
+                            {(
+                              [
+                                ['quiet', '安静(3)'],
+                                ['balanced', '平衡(6)'],
+                                ['lively', '热闹(12)'],
+                              ] as const
+                            ).map(([v, label]) => (
+                              <button
+                                key={v}
+                                className={`seg-btn${form.proactivity === v ? ' on' : ''}`}
+                                onClick={() => {
+                                  setForm({ ...form, proactivity: v })
+                                  saveField({ proactivity: v }, true)
+                                }}
+                              >
+                                {label}
+                              </button>
+                            ))}
+                          </div>
+                        </SetLine>
+                        <SetLine title="久坐提醒" hint="连续活跃一段时间后,角色会提醒你休息">
+                          <SetSwitch
+                            checked={form.breakReminder.enabled}
+                            label="久坐提醒"
+                            onChange={(v) => {
+                              const next = { ...form.breakReminder, enabled: v }
+                              setForm({ ...form, breakReminder: next })
+                              saveField({ breakReminder: next }, true)
+                            }}
+                          />
+                          <input
+                            type="number"
+                            min={15}
+                            max={120}
+                            step={5}
+                            className="break-min-input"
+                            title="连续活跃多少分钟后提醒(15~120)"
+                            value={form.breakReminder.minutes}
+                            onChange={(e) => {
+                              const next = {
+                                ...form.breakReminder,
+                                minutes: Math.min(120, Math.max(15, Number(e.target.value) || 45)),
+                              }
+                              setForm({ ...form, breakReminder: next })
+                              saveField({ breakReminder: next })
+                            }}
+                          />
+                          <span className="set-note">分钟后</span>
+                        </SetLine>
+                        <div className="set-note">使用者的兴趣爱好在「记忆」页维护 — 日常闲聊会偶尔聊到</div>
+                      </SettingsCard>
+                      <SettingsCard card="环境与桌面" flash={flashCard} title="环境与桌面">
+                        <SetLine title="桌面环境感知" hint="识别电量与前台应用类型,仅在本机分类,不上传明细">
+                          <SetSwitch
+                            checked={form.envSense}
+                            label="桌面环境感知"
+                            onChange={(v) => {
+                              setForm({ ...form, envSense: v })
+                              saveField({ envSense: v }, true)
+                            }}
+                          />
+                        </SetLine>
+                        <SetLine title="显示左上角水印" hint="在录屏或直播画面里标识本应用">
+                          <SetSwitch
+                            checked={showWatermark}
+                            label="显示左上角水印"
+                            onChange={(v) => {
+                              setShowWatermark(v)
+                              saveField({ showWatermark: v }, true)
+                            }}
+                          />
+                        </SetLine>
+                      </SettingsCard>
+                    </>
+                  )}
+
+                  {settingsTab === 'model' && (
+                    <>
+                      <SettingsCard card="主模型" flash={flashCard} title="主模型" desc="对话 / 演出 / 台词生成">
+                        <SetField label="厂商" htmlFor="cfg-vendor">
+                          <select
+                            id="cfg-vendor"
+                            value={vendorId}
+                            onChange={(e) => {
+                              const id = e.target.value
+                              // 当前输入的 key 存回旧厂商的键,再从新厂商的键带出(没有则空)
+                              const drafts = { ...keyDrafts, [vendorKeyOf(vendorId, form.baseUrl)]: form.apiKey }
+                              setKeyDrafts(drafts)
+                              setVendorId(id)
+                              let baseUrl = form.baseUrl
+                              let model = form.model
+                              if (id !== CUSTOM_VENDOR_ID) {
+                                const v = VENDORS.find((x) => x.id === id)!
+                                baseUrl = v.baseUrl
+                                model = v.models[0] ?? ''
+                              }
+                              const apiKey = drafts[vendorKeyOf(id, baseUrl)] ?? ''
+                              setForm({ ...form, baseUrl, model, apiKey })
+                              saveField(
+                                {
+                                  baseUrl,
+                                  model,
+                                  apiKey,
+                                  apiKeys: { ...form.apiKeys, ...drafts },
+                                },
+                                true,
+                              )
+                            }}
+                          >
+                            {VENDORS.map((v) => (
+                              <option key={v.id} value={v.id}>
+                                {v.label}
+                              </option>
+                            ))}
+                            <option value={CUSTOM_VENDOR_ID}>本地 / 自定义</option>
+                          </select>
+                        </SetField>
+                        <SetField
+                          label={`API Key${vendorId === CUSTOM_VENDOR_ID ? '(本地服务可为空)' : ''}`}
+                          htmlFor="cfg-key"
+                          hint="每个厂商(自定义按接口地址)分别记忆,切换自动带出"
+                        >
+                          <input
+                            id="cfg-key"
+                            type="password"
+                            value={form.apiKey}
+                            onChange={(e) => {
+                              const v = e.target.value
+                              setForm({ ...form, apiKey: v })
+                              setKeyDrafts((d) => ({ ...d, [vendorKeyOf(vendorId, form.baseUrl)]: v }))
+                              saveField({ apiKey: v, apiKeys: { ...form.apiKeys, [vendorKeyOf(vendorId, form.baseUrl)]: v } })
+                            }}
+                            onBlur={() => saveField({}, true)}
+                          />
+                        </SetField>
+                        <SetField label="接口地址" htmlFor="cfg-url">
+                          <input
+                            id="cfg-url"
+                            value={form.baseUrl}
+                            placeholder={
+                              vendorId === CUSTOM_VENDOR_ID ? 'http://localhost:11434/v1' : 'https://api.deepseek.com/v1'
+                            }
+                            onChange={(e) => {
+                              // 自定义端点键含 baseUrl:先把 key 存回旧地址的键,换地址互不串
+                              const drafts = { ...keyDrafts, [vendorKeyOf(vendorId, form.baseUrl)]: form.apiKey }
+                              setKeyDrafts(drafts)
+                              setForm({ ...form, baseUrl: e.target.value })
+                              saveField({ baseUrl: e.target.value, apiKeys: { ...form.apiKeys, ...drafts } })
+                            }}
+                          />
+                        </SetField>
+                        <SetField label="模型" htmlFor="cfg-model">
+                          {vendorId === CUSTOM_VENDOR_ID ? (
+                            <input
+                              id="cfg-model"
+                              value={form.model}
+                              placeholder="如 qwen2.5:7b(Ollama 模型名)"
+                              onChange={(e) => {
+                                setForm({ ...form, model: e.target.value })
+                                saveField({ model: e.target.value })
+                              }}
+                            />
+                          ) : (
+                            <select
+                              id="cfg-model"
+                              value={form.model}
+                              onChange={(e) => {
+                                setForm({ ...form, model: e.target.value })
+                                saveField({ model: e.target.value }, true)
+                              }}
+                            >
+                              {(VENDORS.find((v) => v.id === vendorId)?.models ?? []).map((m) => (
+                                <option key={m} value={m}>
+                                  {m}
+                                </option>
+                              ))}
+                            </select>
+                          )}
+                        </SetField>
+                      </SettingsCard>
+                      <SettingsCard
+                        card="提取文字"
+                        flash={flashCard}
+                        title="提取文字"
+                        desc="AI 视觉模型优先,失败自动本地兜底;智谱 glm-4.6v-flash 免费,与主模型相互独立"
+                      >
+                        <SetField
+                          label="OCR API Key(留空 = 只用本地识别)"
+                          htmlFor="cfg-ocr-key"
+                          hint="bigmodel.cn 注册即得"
+                        >
+                          <input
+                            id="cfg-ocr-key"
+                            type="password"
+                            value={form.ocr.apiKey}
+                            onChange={(e) => {
+                              const ocr = { ...form.ocr, apiKey: e.target.value }
+                              setForm({ ...form, ocr })
+                              saveField({ ocr })
+                            }}
+                          />
+                        </SetField>
+                        <SetField label="OCR 接口地址(OpenAI 兼容)" htmlFor="cfg-ocr-url">
+                          <input
+                            id="cfg-ocr-url"
+                            value={form.ocr.baseUrl}
+                            onChange={(e) => {
+                              const ocr = { ...form.ocr, baseUrl: e.target.value }
+                              setForm({ ...form, ocr })
+                              saveField({ ocr })
+                            }}
+                          />
+                        </SetField>
+                        <SetField label="OCR 视觉模型" htmlFor="cfg-ocr-model">
+                          <input
+                            id="cfg-ocr-model"
+                            value={form.ocr.model}
+                            placeholder="glm-4.6v-flash"
+                            onChange={(e) => {
+                              const ocr = { ...form.ocr, model: e.target.value }
+                              setForm({ ...form, ocr })
+                              saveField({ ocr })
+                            }}
+                          />
+                        </SetField>
+                      </SettingsCard>
+                    </>
+                  )}
+
+                  {settingsTab === 'persona' && (
+                    <>
+                      <SettingsCard card="角色名字" flash={flashCard} title="角色名字" desc="名牌与台词称呼">
+                        <SetField label="角色A的名字" htmlFor="cfg-name-a">
+                          <input
+                            id="cfg-name-a"
+                            value={form.names.a}
+                            maxLength={12}
+                            onChange={(e) => {
+                              const next = { ...form.names, a: e.target.value }
+                              setForm({ ...form, names: next })
+                              saveField({ names: next })
+                            }}
+                          />
+                        </SetField>
+                        <SetField label="角色B的名字" htmlFor="cfg-name-b">
+                          <input
+                            id="cfg-name-b"
+                            value={form.names.b}
+                            maxLength={12}
+                            onChange={(e) => {
+                              const next = { ...form.names, b: e.target.value }
+                              setForm({ ...form, names: next })
+                              saveField({ names: next })
+                            }}
+                          />
+                        </SetField>
+                      </SettingsCard>
+                      <SettingsCard
+                        card="角色人设"
+                        flash={flashCard}
+                        title="角色人设"
+                        desc="自由编辑,输入后自动保存并采纳"
+                      >
+                        <SetField
+                          label={`${charNames.A} 的人设`}
+                          htmlFor="cfg-persona-a"
+                          hint="性别/职业/性格/日常素材,自由发挥"
+                        >
+                          <textarea
+                            id="cfg-persona-a"
+                            rows={4}
+                            value={form.persona.a || defaultPersonaText('A')}
+                            onChange={(e) => {
+                              setForm({ ...form, persona: { ...form.persona, a: e.target.value } })
+                              saveField({ persona: { ...form.persona, a: e.target.value } })
+                            }}
+                          />
+                        </SetField>
+                        <SetField label={`${charNames.B} 的人设`} htmlFor="cfg-persona-b">
+                          <textarea
+                            id="cfg-persona-b"
+                            rows={4}
+                            value={form.persona.b || defaultPersonaText('B')}
+                            onChange={(e) => {
+                              setForm({ ...form, persona: { ...form.persona, b: e.target.value } })
+                              saveField({ persona: { ...form.persona, b: e.target.value } })
+                            }}
+                          />
+                        </SetField>
+                        <div className="set-actions">
+                          <span className="set-note">清空输入框 = 恢复该角色的内置人设</span>
+                          <button
+                            className="panel-btn"
+                            onClick={() => {
+                              setForm({
+                                ...form,
+                                persona: { a: defaultPersonaText('A'), b: defaultPersonaText('B') },
+                              })
+                              saveField({ persona: { a: defaultPersonaText('A'), b: defaultPersonaText('B') } }, true)
+                            }}
+                          >
+                            还原默认人设
+                          </button>
+                        </div>
+                      </SettingsCard>
+                    </>
+                  )}
+                  {settingsTab === 'voice' && (
+                    <>
+                      <SettingsCard card="语音与供应商" flash={flashCard} title="语音与供应商">
+                        <SetLine title="角色语音" hint="关闭后角色只动不出声">
+                          <SetSwitch
+                            checked={voice.enabled}
+                            label="角色语音"
+                            onChange={(v) => {
+                              const next = { ...voice, enabled: v }
+                              setVoice(next)
+                              saveField({ voice: next }, true)
+                            }}
+                          />
+                        </SetLine>
+                        {voice.enabled && (
+                          <>
+                            <SetField
+                              label="语音供应商"
+                              htmlFor="cfg-voice-provider"
+                              hint="硅基流动 CosyVoice2:流式快、便宜稳定;MiniMax Speech 2.8:情绪与语气表现力更强,按量价格更高"
+                            >
+                              <select
+                                id="cfg-voice-provider"
+                                value={voice.provider}
+                                onChange={(e) => {
+                                  const next = { ...voice, provider: e.target.value as typeof voice.provider }
+                                  setVoice(next)
+                                  saveField({ voice: next }, true)
+                                }}
+                              >
+                                {PROVIDER_OPTIONS.map((p) => (
+                                  <option key={p.id} value={p.id}>
+                                    {p.label}
+                                  </option>
+                                ))}
+                              </select>
+                            </SetField>
+                            {voice.provider === 'siliconflow' ? (
+                              <SetField
+                                label="语音 API Key"
+                                htmlFor="cfg-voice-key"
+                                hint="siliconflow.cn 的 API Key,与 AI 模型页的 key 相互独立"
+                              >
+                                <input
+                                  id="cfg-voice-key"
+                                  type="password"
+                                  placeholder="sk-...(siliconflow.cn)"
+                                  value={voice.apiKey}
+                                  onChange={(e) => {
+                                    const next = { ...voice, apiKey: e.target.value }
+                                    setVoice(next)
+                                    saveField({ voice: next })
+                                  }}
+                                  onBlur={(e) => {
+                                    const next = { ...voice, apiKey: e.target.value }
+                                    setVoice(next)
+                                    saveField({ voice: next }, true)
+                                  }}
+                                />
+                              </SetField>
+                            ) : (
+                              <>
+                                <SetField label="MiniMax API Key" htmlFor="cfg-mm-key" hint="MiniMax 开放平台的 API Key,与硅基流动相互独立">
+                                  <input
+                                    id="cfg-mm-key"
+                                    type="password"
+                                    placeholder="eyJ...(MiniMax)"
+                                    value={voice.minimax.apiKey}
+                                    onChange={(e) => {
+                                      const next = { ...voice, minimax: { ...voice.minimax, apiKey: e.target.value } }
+                                      setVoice(next)
+                                      saveField({ voice: next })
+                                    }}
+                                    onBlur={(e) => {
+                                      const next = { ...voice, minimax: { ...voice.minimax, apiKey: e.target.value } }
+                                      setVoice(next)
+                                      saveField({ voice: next }, true)
+                                    }}
+                                  />
+                                </SetField>
+                                <SetField label="MiniMax GroupId" htmlFor="cfg-mm-group" hint="MiniMax 开放平台账号的 GroupId">
+                                  <input
+                                    id="cfg-mm-group"
+                                    value={voice.minimax.groupId}
+                                    onChange={(e) => {
+                                      const next = { ...voice, minimax: { ...voice.minimax, groupId: e.target.value } }
+                                      setVoice(next)
+                                      saveField({ voice: next })
+                                    }}
+                                    onBlur={(e) => {
+                                      const next = { ...voice, minimax: { ...voice.minimax, groupId: e.target.value } }
+                                      setVoice(next)
+                                      saveField({ voice: next }, true)
+                                    }}
+                                  />
+                                </SetField>
+                                <SetField label="MiniMax 模型" htmlFor="cfg-mm-model" hint="turbo:便宜、流式快;hd:质量优先,价格更高">
+                                  <select
+                                    id="cfg-mm-model"
+                                    value={voice.minimax.model}
+                                    onChange={(e) => {
+                                      const next = { ...voice, minimax: { ...voice.minimax, model: e.target.value as typeof voice.minimax.model } }
+                                      setVoice(next)
+                                      saveField({ voice: next }, true)
+                                    }}
+                                  >
+                                    <option value="speech-2.8-turbo">speech-2.8-turbo(快)</option>
+                                    <option value="speech-2.8-hd">speech-2.8-hd(高质)</option>
+                                  </select>
+                                </SetField>
+                              </>
+                            )}
+                          </>
+                        )}
+                      </SettingsCard>
+                      {voice.enabled && (
+                        <SettingsCard card="音色与表现" flash={flashCard} title="音色与表现">
+                          <SetLine
+                            title="情感指令"
+                            hint="把 deadpan/excited/slow 语气映射为情感指令(CosyVoice2 经 <|endofprompt|> 引导,不会被朗读;MiniMax 走情绪参数),角色差异更可听"
+                          >
+                            <SetSwitch
+                              checked={voice.emotionHints}
+                              label="情感指令"
+                              onChange={(v) => {
+                                const next = { ...voice, emotionHints: v }
+                                setVoice(next)
+                                saveField({ voice: next }, true)
+                              }}
+                            />
+                          </SetLine>
+                          {(
+                            [
+                              ['A', '角色甲音色', 'cfg-voice-a'],
+                              ['B', '角色乙音色', 'cfg-voice-b'],
+                              ['C', '场外客串音色(第三人乱入时用)', 'cfg-voice-c'],
+                            ] as const
+                          ).map(([slot, label, id]) => (
+                            <SetField key={slot} label={label} htmlFor={id}>
+                              <select
+                                id={id}
+                                value={voice.assignments[voice.provider][slot]}
+                                onChange={(e) => {
+                                  const next = {
+                                    ...voice,
+                                    assignments: {
+                                      ...voice.assignments,
+                                      [voice.provider]: { ...voice.assignments[voice.provider], [slot]: e.target.value },
+                                    },
+                                  }
+                                  setVoice(next)
+                                  saveField({ voice: next }, true)
+                                }}
+                              >
+                                {providerById(voice.provider).voices.map((v) => (
+                                  <option key={v.id} value={v.id}>
+                                    {v.label}
+                                  </option>
+                                ))}
+                                {voice.provider === 'siliconflow' && clonedVoices.length > 0 && (
+                                  <optgroup label="我的克隆音色">
+                                    {clonedVoices.map((v) => (
+                                      <option key={v.uri} value={v.uri}>
+                                        {v.name}
+                                      </option>
+                                    ))}
+                                  </optgroup>
+                                )}
+                              </select>
+                            </SetField>
+                          ))}
+                          {voice.provider === 'siliconflow' && (
+                            <CloneVoiceRow
+                              apiKey={voice.apiKey}
+                              onRecordingChange={(rec) => (voiceRecording.current = rec)}
+                              onCloned={(v) => {
+                                setClonedVoices((list) => [...list.filter((x) => x.uri !== v.uri), v])
+                                const next = {
+                                  ...voice,
+                                  assignments: {
+                                    ...voice.assignments,
+                                    siliconflow: { ...voice.assignments.siliconflow, B: v.uri },
+                                  },
+                                }
+                                setVoice(next)
+                                saveConfig({ voice: next }).catch(() => {})
+                              }}
+                            />
+                          )}
+                          <SetLine
+                            title="试听"
+                            hint="用角色甲的音色读一句固定台词;切换供应商后再点一次,可做同台词 A/B 对比"
+                          >
+                            <button id="cfg-voice-preview" className="panel-btn" type="button" onClick={() => previewSample()}>
+                              ▶ 试听一句
+                            </button>
+                          </SetLine>
+                        </SettingsCard>
+                      )}
+                    </>
+                  )}
+                  {settingsTab === 'live' && (
+                    <>
+                      <SettingsCard
+                        card="直播间"
+                        flash={flashCard}
+                        title="直播间"
+                        desc="直播弹幕互动;点工具栏「主播」→「开播」启动,平台 v1 仅B站可用"
+                      >
+                        <SetField label="直播平台" htmlFor="cfg-live-platform">
+                          <select
+                            id="cfg-live-platform"
+                            value={form.live.platform}
+                            onChange={(e) => {
+                              const live = { ...form.live, platform: e.target.value as 'bilibili' | 'douyin' }
+                              setForm({ ...form, live })
+                              saveField({ live })
+                            }}
+                          >
+                            <option value="bilibili">B站</option>
+                            <option value="douyin" disabled>
+                              抖音(即将支持)
+                            </option>
+                          </select>
+                        </SetField>
+                        <SetField label="直播间号(B站房间号)" htmlFor="cfg-live-room" hint="直播间网址 live.bilibili.com/ 后面的数字">
+                          <input
+                            id="cfg-live-room"
+                            value={form.live.roomId}
+                            placeholder="如 21452505"
+                            inputMode="numeric"
+                            onChange={(e) => {
+                              const roomId = e.target.value.replace(/\D/g, '').slice(0, 32)
+                              const live = { ...form.live, roomId }
+                              setForm({ ...form, live })
+                              saveField({ live })
+                            }}
+                          />
+                        </SetField>
+                      </SettingsCard>
+                      <SettingsCard card="B站登录" flash={flashCard} title="B站登录" desc="选填;不填也能播,只是观众名被打码">
+                        <SetField
+                          label="B站 Cookie"
+                          htmlFor="cfg-live-cookie"
+                          hint="浏览器登录B站后 F12 → 应用 → Cookie 里的 SESSDATA,只填值或整串 Cookie 都行,建议用小号。填后以该账号身份连弹幕服务器,可看到观众真实用户名与舰长等级;不填功能照常,名字显示为「某***」打码样式"
+                        >
+                          <input
+                            id="cfg-live-cookie"
+                            type="password"
+                            value={form.live.cookie}
+                            placeholder="SESSDATA 值或完整 Cookie 串,建议小号"
+                            onChange={(e) => {
+                              const live = { ...form.live, cookie: e.target.value.trim().slice(0, 600) }
+                              setForm({ ...form, live })
+                              saveField({ live })
+                            }}
+                          />
+                        </SetField>
+                        <SetLine
+                          title="礼物互动(道具动效与感谢语)"
+                          hint="观众送礼物时角色旁飞入道具并道谢,完全免 AI、无 API Key 也可用;关闭后礼物只记观众活动"
+                        >
+                          <SetSwitch
+                            checked={form.live.giftReactionsEnabled !== false}
+                            label="礼物互动(道具动效与感谢语)"
+                            onChange={(v) => {
+                              const live = { ...form.live, giftReactionsEnabled: v }
+                              setForm({ ...form, live })
+                              saveField({ live })
+                            }}
+                          />
+                        </SetLine>
+                        <SetLine title="扫码登录" hint="不想手贴?用手机B站App扫一下,自动回填并保存">
+                          {qrLogin ? (
+                            <button className="panel-btn" onClick={cancelQrLogin}>
+                              取消扫码
+                            </button>
+                          ) : (
+                            <button className="panel-btn" onClick={beginQrLogin}>
+                              扫码登录B站
+                            </button>
+                          )}
+                        </SetLine>
+                        {qrLogin && (
+                          <div className="qr-row">
+                            {qrLogin.qrDataUrl && (
+                              <img
+                                src={qrLogin.qrDataUrl}
+                                alt="B站登录二维码(手机B站App扫一扫)"
+                                width={148}
+                                height={148}
+                              />
+                            )}
+                            <span className="set-note">
+                              {qrLogin.hint ??
+                                (qrLogin.phase === 'waiting' ? '请用手机B站App「扫一扫」并确认登录' : '')}
+                            </span>
+                          </div>
+                        )}
+                      </SettingsCard>
+                    </>
+                  )}
+                  {settingsTab === 'privacy' && (
+                    <>
+                      <SettingsCard card="截屏" flash={flashCard} title="截屏">
+                        <SetLine title="全局截屏快捷键" hint="框选一块区域,截图复制到剪贴板">
+                          <div className="shot-key-row">
+                            <SetSwitch
+                              checked={form.screenshot.enabled}
+                              label="启用全局截屏快捷键"
+                              onChange={(v) => {
+                                const next = { ...form.screenshot, enabled: v }
+                                setForm({ ...form, screenshot: next })
+                                saveField({ screenshot: next }, true)
+                              }}
+                            />
+                            <HotkeyRecorder
+                              value={form.screenshot.hotkey}
+                              onChange={(hotkey) => {
+                                const next = { ...form.screenshot, hotkey }
+                                setForm({ ...form, screenshot: next })
+                                saveField({ screenshot: next }, true)
+                              }}
+                            />
+                          </div>
+                        </SetLine>
+                        <SetLine title="截屏/录屏时排除角色" hint="角色不进任何截图与录屏(Win10 2004+)">
+                          <SetSwitch
+                            checked={form.screenshot.hideSelf}
+                            label="截屏/录屏时排除角色"
+                            onChange={(v) => {
+                              const next = { ...form.screenshot, hideSelf: v }
+                              setForm({ ...form, screenshot: next })
+                              saveField({ screenshot: next }, true) // commit 内统一执行角色排除
+                            }}
+                          />
+                        </SetLine>
+                      </SettingsCard>
+                      <SettingsCard card="网页版生成" flash={flashCard} title="网页版生成" desc="实验">
+                        <SetLine
+                          title="主演出改用网页模型生成"
+                          hint="仅相声/日常段子走网页模型,记忆提取等小调用仍走 API;失败自动回退"
+                        >
+                          <SetSwitch
+                            checked={form.webchatEnabled}
+                            label="主演出改用网页模型生成"
+                            onChange={(v) => {
+                              setForm({ ...form, webchatEnabled: v })
+                              saveField({ webchatEnabled: v }, true)
+                            }}
+                          />
+                        </SetLine>
+                        {form.webchatEnabled && (
+                          <>
+                            <SetField label="网页模型站点" htmlFor="cfg-webchat-site">
+                              <select
+                                id="cfg-webchat-site"
+                                value={form.webchatSite}
+                                onChange={(e) => {
+                                  setForm({ ...form, webchatSite: e.target.value as AppConfig['webchatSite'] })
+                                  saveField({ webchatSite: e.target.value as AppConfig['webchatSite'] }, true)
+                                }}
+                              >
+                                {WEBCHAT_SITES.map((s) => (
+                                  <option key={s.id} value={s.id}>
+                                    {s.label}
+                                  </option>
+                                ))}
+                              </select>
+                            </SetField>
+                            <SetLine title="网页窗口" hint="首次需登录一次,登录态长期有效">
+                              <div className="shot-key-row">
+                                <button id="cfg-webchat-login" className="panel-btn" onClick={openWebchatWindow}>
+                                  打开窗口
+                                </button>
+                                <button className="panel-btn" onClick={() => void refreshWebchatStatus()}>
+                                  查状态
+                                </button>
+                                <button className="panel-btn" onClick={() => void restoreMain()}>
+                                  恢复角色
+                                </button>
+                              </div>
+                            </SetLine>
+                            {webchatStatusText && <div className="set-note">{webchatStatusText}</div>}
+                            <div className="set-note">
+                              生成用系统 Edge 的独立窗口(独立 profile,不影响日常浏览):登录一次长期有效;生成时会出现
+                              Edge 标签页,可最小化,完成后自动关闭。
+                            </div>
+                          </>
+                        )}
+                      </SettingsCard>
+                      <SettingsCard card="隐私与数据" flash={flashCard} title="隐私与数据">
+                        <div className="set-note">
+                          所有设置、记忆与历史仅保存在本机;桌面环境感知只在本机给应用分类,不上传窗口内容;截屏只在你按快捷键时进行;备忘里别写密码、验证码这类敏感信息。
+                        </div>
+                      </SettingsCard>
+                    </>
+                  )}
+
+                  {settingsTab === 'memory' && (
+                    <>
+                      <SettingsCard card="使用者画像" flash={flashCard} title="使用者画像" desc="角色据此认识你">
+                        <SetField label="你的称呼" htmlFor="cfg-mem-name">
+                          <input
+                            id="cfg-mem-name"
+                            placeholder="角色会这样叫你"
+                            value={form.userProfile.userName}
+                            onChange={(e) => {
+                              const next = { ...form.userProfile, userName: e.target.value }
+                              setForm({ ...form, userProfile: next })
+                              saveField({ userProfile: next })
+                            }}
+                          />
+                        </SetField>
+                        <SetField label="职业 / 身份" htmlFor="cfg-mem-occ">
+                          <input
+                            id="cfg-mem-occ"
+                            placeholder="如:在读研究生"
+                            value={form.userProfile.occupation}
+                            onChange={(e) => {
+                              const next = { ...form.userProfile, occupation: e.target.value }
+                              setForm({ ...form, userProfile: next })
+                              saveField({ userProfile: next })
+                            }}
+                          />
+                        </SetField>
+                        <div className="set-grid">
+                          <SetField label="喜欢(逗号分隔)" htmlFor="cfg-mem-likes">
+                            <input
+                              id="cfg-mem-likes"
+                              value={form.userProfile.likes}
+                              onChange={(e) => {
+                                const next = { ...form.userProfile, likes: e.target.value }
+                                setForm({ ...form, userProfile: next })
+                                saveField({ userProfile: next })
+                              }}
+                            />
+                          </SetField>
+                          <SetField label="不喜欢(逗号分隔)" htmlFor="cfg-mem-dis">
+                            <input
+                              id="cfg-mem-dis"
+                              value={form.userProfile.dislikes}
+                              onChange={(e) => {
+                                const next = { ...form.userProfile, dislikes: e.target.value }
+                                setForm({ ...form, userProfile: next })
+                                saveField({ userProfile: next })
+                              }}
+                            />
+                          </SetField>
+                        </div>
+                        <SetField label="雷区(完全不聊)" htmlFor="cfg-mem-ban">
+                          <input
+                            id="cfg-mem-ban"
+                            placeholder="如:考试,前任"
+                            value={form.userProfile.banTopics}
+                            onChange={(e) => {
+                              const next = { ...form.userProfile, banTopics: e.target.value }
+                              setForm({ ...form, userProfile: next })
+                              saveField({ userProfile: next })
+                            }}
+                          />
+                        </SetField>
+                      </SettingsCard>
+                      <SettingsCard
+                        card="记住的事"
+                        flash={flashCard}
+                        title={`记住的事(${memoryFacts.length})`}
+                        desc="和角色聊天时透露的信息会被自动记住"
+                        action={
+                          <button
+                            className={`hist-clear${clearMemArmed ? ' danger' : ''}`}
+                            disabled={memoryFacts.length === 0}
+                            onClick={() => {
+                              if (!clearMemArmed) {
+                                setClearMemArmed(true)
+                                window.setTimeout(() => setClearMemArmed(false), 3000)
+                                return
+                              }
+                              void (async () => {
+                                await clearMemory()
+                                setMemoryFacts([])
+                                setClearMemArmed(false)
+                              })()
+                            }}
+                          >
+                            {clearMemArmed ? '确认清空?' : '清空全部'}
+                          </button>
+                        }
+                      >
+                        {memoryFacts.length === 0 && (
+                          <div className="set-note">还没有记忆 — 聊天中透露的信息会出现在这里</div>
+                        )}
+                        {memoryFacts.map((f) => (
+                          <div className="mem-fact" key={f.id}>
+                            <span className="mem-cat">{MEM_CAT_LABEL[f.category]}</span>
+                            <span className="mem-content">{f.content}</span>
+                            <button
+                              className={`mem-btn${f.pinned ? ' on' : ''}`}
+                              title={f.pinned ? '取消置顶' : '置顶(永不遗忘)'}
+                              onClick={() => void (async () => { await togglePinFact(f.id); await refreshMemoryFacts() })()}
+                            >
+                              📌
+                            </button>
+                            <button
+                              className="mem-btn"
+                              title="忘记这条"
+                              onClick={() => void (async () => { await deleteFact(f.id); await refreshMemoryFacts() })()}
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        ))}
+                      </SettingsCard>
+                      <SettingsCard
+                        card="角色世界"
+                        flash={flashCard}
+                        title="角色世界"
+                        desc="两人之间的老梗/未了结事件,演出中会偶尔回收"
+                      >
+                        {(storyData?.gags.length ?? 0) === 0 && (storyData?.threads.length ?? 0) === 0 && (
+                          <div className="set-note">还没有角色共同记忆 — 演出几集后会自动积累</div>
+                        )}
+                        {storyData?.gags.map((g) => (
+                          <div className="mem-fact" key={g.id}>
+                            <span className="mem-cat">老梗</span>
+                            <span className="mem-content">{g.text}</span>
+                            <button
+                              className="mem-btn"
+                              title="删掉这条老梗"
+                              onClick={() => void (async () => { await removeStoryItem('gags', g.id); await refreshStory() })()}
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        ))}
+                        {storyData?.threads.map((t) => (
+                          <div className="mem-fact" key={t.id}>
+                            <span className="mem-cat">未了结</span>
+                            <span className="mem-content">{t.text}</span>
+                            <button
+                              className="mem-btn"
+                              title="删掉这条事件线"
+                              onClick={() => void (async () => { await removeStoryItem('threads', t.id); await refreshStory() })()}
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        ))}
+                        {bondLine && (
+                          <div className="mem-fact">
+                            <span className="mem-cat">关系</span>
+                            <span className="mem-content">{bondLine}</span>
+                          </div>
+                        )}
+                      </SettingsCard>
+                      <SettingsCard
+                        card="连续剧情"
+                        flash={flashCard}
+                        title="连续剧情"
+                        desc="多集推进的剧情线,约 30% 的集数会演下一拍"
+                      >
+                        {(storyData?.arcs.length ?? 0) === 0 && (
+                          <div className="set-note">还没有剧情线 — 演出中冒出的连续剧情会出现在这里</div>
+                        )}
+                        {storyData?.arcs.map((a) => (
+                          <div className="mem-fact" key={a.id}>
+                            <span className="mem-cat">{a.status === 'done' ? '完结' : `第${a.stage}拍`}</span>
+                            <span className="mem-content">《{a.title}》下一拍:{a.nextHook}</span>
+                            <button
+                              className="mem-btn"
+                              title="删掉这条剧情线"
+                              onClick={() => void (async () => { await removeArc(a.id); await refreshStory() })()}
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        ))}
+                      </SettingsCard>
+                    </>
+                  )}
+
+                  {settingsTab === 'memo' && (
+                    <>
+                      <SettingsCard card="添加备忘" flash={flashCard} title="添加备忘">
+                        <SetField label="要办的事" htmlFor="memo-text">
+                          <textarea
+                            id="memo-text"
+                            rows={2}
+                            placeholder="如:周三下午 3 点取快递(别写密码、验证码这类)"
+                            value={memoDraft.text}
+                            onChange={(e) => setMemoDraft({ ...memoDraft, text: e.target.value })}
+                          />
+                        </SetField>
+                        <div className="set-grid">
+                          <SetField label="截止时间" htmlFor="memo-due">
+                            <input
+                              id="memo-due"
+                              type="datetime-local"
+                              value={memoDraft.due}
+                              onChange={(e) => setMemoDraft({ ...memoDraft, due: e.target.value })}
+                            />
+                          </SetField>
+                          <SetField label="提前提醒(分钟)" htmlFor="memo-adv" hint={`留空 = 默认 ${form.memo.advanceMin}`}>
+                            <input
+                              id="memo-adv"
+                              type="number"
+                              min={1}
+                              value={memoDraft.advance}
+                              placeholder={`默认 ${form.memo.advanceMin}`}
+                              onChange={(e) => setMemoDraft({ ...memoDraft, advance: e.target.value })}
+                            />
+                          </SetField>
+                        </div>
+                        <div className="set-actions">
+                          <button className="panel-btn primary" onClick={() => void submitMemo()}>
+                            添加备忘
+                          </button>
+                        </div>
+                      </SettingsCard>
+                      <SettingsCard
+                        card="备忘列表"
+                        flash={flashCard}
+                        title={`备忘列表(${memos.length})`}
+                        desc="到点画外音会提醒"
+                        action={
+                          <button
+                            className="hist-clear"
+                            disabled={!memos.some((m) => m.done)}
+                            onClick={() => void (async () => {
+                              for (const m of memos.filter((x) => x.done)) await removeMemo(m.id)
+                              await refreshMemos()
+                            })()}
+                          >
+                            清已完成
+                          </button>
+                        }
+                      >
+                        {memos.length === 0 && <div className="set-note">还没有备忘 — 添加一条试试</div>}
+                        {memos.map((m) => (
+                          <div className="mem-fact" key={m.id}>
+                            <input
+                              type="checkbox"
+                              checked={m.done}
+                              title="标记完成"
+                              onChange={() => void (async () => { await updateMemo(m.id, { done: !m.done }); await refreshMemos() })()}
+                            />
+                            <span className="mem-content" style={m.done ? { textDecoration: 'line-through', opacity: 0.55 } : undefined}>
+                              {m.text}
+                            </span>
+                            <span className="memo-meta">
+                              {formatDue(m.dueAt)}
+                              {m.advanceMin !== null ? ` · 提前 ${m.advanceMin} 分` : ''}
+                              {m.done ? ' · 已完成' : ''}
+                            </span>
+                            <button
+                              className="mem-btn"
+                              title="删除"
+                              onClick={() => void (async () => { await removeMemo(m.id); await refreshMemos() })()}
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        ))}
+                      </SettingsCard>
+                    </>
+                  )}
+
+                  {settingsTab === 'history' && (
+                    <SettingsCard
+                      card="演出历史"
+                      flash={flashCard}
+                      title={`演出历史(${episodes.length})`}
+                      desc="点击一行即可回放;收藏不会被清理且重放权重更高"
+                      action={
+                        <button
+                          className={`hist-clear${clearHistArmed ? ' danger' : ''}`}
+                          disabled={episodes.every((e) => e.fav) || episodes.length === 0}
+                          onClick={() => {
+                            if (!clearHistArmed) {
+                              setClearHistArmed(true)
+                              window.setTimeout(() => setClearHistArmed(false), 3000)
+                              return
+                            }
+                            setClearHistArmed(false)
+                            void onClearUnfavorited()
+                          }}
+                        >
+                          {clearHistArmed ? '确认清空?' : '清空未收藏'}
+                        </button>
+                      }
                     >
-                      <option value="speech-2.8-turbo">speech-2.8-turbo(快)</option>
-                      <option value="speech-2.8-hd">speech-2.8-hd(高质)</option>
-                    </select>
-                  </div>
+                      <div className="hist-list">
+                        {episodes.length === 0 && (
+                          <div className="hist-empty">还没有历史对话，点 ▶ 生成一集试试</div>
+                        )}
+                        {episodes.map((ep) => {
+                          const bm = modeOf(ep.mode)
+                          return (
+                            <div
+                              className="hist-row"
+                              key={ep.ts}
+                              title="点击回放此段"
+                              onClick={() => replayFromHistory(ep)}
+                            >
+                              <span className="hist-mode" style={{ background: bm.accent }}>
+                                {bm.label}
+                              </span>
+                              <div className="hist-main">
+                                <div className="hist-preview">{ep.lines[0]?.text ?? ''}</div>
+                                <div className="hist-meta">
+                                  {fmtTime(ep.ts)} · {ep.lines.length} 句
+                                  {ep.topic ? ` · ${ep.topic}` : ''}
+                                </div>
+                              </div>
+                              <button
+                                className={`hist-fav${ep.fav ? ' on' : ''}`}
+                                title={ep.fav ? '取消收藏' : '收藏（不会被删除，重放权重更高）'}
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  void onToggleFav(ep)
+                                }}
+                              >
+                                {ep.fav ? '★' : '☆'}
+                              </button>
+                              <button
+                                className="hist-del"
+                                title={ep.fav ? '收藏对话不可删除' : '删除此段'}
+                                disabled={ep.fav}
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  void onDeleteEpisode(ep)
+                                }}
+                              >
+                                ✕
+                              </button>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </SettingsCard>
+                  )}
+
                 </>
               )}
-              <div className="settings-row">
-                <label htmlFor="cfg-voice-emotion" title="把 deadpan/excited/slow 语气映射为情感指令(CosyVoice2 经 <|endofprompt|> 引导,不会被朗读;MiniMax 走情绪参数),角色差异更可听">
-                  情感指令
-                </label>
-                <input
-                  id="cfg-voice-emotion"
-                  type="checkbox"
-                  checked={voice.emotionHints}
-                  onChange={(e) => {
-                    const next = { ...voice, emotionHints: e.target.checked }
-                    setVoice(next)
-                    saveField({ voice: next }, true)
-                  }}
-                />
-              </div>
-              {([['A', '角色甲音色', 'cfg-voice-a'], ['B', '角色乙音色', 'cfg-voice-b'], ['C', '场外客串音色(第三人乱入时用)', 'cfg-voice-c']] as const).map(
-                ([slot, label, id]) => (
-                  <div className="settings-row" key={slot}>
-                    <label htmlFor={id}>{label}</label>
-                    <select
-                      id={id}
-                      value={voice.assignments[voice.provider][slot]}
-                      onChange={(e) => {
-                        const next = {
-                          ...voice,
-                          assignments: {
-                            ...voice.assignments,
-                            [voice.provider]: { ...voice.assignments[voice.provider], [slot]: e.target.value },
-                          },
-                        }
-                        setVoice(next)
-                        saveField({ voice: next }, true)
-                      }}
-                    >
-                      {providerById(voice.provider).voices.map((v) => (
-                        <option key={v.id} value={v.id}>
-                          {v.label}
-                        </option>
-                      ))}
-                      {voice.provider === 'siliconflow' && clonedVoices.length > 0 && <optgroup label="我的克隆音色">{clonedVoices.map((v) => (
-                        <option key={v.uri} value={v.uri}>{v.name}</option>
-                      ))}</optgroup>}
-                    </select>
-                  </div>
-                ),
-              )}
-              {voice.provider === 'siliconflow' && (
-                <CloneVoiceRow
-                  apiKey={voice.apiKey}
-                  onRecordingChange={(rec) => (voiceRecording.current = rec)}
-                  onCloned={(v) => {
-                    setClonedVoices((list) => [...list.filter((x) => x.uri !== v.uri), v])
-                    const next = {
-                      ...voice,
-                      assignments: {
-                        ...voice.assignments,
-                        siliconflow: { ...voice.assignments.siliconflow, B: v.uri },
-                      },
-                    }
-                    setVoice(next)
-                    saveConfig({ voice: next }).catch(() => {})
-                  }}
-                />
-              )}
-              <div className="settings-row">
-                <label htmlFor="cfg-voice-preview" title="用角色甲的音色读一句固定台词;切换供应商后再点一次,可做同台词 A/B 对比">
-                  试听
-                </label>
-                <button id="cfg-voice-preview" className="panel-btn" type="button" onClick={() => previewSample()}>
-                  ▶ 试听一句
-                </button>
-              </div>
-            </>
-          )}
-            </>
-          )}
-
-          {settingsTab === 'memory' && (
-            <>
-          <div className="settings-sep">
-            <span>使用者画像(角色据此认识你)</span>
-          </div>
-          <div className="settings-row">
-            <label htmlFor="cfg-mem-name">你的称呼</label>
-            <input
-              id="cfg-mem-name"
-              placeholder="角色会这样叫你"
-              value={form.userProfile.userName}
-              onChange={(e) => {
-                const next = { ...form.userProfile, userName: e.target.value }
-                setForm({ ...form, userProfile: next })
-                saveField({ userProfile: next })
-              }}
-            />
-          </div>
-          <div className="settings-row">
-            <label htmlFor="cfg-mem-occ">职业 / 身份</label>
-            <input
-              id="cfg-mem-occ"
-              placeholder="如:在读研究生"
-              value={form.userProfile.occupation}
-              onChange={(e) => {
-                const next = { ...form.userProfile, occupation: e.target.value }
-                setForm({ ...form, userProfile: next })
-                saveField({ userProfile: next })
-              }}
-            />
-          </div>
-          <div className="settings-row">
-            <label htmlFor="cfg-mem-likes">喜欢(逗号分隔)</label>
-            <input
-              id="cfg-mem-likes"
-              value={form.userProfile.likes}
-              onChange={(e) => {
-                const next = { ...form.userProfile, likes: e.target.value }
-                setForm({ ...form, userProfile: next })
-                saveField({ userProfile: next })
-              }}
-            />
-          </div>
-          <div className="settings-row">
-            <label htmlFor="cfg-mem-dis">不喜欢(逗号分隔)</label>
-            <input
-              id="cfg-mem-dis"
-              value={form.userProfile.dislikes}
-              onChange={(e) => {
-                const next = { ...form.userProfile, dislikes: e.target.value }
-                setForm({ ...form, userProfile: next })
-                saveField({ userProfile: next })
-              }}
-            />
-          </div>
-          <div className="settings-row">
-            <label htmlFor="cfg-mem-ban">雷区(完全不聊)</label>
-            <input
-              id="cfg-mem-ban"
-              placeholder="如:考试,前任"
-              value={form.userProfile.banTopics}
-              onChange={(e) => {
-                const next = { ...form.userProfile, banTopics: e.target.value }
-                setForm({ ...form, userProfile: next })
-                saveField({ userProfile: next })
-              }}
-            />
-          </div>
-          <div className="settings-sep">
-            <span>记住的事({memoryFacts.length})</span>
-            <button
-              className={`hist-clear${clearMemArmed ? ' danger' : ''}`}
-              disabled={memoryFacts.length === 0}
-              onClick={() => {
-                if (!clearMemArmed) {
-                  setClearMemArmed(true)
-                  window.setTimeout(() => setClearMemArmed(false), 3000)
-                  return
-                }
-                void (async () => {
-                  await clearMemory()
-                  setMemoryFacts([])
-                  setClearMemArmed(false)
-                })()
-              }}
-            >
-              {clearMemArmed ? '确认清空?' : '清空全部'}
-            </button>
-          </div>
-          {memoryFacts.length === 0 && (
-            <div className="settings-tip">还没有记忆 — 和角色聊天时透露的信息会被自动记住</div>
-          )}
-          {memoryFacts.map((f) => (
-            <div className="mem-fact" key={f.id}>
-              <span className="mem-cat">{MEM_CAT_LABEL[f.category]}</span>
-              <span className="mem-content">{f.content}</span>
-              <button
-                className={`mem-btn${f.pinned ? ' on' : ''}`}
-                title={f.pinned ? '取消置顶' : '置顶(永不遗忘)'}
-                onClick={() => void (async () => { await togglePinFact(f.id); await refreshMemoryFacts() })()}
-              >
-                📌
-              </button>
-              <button
-                className="mem-btn"
-                title="忘记这条"
-                onClick={() => void (async () => { await deleteFact(f.id); await refreshMemoryFacts() })()}
-              >
-                ✕
-              </button>
             </div>
-          ))}
-          <div className="settings-sep">
-            <span>角色世界(两人之间的老梗/未了结事件,演出中会偶尔回收)</span>
-          </div>
-          {(storyData?.gags.length ?? 0) === 0 && (storyData?.threads.length ?? 0) === 0 && (
-            <div className="settings-tip">还没有角色共同记忆 — 演出几集后会自动积累</div>
-          )}
-          {storyData?.gags.map((g) => (
-            <div className="mem-fact" key={g.id}>
-              <span className="mem-cat">老梗</span>
-              <span className="mem-content">{g.text}</span>
-              <button
-                className="mem-btn"
-                title="删掉这条老梗"
-                onClick={() => void (async () => { await removeStoryItem('gags', g.id); await refreshStory() })()}
-              >
-                ✕
-              </button>
-            </div>
-          ))}
-          {storyData?.threads.map((t) => (
-            <div className="mem-fact" key={t.id}>
-              <span className="mem-cat">未了结</span>
-              <span className="mem-content">{t.text}</span>
-              <button
-                className="mem-btn"
-                title="删掉这条事件线"
-                onClick={() => void (async () => { await removeStoryItem('threads', t.id); await refreshStory() })()}
-              >
-                ✕
-              </button>
-            </div>
-          ))}
-          {bondLine && (
-            <div className="mem-fact">
-              <span className="mem-cat">关系</span>
-              <span className="mem-content">{bondLine}</span>
-            </div>
-          )}
-          <div className="settings-sep">
-            <span>连续剧情(多集推进的剧情线,约 30% 的集数会演下一拍)</span>
-          </div>
-          {(storyData?.arcs.length ?? 0) === 0 && (
-            <div className="settings-tip">还没有剧情线 — 演出中冒出的连续剧情会出现在这里</div>
-          )}
-          {storyData?.arcs.map((a) => (
-            <div className="mem-fact" key={a.id}>
-              <span className="mem-cat">{a.status === 'done' ? '完结' : `第${a.stage}拍`}</span>
-              <span className="mem-content">《{a.title}》下一拍:{a.nextHook}</span>
-              <button
-                className="mem-btn"
-                title="删掉这条剧情线"
-                onClick={() => void (async () => { await removeArc(a.id); await refreshStory() })()}
-              >
-                ✕
-              </button>
-            </div>
-          ))}
-            </>
-          )}
-
-          {settingsTab === 'memo' && (
-            <>
-          <div className="settings-sep">
-            <span>备忘列表</span>
-            <button
-              className="hist-clear"
-              disabled={!memos.some((m) => m.done)}
-              onClick={() => void (async () => {
-                for (const m of memos.filter((x) => x.done)) await removeMemo(m.id)
-                await refreshMemos()
-              })()}
-            >
-              清已完成
-            </button>
-          </div>
-          <div className="settings-row">
-            <label htmlFor="memo-text">要办的事</label>
-            <textarea
-              id="memo-text"
-              rows={2}
-              placeholder="如:周三下午 3 点取快递(别写密码、验证码这类)"
-              value={memoDraft.text}
-              onChange={(e) => setMemoDraft({ ...memoDraft, text: e.target.value })}
-            />
-          </div>
-          <div className="settings-row">
-            <label htmlFor="memo-due">截止时间</label>
-            <input
-              id="memo-due"
-              type="datetime-local"
-              value={memoDraft.due}
-              onChange={(e) => setMemoDraft({ ...memoDraft, due: e.target.value })}
-            />
-          </div>
-          <div className="settings-row">
-            <label htmlFor="memo-adv">提前提醒(分钟,留空 = 默认 {form.memo.advanceMin})</label>
-            <input
-              id="memo-adv"
-              type="number"
-              min={1}
-              value={memoDraft.advance}
-              placeholder={`默认 ${form.memo.advanceMin}`}
-              onChange={(e) => setMemoDraft({ ...memoDraft, advance: e.target.value })}
-            />
-          </div>
-          <div className="settings-actions">
-            <button className="panel-btn primary" onClick={() => void submitMemo()}>
-              添加备忘
-            </button>
-          </div>
-          {memos.length === 0 && <div className="settings-tip">还没有备忘 — 添加一条,到点画外音会提醒</div>}
-          {memos.map((m) => (
-            <div className="mem-fact" key={m.id}>
-              <input
-                type="checkbox"
-                checked={m.done}
-                title="标记完成"
-                onChange={() => void (async () => { await updateMemo(m.id, { done: !m.done }); await refreshMemos() })()}
-              />
-              <span className="mem-content" style={m.done ? { textDecoration: 'line-through', opacity: 0.55 } : undefined}>
-                {m.text}
-              </span>
-              <span className="memo-meta">
-                {formatDue(m.dueAt)}
-                {m.advanceMin !== null ? ` · 提前 ${m.advanceMin} 分` : ''}
-                {m.done ? ' · 已完成' : ''}
-              </span>
-              <button
-                className="mem-btn"
-                title="删除"
-                onClick={() => void (async () => { await removeMemo(m.id); await refreshMemos() })()}
-              >
-                ✕
-              </button>
-            </div>
-          ))}
-            </>
-          )}
-
-          {settingsTab === 'history' && (
-            <>
-          <div className="settings-sep">
-            <span>历史记录（{episodes.length}）</span>
-            <button
-              className={`hist-clear${clearHistArmed ? ' danger' : ''}`}
-              disabled={episodes.every((e) => e.fav) || episodes.length === 0}
-              onClick={() => {
-                if (!clearHistArmed) {
-                  setClearHistArmed(true)
-                  window.setTimeout(() => setClearHistArmed(false), 3000)
-                  return
-                }
-                setClearHistArmed(false)
-                void onClearUnfavorited()
-              }}
-            >
-              {clearHistArmed ? '确认清空?' : '清空未收藏'}
-            </button>
-          </div>
-          <div className="hist-list">
-            {episodes.length === 0 && (
-              <div className="hist-empty">还没有历史对话，点 ▶ 生成一集试试</div>
-            )}
-            {episodes.map((ep) => {
-              const bm = modeOf(ep.mode)
-              return (
-                <div
-                  className="hist-row"
-                  key={ep.ts}
-                  title="点击回放此段"
-                  onClick={() => replayFromHistory(ep)}
-                >
-                  <span className="hist-mode" style={{ background: bm.accent }}>
-                    {bm.label}
-                  </span>
-                  <div className="hist-main">
-                    <div className="hist-preview">{ep.lines[0]?.text ?? ''}</div>
-                    <div className="hist-meta">
-                      {fmtTime(ep.ts)} · {ep.lines.length} 句
-                      {ep.topic ? ` · ${ep.topic}` : ''}
-                    </div>
-                  </div>
-                  <button
-                    className={`hist-fav${ep.fav ? ' on' : ''}`}
-                    title={ep.fav ? '取消收藏' : '收藏（不会被删除，重放权重更高）'}
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      void onToggleFav(ep)
-                    }}
-                  >
-                    {ep.fav ? '★' : '☆'}
-                  </button>
-                  <button
-                    className="hist-del"
-                    title={ep.fav ? '收藏对话不可删除' : '删除此段'}
-                    disabled={ep.fav}
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      void onDeleteEpisode(ep)
-                    }}
-                  >
-                    ✕
-                  </button>
-                </div>
-              )
-            })}
-          </div>
-            </>
-          )}
-
-          {(savedTick !== 0 || saveError) && (
-            <div className={`settings-tip ${saveError ? 'err' : 'ok'}`}>
-              {saveError ? '保存失败，详见控制台日志' : '✓ 已自动保存，即时生效'}
-            </div>
-          )}
+          </section>
         </div>
       )}
 
@@ -3205,6 +3610,11 @@ function App() {
           hot={hovered === 'charA'}
           reacting={reacting.A}
         />
+        <StageProps
+          who="A"
+          charH={charCfg.height}
+          below={charCfg.A.bottom + charCfg.height > window.innerHeight - 110}
+        />
       </div>
 
       <div
@@ -3241,6 +3651,11 @@ function App() {
           dragging={dragUi === 'B'}
           hot={hovered === 'charB'}
           reacting={reacting.B}
+        />
+        <StageProps
+          who="B"
+          charH={charCfg.height}
+          below={charCfg.B.bottom + charCfg.height > window.innerHeight - 110}
         />
       </div>
 
@@ -3338,6 +3753,7 @@ function App() {
             onClose={() => closeOverlay('translation')}
             onScreenshotTranslate={startScreenshotTranslate}
             onTranslated={translateQuip}
+            onState={onTranslateState}
           />
         )}
 

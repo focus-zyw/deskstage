@@ -55,9 +55,19 @@ export function cookieFromCrossUrl(url: string): { cookie: string; uid: number }
 
 async function getJson(path: string): Promise<Record<string, unknown>> {
   const f = inTauri ? rustFetch : fetch
-  const res = await f(`${PASSPORT}${path}`, {
-    headers: { 'User-Agent': UA, Referer: 'https://www.bilibili.com/' },
-  })
+  let res: Response
+  try {
+    res = await f(`${PASSPORT}${path}`, {
+      headers: { 'User-Agent': UA, Referer: 'https://www.bilibili.com/' },
+    })
+  } catch (e) {
+    const msg = String((e as Error)?.message ?? e)
+    // scope 拒绝 = 运行中的 app 是加白名单前启动的旧实例
+    if (/not allowed on the configured scope/i.test(msg))
+      throw new Error('接口未授权,请完全退出应用后重新打开(旧实例缺少新白名单)')
+    if (!inTauri) throw new Error('浏览器预览不支持扫码,请在本应用窗口内使用')
+    throw new Error(msg)
+  }
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   const json = (await res.json()) as { code?: number; message?: string; data?: Record<string, unknown> }
   if (json.code !== 0 || !json.data) throw new Error(json.message || `code ${json.code}`)

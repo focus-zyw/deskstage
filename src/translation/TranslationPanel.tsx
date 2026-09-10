@@ -25,6 +25,11 @@ interface Props {
   onScreenshotTranslate: () => void
   /** 翻译成功回调(角色吐槽等外围互动) */
   onTranslated?: () => void
+  /** 翻译状态回调(App 的道具桥据此切换角色旁的工具卡道具):
+   *  running=开始翻译,done=真正完成,error=失败,idle=被用户取消。
+   *  为什么:截图翻译的 utility 任务在 OCR 完成时就 done 了,但翻译才刚开始,
+   *  道具的 success 必须等这里说了算 */
+  onState?: (s: 'running' | 'done' | 'error' | 'idle') => void
 }
 
 export function TranslationPanel({
@@ -34,6 +39,7 @@ export function TranslationPanel({
   onClose,
   onScreenshotTranslate,
   onTranslated,
+  onState,
 }: Props) {
   const [cfg, setCfg] = useState<TranslationConfig>(DEFAULT_CONFIG.translation)
   const [input, setInput] = useState('')
@@ -82,6 +88,16 @@ export function TranslationPanel({
     setErr('')
     setResult(null)
     stopSpeak()
+    onState?.('running')
+    // 被顶替(有新运行)时不动状态;被取消时撤掉常驻的翻译卡道具
+    const abandoned = () => {
+      if (abortRef.current !== ctrl) return true
+      if (ctrl.signal.aborted) {
+        onState?.('idle')
+        return true
+      }
+      return false
+    }
     try {
       const r = await translate(
         {
@@ -92,8 +108,9 @@ export function TranslationPanel({
         },
         ctrl.signal,
       )
-      if (ctrl.signal.aborted || abortRef.current !== ctrl) return
+      if (abandoned()) return
       setResult(r)
+      onState?.('done')
       onTranslated?.()
       const live = await getConfig()
       if (live.translation.autoSpeak) {
@@ -102,8 +119,9 @@ export function TranslationPanel({
         speakOnRef.current = true
       }
     } catch (e) {
-      if (ctrl.signal.aborted || abortRef.current !== ctrl) return
+      if (abandoned()) return
       setErr(await describeLlmError(e))
+      onState?.('error')
     } finally {
       if (abortRef.current === ctrl) setBusy(false)
     }

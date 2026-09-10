@@ -5,10 +5,12 @@
 // 弹幕源来自 src/live 的 Provider 注册表,本模块对平台无感知。
 
 import { providerFor } from '../live'
-import type { DanmakuMessage, LivePlatform, LiveStatus } from '../live'
+import type { DanmakuMessage, LiveEvent, LivePlatform, LiveStatus } from '../live'
 import { generateLiveReply } from '../engine/llmClient'
 import { getConfig } from '../storage/configStore'
 import { noteActivity } from './proactiveScheduler'
+import { showProp } from './propEffects'
+import { createGiftReactions, type GiftReactions } from './giftReactions'
 
 export interface LiveReply {
   speaker: 'A' | 'B'
@@ -43,6 +45,12 @@ interface Session {
   busy: boolean
   lastReplyAt: number
   pumpTimer: number | null
+  /** 无 API Key 时弹幕 AI 回复静默禁用;礼物旁路不依赖 Key 照常工作 */
+  hasApiKey: boolean
+  /** 礼物互动开关(道具动效与感谢语,一个开关管两者);开播时快照,与 banTopics 同策略 */
+  giftReactionsEnabled: boolean
+  /** 礼物旁路:档位道具 + 模板感谢语(revision 门与 AI 回复共享) */
+  reactions: GiftReactions
   onReply: (r: LiveReply) => void
   onStatus: (s: LiveStatus) => void
 }
@@ -76,9 +84,22 @@ function handleDanmaku(s: Session, m: DanmakuMessage): void {
   if (s.inbox.length > INBOX_CAP) s.inbox.shift()
 }
 
+/** 事件分流:普通弹幕走过滤+AI 管线;礼物走免 AI 旁路。
+ *  礼物的活动记账在开关判断之前(关闭动效,礼物仍是观众活动,照样抑制久坐提醒)。
+ *  导出供单测直接驱动(构造假 session) */
+export function handleLiveEvent(s: Session, ev: LiveEvent): void {
+  if (ev.kind === 'gift') {
+    noteActivity()
+    s.reactions.onGift(ev)
+    return
+  }
+  handleDanmaku(s, ev)
+}
+
 /** 每 800ms 泵一次:凑齐节奏条件就攒批发给 AI 决策 */
 async function pump(s: Session): Promise<void> {
   if (s.busy || s.inbox.length === 0) return
+  if (!s.hasApiKey) return // 无 Key:弹幕 AI 回复静默禁用(不报错不刷屏;礼物旁路不依赖 Key)
   const now = Date.now()
   if (now - s.lastReplyAt < MIN_GAP_MS) return
   // 令牌桶:60s 窗口内的调用次数封顶
@@ -93,13 +114,16 @@ async function pump(s: Session): Promise<void> {
   if (batch.length === 0) return
   s.busy = true
   s.callTimes.push(now)
+  // 在途仲裁:请求前记录版本,期间礼物感谢插队呈现(revision 变化)则本批结果作废
+  const revision = s.reactions.gate.capture()
   try {
     const r = await generateLiveReply(
       batch.map((d) => ({ username: d.username, content: d.content })),
       s.recentReplies,
     )
-    // 等待期间已下播 → 丢弃
+    // 等待期间已下播 → 丢弃;礼物感谢已插队 → 丢弃(否则会顶掉刚上的感谢气泡)
     if (session !== s) return
+    if (!s.reactions.gate.valid(revision)) return
     if (r.reply) {
       s.recentReplies = [...s.recentReplies, r.reply].slice(-5)
       s.lastReplyAt = Date.now()
@@ -134,9 +158,21 @@ export async function startLiveSession(
     busy: false,
     lastReplyAt: 0,
     pumpTimer: null,
+    hasApiKey: Boolean(cfg.apiKey.trim()),
+    giftReactionsEnabled: cfg.live.giftReactionsEnabled !== false,
+    reactions: null!,
     onReply: hooks.onReply,
     onStatus: hooks.onStatus,
   }
+  s.reactions = createGiftReactions({
+    showProp,
+    isEnabled: () => s.giftReactionsEnabled,
+    // 感谢语也走统一呈现口;同时推进共享节流,让 AI 泵顺延,两套呈现不打架
+    present: (r) => {
+      s.lastReplyAt = Date.now()
+      s.onReply(r)
+    },
+  })
   session = s
   // 定期清理去重表,防长播内存缓涨
   window.setInterval(() => {
@@ -145,7 +181,7 @@ export async function startLiveSession(
   }, 60_000)
   s.pumpTimer = window.setInterval(() => void pump(s), PUMP_MS)
   // cookie 选填:带登录态才能拿未打码的观众名(接口第 4 参 = 平台凭证位)
-  providerFor(platform).connect(roomId, (m) => handleDanmaku(s, m), hooks.onStatus, cfg.live.cookie || undefined)
+  providerFor(platform).connect(roomId, (ev) => handleLiveEvent(s, ev), hooks.onStatus, cfg.live.cookie || undefined)
 }
 
 /** 下播:断开连接、停泵、清会话;幂等 */

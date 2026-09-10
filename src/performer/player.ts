@@ -13,8 +13,10 @@ export function bubbleDuration(text: string): number {
 }
 
 export interface PlayerCallbacks {
-  /** 一句台词开始：显示气泡 + 切动作;index 用于语音预合成下一句 */
-  onLine: (line: DialogLine, index: number) => void
+  /** 一句台词开始:显示气泡 + 切动作;index 用于语音预合成下一句。
+   *  可返回「这句语音播放结束」的 promise(tts 的 speakTracked):播放器等语音真正
+   *  结束再推进(下限 70% 预估时长,估算+8s 兜底防悬挂);返回 null 按纯预估推进 */
+  onLine: (line: DialogLine, index: number) => Promise<void> | null | undefined
   /** 一句台词结束：清气泡 + 回 idle */
   onLineEnd: (speaker: Speaker) => void
   /** 整段播完（自然结束，非 stop） */
@@ -35,6 +37,23 @@ const sleep = (ms: number, signal: AbortSignal) =>
       { once: true },
     )
   })
+
+/** 一句台词的推进节奏:有语音 = max(70% 预估, 语音结束),避免语音尾巴被下一句掐断
+ *  或语音结束后干等;无语音(null = 被压制/未接语音)按原预估时长 */
+async function lineWait(
+  dur: number,
+  audio: Promise<void> | null | undefined,
+  signal: AbortSignal,
+): Promise<void> {
+  if (!audio) {
+    await sleep(dur, signal)
+    return
+  }
+  await Promise.all([
+    sleep(Math.round(dur * 0.7), signal),
+    Promise.race([audio, sleep(dur + 8000, signal)]),
+  ])
+}
 
 export class PerformancePlayer {
   private ctrl: AbortController | null = null
@@ -67,10 +86,10 @@ export class PerformancePlayer {
         const before = clampPauseMs(line.pauseBefore)
         if (before) await sleep(before, ctrl.signal)
         if (ctrl.signal.aborted) break
-        this.cbs.onLine(line, i)
+        const audio = this.cbs.onLine(line, i)
         // 气泡时长按语速修正:slow 的语音更长,气泡停留等比加长,避免下一句打断语音
         const dur = Math.round(bubbleDuration(line.text) / deliverySpeed(line.delivery))
-        await sleep(dur, ctrl.signal)
+        await lineWait(dur, audio, ctrl.signal)
         if (ctrl.signal.aborted) break
         // 句尾留白:此间气泡与听者反应继续停留,响底包袱有笑的时间
         const after = clampPauseMs(line.pauseAfter)
@@ -97,9 +116,9 @@ export class PerformancePlayer {
           const before = clampPauseMs(line.pauseBefore)
           if (before) await sleep(before, ctrl.signal)
           if (ctrl.signal.aborted) break
-          this.cbs.onLine(line, i)
+          const audio = this.cbs.onLine(line, i)
           const dur = Math.round(bubbleDuration(line.text) / deliverySpeed(line.delivery))
-          await sleep(dur, ctrl.signal)
+          await lineWait(dur, audio, ctrl.signal)
           if (ctrl.signal.aborted) break
           const after = clampPauseMs(line.pauseAfter)
           if (after) await sleep(after, ctrl.signal)

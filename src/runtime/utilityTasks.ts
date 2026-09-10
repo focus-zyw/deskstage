@@ -9,6 +9,8 @@ export interface UtilityTask {
   id: string
   kind: UtilityKind
   label: string
+  /** 任务由哪个角色表演(道具桥用:工具卡片道具挂在该角色旁) */
+  actor: 'A' | 'B'
   status: 'running' | 'done' | 'error'
   detail: string
   error?: string
@@ -49,15 +51,17 @@ function patch(id: string, p: Partial<UtilityTask>): void {
 }
 
 /** 跑一个工具任务:卡片 running(可随时 report 进度)→ done(6s 后自动消失)/error(手动关)。
- *  exec 抛错 = 任务失败,错误信息原样上卡(已截断) */
+ *  exec 抛错 = 任务失败,错误信息原样上卡(已截断)。
+ *  actor = 表演该任务的角色,道具桥据此把工具卡片道具挂到对应角色旁 */
 export async function runUtilityTask(
   kind: UtilityKind,
   label: string,
+  actor: 'A' | 'B',
   exec: (report: (detail: string) => void) => Promise<string>,
 ): Promise<void> {
   seq += 1
   const id = `ut-${seq}`
-  tasks = [...tasks.slice(-3), { id, kind, label, status: 'running', detail: '处理中…', ts: Date.now() }]
+  tasks = [...tasks.slice(-3), { id, kind, label, actor, status: 'running', detail: '处理中…', ts: Date.now() }]
   emit()
   try {
     const detail = await exec((d) => patch(id, { detail: d }))

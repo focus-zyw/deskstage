@@ -98,3 +98,67 @@ test('authBody 为匿名 protover2 认证 JSON,uid 可带登录态', () => {
   const logged = JSON.parse(new TextDecoder().decode(proto.authBody(23058, 'tok123', 12345)))
   assert.equal(logged.uid, 12345)
 })
+
+// ---------- parseSendGift:礼物事件归一化 ----------
+
+test('parseSendGift 解析真实结构:total_coin 优先,不重复乘数量', () => {
+  const g = proto.parseSendGift({
+    giftName: '小花花',
+    num: 3,
+    price: 100,
+    coin_type: 'gold',
+    total_coin: 300,
+    uid: 4242,
+    uname: '小明',
+  })
+  assert.deepEqual(g, {
+    giftName: '小花花',
+    count: 3,
+    coinType: 'gold',
+    totalCoin: 300, // 有总价字段就用总价,不能 300×3
+    userId: '4242',
+    username: '小明',
+  })
+})
+
+test('parseSendGift 无 total_coin 时回退 单价×数量', () => {
+  const g = proto.parseSendGift({ giftName: '能量箭头', num: 10, price: 50, coin_type: 'gold' })
+  assert.equal(g.totalCoin, 500)
+  assert.equal(g.userId, '')
+  assert.equal(g.username, '')
+})
+
+test('parseSendGift silver 礼物金额按 0 计', () => {
+  const g = proto.parseSendGift({ giftName: '辣条', num: 1, price: 100, coin_type: 'silver', total_coin: 100 })
+  assert.equal(g.coinType, 'silver')
+  assert.equal(g.totalCoin, 0)
+  // coin_type 缺失/异常值 → gold 白名单外归 gold,但金额照算
+  const d = proto.parseSendGift({ giftName: 'x', num: 2, price: 10 })
+  assert.equal(d.coinType, 'gold')
+  assert.equal(d.totalCoin, 20)
+})
+
+test('parseSendGift 钳位:非有限/负数归零,数量下限 1,超限封顶', () => {
+  assert.equal(proto.parseSendGift({ giftName: 'x', num: 2, price: -5 }).totalCoin, 0)
+  assert.equal(proto.parseSendGift({ giftName: 'x', num: 2, price: Number.NaN }).totalCoin, 0)
+  assert.equal(proto.parseSendGift({ giftName: 'x', num: 0, price: 100 }).count, 1)
+  assert.equal(proto.parseSendGift({ giftName: 'x', num: 'bad', price: 100 }).count, 1)
+  assert.equal(
+    proto.parseSendGift({ giftName: 'x', num: 999999, price: 999999999 }).totalCoin,
+    10_000_000,
+  )
+})
+
+test('parseSendGift 结构不符返回 null,giftName 空白也拒收', () => {
+  assert.equal(proto.parseSendGift(null), null)
+  assert.equal(proto.parseSendGift('bad'), null)
+  assert.equal(proto.parseSendGift({ num: 1 }), null)
+  assert.equal(proto.parseSendGift({ giftName: '   ', num: 1 }), null)
+})
+
+test('parseSendGift giftName 去首尾空白,uid 数字化', () => {
+  const g = proto.parseSendGift({ giftName: '  猫爪  ', num: 1 })
+  assert.equal(g.giftName, '猫爪')
+  const u = proto.parseSendGift({ giftName: 'x', num: 1, uid: 0 })
+  assert.equal(u.userId, '0')
+})

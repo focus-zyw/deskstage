@@ -23,4 +23,13 @@ export function providerFor(platform: LivePlatform): LiveDanmakuProvider {
   return PROVIDERS[platform]
 }
 
-export type { DanmakuMessage, LiveDanmakuProvider, LivePlatform, LiveStatus } from './types'
+export type {
+  DanmakuEvent,
+  DanmakuMessage,
+  GiftEvent,
+  GiftInfo,
+  LiveDanmakuProvider,
+  LiveEvent,
+  LivePlatform,
+  LiveStatus,
+} from './types'

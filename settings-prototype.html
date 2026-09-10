@@ -1,0 +1,428 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>设置界面设计原型（临时）</title>
+    <style>
+      /* THROWAWAY PROTOTYPE: three settings-page variants, switchable via ?variant=. */
+      :root {
+        font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+        color: #f4f6ff;
+        background: #e9edf4;
+        font-synthesis: none;
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; min-width: 980px; min-height: 720px; overflow: hidden; }
+      button, input, select { font: inherit; }
+      button { color: inherit; }
+      .desktop {
+        position: fixed;
+        inset: 0;
+        overflow: hidden;
+        background:
+          radial-gradient(circle at 50% 6%, rgba(255,255,255,.95), transparent 36%),
+          linear-gradient(135deg, #eef2f8, #dce4ee);
+      }
+      .desktop::after {
+        content: "桌面背景预览";
+        position: absolute;
+        left: 22px;
+        bottom: 18px;
+        color: #8c98aa;
+        font-size: 12px;
+        letter-spacing: .12em;
+      }
+      .character {
+        position: absolute;
+        bottom: -8px;
+        height: min(34vh, 330px);
+        object-fit: contain;
+        filter: drop-shadow(0 16px 20px rgba(33, 43, 66, .18));
+      }
+      .character.a { left: 14%; }
+      .character.b { right: 14%; }
+      .toolbar {
+        position: absolute;
+        top: 14px;
+        left: 50%;
+        transform: translateX(-50%);
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 5px;
+        border: 1px solid rgba(32, 42, 64, .14);
+        border-radius: 999px;
+        color: #48536a;
+        background: rgba(255,255,255,.82);
+        box-shadow: 0 8px 28px rgba(32, 42, 64, .12);
+      }
+      .toolbar .mode, .toolbar .tool {
+        border: 0;
+        border-radius: 999px;
+        background: transparent;
+        padding: 7px 13px;
+        font-size: 12px;
+      }
+      .toolbar .mode.on { color: white; background: #7668e8; }
+      .toolbar .tool { width: 30px; height: 30px; padding: 0; background: #eff1f6; }
+      .prototype-shell { position: absolute; inset: 56px 0 0; display: grid; place-items: start center; }
+
+      /* Shared controls */
+      .eyebrow { color: var(--muted); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
+      .title { margin: 3px 0 0; font-size: 20px; font-weight: 700; letter-spacing: -.02em; }
+      .subtitle { margin-top: 4px; color: var(--text-2); font-size: 12px; line-height: 1.5; }
+      .label { color: var(--text-2); font-size: 12px; font-weight: 600; }
+      .hint { color: var(--muted); font-size: 11px; line-height: 1.55; }
+      .field { display: grid; gap: 6px; }
+      .input, .select {
+        width: 100%;
+        height: 38px;
+        padding: 0 11px;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        outline: 0;
+        color: var(--text-1);
+        background: var(--input);
+      }
+      .input:focus, .select:focus { border-color: var(--primary); box-shadow: 0 0 0 3px var(--focus); }
+      .select option { color: #111827; }
+      .button {
+        min-height: 34px;
+        padding: 0 13px;
+        border: 1px solid var(--border);
+        border-radius: 9px;
+        cursor: pointer;
+        background: transparent;
+      }
+      .button:hover { background: var(--hover); }
+      .button.primary { border-color: transparent; background: var(--primary); color: white; }
+      .button.danger { color: var(--danger); }
+      .switch {
+        position: relative;
+        width: 38px;
+        height: 22px;
+        flex: none;
+        border: 0;
+        border-radius: 999px;
+        cursor: pointer;
+        background: var(--switch-off);
+      }
+      .switch::after {
+        content: "";
+        position: absolute;
+        top: 3px;
+        left: 3px;
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        background: white;
+        box-shadow: 0 1px 4px rgba(0,0,0,.24);
+        transition: transform .16s ease;
+      }
+      .switch.on { background: var(--primary); }
+      .switch.on::after { transform: translateX(16px); }
+      .setting-line { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+      .setting-line + .setting-line { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border-soft); }
+      .setting-copy strong { display: block; color: var(--text-1); font-size: 13px; font-weight: 600; }
+      .setting-copy span { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; }
+      .save-state { display: inline-flex; align-items: center; gap: 6px; color: var(--success); font-size: 12px; }
+      .save-state::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; box-shadow: 0 0 0 4px color-mix(in srgb, currentColor 15%, transparent); }
+      .exit {
+        border: 1px solid color-mix(in srgb, var(--danger) 38%, transparent);
+        border-radius: 9px;
+        padding: 6px 10px;
+        color: var(--danger);
+        background: transparent;
+        cursor: pointer;
+      }
+      .exit:hover { background: color-mix(in srgb, var(--danger) 12%, transparent); }
+
+      /* A — spacious sidebar workspace */
+      .variant-a {
+        --bg: #0c1222; --surface: #121a2d; --surface-2: #182238; --input: #10182a;
+        --text-1: #f5f7ff; --text-2: #b7c0d7; --muted: #7f8ba8;
+        --border: #2a3653; --border-soft: #222d46; --hover: #202c46;
+        --primary: #8577f4; --focus: rgba(133,119,244,.18); --success: #52d7bd;
+        --danger: #ff7185; --switch-off: #3a465f;
+        width: min(680px, calc(100vw - 32px));
+        height: min(760px, calc(100vh - 82px));
+        display: grid;
+        grid-template-columns: 172px 1fr;
+        overflow: hidden;
+        border: 1px solid rgba(138,155,196,.18);
+        border-radius: 20px;
+        background: var(--surface);
+        box-shadow: 0 24px 70px rgba(27,35,58,.3), 0 4px 16px rgba(27,35,58,.2);
+      }
+      .a-side { display: flex; flex-direction: column; padding: 18px 12px; border-right: 1px solid var(--border-soft); background: #0f1729; }
+      .brand { display: flex; align-items: center; gap: 10px; padding: 0 7px 16px; }
+      .brand-mark { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 10px; background: linear-gradient(145deg, #8f82ff, #6355d7); box-shadow: 0 8px 18px rgba(118,104,232,.3); }
+      .brand strong { font-size: 14px; }
+      .nav-caption { margin: 14px 9px 6px; color: #65718e; font-size: 10px; font-weight: 700; letter-spacing: .1em; }
+      .a-nav { display: grid; gap: 3px; }
+      .a-nav button { display: flex; align-items: center; gap: 9px; width: 100%; padding: 9px 10px; border: 0; border-radius: 9px; color: #929db7; background: transparent; text-align: left; cursor: pointer; font-size: 12px; }
+      .a-nav button:hover { color: white; background: #18223a; }
+      .a-nav button.on { color: white; background: linear-gradient(90deg, rgba(133,119,244,.28), rgba(133,119,244,.08)); box-shadow: inset 2px 0 #9185ff; }
+      .nav-icon { width: 18px; color: #9185ff; text-align: center; }
+      .a-side-note { margin-top: auto; padding: 10px; border: 1px solid #27324b; border-radius: 10px; color: #75819c; font-size: 10px; line-height: 1.55; }
+      .a-main { min-width: 0; display: flex; flex-direction: column; }
+      .a-head { display: flex; align-items: center; justify-content: space-between; padding: 17px 20px; border-bottom: 1px solid var(--border-soft); }
+      .a-head-actions { display: flex; align-items: center; gap: 14px; }
+      .a-body { padding: 18px 20px 26px; overflow: auto; }
+      .a-section-title { margin: 0 0 10px; color: var(--text-2); font-size: 12px; font-weight: 700; }
+      .a-card { margin-bottom: 14px; padding: 15px; border: 1px solid var(--border-soft); border-radius: 14px; background: var(--surface-2); }
+      .a-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 13px; }
+      .segment { display: flex; padding: 3px; border: 1px solid var(--border); border-radius: 10px; background: #111a2c; }
+      .segment button { flex: 1; height: 29px; border: 0; border-radius: 7px; color: var(--muted); background: transparent; cursor: pointer; font-size: 11px; }
+      .segment button.on { color: white; background: var(--primary); box-shadow: 0 4px 12px rgba(133,119,244,.26); }
+
+      /* B — compact anchored popover */
+      .variant-b {
+        --surface: #211927; --surface-2: #2a2031; --input: #17131c;
+        --text-1: #fff8fd; --text-2: #d8c8d6; --muted: #9c899b;
+        --border: #4b394c; --border-soft: #3a2b3c; --hover: #37283a;
+        --primary: #e47b9d; --focus: rgba(228,123,157,.2); --success: #7cd6b1;
+        --danger: #ff7c89; --switch-off: #5a4658;
+        width: min(486px, calc(100vw - 32px));
+        max-height: calc(100vh - 86px);
+        overflow: hidden;
+        border: 1px solid rgba(255,210,230,.18);
+        border-radius: 16px;
+        background: var(--surface);
+        box-shadow: 0 24px 64px rgba(54,31,50,.3);
+      }
+      .b-head { padding: 15px 16px 12px; }
+      .b-head-top { display: flex; align-items: center; justify-content: space-between; }
+      .b-actions { display: flex; align-items: center; gap: 12px; }
+      .b-tabs { display: flex; gap: 4px; margin-top: 13px; padding: 3px; overflow-x: auto; border-radius: 10px; background: #18131d; }
+      .b-tabs button { flex: 1; min-width: 58px; height: 30px; border: 0; border-radius: 7px; color: var(--muted); background: transparent; cursor: pointer; font-size: 11px; }
+      .b-tabs button.on { color: white; background: #3b2a40; box-shadow: inset 0 -2px var(--primary); }
+      .b-body { padding: 0 12px 14px; max-height: calc(100vh - 190px); overflow: auto; }
+      .accordion { margin-top: 8px; overflow: hidden; border: 1px solid var(--border-soft); border-radius: 12px; background: var(--surface-2); }
+      .accordion summary { display: flex; align-items: center; justify-content: space-between; padding: 13px 14px; cursor: pointer; list-style: none; color: var(--text-1); font-size: 13px; font-weight: 650; }
+      .accordion summary::-webkit-details-marker { display: none; }
+      .accordion summary::after { content: "⌄"; color: var(--muted); }
+      .accordion[open] summary::after { content: "⌃"; }
+      .accordion-content { display: grid; gap: 13px; padding: 0 14px 14px; border-top: 1px solid var(--border-soft); }
+      .accordion-content .setting-line:first-child { margin-top: 14px; }
+      .b-callout { padding: 11px 12px; border: 1px solid rgba(228,123,157,.22); border-radius: 10px; color: #cdb9c9; background: rgba(228,123,157,.07); font-size: 11px; line-height: 1.55; }
+
+      /* C — searchable right drawer */
+      .prototype-shell.c-align { place-items: stretch end; padding: 0 16px 16px 0; }
+      .variant-c {
+        --surface: #f8fbff; --surface-2: #ffffff; --input: #f2f6fb;
+        --text-1: #15243a; --text-2: #53647a; --muted: #8090a4;
+        --border: #d9e2ee; --border-soft: #e7edf5; --hover: #edf5fb;
+        --primary: #357bbd; --focus: rgba(53,123,189,.16); --success: #168f7a;
+        --danger: #d84c63; --switch-off: #afbccb;
+        width: min(560px, calc(100vw - 32px));
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        border: 1px solid #d5dfeb;
+        border-radius: 18px;
+        color: var(--text-1);
+        background: var(--surface);
+        box-shadow: 0 18px 60px rgba(41,73,104,.24);
+      }
+      .c-head { padding: 18px; border-bottom: 1px solid var(--border-soft); background: rgba(255,255,255,.8); }
+      .c-head-top { display: flex; align-items: center; justify-content: space-between; }
+      .c-head-actions { display: flex; align-items: center; gap: 13px; }
+      .c-search { position: relative; margin-top: 14px; }
+      .c-search::before { content: "⌕"; position: absolute; left: 12px; top: 8px; color: #6d7d91; font-size: 18px; }
+      .c-search .input { padding-left: 36px; background: #edf3f9; }
+      .c-body { padding: 16px 18px 26px; overflow: auto; }
+      .c-group-title { display: flex; align-items: baseline; justify-content: space-between; margin: 3px 0 10px; }
+      .c-group-title strong { font-size: 13px; }
+      .c-group-title span { color: var(--muted); font-size: 10px; }
+      .c-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 19px; }
+      .c-card { min-height: 102px; padding: 13px; border: 1px solid var(--border-soft); border-radius: 13px; background: white; box-shadow: 0 4px 12px rgba(30,61,92,.04); }
+      .c-card.wide { grid-column: 1 / -1; min-height: auto; }
+      .c-card-top { display: flex; align-items: center; justify-content: space-between; }
+      .c-icon { display: grid; place-items: center; width: 29px; height: 29px; border-radius: 9px; color: #286b9e; background: #e7f2fb; }
+      .c-card h3 { margin: 9px 0 4px; font-size: 12px; }
+      .c-card p { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
+      .c-status { color: var(--success); font-size: 10px; font-weight: 650; }
+      .c-row { display: flex; align-items: center; gap: 12px; }
+      .c-row .field { flex: 1; }
+
+      /* Prototype switcher, deliberately outside all three designs */
+      .prototype-switcher {
+        position: fixed;
+        left: 50%;
+        bottom: 12px;
+        z-index: 100;
+        transform: translateX(-50%);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px;
+        border: 1px solid rgba(255,255,255,.16);
+        border-radius: 999px;
+        color: white;
+        background: rgba(12,17,27,.94);
+        box-shadow: 0 10px 32px rgba(0,0,0,.3);
+      }
+      .prototype-switcher button { display: grid; place-items: center; width: 30px; height: 30px; border: 0; border-radius: 50%; color: white; background: #2b3445; cursor: pointer; }
+      .prototype-switcher button:hover { background: #7668e8; }
+      .prototype-label { min-width: 230px; text-align: center; font-size: 12px; }
+      .prototype-label small { color: #9aa6ba; }
+      @media (max-height: 800px) {
+        .character { height: 30vh; }
+        .variant-a { border-radius: 16px; }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="desktop">
+      <img class="character a" src="/sprites/a/idle.png" alt="角色甲" />
+      <img class="character b" src="/sprites/b/idle.png" alt="角色乙" />
+      <div class="toolbar" aria-label="模拟控制栏">
+        <button class="mode on">日常</button><button class="mode">相声</button><button class="mode">主播</button>
+        <button class="tool">▶</button><button class="tool">■</button><button class="tool">⚙</button>
+      </div>
+      <div id="prototype-shell" class="prototype-shell"></div>
+    </main>
+    <div class="prototype-switcher" aria-label="原型版本切换">
+      <button id="prev" aria-label="上一个版本">←</button>
+      <div id="prototype-label" class="prototype-label"></div>
+      <button id="next" aria-label="下一个版本">→</button>
+    </div>
+    <script>
+      const variants = ['A', 'B', 'C']
+      const names = { A: '侧栏工作台 · 深海紫', B: '紧凑弹层 · 暖莓红', C: '搜索抽屉 · 雾蓝' }
+      const shell = document.querySelector('#prototype-shell')
+
+      const switchControl = (on = true) => `<button class="switch${on ? ' on' : ''}" aria-label="切换开关"></button>`
+
+      function variantA() {
+        return `<section class="variant-a" aria-label="设置原型 A">
+          <aside class="a-side">
+            <div class="brand"><span class="brand-mark">✦</span><strong>设置</strong></div>
+            <div class="nav-caption">偏好设置</div>
+            <nav class="a-nav">
+              <button class="on"><span class="nav-icon">◉</span>基础设置</button>
+              <button><span class="nav-icon">◇</span>AI 模型</button>
+              <button><span class="nav-icon">♙</span>角色人设</button>
+              <button><span class="nav-icon">♪</span>角色语音</button>
+              <button><span class="nav-icon">◌</span>直播设置</button>
+              <button><span class="nav-icon">⌗</span>工具与隐私</button>
+            </nav>
+            <div class="nav-caption">数据管理</div>
+            <nav class="a-nav">
+              <button><span class="nav-icon">◎</span>记忆</button>
+              <button><span class="nav-icon">✓</span>备忘</button>
+              <button><span class="nav-icon">↺</span>历史</button>
+            </nav>
+            <div class="a-side-note">所有设置自动保存，仅保存在本机。</div>
+          </aside>
+          <div class="a-main">
+            <header class="a-head">
+              <div><div class="eyebrow">GENERAL</div><h1 class="title">基础设置</h1></div>
+              <div class="a-head-actions"><span class="save-state">已保存</span><button class="exit">退出程序</button></div>
+            </header>
+            <div class="a-body">
+              <h2 class="a-section-title">显示与布局</h2>
+              <div class="a-card">
+                <div class="setting-line"><div class="setting-copy"><strong>显示角色</strong><span>在桌面上显示两位角色</span></div>${switchControl()}</div>
+                <div class="setting-line"><div class="setting-copy"><strong>角色与控制栏位置</strong><span>拖动角色可移动，悬停滚轮可同步缩放</span></div><button class="button">恢复默认布局</button></div>
+              </div>
+              <h2 class="a-section-title">演出与主动行为</h2>
+              <div class="a-card">
+                <div class="field"><label class="label">主动程度</label><div class="segment"><button>安静 · 3次/时</button><button class="on">平衡 · 6次/时</button><button>热闹 · 12次/时</button></div></div>
+                <div class="a-grid" style="margin-top:13px"><label class="field"><span class="label">空闲自动重放</span><select class="select"><option>10 分钟</option><option>关闭</option></select></label><label class="field"><span class="label">久坐提醒</span><select class="select"><option>45 分钟</option><option>关闭</option></select></label></div>
+              </div>
+              <h2 class="a-section-title">环境</h2>
+              <div class="a-card">
+                <div class="setting-line"><div class="setting-copy"><strong>桌面环境感知</strong><span>只在本机识别电量与应用类型，不上传明细</span></div>${switchControl()}</div>
+                <div class="setting-line"><div class="setting-copy"><strong>显示左上角水印</strong><span>在录屏或直播时标识角色应用</span></div>${switchControl(false)}</div>
+              </div>
+            </div>
+          </div>
+        </section>`
+      }
+
+      function variantB() {
+        return `<section class="variant-b" aria-label="设置原型 B">
+          <header class="b-head">
+            <div class="b-head-top"><div><div class="eyebrow">QUICK SETTINGS</div><h1 class="title">设置</h1></div><div class="b-actions"><span class="save-state">已保存</span><button class="exit">退出</button></div></div>
+            <nav class="b-tabs"><button class="on">常规</button><button>模型</button><button>人设</button><button>语音</button><button>数据</button></nav>
+          </header>
+          <div class="b-body">
+            <details class="accordion" open><summary>显示与布局</summary><div class="accordion-content">
+              <div class="setting-line"><div class="setting-copy"><strong>显示角色</strong><span>桌面上显示角色立绘</span></div>${switchControl()}</div>
+              <button class="button">恢复默认布局</button>
+            </div></details>
+            <details class="accordion" open><summary>主动行为</summary><div class="accordion-content">
+              <div class="field"><label class="label">主动程度</label><div class="segment"><button>安静</button><button class="on">平衡</button><button>热闹</button></div></div>
+              <label class="field"><span class="label">空闲重放</span><select class="select"><option>10 分钟后</option><option>关闭</option></select></label>
+              <div class="setting-line"><div class="setting-copy"><strong>桌面环境感知</strong><span>仅本地分类，不上传窗口内容</span></div>${switchControl()}</div>
+            </div></details>
+            <details class="accordion"><summary>久坐提醒</summary><div class="accordion-content"><label class="field"><span class="label">连续活跃多久后提醒</span><select class="select"><option>45 分钟</option></select></label></div></details>
+            <details class="accordion"><summary>直播模式</summary><div class="accordion-content"><div class="b-callout">直播相关设置集中于此，启用后再显示房间号和扫码登录。</div></div></details>
+            <details class="accordion"><summary>截屏与隐私</summary><div class="accordion-content"><div class="b-callout">快捷键、角色排除与隐私说明按需展开。</div></div></details>
+          </div>
+        </section>`
+      }
+
+      function variantC() {
+        return `<section class="variant-c" aria-label="设置原型 C">
+          <header class="c-head">
+            <div class="c-head-top"><div><div class="eyebrow">CONTROL CENTER</div><h1 class="title">设置中心</h1></div><div class="c-head-actions"><span class="save-state">已同步</span><button class="exit">退出程序</button></div></div>
+            <label class="c-search"><input class="input" placeholder="搜索设置，例如“语音”或“快捷键”" /></label>
+          </header>
+          <div class="c-body">
+            <div class="c-group-title"><strong>常用设置</strong><span>状态一目了然</span></div>
+            <div class="c-grid">
+              <article class="c-card"><div class="c-card-top"><span class="c-icon">◉</span>${switchControl()}</div><h3>显示角色</h3><p>角色当前显示在桌面上</p></article>
+              <article class="c-card"><div class="c-card-top"><span class="c-icon">◇</span><span class="c-status">已连接</span></div><h3>DeepSeek</h3><p>deepseek-chat · 主模型</p></article>
+              <article class="c-card"><div class="c-card-top"><span class="c-icon">♪</span>${switchControl()}</div><h3>角色语音</h3><p>硅基流动 · CosyVoice2</p></article>
+              <article class="c-card"><div class="c-card-top"><span class="c-icon">◌</span><span class="c-status">未开播</span></div><h3>B站直播</h3><p>配置房间与扫码登录</p></article>
+            </div>
+            <div class="c-group-title"><strong>行为与提醒</strong><span>自动保存</span></div>
+            <div class="c-grid">
+              <article class="c-card wide"><div class="c-row"><div class="field"><label class="label">主动程度</label><div class="segment"><button>安静</button><button class="on">平衡</button><button>热闹</button></div></div><div class="field" style="max-width:150px"><label class="label">空闲重放</label><select class="select"><option>10 分钟</option></select></div></div></article>
+              <article class="c-card"><div class="c-card-top"><span class="c-icon">✓</span>${switchControl(false)}</div><h3>久坐提醒</h3><p>当前关闭</p></article>
+              <article class="c-card"><div class="c-card-top"><span class="c-icon">⌗</span>${switchControl()}</div><h3>环境感知</h3><p>只在本机分类</p></article>
+            </div>
+            <div class="c-group-title"><strong>数据管理</strong><span>记忆 · 备忘 · 历史</span></div>
+            <div class="c-grid">
+              <article class="c-card"><div class="c-card-top"><span class="c-icon">◎</span><span>›</span></div><h3>记忆</h3><p>4 条画像 · 12 条共同记忆</p></article>
+              <article class="c-card"><div class="c-card-top"><span class="c-icon">↺</span><span>›</span></div><h3>历史</h3><p>38 段演出 · 6 条收藏</p></article>
+            </div>
+          </div>
+        </section>`
+      }
+
+      function currentVariant() {
+        const value = new URLSearchParams(location.search).get('variant')?.toUpperCase()
+        return variants.includes(value) ? value : 'A'
+      }
+      function render() {
+        const variant = currentVariant()
+        shell.classList.toggle('c-align', variant === 'C')
+        shell.innerHTML = variant === 'A' ? variantA() : variant === 'B' ? variantB() : variantC()
+        document.querySelector('#prototype-label').innerHTML = `<strong>${variant}</strong> · ${names[variant]}<br><small>← → 切换方案</small>`
+        document.querySelectorAll('.switch').forEach((button) => button.addEventListener('click', () => button.classList.toggle('on')))
+      }
+      function cycle(offset) {
+        const index = variants.indexOf(currentVariant())
+        const next = variants[(index + offset + variants.length) % variants.length]
+        const url = new URL(location.href)
+        url.searchParams.set('variant', next)
+        history.replaceState({}, '', url)
+        render()
+      }
+      document.querySelector('#prev').addEventListener('click', () => cycle(-1))
+      document.querySelector('#next').addEventListener('click', () => cycle(1))
+      document.addEventListener('keydown', (event) => {
+        if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName) || document.activeElement?.isContentEditable) return
+        if (event.key === 'ArrowLeft') cycle(-1)
+        if (event.key === 'ArrowRight') cycle(1)
+      })
+      render()
+    </script>
+  </body>
+</html>

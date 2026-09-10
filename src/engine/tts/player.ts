@@ -58,8 +58,9 @@ class PcmRingPlayer extends AudioWorkletProcessor {
 registerProcessor('pcm-ring-player', PcmRingPlayer)
 `
 
-/** 起播前缓冲秒数:吸收网络抖动,又不明显拖慢首声 */
-const START_LATENCY_S = 0.18
+/** 起播前缓冲秒数:太小(≤0.15)时网络突发会造成早期欠载噼啪声,
+ *  0.25s 在首声延迟与播放平滑之间取平衡 */
+const START_LATENCY_S = 0.25
 
 /** Int16LE 字节 → Float32 单声道(多声道时平均下混) */
 function int16ToFloat32(bytes: Uint8Array, channels: number): Float32Array {
@@ -153,6 +154,12 @@ class AudioStreamPlayer {
     let receivedFrames = 0
     const pending: Float32Array[] = []
     const rate = meta.sampleRate
+    // Int16 采样跨分片对齐:网络分片长度不保证偶数,奇数尾字节必须留给下一分片,
+    // 否则丢半采样 + 后续全部错位一字节,听感为持续电流噪声
+    let carry: Uint8Array | null = null
+    // 起播 10ms 线性淡入,抹掉编码器首帧的瞬态杂音
+    const FADE_IN_FRAMES = Math.round(0.01 * rate)
+    let fadeInLeft = FADE_IN_FRAMES
 
     const feed = (f32: Float32Array) => {
       if (!started) pending.push(f32)
@@ -196,7 +203,26 @@ class AudioStreamPlayer {
           chunk = merged.subarray(parsed.pcmOffset)
           if (chunk.length === 0) return
         }
-        const f32 = int16ToFloat32(chunk, layout!.channels)
+        // 采样对齐:接上上片落下的尾字节;本片若又是奇数,留尾字节给下片
+        let bytes = chunk
+        if (carry) {
+          const merged = new Uint8Array(carry.length + bytes.length)
+          merged.set(carry, 0)
+          merged.set(bytes, carry.length)
+          bytes = merged
+          carry = null
+        }
+        if (bytes.length % 2 !== 0) {
+          carry = bytes.slice(bytes.length - 1)
+          bytes = bytes.subarray(0, bytes.length - 1)
+        }
+        if (bytes.length === 0) return
+        const f32 = int16ToFloat32(bytes, layout!.channels)
+        if (fadeInLeft > 0) {
+          const n = Math.min(f32.length, fadeInLeft)
+          for (let i = 0; i < n; i++) f32[i] *= (FADE_IN_FRAMES - fadeInLeft + i) / FADE_IN_FRAMES
+          fadeInLeft -= n
+        }
         receivedFrames += f32.length
         feed(f32)
         startIfReady()

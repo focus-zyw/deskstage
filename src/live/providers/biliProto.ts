@@ -99,3 +99,49 @@ export function authBody(realRoomId: number, token: string, uid = 0): Uint8Array
   })
   return new TextEncoder().encode(json)
 }
+
+export interface BiliGift {
+  giftName: string
+  count: number
+  coinType: 'gold' | 'silver'
+  /** 事件总金额(金瓜子;silver 礼物按 0 计):优先服务端总价 total_coin,
+   *  取不到才单价 price × num——字段已是总价时绝不能重复乘 */
+  totalCoin: number
+  userId: string
+  username: string
+}
+
+// 脏数据钳位上限:单个事件金额(金瓜子)/数量,超出按上限计,负数/非有限数归零
+const MAX_COIN = 10_000_000
+const MAX_COUNT = 9999
+
+function clampCoin(v: unknown): number {
+  const n = typeof v === 'number' ? v : Number(v)
+  if (!Number.isFinite(n) || n <= 0) return 0
+  return Math.min(MAX_COIN, Math.round(n))
+}
+
+function clampCount(v: unknown): number {
+  const n = typeof v === 'number' ? v : Number(v)
+  if (!Number.isFinite(n) || n < 1) return 1
+  return Math.min(MAX_COUNT, Math.round(n))
+}
+
+/** 从 SEND_GIFT 的 data 提取归一化礼物字段;结构不符返回 null(协议变更时静默丢弃)。
+ *  data 常见字段:giftName/num/price/coin_type('gold'|'silver')/total_coin/uid/uname */
+export function parseSendGift(data: unknown): BiliGift | null {
+  if (!data || typeof data !== 'object') return null
+  const d = data as Record<string, unknown>
+  if (typeof d.giftName !== 'string' || !d.giftName.trim()) return null
+  const count = clampCount(d.num)
+  const coinType = d.coin_type === 'silver' ? 'silver' : 'gold'
+  const totalCoin = coinType === 'silver' ? 0 : clampCoin(d.total_coin) || Math.min(MAX_COIN, clampCoin(d.price) * count)
+  return {
+    giftName: d.giftName.trim(),
+    count,
+    coinType,
+    totalCoin,
+    userId: d.uid !== undefined && d.uid !== null ? String(d.uid) : '',
+    username: typeof d.uname === 'string' ? d.uname : '',
+  }
+}

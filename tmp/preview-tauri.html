@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>settings preview (tauri mock)</title>
+    <script>
+      // 临时预览页:mock 最小 Tauri 内部 API,供浏览器里做设置窗口的视觉验收。
+      // 仅 dev 预览用,不进构建产物(build 入口只有根 index.html)。
+      (() => {
+        window.__bootErrors = []
+        window.addEventListener('error', (e) => window.__bootErrors.push((e.error && e.error.stack) || e.message))
+        window.addEventListener('unhandledrejection', (e) => window.__bootErrors.push('rej: ' + ((e.reason && e.reason.stack) || e.reason)))
+        const origErr = console.error
+        console.error = (...args) => {
+          try {
+            const msg = args.map((a) => (typeof a === 'string' ? a : String(a && a.message || a))).join(' ')
+            if (msg.includes('Maximum update') || msg.includes('at ')) {
+              window.__bootErrors.push('console: ' + msg.slice(0, 1500))
+            }
+          } catch {}
+          origErr(...args)
+        }
+        let cbSeq = 1
+        const monitor = {
+          name: null,
+          size: { Physical: { width: 1366, height: 768 } },
+          position: { Physical: { x: 0, y: 0 } },
+          workArea: {
+            size: { Physical: { width: 1366, height: 768 } },
+            position: { Physical: { x: 0, y: 0 } },
+          },
+          scaleFactor: 1,
+        }
+        window.__TAURI_INTERNALS__ = {
+          metadata: {
+            currentWindow: { label: 'main' },
+            currentWebview: { windowLabel: 'main', label: 'main' },
+          },
+          plugins: {},
+          unregisterListener: () => {},
+          transformCallback: (cb) => {
+            const id = cbSeq++
+            window['_' + id] = typeof cb === 'function' ? cb : () => {}
+            return id
+          },
+          invoke: async (cmd) => {
+            if (cmd === 'plugin:event|listen') return 1
+            if (cmd === 'plugin:event|unlisten') return null
+            if (cmd === 'plugin:path|resolve_directory') return 'C:\\preview\\appdata'
+            if (typeof cmd === 'string' && cmd.startsWith('plugin:path|')) return 'C:\\preview\\appdata\\data'
+            if (cmd === 'plugin:fs|exists') return false
+            if (cmd === 'plugin:fs|read_text_file') return '{}'
+            if (cmd === 'plugin:window|current_monitor') return monitor
+            if (cmd === 'plugin:window|outer_position' || cmd === 'plugin:window|inner_position')
+              return { Physical: { x: 0, y: 0 } }
+            if (cmd === 'plugin:window|outer_size' || cmd === 'plugin:window|inner_size')
+              return { Physical: { width: 1366, height: 768 } }
+            if (cmd === 'plugin:window|scale_factor') return 1
+            return null
+          },
+        }
+      })()
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
