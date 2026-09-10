@@ -9,6 +9,8 @@ export interface SpriteVariant {
   cooldownMs?: number
   /** 进入动作后至少保持多久才允许使用；适合避免 idle 变体在对白间隙闪现 */
   activationDelayMs?: number
+  /** 变体出现后保持多久再回到基础图片；主要用于待机姿势 */
+  holdMs?: number
   /** 姿势轮廓变化大时可覆盖动作的默认切图方式 */
   transitionMode?: TransitionMode
 }

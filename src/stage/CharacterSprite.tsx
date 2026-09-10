@@ -2,11 +2,8 @@ import { useEffect, useState } from 'react'
 import type { CSSProperties, Ref } from 'react'
 import { spriteFileSrc, type SpriteSet } from './spriteSets'
 import { motionForAction } from './spriteMotion'
-import {
-  firstDelayedVariantGroup,
-  immediateSpriteVariants,
-  SpriteVariantPicker,
-} from './spriteVariants'
+import { IdleDirector } from './idleDirector'
+import { immediateSpriteVariants, SpriteVariantPicker } from './spriteVariants'
 
 export interface CharacterSpriteProps {
   /** 立绘配置(素材目录、强调色、显示高、基线微调) */
@@ -89,10 +86,21 @@ export function CharacterSprite({
   // shake/jump 等无独立贴图的动作复用 idle 图，表现由 CSS 动画承担
   const artAction = sprite.actions.includes(action) ? action : 'idle'
   const baseFile = `${artAction}.png`
-  const variantKey = `${sprite.dir}:${action}`
+  const idleCycleActive =
+    action === artAction &&
+    artAction === 'idle' &&
+    !hot &&
+    !reacting &&
+    !dragging &&
+    !dropped &&
+    !listening &&
+    !pulsing
+  // 可待机状态也进入 key：交互打断时渲染期立即回基础图，不留一帧旧姿势。
+  const variantKey = `${sprite.dir}:${action}:${idleCycleActive ? 'idle-ready' : 'busy'}`
   const configuredVariants = action === artAction ? sprite.variants?.[artAction] : undefined
   const immediateCandidates = immediateSpriteVariants(configuredVariants)
   const [variantPicker] = useState(() => new SpriteVariantPicker())
+  const [idleDirector] = useState(() => new IdleDirector())
   const [variant, setVariant] = useState(() => ({
     key: variantKey,
     file: variantPicker.pick(action, baseFile, immediateCandidates),
@@ -105,19 +113,34 @@ export function CharacterSprite({
     })
   }
   useEffect(() => {
-    const delayedGroup = firstDelayedVariantGroup(configuredVariants)
-    if (!delayedGroup) return
-    const timer = window.setTimeout(() => {
-      setVariant((current) => {
-        if (current.key !== variantKey) return current
-        const file = variantPicker.pick(action, baseFile, delayedGroup.variants)
-        return file === current.file ? current : { ...current, file }
-      })
-    }, delayedGroup.delayMs)
-    return () => window.clearTimeout(timer)
-  }, [action, baseFile, configuredVariants, variantKey, variantPicker])
+    if (!idleCycleActive) {
+      idleDirector.stop()
+      return
+    }
+
+    idleDirector.start({
+      baseFile,
+      variants: configuredVariants,
+      onFrame: ({ file }) => {
+        setVariant((current) =>
+          current.key === variantKey && current.file !== file
+            ? { ...current, file }
+            : current,
+        )
+      },
+    })
+    return () => idleDirector.stop()
+  }, [action, artAction, baseFile, configuredVariants, idleCycleActive, idleDirector, variantKey])
   const src = spriteFileSrc(sprite, variant.file)
-  const fidget = useIdleFidget(artAction === 'idle')
+  const idleSpecial =
+    artAction === 'idle' &&
+    Boolean(
+      configuredVariants?.some(
+        (candidate) =>
+          candidate.file === variant.file && (candidate.activationDelayMs ?? 0) > 0,
+      ),
+    )
+  const fidget = useIdleFidget(idleCycleActive && !idleSpecial)
   const defaultMotion = motionForAction(action)
   const variantMotion = sprite.variants?.[artAction]?.find(
     (candidate) => candidate.file === variant.file,
