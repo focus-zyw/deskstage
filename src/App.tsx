@@ -714,11 +714,10 @@ function App() {
     showPoke(next ? 'B' : 'A', next ? '知道了,我们安静待着' : '欢迎回来~', 'talk', 2000)
   }
 
-  /** 命令面板:点播一段演出(话题可选;把主题挂上让这次点播聊它) */
+  /** 命令面板:点播一段演出。话题一次性传入(不落盘,不永久锁定聊天主题) */
   function performNow(m: Mode, topic?: string) {
-    if (topic) applyTopic(topic)
     setMode(m)
-    void playMode(m)
+    void playMode(m, topic)
   }
 
   /** 命令面板:跳到备忘页手填(时间没解析出来时的兜底入口) */
@@ -1049,8 +1048,9 @@ function App() {
   }, [])
 
   /** 单次点播：优先消费预生成(秒开,使用后移入 history);
-   *  未命中则生成当前轮,开播后后台再静默预生成下一轮(共两轮) */
-  async function playMode(m: Mode) {
+   *  未命中则生成当前轮,开播后后台再静默预生成下一轮(共两轮)。
+   *  topicArg = 一次性话题(命令面板"来一段关于X的相声"),不落盘不锁主题 */
+  async function playMode(m: Mode, topicArg?: string) {
     // 未配置 API Key:不进生成流程,气泡引导去设置
     const { apiKey } = await getConfig()
     if (!apiKey.trim()) {
@@ -1070,8 +1070,8 @@ function App() {
     setBubble({ A: null, B: null, C: null })
     setAction({ A: 'idle', B: 'idle', C: 'idle' })
 
-    // 主题:手动锁定 > 按模式概率聊使用者画像/兴趣 > 话题池随机(雷区过滤+偏好加权)
-    const fixedTopic = topicOverride
+    // 主题:一次性话题(参数) > 手动锁定 > 按模式概率聊使用者画像/兴趣 > 话题池随机(雷区过滤+偏好加权)
+    const fixedTopic = topicArg ?? topicOverride
     const interests = form.userProfile.likes
       .split(/[,，、;；\n]/)
       .map((x) => x.trim())

@@ -12,6 +12,12 @@ Windows 桌面虚拟角色(桌宠)应用:两个 Q 版角色(甲·便利店店员
   解析失败自动降级内置剧本;预生成下一轮实现"秒开",话题池随机 + 使用者兴趣介入 + 偏好加权。
 - **聊天通道**:点聊天按钮直接对角色说话,`@甲`/`@乙` 指定谁回,轮换应答;
   说话内容后台提取"关于你的长期事实"进入记忆库。
+- **工具循环**:命令面板(工具按钮)聚合翻译/截图翻译/提取文字/添加提醒/主题/隐藏角色/点播,
+  支持搜索与整句指令("明天下午三点提醒我交报告",关键词路由 + LLM 兜底,时间先确认再入库);
+  任务进度/结果走右下浮层卡,角色气泡不掺和正文。翻译面板支持自然/直译/润色、复制、朗读。
+- **主动行为调度**:单一调度器统管问候/自发闲聊/久坐提醒/备忘到点/空闲重放,
+  优先级 + 小时配额(主动程度:安静/平衡/热闹)+ 勿扰一键全静(提醒卡片照弹);
+  主动行为被连续掐断 3 次自动降频,用户一互动即清零。
 - **记忆系统**:手填画像(称呼/身份/喜好/雷区)+ 机器自动提取的事实(pinned 置顶防遗忘),
   注入所有对话 prompt;行为信号(戳/收藏/重放)反馈到话题权重。
 - **语音**:硅基流动 CosyVoice2 合成,甲乙各自音色,两级缓存(内存 blob → 磁盘 base64)逐句预合成;
@@ -24,31 +30,47 @@ Windows 桌面虚拟角色(桌宠)应用:两个 Q 版角色(甲·便利店店员
 
 ```
 src/
-  engine/     LLM 与语音:llmClient(厂商兼容/错误分类)、promptBuilder(人设+画像+协议)、
-              tts(CosyVoice2+克隆+缓存)、dialogPrefetch+topicSeeds(预生成/话题池)、timeAware
+  engine/     LLM 与语音:llmClient(厂商兼容/错误分类,走 llmGateway 通道)、llmGateway(通用请求网关)、
+              promptBuilder(人设+画像+协议)、tts(CosyVoice2+克隆+缓存+通道仲裁)、
+              dialogPrefetch+topicSeeds(预生成/话题池)、timeAware、envAware(环境感知)
   performer/  演出层:player(台词队列,LLM/硬编码剧本同一条路)、modes(模式注册表)
+  runtime/    运行时地基:runtimeMode(统一状态机+capabilities)、proactiveScheduler(主动行为
+              调度:优先级/配额/降频)、utilityTasks(工具任务状态)
+  features/   commands(命令注册表+整句路由+中文时间解析)
+  translation/ 翻译:types(语言表)、prompt(防注入协议)、translator(切块/容错)、TranslationPanel
+  ui/         ControlBar(工具栏,自带热区注册)、CommandPanel(命令面板)、UtilityCard(任务浮层卡)
   storage/    持久化:configStore / historyStore(jsonl 分集+收藏) / memoryStore(事实+口味统计) /
-              prefetchStore(预生成缓冲);全部写操作走 writeLock 读改写锁,失败静默不影响演出
+              storyStore(角色世界:老梗/事件线/连续剧情/关系) / interactionStore(互动账本+降频记账) /
+              memoStore(备忘) / prefetchStore(预生成缓冲);全部写操作走 writeLock 读改写锁,失败静默
   stage/      表现层:CharacterSprite(立绘交叉淡入+CSS 动画)、Bubble、icons、spriteSets(素材注册表)
   input/      pointerManager:穿透窗口的核心——Rust 轮询全局光标,命中已注册热区才恢复交互
 src-tauri/
   src/lib.rs            窗口 NOACTIVATE 切换、光标轮询线程、插件注册(单实例/fs/http/log)
   src/audio_capture.rs  WASAPI 环回录音(按进程/整系统),OBS 式录制目标列表,结束事件回传前端
+  src/capture.rs        冻结全屏→框选裁剪→写剪贴板(WDA_EXCLUDEFROMCAPTURE 角色不进截图)
+  src/ocr.rs            Windows 自带 OCR(剪贴板图片→文本行,专用 STA 线程)
+  src/env.rs            桌面快照:电量/前台应用类别/全屏/键鼠空闲/音频在播
 ```
 
 **关键设计:穿透窗口。** 窗口铺满主屏且默认 `WS_EX_NOACTIVATE` + 忽略鼠标事件;
 Rust 以 ~80Hz 推送全局光标坐标,前端把物理像素换算成窗口逻辑坐标做热区命中,
 命中才 `setIgnoreCursorEvents(false)`。**任何可点元素都必须注册热区,否则彻底点不到**——
-新增按钮/面板时务必在 `App.tsx` 挂 `registerHitRegion`。
+工具栏按钮由 `ui/ControlBar` 自行注册,新增面板时在 `App.tsx` 挂 `registerHitRegion`,
+新增工具入口请注册进 `features/commands`(命令面板),不再往工具栏加按钮。
+
+**统一运行状态:** 演出/面板/截图/录音状态全部收在 `runtime/runtimeMode`,是否可点播/聊天/
+主动说话都问它拿;主动行为(闲聊/提醒/重放)只允许 `runtime/proactiveScheduler` 发起,
+TTS 按 `chat < performance < utility < proactive` 通道仲裁,勿扰时全静(提醒卡片照弹)。
 
 **LLM 网络:** 请求统一走 `tauri-plugin-http`(Rust 侧,无 CORS),capabilities 放行预设厂商域与
 `http://*`(本地 Ollama/LM Studio 等);未放行的自定义 https 端点自动回落原生 fetch。
 戳一戳吐槽/聊天回复等纯文本调用不启用 `response_format`,端点不支持 json 模式时 400 自动降级重试。
 
 **数据落盘** (`%APPDATA%/dev.virtualcharacter.app/data/`):
-`config.json`(应用配置)· `memory.json`(事实/口味/计数)· `history/yyyy-MM-dd.jsonl`(演出史)
-· `favorites.json`(收藏,独立于历史,删历史不波及)· `prefetch.json`(预生成缓冲)
-· `audio-cache/`(语音缓存)· `voice-captures/`(克隆参考录音)。
+`config.json`(应用配置)· `memory.json`(事实/口味/计数)· `story.json`(角色世界:老梗/事件线/剧情/关系)
+· `interactions.json`(互动账本+主动行为降频计数)· `memos.json`(备忘)
+· `history/yyyy-MM-dd.jsonl`(演出史)· `favorites.json`(收藏,独立于历史,删历史不波及)
+· `prefetch.json`(预生成缓冲)· `audio-cache/`(语音缓存)· `voice-captures/`(克隆参考录音)。
 
 ## 开发
 
