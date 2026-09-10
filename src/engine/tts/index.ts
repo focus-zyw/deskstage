@@ -61,19 +61,37 @@ const CHANNEL_PRIORITY: Record<TtsChannel, number> = {
 let epoch = 0
 /** 已结束(播完/被打断/失败/静音)的最大 epoch */
 let endedEpoch = 0
+/** 已真正出声(首帧音频输出)的最大 epoch */
+let audibleEpoch = 0
 const endWaiters = new Set<{ at: number; resolve: () => void }>()
+const startWaiters = new Set<{ at: number; resolve: (v: 'audible' | 'silent') => void }>()
 
 function markEnded(my: number): void {
   if (my > endedEpoch) endedEpoch = my
-  flushEndWaiters()
+  flushWaiters()
 }
 
-function flushEndWaiters(): void {
+function markAudible(my: number): void {
+  if (my > audibleEpoch) audibleEpoch = my
+  flushWaiters()
+}
+
+function flushWaiters(): void {
   for (const w of endWaiters) {
     // 被更新的句抢占(epoch 前移)或自身已结束,都算"这句完了"
     if (w.at <= endedEpoch || w.at < epoch) {
       endWaiters.delete(w)
       w.resolve()
+    }
+  }
+  for (const s of startWaiters) {
+    if (audibleEpoch >= s.at) {
+      startWaiters.delete(s)
+      s.resolve('audible')
+    } else if (s.at <= endedEpoch || s.at < epoch) {
+      // 这句无声收场(静音/失败/被抢占前没出声)
+      startWaiters.delete(s)
+      s.resolve('silent')
     }
   }
 }
@@ -82,7 +100,15 @@ function flushEndWaiters(): void {
 function waitSpokenEnd(at: number): Promise<void> {
   return new Promise((resolve) => {
     endWaiters.add({ at, resolve })
-    flushEndWaiters()
+    flushWaiters()
+  })
+}
+
+/** 等待某句的首帧声音输出;无声收场则得 'silent' */
+function waitAudible(at: number): Promise<'audible' | 'silent'> {
+  return new Promise((resolve) => {
+    startWaiters.add({ at, resolve })
+    flushWaiters()
   })
 }
 let activeChannel: TtsChannel | null = null
@@ -208,7 +234,8 @@ async function drainStream(
       if (value) {
         parts.push(value)
         total += value.length
-        session?.push(value)
+        // 背压:缓冲达高水位时 push 会等待 worklet 消费,HTTP 读取随之暂停,不丢采样
+        if (session) await session.push(value)
       }
       if (my !== null && my !== epoch) {
         void reader.cancel().catch(() => {})
@@ -226,7 +253,7 @@ async function drainStream(
       // 仍有在途读取,交给 GC
     }
   }
-  session?.finish()
+  if (session) await session.finish() // 待发数据全部进入 worklet 后才发 finish
   const raw = concatBytes(parts, total)
   if (meta.format === 'wav') return raw.buffer as ArrayBuffer // concatBytes 新建,buffer 即完整 wav
   return pcmToWav(raw, meta.sampleRate, meta.channels, meta.bitsPerSample)
@@ -266,6 +293,8 @@ function playViaElement(bytes: ArrayBuffer, my: number, channel: TtsChannel, gai
   const audio = new Audio(url)
   audio.volume = Math.min(1, 10 ** (gainDb / 20)) // 深夜档降音量在播放端做
   currentEl = audio
+  // 首帧声音真正开始播放(非仅 play() 调用成功)
+  audio.addEventListener('playing', () => markAudible(my), { once: true })
   audio.onended = () => {
     URL.revokeObjectURL(url)
     markEnded(my)
@@ -308,7 +337,7 @@ export function speak(speaker: Speaker, text: string, delivery?: string, channel
   }
   // 进函数即领序号:若先发的句子合成慢,完成时序号已落后,不会反向覆盖新句
   const my = ++epoch
-  flushEndWaiters()
+  flushWaiters()
   void (async () => {
     try {
       const cfg = await getConfig()
@@ -362,13 +391,18 @@ export function speak(speaker: Speaker, text: string, delivery?: string, channel
       activeChannel = channel
       let sess: StreamSession | null = null
       try {
-        sess = await streamPlayer.session(stream.meta, gainDb, () => {
-          markEnded(my)
-          if (sess && activeSession === sess && epoch === my) {
-            activeSession = null
-            activeChannel = null
-          }
-        })
+        sess = await streamPlayer.session(
+          stream.meta,
+          gainDb,
+          () => {
+            markEnded(my)
+            if (sess && activeSession === sess && epoch === my) {
+              activeSession = null
+              activeChannel = null
+            }
+          },
+          () => markAudible(my), // worklet 首帧真实输出
+        )
       } catch (e) {
         console.warn('[tts] 流式播放初始化失败,降级整段', e)
         playViaElement(await ensureCached(spec), my, channel, gainDb)
@@ -419,17 +453,32 @@ export function prefetchVoice(speaker: Speaker, text: string, delivery?: string)
 /** 停止当前语音(演出停止/切换时) */
 export function stopSpeaking(): void {
   epoch++
-  flushEndWaiters()
+  flushWaiters()
   clearActive()
 }
 
-/** 说一句并返回「这句语音结束」的信号:播完/被新句抢占/停止/静音/失败 都会放行。
- *  返回 null = 被更高优先级压制,本轮无声(调用方按无语音节奏走)。
- *  演出播放器用它做语音驱动的台词推进:文本停留到语音真正说完 */
-export function speakTracked(speaker: Speaker, text: string, delivery?: string, channel: TtsChannel = 'chat'): Promise<void> | null {
+/** 一句语音的生命周期句柄 */
+export interface SpeechHandle {
+  /** 首帧声音真正输出 → 'audible';本句无声收场(静音/失败/被抢占) → 'silent' */
+  started: Promise<'audible' | 'silent'>
+  /** 语音结束(播完/被打断/停止/失败),都会放行 */
+  ended: Promise<void>
+  /** 取消本句(仅当仍是当前句时生效):首声超时用,杜绝迟到语音突然插入 */
+  stop(): void
+}
+
+/** 说一句并拿到完整生命周期句柄。返回 null = 被更高优先级压制,本轮无声。
+ *  演出播放器用它做语音驱动的台词推进:气泡随首帧声音上屏,闭嘴随语音结束 */
+export function speakTracked(speaker: Speaker, text: string, delivery?: string, channel: TtsChannel = 'chat'): SpeechHandle | null {
   const my = speak(speaker, text, delivery, channel)
   if (my < 0) return null
-  return waitSpokenEnd(my)
+  return {
+    started: waitAudible(my),
+    ended: waitSpokenEnd(my),
+    stop: () => {
+      if (epoch === my) stopSpeaking()
+    },
+  }
 }
 
 /** 设置页试听:固定台词走完整链路(含情感指令),channel=utility,可与切换供应商配合做同台词 A/B */

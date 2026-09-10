@@ -32,6 +32,19 @@ test('解析完整 crossDomain 链接:cookie 拼接 + uid', () => {
   assert.equal(r.cookie, 'DedeUserID=12345; SESSDATA=aa%2Cbb+cc,dd*Ce; bili_jct=jcttoken')
 })
 
+test('cookieFromSetCookie 提取 Set-Cookie 行中的登录三件套', () => {
+  const r = mod.cookieFromSetCookie([
+    'DedeUserID=99; Path=/; Domain=.bilibili.com; Expires=Wed, 24 Sep 2026 12:00:00 GMT;',
+    'SESSDATA=aa%2Cbb,cc; Path=/; Domain=.bilibili.com; HttpOnly;',
+    'bili_jct=tok123; Path=/;',
+    'buvid3=other; Path=/;',
+  ])
+  assert.deepEqual(r, { cookie: 'DedeUserID=99; SESSDATA=aa%2Cbb,cc; bili_jct=tok123', uid: 99 })
+  // 缺关键字段
+  assert.equal(mod.cookieFromSetCookie(['buvid3=x; Path=/']), null)
+  assert.equal(mod.cookieFromSetCookie([]), null)
+})
+
 test('缺 SESSDATA / 缺 DedeUserID / 坏链接 返回 null', () => {
   assert.equal(mod.cookieFromCrossUrl('https://x.com/crossDomain?bili_jct=only'), null)
   assert.equal(mod.cookieFromCrossUrl('https://x.com/crossDomain?SESSDATA=only'), null)

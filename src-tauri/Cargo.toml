@@ -25,7 +25,8 @@ tauri = { version = "2.11.3", features = [] }
 tauri-plugin-log = "2"
 tauri-plugin-fs = "2"
 mouse_position = "0.1"
-tauri-plugin-http = "2"
+# unsafe-headers:允许 JS 显式传空 Origin——插件默认强加 webview 来源的 Origin,B站登录接口会 403
+tauri-plugin-http = { version = "2", features = ["unsafe-headers"] }
 # windows 0.61 以 default-features=false 引入 windows-future;显式开 std 解锁 IAsyncOperation 的 .await
 windows-future = { version = "0.2.1", features = ["std"] }
 wasapi = "0.24.0"
@@ -37,3 +38,4 @@ image = { version = "0.25.6", default-features = false, features = ["png"] }
 base64 = "0.22"
 tauri-plugin-clipboard-manager = "2.3.3"
 tauri-plugin-global-shortcut = "2.3.2"
+tauri-plugin-autostart = "2.5.1"

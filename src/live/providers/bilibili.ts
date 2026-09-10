@@ -42,6 +42,8 @@ async function apiGet<T>(path: string, cookie?: string): Promise<T> {
     headers: {
       'User-Agent': UA,
       Referer: 'https://live.bilibili.com/',
+      // Origin 显式传空:插件强加 webview 来源 Origin 时B站接口会 403(需 unsafe-headers feature)
+      Origin: '',
       ...(cookie ? { Cookie: cookie } : {}),
     },
   })

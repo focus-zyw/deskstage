@@ -64,6 +64,11 @@ pub fn run() {
     // 单实例:双开会导致两个全屏穿透覆盖层 + 两份前端并发写同一批 json(内存锁互不可见)。
     // 二次启动时窗口常驻穿透、无从唤起,仅作静默退出
     .plugin(tauri_plugin_single_instance::init(|_app, _args, _cwd| {}))
+    // 开机自启动:Windows 走 HKCU Run 注册表键;开关状态由前端按配置同步(默认关)
+    .plugin(tauri_plugin_autostart::init(
+      tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+      None,
+    ))
     .plugin(tauri_plugin_fs::init())
     .plugin(tauri_plugin_http::init())
     .plugin(tauri_plugin_clipboard_manager::init())

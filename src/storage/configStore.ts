@@ -114,6 +114,9 @@ export interface AppConfig {
   ocr: OcrConfig
   /** 主播模式:直播弹幕互动 */
   live: LiveConfig
+  /** 开机自启动(Windows 写 HKCU Run 注册表键);默认关。
+   *  配置是唯一事实来源:应用启动时按此值与系统注册状态对账 */
+  launchOnBoot: boolean
 }
 
 /** 翻译面板配置 */
@@ -200,6 +203,7 @@ export const DEFAULT_CONFIG: AppConfig = {
     model: 'glm-4.6v-flash',
   },
   live: { platform: 'bilibili', roomId: '', cookie: '', giftReactionsEnabled: true },
+  launchOnBoot: false,
 }
 
 /** 清洗使用者画像:逐字段裁剪;likes 为空时回落旧 userInterests 字段(老配置平滑迁移) */
@@ -450,6 +454,7 @@ function sanitizeConfig(obj: unknown): AppConfig {
         giftReactionsEnabled: c.giftReactionsEnabled !== false,
       }
     })(),
+    launchOnBoot: o.launchOnBoot === true,
   }
 }
 

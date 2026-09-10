@@ -5,6 +5,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 import { listen } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
 import { readFile, remove } from '@tauri-apps/plugin-fs'
+import { enable as autoStartEnable, disable as autoStartDisable, isEnabled as isAutoStartEnabled } from '@tauri-apps/plugin-autostart'
 import { CharacterSprite } from './stage/CharacterSprite'
 import { Bubble } from './stage/Bubble'
 import { startScreenshot, applyScreenshotHotkey } from './capture'
@@ -20,11 +21,16 @@ import {
 } from './input/pointerManager'
 import {
   PerformancePlayer,
+  bubbleDuration,
+  MIN_READABLE_MS,
+  FIRST_AUDIO_DEADLINE_MS,
+  planLinePresentation,
   type ChoiceOption,
   type ChoicePoint,
   type DialogLine,
   type Speaker,
 } from './performer/player'
+import { deliverySpeed } from './performer/dialogSchema'
 import { MODES, modeOf, type Mode } from './performer/modes'
 import { generateDialog, generateShortChat, improvPokeLine, describeLlmError, generateUserChatReply, extractFacts, distillStory, memoReminderLine } from './engine/llmClient'
 import { react, reactBonded, distanceBands } from './engine/interactionRules'
@@ -76,6 +82,7 @@ import { UtilityCards } from './ui/UtilityCard'
 import {
   getConfig,
   saveConfig,
+  inTauri,
   DEFAULT_CONFIG,
   type AppConfig,
   type CharactersConfig,
@@ -147,6 +154,34 @@ function withFinalePause(lines: DialogLine[]): DialogLine[] {
 /** apiKeys 的存储键:预设厂商用 id,自定义端点按 baseUrl 区分(与 configStore 注释约定一致) */
 function vendorKeyOf(id: string, baseUrl: string): string {
   return id === CUSTOM_VENDOR_ID ? `custom:${baseUrl.trim()}` : id
+}
+
+const sleepMs = (ms: number): Promise<void> => new Promise((resolve) => window.setTimeout(resolve, ms))
+
+// dev 诊断:全局异常自动收集到 window.__errs(桌面窗口 Console 直接查看)
+if (import.meta.env.DEV) {
+  window.addEventListener('error', (e) => {
+    const w = window as any
+    ;(w.__errs = w.__errs || []).push(`error: ${e.message ?? e}`)
+  })
+  window.addEventListener('unhandledrejection', (e) => {
+    const w = window as any
+    ;(w.__errs = w.__errs || []).push(`rejection: ${String(e.reason?.message ?? e.reason)}`)
+  })
+}
+
+/** 开机自启动:把系统注册状态对齐到配置值。配置是唯一事实来源——
+ *  面板开关与手改配置文件两条路都汇到这里;启动时对账一次,改了配置文件重启也能生效。
+ *  浏览器预览(无 Tauri 运行时)跳过 */
+async function applyLaunchOnBoot(want: boolean): Promise<void> {
+  if (!inTauri) return
+  try {
+    if ((await isAutoStartEnabled()) !== want) {
+      await (want ? autoStartEnable() : autoStartDisable())
+    }
+  } catch (e) {
+    console.warn('开机自启动设置失败', e)
+  }
 }
 
 // ---------- 设置窗口:分页导航与搜索索引 ----------
@@ -303,6 +338,7 @@ const SETTINGS_SEARCH_INDEX: { tab: SettingsTab; card: string; label: string; ke
   { tab: 'general', card: '演出与主动行为', label: '久坐提醒', keywords: '休息 番茄 健康 分钟' },
   { tab: 'general', card: '环境与桌面', label: '桌面环境感知', keywords: '电量 应用 感知 分类' },
   { tab: 'general', card: '环境与桌面', label: '显示左上角水印', keywords: '水印 直播 录屏' },
+  { tab: 'general', card: '环境与桌面', label: '开机自启动', keywords: '自启 开机 启动 登录 autostart' },
   // AI 模型
   { tab: 'model', card: '主模型', label: '厂商', keywords: 'deepseek 智谱 ollama 供应商' },
   { tab: 'model', card: '主模型', label: 'API Key', keywords: '密钥 鉴权 token' },
@@ -862,38 +898,73 @@ function App() {
   const playingLines = useRef<DialogLine[]>([])
   if (!player.current) {
     player.current = new PerformancePlayer({
-      onLine: (line, index) => {
-        setBubble((b) => ({ ...b, [line.speaker]: line.text }))
-        // 台词在笑 → 用大笑表情(LLM 词表有 laugh 时直接命中,否则启发式兜底)
-        const laughing = /哈哈+|嘿嘿|嘻嘻|笑死|233/.test(line.text)
-        const act = laughing ? 'laugh' : line.action || 'talk'
-        setAction((a) => ({ ...a, [line.speaker]: act }))
-        setSpeaking(line.speaker)
-        setDelivery((d) => ({ ...d, [line.speaker]: line.delivery }))
+      onStart: (first) => {
+        // 开播即预取第一句语音,消除首句文字先行
+        prefetchVoice(first.speaker, first.text, first.delivery)
+      },
+      onLineStart: (line, index) => {
         if (nowPlaying.current) nowPlaying.current.index = index
-        // 语音结束信号交给播放器:等语音真正说完再推进下一句(静音/失败自动回退估算节奏)
-        const audioDone = speakTracked(line.speaker, line.text, line.delivery, 'performance')
+        // 气泡与说话动作在首帧声音出现时同步上屏(静音/首声超时按纯文本节奏显示)
+        const showTalk = () => {
+          setBubble((b) => ({ ...b, [line.speaker]: line.text }))
+          // 台词在笑 → 用大笑表情(LLM 词表有 laugh 时直接命中,否则启发式兜底)
+          const laughing = /哈哈+|嘿嘿|嘻嘻|笑死|233/.test(line.text)
+          const act = laughing ? 'laugh' : line.action || 'talk'
+          setAction((a) => ({ ...a, [line.speaker]: act }))
+          setSpeaking(line.speaker)
+          setDelivery((d) => ({ ...d, [line.speaker]: line.delivery }))
+          // 听者同步反应:LLM 指定听者动作(害羞/大笑/欲言又止…),与台词同拍
+          const listener: Speaker = line.speaker === 'A' ? 'B' : 'A'
+          const la = line.listenerAction
+          if (la) setAction((a) => ({ ...a, [listener]: la }))
+          // 台词带感叹/问号 → 听者惊讶脉冲
+          if (/[!?！？]/.test(line.text)) {
+            setPulseFor(listener)
+            window.clearTimeout(pulseTimer.current)
+            pulseTimer.current = window.setTimeout(() => setPulseFor(null), 600)
+          }
+        }
+        const handle = speakTracked(line.speaker, line.text, line.delivery, 'performance')
         const next = playingLines.current[index + 1]
         if (next) prefetchVoice(next.speaker, next.text, next.delivery)
-        // 听者同步反应:LLM 指定听者动作(害羞/大笑/欲言又止…),对手戏更活
-        const listener: Speaker = line.speaker === 'A' ? 'B' : 'A'
-        const la = line.listenerAction
-        if (la) setAction((a) => ({ ...a, [listener]: la }))
-        // 台词带感叹/问号 → 听者惊讶脉冲
-        if (/[!?！？]/.test(line.text)) {
-          setPulseFor(listener)
-          window.clearTimeout(pulseTimer.current)
-          pulseTimer.current = window.setTimeout(() => setPulseFor(null), 600)
+        const estimate = Math.round(bubbleDuration(line.text) / deliverySpeed(line.delivery))
+        let speechPhase: Promise<void>
+        if (!handle) {
+          showTalk() // 被更高优先级压制:纯文本节奏
+          speechPhase = sleepMs(estimate)
+        } else {
+          // 首声截止:超时取消本句 TTS 按纯文本播,杜绝迟到语音突然插入
+          let deadlineTimer = 0
+          speechPhase = Promise.race([
+            handle.started,
+            new Promise<'timeout'>((resolve) => {
+              deadlineTimer = window.setTimeout(() => resolve('timeout'), FIRST_AUDIO_DEADLINE_MS)
+            }),
+          ]).then((res) => {
+            window.clearTimeout(deadlineTimer)
+            showTalk() // 无论声音是否赶上截止,台词与表情都必须上屏
+            const plan = planLinePresentation(res, estimate)
+            if (plan.stopTts) handle.stop() // 首声超时:取消本句,按纯文本节奏走,杜绝迟到语音插入
+            if (plan.textDurationMs !== null) return sleepMs(plan.textDurationMs) // 静音/超时:纯文本节奏
+            return Promise.all([
+              sleepMs(MIN_READABLE_MS),
+              Promise.race([handle.ended, sleepMs(estimate + 8000)]),
+            ]).then(() => {})
+          })
         }
-        return audioDone
+        return { speechPhase }
+      },
+      onSpeechEnd: (speaker) => {
+        // 声音结束立即闭嘴;气泡与听者反应留进句尾留白
+        setSpeaking(null)
+        setAction((a) => ({ ...a, [speaker]: 'idle' }))
       },
       onLineEnd: (speaker) => {
         const listener: Speaker = speaker === 'A' ? 'B' : 'A'
         setBubble((b) => ({ ...b, [speaker]: null }))
-        // 双方回 idle:说话者收声,听者的反应动作也不滞留到下一拍
-        setAction((a) => ({ ...a, [speaker]: 'idle', [listener]: 'idle' }))
+        // 听者的反应动作不滞留到下一拍(说话者已在 onSpeechEnd 回 idle)
+        setAction((a) => ({ ...a, [listener]: 'idle' }))
         setDelivery((d) => ({ ...d, [speaker]: undefined }))
-        setSpeaking(null)
       },
       onChoice: (cp) => {
         setChoice(cp)
@@ -1067,7 +1138,8 @@ function App() {
   const qrHandleRef = useRef<QrLoginHandle | null>(null)
   const [qrLogin, setQrLogin] = useState<{
     phase: QrPhase | 'generating'
-    qrDataUrl?: string
+    qrOfficial?: string
+    qrClassic?: string
     hint?: string
   } | null>(null)
 
@@ -1084,10 +1156,19 @@ function App() {
     qrHandleRef.current?.cancel()
     setQrLogin({ phase: 'generating', hint: '正在生成二维码…' })
     qrHandleRef.current = startQrLogin({
-      onQr: (url) => {
-        void QRCode.toDataURL(url, { width: 176, margin: 1 }).then((dataUrl) => {
-          setQrLogin((s) => (s ? { ...s, phase: 'waiting', qrDataUrl: dataUrl } : s))
-        })
+      onQr: (urls) => {
+        // 渲染失败必须可见:吞掉 rejection 会永远停在"生成中"
+        const render = (u: string) =>
+          QRCode.toDataURL(u, { width: 148, margin: 1 }).catch((e) =>
+            Promise.reject(String(e?.message ?? e)),
+          )
+        Promise.all([render(urls.official), render(urls.classic)])
+          .then(([official, classic]) => {
+            setQrLogin((s) => (s ? { ...s, phase: 'waiting', qrOfficial: official, qrClassic: classic } : s))
+          })
+          .catch((e) => {
+            setQrLogin((s) => (s ? { ...s, phase: 'error', hint: `二维码渲染失败:${String(e).slice(0, 80)}` } : s))
+          })
       },
       onPhase: (p, message) => {
         // 过期自动刷新中:保留二维码,仅提示;error/ok 文案由 onPhase/message 带出
@@ -1250,6 +1331,8 @@ function App() {
       setPersonaOverride(c.persona.a, c.persona.b)
       // 环境感知:按配置低频轮询本机状态(电量/前台应用分类等)
       if (c.envSense) startEnvPolling()
+      // 开机自启动:按配置对账系统注册状态(默认关;手改配置文件后重启同样生效)
+      void applyLaunchOnBoot(c.launchOnBoot)
     })
     // 启动恢复：读最近历史，续集生成时衔接上次聊到的内容
     void loadRecentHistory(20).then((entries) => {
@@ -2278,7 +2361,6 @@ function App() {
     showPoke(who, fallback, fallbackAction)
   }
 
-  const busy = phase === 'generating'
   // 显示用动作:打瞌睡仅覆盖 idle 态,任何明确动作优先
   const displayAction = (who: Speaker) =>
     sleepyOn && action[who] === 'idle' ? 'sleepy' : action[who]
@@ -2307,7 +2389,7 @@ function App() {
         onPosChange={applyCtrlBar}
         mode={mode}
         onModeChange={setMode}
-        busy={busy}
+        busy={phase === 'generating' || phase === 'performing'}
         canStop={phase !== 'idle'}
         onGenerate={() => void playMode(mode)}
         onStop={stopEverything}
@@ -2542,6 +2624,17 @@ function App() {
                             onChange={(v) => {
                               setShowWatermark(v)
                               saveField({ showWatermark: v }, true)
+                            }}
+                          />
+                        </SetLine>
+                        <SetLine title="开机自启动" hint="登录系统后自动运行本应用">
+                          <SetSwitch
+                            checked={form.launchOnBoot}
+                            label="开机自启动"
+                            onChange={(v) => {
+                              setForm({ ...form, launchOnBoot: v })
+                              saveField({ launchOnBoot: v }, true)
+                              void applyLaunchOnBoot(v)
                             }}
                           />
                         </SetLine>
@@ -3065,17 +3158,27 @@ function App() {
                         </SetLine>
                         {qrLogin && (
                           <div className="qr-row">
-                            {qrLogin.qrDataUrl && (
-                              <img
-                                src={qrLogin.qrDataUrl}
-                                alt="B站登录二维码(手机B站App扫一扫)"
-                                width={148}
-                                height={148}
-                              />
+                            {(qrLogin.qrOfficial || qrLogin.qrClassic) && (
+                              <div style={{ display: 'flex', gap: 10 }}>
+                                {qrLogin.qrOfficial && (
+                                  <div style={{ textAlign: 'center' }}>
+                                    <img src={qrLogin.qrOfficial} alt="二维码A(新版App)" width={148} height={148} />
+                                    <div className="set-note">格式A(新版App)</div>
+                                  </div>
+                                )}
+                                {qrLogin.qrClassic && (
+                                  <div style={{ textAlign: 'center' }}>
+                                    <img src={qrLogin.qrClassic} alt="二维码B(旧版App)" width={148} height={148} />
+                                    <div className="set-note">格式B(旧版App)</div>
+                                  </div>
+                                )}
+                              </div>
                             )}
                             <span className="set-note">
                               {qrLogin.hint ??
-                                (qrLogin.phase === 'waiting' ? '请用手机B站App「扫一扫」并确认登录' : '')}
+                                (qrLogin.phase === 'waiting'
+                                  ? '两个码各扫一次:哪个在手机上弹出登录确认就点确认(两码同一会话);都报错请升级手机B站App'
+                                  : '')}
                             </span>
                           </div>
                         )}
