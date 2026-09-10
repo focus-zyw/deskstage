@@ -45,6 +45,8 @@ export interface PlayerCallbacks {
   onLineEnd: (speaker: Speaker) => void
   /** 整段播完（自然结束，非 stop） */
   onDone: () => void
+  /** 中止(手动停止/被新播放顶掉/停在选择点):上报真实开播过的台词前缀;自然播完不触发 */
+  onStopped?: (played: DialogLine[]) => void
   /** 播放到观众抉择点:暂停推进,等 resume(branchId) 继续 */
   onChoice?: (choice: ChoicePoint) => void
   /** 脚本/分支开播:预取第一句语音,消除首句文字先行 */
@@ -67,6 +69,8 @@ const sleep = (ms: number, signal: AbortSignal) =>
 export class PerformancePlayer {
   private ctrl: AbortController | null = null
   private cbs: PlayerCallbacks
+  /** 本次播放中真实开播过的台词(开播即计入,中止时按前缀上报) */
+  private played: DialogLine[] = []
 
   constructor(cbs: PlayerCallbacks) {
     this.cbs = cbs
@@ -76,7 +80,7 @@ export class PerformancePlayer {
     return this.ctrl !== null
   }
 
-  /** 播放一段脚本；重复调用会先停掉上一段。
+  /** 播放一段脚本；重复调用会先停掉上一段(其 onStopped 会先同步触发)。
    *  choice+after 同时提供时:播完 before 后触发 onChoice 暂停,
    *  等 resume(branchId) 播对应分支 */
   play(
@@ -84,6 +88,7 @@ export class PerformancePlayer {
     opts: { gap?: number; choice?: ChoicePoint; after?: Record<string, DialogLine[]> } = {},
   ) {
     this.stop()
+    this.played = []
     const ctrl = new AbortController()
     this.ctrl = ctrl
     const gap = opts.gap ?? 400
@@ -97,6 +102,7 @@ export class PerformancePlayer {
         if (before) await sleep(before, ctrl.signal)
         if (ctrl.signal.aborted) break
         // 推进时机由语音层决定(语音真正结束/纯文本估时);最短可读时间防气泡闪烁
+        this.played.push(line)
         const { speechPhase } = this.cbs.onLineStart(line, i)
         await Promise.all([speechPhase, sleep(MIN_READABLE_MS, ctrl.signal)])
         if (ctrl.signal.aborted) break
@@ -127,6 +133,7 @@ export class PerformancePlayer {
           const before = clampPauseMs(line.pauseBefore)
           if (before) await sleep(before, ctrl.signal)
           if (ctrl.signal.aborted) break
+          this.played.push(line)
           const { speechPhase } = this.cbs.onLineStart(line, i)
           await Promise.all([speechPhase, sleep(MIN_READABLE_MS, ctrl.signal)])
           if (ctrl.signal.aborted) break
@@ -156,6 +163,11 @@ export class PerformancePlayer {
   private choiceWaiter: ((branchId: string) => void) | null = null
 
   stop() {
+    // 确实在播(或停在选择点)才上报中止前缀;防御性空停不打扰
+    if (this.ctrl !== null || this.choiceWaiter !== null) {
+      this.cbs.onStopped?.([...this.played])
+    }
+    this.played = []
     this.choiceWaiter?.('__aborted__')
     this.choiceWaiter = null
     this.ctrl?.abort()
