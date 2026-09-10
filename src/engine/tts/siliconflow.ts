@@ -33,7 +33,8 @@ export const siliconflowProvider: TtsProvider = {
   modelId: () => TTS_MODEL,
   missingSetup: (cfg: AppConfig) => (cfg.voice.apiKey.trim() ? null : '未配置硅基流动 API Key(设置 → 角色语音)'),
   async synthesizeStream(req: SynthRequest, creds: TtsCredentials): Promise<TtsStream> {
-    // 情感指令拼在台词前(可开关):仅靠语速区分角色太单薄
+    // 情感指令经 <|endofprompt|> 注入(可开关):标记前是语气指令,模型只取风格不朗读;
+    // 直接把指令拼在台词前面会被整句念出来
     const instruction = creds.emotionHints ? deliveryInstruction(req.delivery) : ''
     const resp = await fetch(TTS_URL, {
       method: 'POST',
@@ -43,7 +44,7 @@ export const siliconflowProvider: TtsProvider = {
       },
       body: JSON.stringify({
         model: TTS_MODEL,
-        input: instruction + req.text,
+        input: instruction ? `${instruction}<|endofprompt|>${req.text}` : req.text,
         voice: fullVoice(req.voice),
         response_format: 'wav',
         sample_rate: SAMPLE_RATE,

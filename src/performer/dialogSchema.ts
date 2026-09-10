@@ -96,13 +96,14 @@ export function deliverySpeed(delivery?: string): number {
   return (delivery && { deadpan: 0.92, excited: 1.15, slow: 0.85 }[delivery]) || 1
 }
 
-/** 语气→自然语言情感指令(CosyVoice2 拼在台词前,MiniMax 等供应商自行转换表达):
- *  仅靠语速区分角色差异太单薄,语气描述让情感可听 */
+/** 语气→自然语言情感指令:仅靠语速区分角色差异太单薄,语气描述让情感可听。
+ *  CosyVoice2 端拼成 `指令<|endofprompt|>台词`——标记前是指令,不会被朗读;
+ *  MiniMax 端自行转换为 emotion 参数 */
 export function deliveryInstruction(delivery?: string): string {
   return (delivery && {
-    deadpan: '用冷静、面无表情、略带讽刺的语气说:',
-    excited: '用兴奋、活泼的语气说:',
-    slow: '用慢条斯理、从容的语气说:',
+    deadpan: '用冷静、面无表情、略带讽刺的语气说',
+    excited: '用兴奋、活泼的语气说',
+    slow: '用慢条斯理、从容的语气说',
   }[delivery]) || ''
 }
 
