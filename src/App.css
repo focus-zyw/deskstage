@@ -78,10 +78,11 @@
   animation: sprite-in 0.14s ease forwards;
 }
 .transition-dip .char-img.under {
-  animation: sprite-dip-out 0.11s ease forwards;
+  animation: sprite-dip-out 0.12s ease forwards;
 }
 .transition-dip .char-img.main.ready {
-  animation: sprite-dip-in 0.13s 0.1s ease both;
+  /* 与淡出同时长、零延迟:全程交叉淡化,任一时刻两图合成可见度不低于 1(见 spriteTransition 回归) */
+  animation: sprite-dip-in 0.12s ease both;
 }
 .transition-impact .char-img.under {
   opacity: 0;

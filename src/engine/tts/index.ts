@@ -4,7 +4,7 @@
 // 原则:语音失败永不影响演出 —— 所有错误静默降级为无语音,气泡照常走。
 // 对外 API 与旧版一致(speak/prefetchVoice/stopSpeaking/cloneVoice/listCustomVoices),
 // App.tsx、TranslationPanel 的 import 无需改动。
-import { deliverySpeed, type Speaker } from '../../performer/dialogSchema'
+import { deliverySpeed, normalizeForSpeech, type Speaker } from '../../performer/dialogSchema'
 import {
   getConfig,
   inTauri,
@@ -23,6 +23,7 @@ import {
 } from './siliconflow'
 import type { AudioStreamMeta, SynthRequest, TtsCredentials, TtsProvider, TtsStream } from './types'
 import { pcmToWav } from './wav'
+import { postProcessWav } from './speechPostProcessor'
 
 export { cloneVoice, listCustomVoices } from './siliconflow'
 export type { ClonedVoice } from './siliconflow'
@@ -168,6 +169,8 @@ async function resolveLine(
   const asg = v.assignments[provider.id]
   const voiceId = asg[speaker] || provider.voices[0]?.id || ''
   const speed = deliverySpeed(delivery)
+  // 朗读归一化在进哈希前做:缓存键与实际发给供应商的文本保持一致
+  const speechText = normalizeForSpeech(text)
   const hash = await hashOf([
     provider.id,
     provider.modelId(cfg),
@@ -175,9 +178,9 @@ async function resolveLine(
     String(speed),
     delivery ?? 'normal',
     String(CACHE_VERSION),
-    text,
+    speechText,
   ])
-  return { provider, creds, voiceId, speed, delivery, text, hash }
+  return { provider, creds, voiceId, speed, delivery, text: speechText, hash }
 }
 
 function requestOf(spec: LineSpec): SynthRequest {
@@ -259,6 +262,14 @@ async function drainStream(
   return pcmToWav(raw, meta.sampleRate, meta.channels, meta.bitsPerSample)
 }
 
+/** 统一后处理(裁首尾静音/响度归一/峰值限制)后写入两级缓存;返回处理后的 wav */
+function processAndCache(hash: string, full: ArrayBuffer): ArrayBuffer {
+  const { wav } = postProcessWav(full)
+  memPut(hash, wav)
+  void diskPut(hash, new Uint8Array(wav))
+  return wav
+}
+
 /** 合成并缓存(不播放,预取/降级路径用);在飞去重 */
 function ensureCached(spec: LineSpec): Promise<ArrayBuffer> {
   const hit = memGet(spec.hash)
@@ -271,9 +282,7 @@ function ensureCached(spec: LineSpec): Promise<ArrayBuffer> {
     const stream = await spec.provider.synthesizeStream(requestOf(spec), spec.creds)
     const full = await drainStream(stream, stream.meta, null, null)
     if (!full) throw new Error('流提前结束')
-    memPut(spec.hash, full)
-    void diskPut(spec.hash, new Uint8Array(full))
-    return full
+    return processAndCache(spec.hash, full)
   })()
   inflight.set(spec.hash, task)
   void task.catch(() => {}).then(() => {
@@ -417,10 +426,8 @@ export function speak(speaker: Speaker, text: string, delivery?: string, channel
         sess.stop()
         markEnded(my)
       }
-      if (full) {
-        memPut(spec.hash, full)
-        void diskPut(spec.hash, new Uint8Array(full))
-      } else if (activeSession === sess) {
+      if (full) processAndCache(spec.hash, full)
+      else if (activeSession === sess) {
         // 中断收尾:被顶掉时通道已归新 speak;异常中断时把"在播"状态归还
         activeSession = null
         markEnded(my)

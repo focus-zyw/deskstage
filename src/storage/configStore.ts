@@ -1,6 +1,7 @@
 // 配置外置：appData/data/config.json。首次运行写入默认值，之后读文件。
 // 改配置两条路：编辑该文件后重启，或在应用内设置面板保存（立即生效）。
 // 浏览器预览(无 Tauri 运行时)降级为 localStorage,保证 dev 调试可用。
+import { useSyncExternalStore } from 'react'
 import { readTextFile, writeTextFile, exists, mkdir } from '@tauri-apps/plugin-fs'
 import { appDataDir, join } from '@tauri-apps/api/path'
 import { withFileLock } from './writeLock'
@@ -507,5 +508,36 @@ export async function saveConfig(update: Partial<AppConfig>): Promise<AppConfig>
     return merged
   })
   cache = Promise.resolve(next)
+  publishConfig(next)
   return next
+}
+
+// ---------- 订阅:配置作为可观察事实源 ----------
+// 设置窗口/舞台/运行时读同一份已加载配置,不再各自维护镜像 state;
+// 首次加载与每次 saveConfig 成功后发布。读取方用 useConfigSnapshot(),
+// 非 React 侧用 getConfigSnapshot()(始终可用,未加载完前为 DEFAULT_CONFIG)。
+
+let snapshot: AppConfig = DEFAULT_CONFIG
+const configListeners = new Set<() => void>()
+
+function publishConfig(next: AppConfig): void {
+  snapshot = next
+  configListeners.forEach((l) => l())
+}
+
+export function getConfigSnapshot(): AppConfig {
+  return snapshot
+}
+
+export function subscribeConfig(l: () => void): () => void {
+  configListeners.add(l)
+  // 订阅即对账一次:若磁盘读取晚于首个订阅者,补一发通知
+  void getConfig().then(publishConfig)
+  return () => {
+    configListeners.delete(l)
+  }
+}
+
+export function useConfigSnapshot(): AppConfig {
+  return useSyncExternalStore(subscribeConfig, getConfigSnapshot)
 }

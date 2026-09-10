@@ -4,7 +4,14 @@ import { complete } from './llmGateway'
 import { buildMessages, renderAudienceContext, type UserContext } from './promptBuilder'
 import { mergeMessages, webchatAsk } from './webchat'
 import { getMemory, topFacts, tasteSummary, type FactCategory } from '../storage/memoryStore'
-import { storyContext, getBond } from '../storage/storyStore'
+import {
+  storyContext,
+  getBond,
+  type StoryAssertion,
+  type StoryCandidate,
+  type DistilledStory,
+  type StoryInventory,
+} from '../storage/storyStore'
 import { takeRecap } from '../storage/interactionStore'
 import { pickRelationship } from '../performer/modes/relationships'
 import { currentTimeSlot } from './timeAware'
@@ -482,53 +489,32 @@ export async function addPerformanceCues(lines: DialogLine[]): Promise<DialogLin
   }
 }
 
-/** 蒸馏时的已知素材清单(带 id,供模型报 resolved/reused) */
-export interface StoryInventory {
-  gags: { id: string; text: string }[]
-  threads: { id: string; text: string }[]
-  arcs: { id: string; title: string; stage: number; hook: string }[]
-}
-
-export interface ArcAdvance {
-  id: string
-  nextHook: string
-}
-
-export interface NewArc {
-  title: string
-  hook: string
-}
-
-export interface DistilledStory {
-  newGags: string[]
-  newThreads: string[]
-  /** 台词里已经了结的已知事件线 id(结案后不再注入) */
-  resolvedThreadIds: string[]
-  /** 台词里实际回收了的已知老梗 id(真实"被用过"计数) */
-  reusedGagIds: string[]
-  /** 连续剧情推进一拍(写新钩子,stage 由存储层自增) */
-  arcAdvance: ArcAdvance | null
-  /** 本集冒出的值得多集延续的新剧情线(最多 1 条) */
-  newArc: NewArc | null
+/** 本集台词文本:蒸馏输入与 curator 的证据校验用同一拼写,避免两边格式漂移 */
+export function transcriptOf(lines: DialogLine[]): string {
+  return lines
+    .map((l) => `${l.speaker === 'A' ? nameOf('A') : l.speaker === 'C' ? '丙(场外)' : nameOf('B')}:${l.text}`)
+    .join('\n')
 }
 
 /**
  * 角色世界蒸馏:从一集台词里提炼可长期复用的素材,并对已知素材记账——
- * newGags/newThreads:新形成的固定笑点/还没了结的事件线(自包含短语);
+ * newGags/newThreads 为证据化候选(文本+台词引文+断言类别+sameAs 指认);
  * reusedGagIds/resolvedThreadIds:已知素材在本集被回收/了结的记账;
- * arcAdvance:连续剧情推进一拍(给出下一拍钩子);newArc:本集冒出的新剧情线。
+ * arcAdvance:连续剧情推进一拍(给出下一拍钩子);newArc:新剧情线(可携带被吸收的事件线)。
  * 8s 超时、不重试;失败由调用方静默——蒸馏宁可错过也不能拖累演出。
  */
 export async function distillStory(
   lines: DialogLine[],
-  known: StoryInventory = { gags: [], threads: [], arcs: [] },
+  known: StoryInventory = { gags: [], threads: [], arcs: [], doneArcs: [] },
 ): Promise<DistilledStory> {
-  const text = lines.map((l) => `${l.speaker === 'A' ? nameOf('A') : l.speaker === 'C' ? '丙(场外)' : nameOf('B')}:${l.text}`).join('\n')
+  const text = transcriptOf(lines)
   const knownGags = known.gags.map((g) => `${g.id}:${g.text}`).join(';') || '(无)'
   const knownThreads = known.threads.map((t) => `${t.id}:${t.text}`).join(';') || '(无)'
   const knownArcs =
     known.arcs.map((a) => `${a.id}:${a.title}[已演${a.stage}拍,下一拍:${a.hook}]`).join(';') ||
     '(无)'
+  const knownDone =
+    known.doneArcs.map((a) => `${a.id}:${a.title}[结局:${a.ending || '已收尾'}]`).join(';') || '(无)'
   const messages: { role: string; content: string }[] = [
     {
       role: 'system',
@@ -536,12 +522,16 @@ export async function distillStory(
 老梗(编号:内容):${knownGags}
 事件线(编号:内容):${knownThreads}
 连续剧情(编号:标题[已演N拍,下一拍:hook]):${knownArcs}
+已完结剧情(编号:标题[结局],仅作背景,不得推进、不得报成新事件线):${knownDone}
 
 对照刚播出的台词,只输出一个 JSON 对象:
-{"newGags":["新形成的固定笑点,自包含短语10~25字,如冰箱是甲的健身器材"],"newThreads":["新出现的、还没了结的事件线,自包含短语"],"resolvedThreadIds":["台词里已经了结的已知事件线编号"],"reusedGagIds":["台词里实际回收了的已知老梗编号"],"arcAdvance":{"id":"本集演出了其下一拍的连续剧情编号","nextHook":"再下一拍的新进展或悬念,15~40字"},"newArc":{"title":"本集冒出的值得多集延续的新剧情线标题,10字内","hook":"第一拍的悬念,15~40字"}}
-- newGags/newThreads 各最多 2 条,只提炼台词里明确出现的,不要编造;已知素材原文再现时不要重复放进 new*
-- resolvedThreadIds/reusedGagIds 只能填上面列出的编号,没有就给空数组
-- arcAdvance 只在本集确实演出了某条连续剧情的"下一拍"时给出,并写出新钩子;newArc 只在本集剧情确有延续价值时给出,各最多 1 条;不适用就给 null`,
+{"newGags":[{"text":"...","evidence":["..."],"assertion":"established","sameAsId":null}],"newThreads":[同结构],"resolvedThreadIds":[],"reusedGagIds":[],"arcAdvance":null,"newArc":null}
+- newGags 每集最多 1 条:只收"脱离台词也能反复回收"的固定笑点,自包含、以甲/乙为主语、8~40字;一次性的普通包袱不要报。newThreads 最多 2 条(还没了结的具体事情)
+- evidence 必须逐字摘自台词(每段6~30字,最多2段);拿不出原句证据的候选不要报
+- assertion 只能是 established(台词确认的事实)/boast(甲吹牛)/excuse(甲找借口甩锅);text 要自带"自称/号称/甩锅/嘴硬"等语气,不得把吹牛、甩锅、反问写成事实;反问、疑问、猜测一律不要报
+- 同一个梗只是换了说法时报 sameAsId 为库存编号,并把 text 改写成更自包含的规范表述;本集确实回收了库存老梗则填 reusedGagIds
+- resolvedThreadIds/reusedGagIds/sameAsId 只能填上面列出的编号,没有就给空数组或 null
+- arcAdvance 只在本集确实演出了某条活跃剧情的"下一拍"时给出,并写出再下一拍的新进展或悬念(10~60字);newArc 只在本集冒出值得多集延续的新剧情线时给出(标题2~15字,第一拍悬念10~60字),并用 closeThreadIds 把被它吸收的已知事件线一并结案;各最多 1 条,不适用给 null`,
     },
     { role: 'user', content: text },
   ]
@@ -563,13 +553,42 @@ export async function distillStory(
     const knownGagIds = new Set(known.gags.map((g) => g.id))
     const knownThreadIds = new Set(known.threads.map((t) => t.id))
     const knownArcIds = new Set(known.arcs.map((a) => a.id))
-    const texts = (v: unknown): string[] =>
-      Array.isArray(v)
-        ? v
-            .filter((x): x is string => typeof x === 'string' && x.trim().length > 3)
-            .map((x) => x.trim().slice(0, 60))
-            .slice(0, 2)
-        : []
+    const assertions: ReadonlySet<unknown> = new Set([
+      'established',
+      'boast',
+      'excuse',
+      'question',
+      'hypothesis',
+    ])
+    // 候选清洗:旧格式(裸字符串)转成无证据候选,交 curator 拒收——不让脏数据绕过证据门
+    const candidates = (v: unknown, cap: number): StoryCandidate[] => {
+      if (!Array.isArray(v)) return []
+      const out: StoryCandidate[] = []
+      for (const item of v) {
+        if (out.length >= cap) break
+        if (typeof item === 'string') {
+          const text = item.trim().slice(0, 60)
+          if (text.length > 3) out.push({ text, evidence: [], assertion: 'established', sameAsId: null })
+          continue
+        }
+        if (!item || typeof item !== 'object' || Array.isArray(item)) continue
+        const o = item as Record<string, unknown>
+        const text = typeof o.text === 'string' ? o.text.trim().slice(0, 60) : ''
+        if (text.length <= 3) continue
+        const evidence = Array.isArray(o.evidence)
+          ? o.evidence
+              .filter((e): e is string => typeof e === 'string')
+              .map((e) => e.trim().slice(0, 30))
+              .filter((e) => e.length >= 4)
+              .slice(0, 2)
+          : []
+        const assertion = assertions.has(o.assertion) ? (o.assertion as StoryAssertion) : 'established'
+        const sameAsId =
+          typeof o.sameAsId === 'string' && knownGagIds.has(o.sameAsId) ? o.sameAsId : null
+        out.push({ text, evidence, assertion, sameAsId })
+      }
+      return out
+    }
     const ids = (v: unknown, allowed: Set<string>): string[] =>
       Array.isArray(v)
         ? v.filter((x): x is string => typeof x === 'string' && allowed.has(x)).slice(0, 3)
@@ -583,10 +602,16 @@ export async function distillStory(
     const arcAdvance = adv
       ? { id: String(adv.id ?? ''), nextHook: str(adv.nextHook, 5, 60) }
       : null
-    const newArc = na ? { title: str(na.title, 2, 30), hook: str(na.hook, 5, 60) } : null
+    const newArc = na
+      ? {
+          title: str(na.title, 2, 15),
+          hook: str(na.hook, 5, 60),
+          closeThreadIds: ids(na.closeThreadIds, knownThreadIds),
+        }
+      : null
     return {
-      newGags: texts(obj.newGags),
-      newThreads: texts(obj.newThreads),
+      newGags: candidates(obj.newGags, 1),
+      newThreads: candidates(obj.newThreads, 2),
       resolvedThreadIds: ids(obj.resolvedThreadIds, knownThreadIds),
       reusedGagIds: ids(obj.reusedGagIds, knownGagIds),
       arcAdvance: arcAdvance && knownArcIds.has(arcAdvance.id) ? arcAdvance : null,

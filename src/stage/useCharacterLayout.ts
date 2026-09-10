@@ -1,0 +1,215 @@
+// 角色舞台布局:位置拖动(各自独立)/滚轮缩放(全局一致)/落盘防抖/最近交互置顶,
+// 以及拖拽结束后的"距离演出"(按长期关系 bond 给文案与表现,并缓慢回写关系)。
+// 布局只管几何与手势;台词呈现(present)与戳一戳(onPoke)由调用方注入,
+// 这样本模块不依赖气泡/说话状态,可独立测试。
+import { useRef, useState } from 'react'
+import type { PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent } from 'react'
+import {
+  saveConfig,
+  DEFAULT_CONFIG,
+  type CharactersConfig,
+  type CharPos,
+  type CtrlBarPos,
+} from '../storage/configStore'
+import { getBond, shiftBond } from '../storage/storyStore'
+import { logDrag } from '../storage/interactionStore'
+import { bondTierOf, reactBonded, distanceBands } from '../engine/interactionRules'
+import type { Speaker } from '../performer/player'
+
+export interface CharacterLayoutDeps {
+  /** 距离演出仅在空闲时触发 */
+  isIdle(): boolean
+  /** 角色插话呈现(气泡+动作+计时回收) */
+  present(who: Speaker, line: string, action: string, ms?: number, loud?: boolean): void
+  /** 原地点一下(位移 < 6px)= 戳一戳 */
+  onPoke(who: 'A' | 'B'): void
+}
+
+export function useCharacterLayout(deps: CharacterLayoutDeps) {
+  // 角色布局(位置各自独立/缩放共享);ref 供拖动/滚轮事件读最新值
+  const [charCfg, setCharCfg] = useState<CharactersConfig>(DEFAULT_CONFIG.characters)
+  const charCfgRef = useRef(charCfg)
+  const charSaveTimer = useRef(0)
+  // 控制栏位置(可拖动)
+  const [ctrlBar, setCtrlBar] = useState<CtrlBarPos>(DEFAULT_CONFIG.ctrlBar)
+  const ctrlBarRef = useRef(ctrlBar)
+  const ctrlBarTimer = useRef(0)
+  // 最近交互的角色显示在上层(z-order)
+  const [topActor, setTopActor] = useState<Speaker>('A')
+  // 拎起态(轻微缩小提亮)与落地 squash 回弹
+  const [dragUi, setDragUi] = useState<Speaker | null>(null)
+  const [dropFor, setDropFor] = useState<Speaker | null>(null)
+  const dropTimer = useRef(0)
+  // 距离演出冷却记账(12s)
+  const distLastAt = useRef<Record<string, number>>({})
+  const dragRef = useRef<{ who: Speaker; startX: number; startY: number; orig: CharPos; moved: boolean } | null>(null)
+  // 拖动中的角色命中区膨胀为全窗口:快速拖动时光标冲出角色矩形,
+  // 否则穿透窗口会立刻恢复 ignoreCursorEvents,拖拽被中断
+  const draggingWho = useRef<Speaker | null>(null)
+
+  const charA = useRef<HTMLDivElement>(null)
+  const charB = useRef<HTMLDivElement>(null)
+
+  /** 更新布局;persist='now' 立即落盘,'debounced' 防抖落盘(滚轮连续滚动只写一次) */
+  function applyChars(next: CharactersConfig, persist: 'now' | 'debounced' | 'no' = 'no') {
+    charCfgRef.current = next
+    setCharCfg(next)
+    if (persist === 'no') return
+    window.clearTimeout(charSaveTimer.current)
+    const write = () =>
+      saveConfig({ characters: next }).catch((e) => console.warn('布局保存失败(静默)', e))
+    if (persist === 'now') void write()
+    else charSaveTimer.current = window.setTimeout(write, 500)
+  }
+
+  function applyCtrlBar(next: CtrlBarPos, persist: 'now' | 'debounced' | 'no' = 'no') {
+    ctrlBarRef.current = next
+    setCtrlBar(next)
+    if (persist === 'no') return
+    window.clearTimeout(ctrlBarTimer.current)
+    const write = () =>
+      saveConfig({ ctrlBar: next }).catch((e) => console.warn('控制栏位置保存失败(静默)', e))
+    if (persist === 'now') void write()
+    else ctrlBarTimer.current = window.setTimeout(write, 500)
+  }
+
+  /** 恢复默认布局(设置-基础设置入口) */
+  function resetLayout() {
+    applyChars(DEFAULT_CONFIG.characters, 'now')
+    applyCtrlBar(DEFAULT_CONFIG.ctrlBar, 'now')
+  }
+
+  function onCharPointerDown(e: ReactPointerEvent, who: 'A' | 'B') {
+    setTopActor(who) // 最近交互的角色置顶
+    setDragUi(who) // 拎起态(轻微缩小提亮)
+    dragRef.current = {
+      who,
+      startX: e.clientX,
+      startY: e.clientY,
+      orig: { ...charCfgRef.current[who] },
+      moved: false,
+    }
+    try {
+      ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+    } catch {
+      // 合成事件/指针已释放时无活动指针可捕获,忽略
+    }
+  }
+
+  function onCharPointerMove(e: ReactPointerEvent, who: 'A' | 'B') {
+    const d = dragRef.current
+    if (!d || d.who !== who) return
+    const dx = e.clientX - d.startX
+    const dy = e.clientY - d.startY
+    if (!d.moved) {
+      if (Math.hypot(dx, dy) < 6) return // 小位移视为点击,留给戳一戳
+      d.moved = true
+      draggingWho.current = who
+    }
+    const cur = charCfgRef.current
+    applyChars(
+      {
+        ...cur,
+        [who]: {
+          xPct: Math.min(97, Math.max(3, d.orig.xPct + (dx / window.innerWidth) * 100)),
+          bottom: Math.min(
+            Math.max(0, window.innerHeight - 80),
+            Math.max(0, d.orig.bottom - dy),
+          ),
+        },
+      },
+      'no',
+    )
+  }
+
+  function onCharPointerUp(who: 'A' | 'B') {
+    const d = dragRef.current
+    dragRef.current = null
+    setDragUi(null)
+    if (!d || d.who !== who) return
+    if (d.moved) {
+      draggingWho.current = null
+      applyChars(charCfgRef.current, 'now')
+      setDropFor(who) // 落地 squash 回弹
+      window.clearTimeout(dropTimer.current)
+      dropTimer.current = window.setTimeout(() => setDropFor(null), 500)
+      void maybeDistancePlay(who)
+    } else {
+      deps.onPoke(who) // 原地点一下 = 戳一戳
+    }
+  }
+
+  /** 拖拽结束后的距离演出:按长期关系(bond)给出不同文案与表现,并缓慢回写关系。
+   *  贴近=亲近信号(trust+0.1);叠一起/拖太远=摩擦信号(rivalry+);12s 冷却 */
+  async function maybeDistancePlay(who: 'A' | 'B') {
+    if (!deps.isIdle()) return
+    const other: Speaker = who === 'A' ? 'B' : 'A'
+    const ax = (charCfg.A.xPct / 100) * window.innerWidth
+    const bx = (charCfg.B.xPct / 100) * window.innerWidth
+    const dx = Math.abs(ax - bx)
+    const bands = distanceBands(charCfg.height)
+    const now = Date.now()
+    const cooled = (kind: string) => now - (distLastAt.current[kind] ?? 0) > 12_000
+    const mark = (kind: string) => { distLastAt.current[kind] = now }
+
+    const bond = await getBond()
+    const tier = bondTierOf(bond.trust, bond.rivalry)
+
+    if (dx < bands.overlap && cooled('overlap')) {
+      mark('overlap')
+      deps.present(other, reactBonded(other, 'overlap', tier), tier === 'strained' ? 'angry' : 'surprise', 2000)
+      // 推开:被拖者向远离方向挪 6%(关系好时推开幅度减半,挤挤更热闹)
+      const cfg = charCfgRef.current
+      const dir = (cfg[who].xPct <= cfg[other].xPct ? -6 : 6) * (tier === 'warm' ? 0.5 : 1)
+      applyChars({ ...cfg, [who]: { ...cfg[who], xPct: Math.min(97, Math.max(3, cfg[who].xPct + dir)) } }, 'now')
+      void shiftBond(0, 0.3)
+      void logDrag()
+      return
+    }
+    if (dx < bands.close && cooled('close')) {
+      mark('close')
+      const act = tier === 'warm' ? 'happy' : tier === 'strained' ? 'angry' : 'surprise'
+      deps.present(other, reactBonded(other, 'close', tier), act, 2200)
+      void shiftBond(0.1, 0)
+      void logDrag()
+      return
+    }
+    if (dx > window.innerWidth * 0.6 && cooled('far')) {
+      mark('far')
+      const act = tier === 'strained' ? 'angry' : tier === 'warm' ? 'sad' : 'talk'
+      deps.present('A', reactBonded('A', 'far', tier), act, 2400, true)
+      deps.present('B', reactBonded('B', 'far', tier), act, 2400, true)
+      void shiftBond(-0.1, 0.4)
+      void logDrag()
+    }
+  }
+
+  function onCharWheel(e: ReactWheelEvent) {
+    const cur = charCfgRef.current
+    const maxHeight = Math.max(240, window.innerHeight - 40)
+    const height = Math.min(maxHeight, Math.max(140, cur.height + (e.deltaY < 0 ? 12 : -12)))
+    if (height === cur.height) return
+    applyChars({ ...cur, height }, 'debounced') // 缩放全局一致:两个角色同步
+  }
+
+  return {
+    charCfg,
+    ctrlBar,
+    topActor,
+    setTopActor,
+    dragUi,
+    dropFor,
+    charA,
+    charB,
+    draggingWho,
+    applyChars,
+    applyCtrlBar,
+    resetLayout,
+    onCharPointerDown,
+    onCharPointerMove,
+    onCharPointerUp,
+    onCharWheel,
+  }
+}
+
+export type CharacterLayout = ReturnType<typeof useCharacterLayout>

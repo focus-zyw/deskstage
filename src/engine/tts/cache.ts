@@ -5,9 +5,9 @@ import { readTextFile, writeTextFile, exists, mkdir, readDir, remove, stat } fro
 import { appDataDir, join } from '@tauri-apps/api/path'
 import { inTauri } from '../../storage/configStore'
 
-/** 缓存结构版本:变化即整体失效。v3 = 情感指令改走 <|endofprompt|>
- *  (v2 的旧音频把指令文本整句念出来了,必须作废) */
-export const CACHE_VERSION = 3
+/** 缓存结构版本:变化即整体失效。v4 = 新增统一音频后处理(裁首尾静音/响度归一/
+ *  峰值限制),旧缓存音频未处理,响度与首尾与新版不一致 */
+export const CACHE_VERSION = 4
 
 /** 磁盘缓存预算:条数与字节双上限。wav 约为 mp3 的 8 倍大,必须按字节限,
  *  超限按 mtime 从最旧开始删 */

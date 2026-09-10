@@ -1,0 +1,217 @@
+{
+  "version": 1,
+  "gags": [
+    {
+      "id": "g1789062147453r3rgxx",
+      "text": "AI写请假条店长秒批",
+      "lastSeen": 1789062147452,
+      "hits": 0,
+      "lastInjectedAt": 1789066309790
+    },
+    {
+      "id": "g178906214745373xax6",
+      "text": "赛博身体不适需接入床铺碎片整理",
+      "lastSeen": 1789062147452,
+      "hits": 0,
+      "lastInjectedAt": 0
+    },
+    {
+      "id": "g1789062906858rfolq3",
+      "text": "猪自己哼的调是陈奕迅考不上编转行养的",
+      "lastSeen": 1789062906858,
+      "hits": 0,
+      "lastInjectedAt": 0
+    },
+    {
+      "id": "g1789062906858z9p1iv",
+      "text": "甲家的猪得是陈奕迅考不上编转行养的",
+      "lastSeen": 1789062906858,
+      "hits": 0,
+      "lastInjectedAt": 0
+    },
+    {
+      "id": "g17890630762627z2v4u",
+      "text": "算法比亲戚懂我，还秒推辟谣",
+      "lastSeen": 1789063076262,
+      "hits": 0,
+      "lastInjectedAt": 0
+    },
+    {
+      "id": "g1789063076262j6f3dj",
+      "text": "家族群是过年灵魂拷问的真算法",
+      "lastSeen": 1789063076262,
+      "hits": 0,
+      "lastInjectedAt": 0
+    },
+    {
+      "id": "g1789066161938nt5at4",
+      "text": "图书馆办卡等于跟知识签约，已履约",
+      "lastSeen": 1789066161938,
+      "hits": 0,
+      "lastInjectedAt": 0
+    },
+    {
+      "id": "g17890661619382tybys",
+      "text": "儿童区小板凳是沉浸式阅读神器",
+      "lastSeen": 1789066161938,
+      "hits": 0,
+      "lastInjectedAt": 0
+    },
+    {
+      "id": "g17890699426417w63e2",
+      "text": "无糖比白开水还狠，全糖永远背锅",
+      "lastSeen": 1789070323007,
+      "hits": 1,
+      "lastInjectedAt": 0
+    },
+    {
+      "id": "g178907032300797r1d6",
+      "text": "甲的手机是公用充电宝，谁都能借去发emo语音",
+      "lastSeen": 1789070323007,
+      "hits": 0,
+      "lastInjectedAt": 0
+    },
+    {
+      "id": "g1789070415812lakh3k",
+      "text": "奶茶杯里连茶底都是AI画的",
+      "lastSeen": 1789070415812,
+      "hits": 0,
+      "lastInjectedAt": 0
+    },
+    {
+      "id": "g1789072731777gcsnwt",
+      "text": "观众是打地鼠的锤子，戳人二十六下",
+      "lastSeen": 1789072731776,
+      "hits": 0,
+      "lastInjectedAt": 0
+    },
+    {
+      "id": "g1789072731777hpp86l",
+      "text": "食堂打菜阿姨式关爱，一勺下去全是手抖",
+      "lastSeen": 1789072731776,
+      "hits": 0,
+      "lastInjectedAt": 0
+    }
+  ],
+  "threads": [
+    {
+      "id": "t1789062147453qbpabm",
+      "text": "怀疑观众和店长全是AI",
+      "lastSeen": 1789062147452,
+      "lastInjectedAt": 1789066309790
+    },
+    {
+      "id": "t17890629068587y1hw3",
+      "text": "观众群投票让甲直播唱全曲，票数已过百",
+      "lastSeen": 1789062906858,
+      "lastInjectedAt": 0
+    },
+    {
+      "id": "t1789062906858m90l43",
+      "text": "甲要教猪唱《孤勇者》凑合唱环节",
+      "lastSeen": 1789062906858,
+      "lastInjectedAt": 0
+    },
+    {
+      "id": "t1789066161938qkm6vx",
+      "text": "甲办图书馆卡却把儿童区睡成采风地，管理员来了",
+      "lastSeen": 1789066161938,
+      "lastInjectedAt": 0
+    },
+    {
+      "id": "t1789070323007mks8t1",
+      "text": "甲的房东半夜连发六条语音方阵，从马桶漏水聊到情感问题还邀他过年吃饺子",
+      "lastSeen": 1789070323007,
+      "lastInjectedAt": 0
+    },
+    {
+      "id": "t17890704158122axkma",
+      "text": "甲拿AI图当毕业设计被质疑",
+      "lastSeen": 1789070415812,
+      "lastInjectedAt": 0
+    },
+    {
+      "id": "t1789072731777s48nb8",
+      "text": "乙把监控备份发给甲的相亲对象，还透露甲存有十八集监控日记",
+      "lastSeen": 1789072731776,
+      "lastInjectedAt": 0
+    },
+    {
+      "id": "t1789072731777h4a5ow",
+      "text": "甲的耳机外放《相亲对象观察日记》，乙已掌握其全部内容",
+      "lastSeen": 1789072731776,
+      "lastInjectedAt": 0
+    }
+  ],
+  "arcs": [
+    {
+      "id": "a1788979818617auodar",
+      "title": "奶茶内存与手机清理",
+      "stage": 4,
+      "nextHook": "乙拒绝再凑单，甲改口说要用满减充话费，乙发现副卡又被绑了",
+      "status": "done",
+      "lastSeen": 1789016770101
+    },
+    {
+      "id": "a17890161536891tthw3",
+      "title": "双十一线上相亲",
+      "stage": 4,
+      "nextHook": "甲试图用过期饭团积分再换一顿浪漫晚餐挽回相亲对象，乙表示要当见证人",
+      "status": "done",
+      "lastSeen": 1789060962614
+    },
+    {
+      "id": "a1789016526602ml1j8e",
+      "title": "AI情话翻车记",
+      "stage": 4,
+      "nextHook": "甲被逼真念出养猪笔记，和AI情话第三行一模一样，还得抄给观众群",
+      "status": "done",
+      "lastSeen": 1789040971365
+    },
+    {
+      "id": "a17890167701019d8d8z",
+      "title": "副卡谍战",
+      "stage": 4,
+      "nextHook": "乙把副卡消费写成养卡投资和履约测试，甲发现第十九条限定副卡持有人，下单权开始被限。",
+      "status": "done",
+      "lastSeen": 1789061985846
+    },
+    {
+      "id": "a1789040971365q5l1t6",
+      "title": "声明发观众群",
+      "stage": 4,
+      "nextHook": "甲直播唱《孤勇者》前紧张到忘词，猪突然哼出正确旋律，网友开始怀疑猪才是原唱",
+      "status": "done",
+      "lastSeen": 1789066161938
+    },
+    {
+      "id": "a1789060962614v586jz",
+      "title": "监控拷贝危机",
+      "stage": 2,
+      "nextHook": "甲要反击乙的叛变，却发现相亲对象开始追更监控日记，要求甲补拍十八集",
+      "status": "active",
+      "lastSeen": 1789072731776
+    },
+    {
+      "id": "a1789062147452dk4ncf",
+      "title": "AI放假疑云",
+      "stage": 2,
+      "nextHook": "甲发现毕业设计也是AI代笔，怀疑自己是否真人",
+      "status": "active",
+      "lastSeen": 1789070415812
+    },
+    {
+      "id": "a1789066161938py0rym",
+      "title": "图书馆睡神",
+      "stage": 1,
+      "nextHook": "甲在读者群被@的睡照曝光，群里开始投票让他去图书馆当众道歉",
+      "status": "active",
+      "lastSeen": 1789066161938
+    }
+  ],
+  "bond": {
+    "trust": 3,
+    "rivalry": 5,
+    "updatedAt": 1789072608744
+  }
+}

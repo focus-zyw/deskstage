@@ -91,20 +91,52 @@ export function sanitizeDelivery(v: unknown): Delivery | undefined {
     : undefined
 }
 
-/** 语气→语速:deadpan 面瘫略慢 / excited 兴奋略快 / slow 慢条斯理 */
+/** 语气→语速(收敛后:保留差异但不夸张,幅度过大听着刻意):
+ *  deadpan 面瘫略慢 / excited 兴奋略快 / slow 慢条斯理 */
 export function deliverySpeed(delivery?: string): number {
-  return (delivery && { deadpan: 0.92, excited: 1.15, slow: 0.85 }[delivery]) || 1
+  return (delivery && { deadpan: 0.96, excited: 1.06, slow: 0.92 }[delivery]) || 1
 }
 
 /** 语气→自然语言情感指令:仅靠语速区分角色差异太单薄,语气描述让情感可听。
- *  CosyVoice2 端拼成 `指令<|endofprompt|>台词`——标记前是指令,不会被朗读;
- *  MiniMax 端自行转换为 emotion 参数 */
+ *  强度收敛:不喊叫、不拖字、不刻意重读——表演交给情绪参数而不是文案夸张。
+ *  CosyVoice2 端拼成 `指令<|endofprompt|>台词`(标记前不朗读);MiniMax 转情绪参数 */
 export function deliveryInstruction(delivery?: string): string {
   return (delivery && {
-    deadpan: '用冷静、面无表情、略带讽刺的语气说',
-    excited: '用兴奋、活泼的语气说',
-    slow: '用慢条斯理、从容的语气说',
+    deadpan: '用平静克制、句尾略带吐槽的语气说',
+    excited: '用自然兴奋、不喊叫、不刻意拖长重音的语气说',
+    slow: '用从容、有意停顿、不拖字的语气说',
   }[delivery]) || ''
+}
+
+/** 朗读文本归一化:统一 TTS 易读错的写法,只做安全替换,不改内容与语气 */
+export function normalizeForSpeech(text: string): string {
+  return text
+    .replace(/\bAI\b/g, ' A I ') // 避免读成"爱"
+    .replace(/…+|。{3,}|\.{2,}/g, '，') // 省略号统一为逗号停顿
+    .replace(/——+/g, '，') // 长破折号统一为逗号
+    .replace(/(\d+(?:\.\d+)?)%/g, '百分之$1') // 百分号前置读法(50% → 百分之50)
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+/** 强情绪连续收敛:同一角色连续出现同一种强情绪(excited/slow)超过两句时,
+ *  第三句起降回普通——LLM 偷懒整段刷同一种情绪时由这里兜底 */
+export function diversifyDeliveries(lines: DialogLine[]): DialogLine[] {
+  let curSpeaker: Speaker | null = null
+  let curDelivery: Delivery | undefined
+  let run = 0
+  return lines.map((line) => {
+    if (line.speaker !== curSpeaker || line.delivery !== curDelivery) {
+      curSpeaker = line.speaker
+      curDelivery = line.delivery
+      run = 1
+      return line
+    }
+    run++
+    const strong = line.delivery === 'excited' || line.delivery === 'slow'
+    if (strong && run > 2) return { ...line, delivery: undefined }
+    return line
+  })
 }
 
 /** 清洗单条台词:speaker/text 必须合法,否则整条丢弃(null)。
@@ -192,8 +224,8 @@ export function parseGeneratedDialog(
   const o = (obj ?? {}) as Record<string, unknown>
   const arr = Array.isArray(o.dialog) ? o.dialog : []
   const card = sanitizeSceneCard(o.card)
-  const before: DialogLine[] = []
-  const after: Record<string, DialogLine[]> = {}
+  const beforeRaw: DialogLine[] = []
+  const afterRaw: Record<string, DialogLine[]> = {}
   let choice: ChoicePoint | undefined
   let total = 0
   for (const item of arr) {
@@ -209,12 +241,16 @@ export function parseGeneratedDialog(
     if (!line) continue
     total++
     if (!choice) {
-      before.push(line)
+      beforeRaw.push(line)
     } else {
       const key = typeof line.branch === 'string' && line.branch ? line.branch : '__default__'
-      ;(after[key] ??= []).push(line)
+      ;(afterRaw[key] ??= []).push(line)
     }
   }
   if (total < minLines) throw new Error('有效台词过少')
+  // 强情绪连续收敛:同角色同种强情绪最多连用两句
+  const before = diversifyDeliveries(beforeRaw)
+  const after: Record<string, DialogLine[]> = {}
+  for (const [branchId, seg] of Object.entries(afterRaw)) after[branchId] = diversifyDeliveries(seg)
   return { card, before, choice, after }
 }

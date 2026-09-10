@@ -1,72 +1,39 @@
-import { useEffect, useRef, useState } from 'react'
-import type { PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent } from 'react'
-import type { ReactElement, ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { listen } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
-import { readFile, remove } from '@tauri-apps/plugin-fs'
-import { enable as autoStartEnable, disable as autoStartDisable, isEnabled as isAutoStartEnabled } from '@tauri-apps/plugin-autostart'
 import { CharacterSprite } from './stage/CharacterSprite'
 import { Bubble } from './stage/Bubble'
 import { startScreenshot, applyScreenshotHotkey } from './capture'
-import { defaultPersonaText, setCharacterNames, setPersonaOverride } from './engine/persona'
-import { startEnvPolling, stopEnvPolling, isFullscreenApp } from './engine/envAware'
-import { setCaptureMode } from './input/pointerManager'
+import { setCharacterNames, setPersonaOverride } from './engine/persona'
+import { startEnvPolling } from './engine/envAware'
+import { setCaptureMode, initPointerManager, registerHitRegion, onHoverChange } from './input/pointerManager'
 import { CaptureOverlay } from './CaptureOverlay'
 import { SPRITE_SETS, preloadSprites } from './stage/spriteSets'
-import {
-  initPointerManager,
-  registerHitRegion,
-  onHoverChange,
-} from './input/pointerManager'
-import {
-  PerformancePlayer,
-  bubbleDuration,
-  MIN_READABLE_MS,
-  FIRST_AUDIO_DEADLINE_MS,
-  planLinePresentation,
-  type ChoiceOption,
-  type ChoicePoint,
-  type DialogLine,
-  type Speaker,
-} from './performer/player'
-import { deliverySpeed } from './performer/dialogSchema'
-import { MODES, modeOf, type Mode } from './performer/modes'
-import { generateDialog, generateShortChat, improvPokeLine, describeLlmError, generateUserChatReply, extractFacts, distillStory, memoReminderLine } from './engine/llmClient'
-import { react, reactBonded, distanceBands } from './engine/interactionRules'
-import { bondTierOf } from './engine/interactionRules'
-import { getBond, shiftBond } from './storage/storyStore'
-import { logInteraction, logInterrupt, logDrag, logDismiss, resetDismissals, type DismissableKind } from './storage/interactionStore'
-import { startScheduler, noteActivity, noteSpontaneous } from './runtime/proactiveScheduler'
-import { speak, speakTracked, prefetchVoice, stopSpeaking, cloneVoice, listCustomVoices, previewSample, providerById, PROVIDER_OPTIONS, type ClonedVoice } from './engine/tts'
-import { prefetchNext } from './engine/dialogPrefetch'
-import { WEBCHAT_SITES, webchatLogin, webchatProbe, webchatRestoreMain } from './engine/webchat'
-import { TOPIC_SEEDS, pickTopic } from './engine/topicSeeds'
-import { bumpTopicSeen, bumpTopicFavored, bumpTopicReplays, bumpTopicWatched, bumpTopicSkipped, bumpMode, bumpPoke, getTopicWeights, getMemory, clearMemory, deleteFact, togglePinFact, topFacts, mergeFacts, type MemoryFact } from './storage/memoryStore'
-import { getStory, mergeStory, removeArc, removeStoryItem, storyInventory, type StoryData } from './storage/storyStore'
-import { getDueMemos, getMemos, addMemo, updateMemo, removeMemo, type Memo } from './storage/memoStore'
-import { VENDORS, CUSTOM_VENDOR_ID, vendorIdOfBaseUrl } from './engine/vendors'
-import { listPrefetchedArcIds, takePrefetch } from './storage/prefetchStore'
-import { reserveArcBeat } from './engine/arcReservation'
-import { appendHistory, loadRecentHistory, listEpisodes, deleteEpisodes, toggleFavorite, type Episode } from './storage/historyStore'
+import type { DialogLine, Speaker } from './performer/player'
+import type { Mode } from './performer/modes'
+import { generateShortChat, improvPokeLine, generateUserChatReply, extractFacts, memoReminderLine } from './engine/llmClient'
+import { curateEpisode } from './engine/storyCurator'
+import { react } from './engine/interactionRules'
+import { logInteraction, logInterrupt, resetDismissals } from './storage/interactionStore'
+import { noteActivity } from './runtime/proactiveScheduler'
+import { speak } from './engine/tts'
+import { TOPIC_SEEDS } from './engine/topicSeeds'
+import { bumpPoke, getMemory, topFacts, mergeFacts } from './storage/memoryStore'
+import { getDueMemos, addMemo, updateMemo } from './storage/memoStore'
+import { type Episode } from './storage/historyStore'
 import { TranslationPanel, type TranslationInject } from './translation/TranslationPanel'
 import { extractTextFromClipboard } from './translation/ocr'
 import { startLiveSession, stopLiveSession, type LiveReply } from './runtime/liveDanmaku'
-import { startQrLogin, type QrLoginHandle, type QrPhase } from './live/biliLogin'
-import QRCode from 'qrcode'
 import { CommandPanel } from './ui/CommandPanel'
 import { ChoicePanel } from './ui/ChoicePanel'
 import type { Command } from './features/commands/commands'
 import {
   useRuntime,
   getCaps,
-  setMode as setRuntimeMode,
-  beginPerforming,
   beginStreaming,
   beginCapture,
   endCapture,
-  beginRecording,
-  endRecording,
   openOverlayExclusive,
   closeOverlay,
   closeAllOverlays,
@@ -77,18 +44,21 @@ import { runUtilityTask, useUtilityTasks } from './runtime/utilityTasks'
 import { showProp, dismissProps, clearProps } from './runtime/propEffects'
 import { preloadProps } from './stage/props'
 import { StageProps } from './stage/StageProps'
+import { useCharacterLayout } from './stage/useCharacterLayout'
+import { usePerformanceDirector } from './runtime/usePerformanceDirector'
+import { useActorPresenter } from './stage/useActorPresenter'
 import { ControlBar } from './ui/ControlBar'
 import { UtilityCards } from './ui/UtilityCard'
 import {
   getConfig,
   saveConfig,
-  inTauri,
-  DEFAULT_CONFIG,
-  type AppConfig,
-  type CharactersConfig,
-  type CharPos,
-  type CtrlBarPos,
+  useConfigSnapshot,
 } from './storage/configStore'
+import { applyLaunchOnBoot } from './runtime/launchOnBoot'
+import { useOverlayHitRegions } from './runtime/useOverlayHitRegion'
+import { SettingsWindow } from './settings/SettingsWindow'
+import type { SettingsBridge } from './settings/useSettingsSession'
+import type { SettingsTab } from './settings/settingsCatalog'
 import './App.css'
 
 // 点击反应台词池,按连戳强度分级(60s 滑动窗口计数)
@@ -130,33 +100,9 @@ const TRANSLATE_QUIP_COOLDOWN_MS = 20_000
 
 type Phase = 'idle' | 'generating' | 'performing' | 'choosing'
 
-/** 记忆事实分类的中文标签 */
-const MEM_CAT_LABEL: Record<string, string> = {
-  identity: '身份',
-  preference: '喜好',
-  habit: '习惯',
-  people: '身边人',
-  event: '事件',
-  other: '其他',
-}
-
 /** 语气→说话节奏(秒/循环):deadpan 慢半拍、excited 加速、slow 拖沓;与 TTS 语速同向 */
 const DELIVERY_TALK_DUR: Record<string, number> = { deadpan: 1.05, excited: 0.38, slow: 0.9 }
 
-/** 保底收底留白:未走二遍节奏标注的集,最后一句自动补 1s 停顿,给响底包袱留笑的时间 */
-function withFinalePause(lines: DialogLine[]): DialogLine[] {
-  if (lines.length === 0) return lines
-  const last = lines[lines.length - 1]!
-  if (last.pauseAfter !== undefined) return lines
-  return [...lines.slice(0, -1), { ...last, pauseAfter: 1000 }]
-}
-
-/** apiKeys 的存储键:预设厂商用 id,自定义端点按 baseUrl 区分(与 configStore 注释约定一致) */
-function vendorKeyOf(id: string, baseUrl: string): string {
-  return id === CUSTOM_VENDOR_ID ? `custom:${baseUrl.trim()}` : id
-}
-
-const sleepMs = (ms: number): Promise<void> => new Promise((resolve) => window.setTimeout(resolve, ms))
 
 // dev 诊断:全局异常自动收集到 window.__errs(桌面窗口 Console 直接查看)
 if (import.meta.env.DEV) {
@@ -170,608 +116,10 @@ if (import.meta.env.DEV) {
   })
 }
 
-/** 开机自启动:把系统注册状态对齐到配置值。配置是唯一事实来源——
- *  面板开关与手改配置文件两条路都汇到这里;启动时对账一次,改了配置文件重启也能生效。
- *  浏览器预览(无 Tauri 运行时)跳过 */
-async function applyLaunchOnBoot(want: boolean): Promise<void> {
-  if (!inTauri) return
-  try {
-    if ((await isAutoStartEnabled()) !== want) {
-      await (want ? autoStartEnable() : autoStartDisable())
-    }
-  } catch (e) {
-    console.warn('开机自启动设置失败', e)
-  }
-}
-
-// ---------- 设置窗口:分页导航与搜索索引 ----------
-
-type SettingsTab =
-  | 'general'
-  | 'model'
-  | 'persona'
-  | 'voice'
-  | 'live'
-  | 'privacy'
-  | 'memory'
-  | 'memo'
-  | 'history'
-
-/** 左侧导航:偏好设置 / 数据管理 两组 */
-const SETTINGS_NAV: { group: string; items: { id: SettingsTab; label: string; icon: ReactElement }[] }[] = [
-  {
-    group: '偏好设置',
-    items: [
-      {
-        id: 'general',
-        label: '基础设置',
-        icon: (
-          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
-            <line x1="4" y1="21" x2="4" y2="14" />
-            <line x1="4" y1="10" x2="4" y2="3" />
-            <line x1="12" y1="21" x2="12" y2="12" />
-            <line x1="12" y1="8" x2="12" y2="3" />
-            <line x1="20" y1="21" x2="20" y2="16" />
-            <line x1="20" y1="12" x2="20" y2="3" />
-            <line x1="1" y1="14" x2="7" y2="14" />
-            <line x1="9" y1="8" x2="15" y2="8" />
-            <line x1="17" y1="16" x2="23" y2="16" />
-          </svg>
-        ),
-      },
-      {
-        id: 'model',
-        label: 'AI 模型',
-        icon: (
-          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-            <rect x="5" y="5" width="14" height="14" rx="2" />
-            <rect x="9.5" y="9.5" width="5" height="5" />
-            <line x1="9" y1="2" x2="9" y2="5" />
-            <line x1="15" y1="2" x2="15" y2="5" />
-            <line x1="9" y1="19" x2="9" y2="22" />
-            <line x1="15" y1="19" x2="15" y2="22" />
-            <line x1="19" y1="9" x2="22" y2="9" />
-            <line x1="19" y1="15" x2="22" y2="15" />
-            <line x1="2" y1="9" x2="5" y2="9" />
-            <line x1="2" y1="15" x2="5" y2="15" />
-          </svg>
-        ),
-      },
-      {
-        id: 'persona',
-        label: '角色人设',
-        icon: (
-          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
-            <circle cx="12" cy="7" r="4" />
-          </svg>
-        ),
-      },
-      {
-        id: 'voice',
-        label: '角色语音',
-        icon: (
-          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z" />
-            <path d="M19 11v1a7 7 0 0 1-14 0v-1" />
-            <line x1="12" y1="19" x2="12" y2="22" />
-          </svg>
-        ),
-      },
-      {
-        id: 'live',
-        label: '直播设置',
-        icon: (
-          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
-            <circle cx="12" cy="12" r="2" />
-            <path d="M16.24 7.76a6 6 0 0 1 0 8.49M7.76 16.25a6 6 0 0 1 0-8.49M19.07 4.93a10 10 0 0 1 0 14.14M4.93 19.07a10 10 0 0 1 0-14.14" />
-          </svg>
-        ),
-      },
-      {
-        id: 'privacy',
-        label: '工具与隐私',
-        icon: (
-          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-          </svg>
-        ),
-      },
-    ],
-  },
-  {
-    group: '数据管理',
-    items: [
-      {
-        id: 'memory',
-        label: '记忆',
-        icon: (
-          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
-          </svg>
-        ),
-      },
-      {
-        id: 'memo',
-        label: '备忘',
-        icon: (
-          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-            <polyline points="9 11 12 14 22 4" />
-            <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
-          </svg>
-        ),
-      },
-      {
-        id: 'history',
-        label: '历史',
-        icon: (
-          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="12" cy="12" r="10" />
-            <polyline points="12 6 12 12 16 14" />
-          </svg>
-        ),
-      },
-    ],
-  },
-]
-
-/** 分页 → 所属分组(标题栏眉标与搜索结果面包屑用) */
-const TAB_GROUP: Record<SettingsTab, string> = {
-  general: '偏好设置',
-  model: '偏好设置',
-  persona: '偏好设置',
-  voice: '偏好设置',
-  live: '偏好设置',
-  privacy: '偏好设置',
-  memory: '数据管理',
-  memo: '数据管理',
-  history: '数据管理',
-}
-
-/** 搜索索引:每个可搜索的设置项 → 所在分页 + 卡片(点击结果跳转并高亮卡片) */
-const SETTINGS_SEARCH_INDEX: { tab: SettingsTab; card: string; label: string; keywords?: string }[] = [
-  // 基础设置
-  { tab: 'general', card: '显示与布局', label: '显示角色', keywords: '隐藏 角色 立绘 桌面' },
-  { tab: 'general', card: '显示与布局', label: '恢复默认布局', keywords: '位置 缩放 重置 拖动' },
-  { tab: 'general', card: '演出与主动行为', label: '空闲自动重放', keywords: '重放 历史 自动 分钟' },
-  { tab: 'general', card: '演出与主动行为', label: '主动程度', keywords: '频率 安静 平衡 热闹 闲聊' },
-  { tab: 'general', card: '演出与主动行为', label: '久坐提醒', keywords: '休息 番茄 健康 分钟' },
-  { tab: 'general', card: '环境与桌面', label: '桌面环境感知', keywords: '电量 应用 感知 分类' },
-  { tab: 'general', card: '环境与桌面', label: '显示左上角水印', keywords: '水印 直播 录屏' },
-  { tab: 'general', card: '环境与桌面', label: '开机自启动', keywords: '自启 开机 启动 登录 autostart' },
-  // AI 模型
-  { tab: 'model', card: '主模型', label: '厂商', keywords: 'deepseek 智谱 ollama 供应商' },
-  { tab: 'model', card: '主模型', label: 'API Key', keywords: '密钥 鉴权 token' },
-  { tab: 'model', card: '主模型', label: '接口地址', keywords: 'baseUrl 端点 地址' },
-  { tab: 'model', card: '主模型', label: '模型', keywords: 'deepseek-chat 模型名' },
-  { tab: 'model', card: '提取文字', label: 'OCR API Key', keywords: '视觉 识别 截图 文字 免费' },
-  { tab: 'model', card: '提取文字', label: 'OCR 接口地址', keywords: '视觉 识别 地址' },
-  { tab: 'model', card: '提取文字', label: 'OCR 视觉模型', keywords: 'glm 视觉 识别' },
-  // 角色人设
-  { tab: 'persona', card: '角色名字', label: '角色A的名字', keywords: '名字 称呼 名牌' },
-  { tab: 'persona', card: '角色名字', label: '角色B的名字', keywords: '名字 称呼 名牌' },
-  { tab: 'persona', card: '角色人设', label: '角色A的人设', keywords: '人设 性格 职业 背景' },
-  { tab: 'persona', card: '角色人设', label: '角色B的人设', keywords: '人设 性格 职业 背景' },
-  { tab: 'persona', card: '角色人设', label: '还原默认人设', keywords: '重置 出厂 内置' },
-  // 角色语音
-  { tab: 'voice', card: '语音与供应商', label: '角色语音开关', keywords: '朗读 配音 开关' },
-  { tab: 'voice', card: '语音与供应商', label: '语音供应商', keywords: '硅基流动 minimax cosyvoice' },
-  { tab: 'voice', card: '语音与供应商', label: '语音 API Key', keywords: 'siliconflow 密钥' },
-  { tab: 'voice', card: '语音与供应商', label: 'MiniMax API Key', keywords: 'minimax 密钥' },
-  { tab: 'voice', card: '语音与供应商', label: 'MiniMax GroupId', keywords: 'minimax 分组' },
-  { tab: 'voice', card: '语音与供应商', label: 'MiniMax 模型', keywords: 'turbo hd 高质' },
-  { tab: 'voice', card: '音色与表现', label: '情感指令', keywords: '情感 语气 情绪' },
-  { tab: 'voice', card: '音色与表现', label: '角色甲音色', keywords: '声音 音色 分配' },
-  { tab: 'voice', card: '音色与表现', label: '角色乙音色', keywords: '声音 音色 分配' },
-  { tab: 'voice', card: '音色与表现', label: '场外客串音色', keywords: '第三人 画外音' },
-  { tab: 'voice', card: '音色与表现', label: '克隆音色', keywords: '克隆 录音 样本' },
-  { tab: 'voice', card: '音色与表现', label: '试听', keywords: '预览 试听' },
-  // 直播设置
-  { tab: 'live', card: '直播间', label: '直播平台', keywords: 'bilibili B站 抖音' },
-  { tab: 'live', card: '直播间', label: '直播间号', keywords: '房间号 开播 弹幕' },
-  { tab: 'live', card: 'B站登录', label: 'B站 Cookie', keywords: 'sessdata 登录 凭证 舰长 打码' },
-  { tab: 'live', card: 'B站登录', label: '扫码登录B站', keywords: '二维码 扫码 登录' },
-  // 工具与隐私
-  { tab: 'privacy', card: '截屏', label: '全局截屏快捷键', keywords: '截图 快捷键 热键 框选' },
-  { tab: 'privacy', card: '截屏', label: '截屏/录屏时排除角色', keywords: '隐私 排除 录屏 隐藏' },
-  { tab: 'privacy', card: '网页版生成', label: '主演出改用网页模型生成', keywords: '实验 网页 deepseek 豆包' },
-  { tab: 'privacy', card: '网页版生成', label: '网页模型站点', keywords: 'deepseek 豆包 站点' },
-  { tab: 'privacy', card: '网页版生成', label: '网页窗口登录', keywords: 'edge 登录 窗口' },
-  { tab: 'privacy', card: '隐私与数据', label: '隐私与数据说明', keywords: '本机 上传 隐私 安全' },
-  // 记忆
-  { tab: 'memory', card: '使用者画像', label: '你的称呼', keywords: '画像 称呼 名字' },
-  { tab: 'memory', card: '使用者画像', label: '职业/身份', keywords: '画像 职业 身份' },
-  { tab: 'memory', card: '使用者画像', label: '喜欢/不喜欢', keywords: '画像 喜好 偏好' },
-  { tab: 'memory', card: '使用者画像', label: '雷区', keywords: '禁聊 话题 避免' },
-  { tab: 'memory', card: '记住的事', label: '记住的事', keywords: '事实 置顶 遗忘 清空' },
-  { tab: 'memory', card: '角色世界', label: '角色世界', keywords: '老梗 事件线 共同记忆' },
-  { tab: 'memory', card: '连续剧情', label: '连续剧情', keywords: '剧情线 多集 下一拍' },
-  // 备忘
-  { tab: 'memo', card: '添加备忘', label: '添加备忘', keywords: '待办 提醒 截止时间' },
-  { tab: 'memo', card: '备忘列表', label: '备忘列表', keywords: '已完成 清除 待办' },
-  // 历史
-  { tab: 'history', card: '演出历史', label: '演出历史', keywords: '回放 收藏 删除 历史' },
-]
-
-// ---------- 设置窗口的小部件 ----------
-
-/** 卡片:同组设置项的容器;card 是搜索跳转的定位键(同页内唯一),flash 时高亮 */
-function SettingsCard(props: {
-  card: string
-  flash?: string | null
-  title: string
-  desc?: string
-  action?: ReactNode
-  children: ReactNode
-}) {
-  const { card, flash, title, desc, action, children } = props
-  return (
-    <section className={`set-card${flash === card ? ' flash' : ''}`} data-card={card}>
-      <div className="set-card-head">
-        <h2>{title}</h2>
-        {desc && <span className="set-card-desc">{desc}</span>}
-        {action && <span className="set-card-action">{action}</span>}
-      </div>
-      {children}
-    </section>
-  )
-}
-
-/** 一行设置:左侧标题+说明,右侧控件 */
-function SetLine(props: { title: string; hint?: string; children: ReactNode }) {
-  const { title, hint, children } = props
-  return (
-    <div className="set-line">
-      <div className="set-copy">
-        <span className="set-label">{title}</span>
-        {hint && <span className="set-hint">{hint}</span>}
-      </div>
-      <div className="set-control">{children}</div>
-    </div>
-  )
-}
-
-/** 竖排字段:标签在上,控件在下(文本输入/下拉/文本域) */
-function SetField(props: { label: string; htmlFor?: string; hint?: string; children: ReactNode }) {
-  const { label, htmlFor, hint, children } = props
-  return (
-    <div className="set-field">
-      <label htmlFor={htmlFor}>{label}</label>
-      {children}
-      {hint && <span className="set-hint">{hint}</span>}
-    </div>
-  )
-}
-
-/** 开关:紫色仅用于开关等交互强调态 */
-function SetSwitch(props: { checked: boolean; label?: string; onChange: (v: boolean) => void }) {
-  const { checked, label, onChange } = props
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      aria-label={label}
-      title={label}
-      className={`set-switch${checked ? ' on' : ''}`}
-      onClick={() => onChange(!checked)}
-    />
-  )
-}
-
-function fmtTime(ts: number): string {
-  const d = new Date(ts)
-  const p = (n: number) => String(n).padStart(2, '0')
-  return `${d.getMonth() + 1}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
-}
-
-/** 音色克隆行:选一段 10~20 秒的清晰人声(说话内容与文本一致),上传后成为账号下的克隆音色。
- *  也支持从正在播放声音的应用直接录一段(进程环回,隔离其他软件声音)。
- *  克隆成功自动选中给角色乙(通常捧哏换个有味道的声线) */
-function CloneVoiceRow({
-  apiKey,
-  onCloned,
-  onRecordingChange,
-}: {
-  apiKey: string
-  onCloned: (v: ClonedVoice) => void
-  /** 录音状态上报:录音中锁定面板(点外部/Esc 不收起,停止入口不会丢失) */
-  onRecordingChange?: (recording: boolean) => void
-}) {
-  const [file, setFile] = useState<File | null>(null)
-  const [name, setName] = useState('')
-  const [text, setText] = useState('')
-  const [state, setState] = useState<'idle' | 'busy' | 'ok' | 'error'>('idle')
-  const [errMsg, setErrMsg] = useState('')
-  // 应用声音录制:会话列表/选中项/录音状态与计时
-  const [sessions, setSessions] = useState<{ pid: number; name: string; playing: boolean }[]>([])
-  const [targetFilter, setTargetFilter] = useState('')
-  const [target, setTarget] = useState<string>('')
-  const [recording, setRecording] = useState(false)
-  const [elapsed, setElapsed] = useState(0)
-  const recordingRef = useRef(false)
-  const togglingRef = useRef(false) // 录音按钮防抖:命令在途时忽略重复点击
-  const capturePathRef = useRef<string | null>(null) // 本次录音的 wav 落盘路径(克隆成功后清理)
-
-  /** 删除本次录音的 wav(克隆已用完/面板中途取消) */
-  function discardCapture(path: string | null) {
-    if (!path) return
-    capturePathRef.current = null
-    void remove(path).catch(() => {})
-  }
-
-  // 计时器 + 卸载保险:面板若在此期间被关闭/卸载,自动停录并丢弃半成品,不留孤儿线程/文件
-  useEffect(() => {
-    if (!recording) return
-    const t = window.setInterval(() => setElapsed((s) => s + 1), 1000)
-    return () => {
-      window.clearInterval(t)
-      if (recordingRef.current) {
-        void invoke<string>('stop_capture')
-          .then((p) => remove(p).catch(() => {}))
-          .catch(() => {})
-        recordingRef.current = false
-        onRecordingChange?.(false)
-        endRecording()
-      }
-    }
-    // onRecordingChange 是父组件的内联回调,行为恒定;入 deps 会让计时器每帧重建
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [recording])
-
-  /** 收尾一次录音:取回文件、复位 UI。手动停止与 180s 自动停共用 */
-  async function finishRecording() {
-    const path = await invoke<string>('stop_capture') // 同时清掉后端 job,线程已结束时立即返回
-    const bytes = await readFile(path)
-    capturePathRef.current = path
-    setFile(new File([bytes], path.split(/[\\/]/).pop() ?? 'capture.wav', { type: 'audio/wav' }))
-    recordingRef.current = false
-    setRecording(false)
-    onRecordingChange?.(false)
-    endRecording()
-  }
-
-  // 后端录音线程意外结束(设备失效/目标进程异常 → 报错;达到 180s 上限 → 自动停):
-  // 把前端拉回一致状态并清后端残留 job。手动停止的正常事件由 toggleRecord 收尾,这里跳过
-  useEffect(() => {
-    const un = listen<{ ok: boolean; path?: string; error?: string; auto: boolean }>(
-      'capture-ended',
-      (e) => {
-        if (!recordingRef.current) return
-        if (e.payload.ok && !e.payload.auto) return
-        recordingRef.current = false
-        setRecording(false)
-        onRecordingChange?.(false)
-        endRecording()
-        if (!e.payload.ok) {
-          setErrMsg(String(e.payload.error ?? '录音意外结束').slice(0, 120))
-          setState('error')
-          void invoke('stop_capture').catch(() => {}) // 清残留 job,下次才能再录
-          return
-        }
-        void finishRecording().catch(() => {
-          void invoke('stop_capture').catch(() => {})
-        })
-      },
-    )
-    return () => {
-      void un.then((f) => f())
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  if (!apiKey.trim()) return null
-
-  async function refreshSessions() {
-    try {
-      const list = await invoke<{ pid: number; name: string; playing: boolean }[]>('list_audio_sessions')
-      setSessions(list)
-    } catch (e) {
-      console.warn('应用声音会话列表拉取失败', e)
-    }
-  }
-
-  async function toggleRecord() {
-    if (togglingRef.current) return // 命令在途,防双击造成"已有录音/没有录音"误报
-    togglingRef.current = true
-    try {
-      if (!recording) {
-        try {
-          await invoke('start_capture', {
-            pid: target === 'system' || target === '' ? null : Number(target),
-          })
-          recordingRef.current = true
-          setRecording(true)
-          onRecordingChange?.(true)
-          beginRecording() // 录音进统一运行态(调度器/Esc 锁定的闸门)
-          setElapsed(0)
-          discardCapture(capturePathRef.current) // 换新样本,旧录音不再需要
-          setFile(null)
-        } catch (e) {
-          setErrMsg(String(e).slice(0, 120))
-          setState('error')
-        }
-        return
-      }
-      try {
-        await finishRecording()
-      } catch (e) {
-        recordingRef.current = false
-        setRecording(false)
-        onRecordingChange?.(false)
-        endRecording()
-        setErrMsg(String(e).slice(0, 120))
-        setState('error')
-      }
-    } finally {
-      togglingRef.current = false
-    }
-  }
-
-  async function submit() {
-    if (!file || !name.trim() || !text.trim()) return
-    setState('busy')
-    try {
-      const v = await cloneVoice(apiKey, file, file.name, name.trim(), text.trim())
-      discardCapture(capturePathRef.current) // 克隆成功,参考录音完成使命
-      setState('ok')
-      onCloned(v)
-    } catch (e) {
-      setState('error')
-      setErrMsg((e as Error).message.slice(0, 120))
-    }
-  }
-
-  return (
-    <div className="settings-row clone-row" title="用一段真人录音克隆专属音色:内容需与文本一致,清晰无背景音乐">
-      <label htmlFor="cfg-clone-file">克隆音色(选人声样本,或从应用录一段)</label>
-      <div className="clone-fields">
-        <input
-          id="cfg-clone-file"
-          type="file"
-          accept="audio/*"
-          onChange={(e) => {
-            discardCapture(capturePathRef.current) // 改选手动文件,之前录的不再需要
-            setFile(e.target.files?.[0] ?? null)
-          }}
-        />
-        <div className="capture-fields">
-          <input
-            type="text"
-            placeholder="过滤应用名…"
-            value={targetFilter}
-            onChange={(e) => setTargetFilter(e.target.value)}
-          />
-          <button
-            className="panel-btn"
-            title="重新拉取应用列表"
-            onClick={() => void refreshSessions()}
-          >
-            ↻
-          </button>
-        </div>
-        <div className="capture-fields">
-          <select
-            value={target}
-            onChange={(e) => setTarget(e.target.value)}
-            onFocus={() => void refreshSessions()}
-          >
-            <option value="system">整个系统的声音</option>
-            {sessions
-              .filter((s) => s.name.toLowerCase().includes(targetFilter.toLowerCase()))
-              .map((s) => (
-                <option key={s.pid} value={String(s.pid)}>
-                  {s.playing ? '🔊 ' : ''}
-                  {s.name}
-                </option>
-              ))}
-          </select>
-          <button
-            className="panel-btn"
-            disabled={state === 'busy'}
-            onClick={() => void toggleRecord()}
-          >
-            {recording ? `停止录制 (${elapsed}s)` : target === 'system' ? '录制系统' : '录制该应用'}
-          </button>
-        </div>
-        {recording && (
-          <span className="clone-tip warn">录音中:去目标应用播放声音即可;面板已锁定,点停止后恢复正常</span>
-        )}
-        {file && (
-          <span className="clone-tip ok">
-            样本:{file.name}({Math.round(file.size / 1024)}KB)
-            {file.size < 100_000 && ' · 偏小:确认目标应用真的在发声、录满 10~20 秒再停'}
-          </span>
-        )}
-        <input
-          type="text"
-          placeholder="音色名(如:up主小张)"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-        />
-        <input
-          type="text"
-          placeholder="录音里说的那句话(逐字)"
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-        />
-        <button
-          className="panel-btn"
-          disabled={!file || !name.trim() || !text.trim() || state === 'busy'}
-          onClick={() => void submit()}
-        >
-          {state === 'busy' ? '上传中…' : '克隆'}
-        </button>
-      </div>
-      {state === 'ok' && <span className="clone-tip ok">✓ 克隆成功,已选给角色乙</span>}
-      {state === 'error' && <span className="clone-tip err">{errMsg}</span>}
-    </div>
-  )
-}
-
-/** 全局快捷键录入器:点击进入录入态,按下带修饰键的组合键即完成,Esc 取消。
- *  输出为 global-shortcut 接受的格式(Ctrl+Alt+A 这类);必须带修饰键,防止单键误占 */
-function HotkeyRecorder({ value, onChange }: { value: string; onChange: (v: string) => void }) {
-  const [listening, setListening] = useState(false)
-  useEffect(() => {
-    if (!listening) return
-    const onKey = (e: KeyboardEvent) => {
-      e.preventDefault()
-      e.stopPropagation()
-      if (e.key === 'Escape') {
-        setListening(false)
-        return
-      }
-      if (['Control', 'Alt', 'Shift', 'Meta'].includes(e.key)) return // 等主键
-      const mods: string[] = []
-      if (e.ctrlKey) mods.push('Ctrl')
-      if (e.altKey) mods.push('Alt')
-      if (e.shiftKey) mods.push('Shift')
-      if (e.metaKey) mods.push('Super')
-      if (mods.length === 0) {
-        setListening(false) // 无修饰键的组合不收,防误占普通按键
-        return
-      }
-      const main = e.key.length === 1 ? e.key.toUpperCase() : e.key
-      onChange(`${mods.join('+')}+${main}`)
-      setListening(false)
-    }
-    // 捕获阶段拦下,避免 Escape 冒泡把设置面板关掉
-    window.addEventListener('keydown', onKey, true)
-    return () => window.removeEventListener('keydown', onKey, true)
-  }, [listening, onChange])
-  return (
-    <button className="panel-btn" onClick={() => setListening(true)}>
-      {listening ? '按下组合键…(Esc 取消)' : value || '未设置'}
-    </button>
-  )
-}
-
 function App() {
   // 统一运行状态:phase/面板开关全部派生自它,写入走 setRuntimeMode/openOverlayExclusive 等
   const rt = useRuntime()
   const [hovered, setHovered] = useState<string | null>(null)
-  const [reacting, setReacting] = useState<Record<Speaker, boolean>>({
-    A: false,
-    B: false,
-    C: false,
-  })
-  const [bubble, setBubble] = useState<Record<Speaker, string | null>>({
-    A: null,
-    B: null,
-    C: null,
-  })
-  const [action, setAction] = useState<Record<Speaker, string>>({
-    A: 'idle',
-    B: 'idle',
-    C: 'idle',
-  })
-  // 台词语气(delivery):驱动 sprite 修饰类与说话节奏
-  const [delivery, setDelivery] = useState<Record<Speaker, string | undefined>>({
-    A: undefined,
-    B: undefined,
-    C: undefined,
-  })
   const phase: Phase =
     rt.mode.type === 'generating'
       ? 'generating'
@@ -783,25 +131,10 @@ function App() {
   // 分段选择器当前选中模式；生成按钮按它点播
   const [mode, setMode] = useState<Mode>('daily')
   const settingsOpen = rt.overlays.includes('settings')
-  const [form, setForm] = useState<AppConfig>(DEFAULT_CONFIG)
-  // 即存反馈:最近一次自动保存/失败的时间戳(渲染 2.5s 后自动消失)
-  const [savedTick, setSavedTick] = useState(0)
-  const [saveError, setSaveError] = useState(false)
-  // 设置窗口分页:偏好设置(基础/模型/人设/语音/直播/工具隐私)+ 数据管理(记忆/备忘/历史)
-  const [settingsTab, setSettingsTab] = useState<SettingsTab>('general')
-  // 设置搜索:关键词非空时右侧改为搜索结果列表,点击结果跳转分页并高亮卡片
-  const [settingsQuery, setSettingsQuery] = useState('')
-  const [flashCard, setFlashCard] = useState<string | null>(null)
-  const flashTimer = useRef(0)
-  const setBodyRef = useRef<HTMLDivElement>(null)
-  // 记忆系统的机器事实列表(设置"记忆"页展示/管理)
-  const [memoryFacts, setMemoryFacts] = useState<MemoryFact[]>([])
-  const [clearMemArmed, setClearMemArmed] = useState(false)
-  const [clearHistArmed, setClearHistArmed] = useState(false)
-  // 角色世界(两人之间的老梗/未了结事件),记忆页展示管理
-  const [storyData, setStoryData] = useState<StoryData | null>(null)
-  // 长期关系一句话摘要(记忆页展示)
-  const [bondLine, setBondLine] = useState<string | null>(null)
+  // 配置事实源:读同一份已落盘配置(任何 saveConfig 成功后即时发布),不再各自维护镜像
+  const config = useConfigSnapshot()
+  const charNames = { A: config.names.a, B: config.names.b }
+  const showWatermark = config.showWatermark
   // 聊天通道:输入框开合/草稿/应答中;用户气泡(区别于角色气泡)
   const chatOpen = rt.overlays.includes('chat')
   const [chatDraft, setChatDraft] = useState('')
@@ -817,188 +150,73 @@ function App() {
   const pendingOcrTranslate = useRef(false)
   const trQuipAt = useRef(0)
   // 最近打开的面板由 runtime overlays 栈决定(escapeTarget),不再单独记 ref
-  // 语音录制进行中:面板锁定(点外部/Esc/齿轮均不收起,防止丢失停止入口)
-  const voiceRecording = useRef(false)
-  // 设置面板当前选中的厂商(custom = 本地/自定义,baseUrl/model 自由输入)
-  const [vendorId, setVendorId] = useState(CUSTOM_VENDOR_ID)
-  // 面板内各厂商 key 的草稿:切换厂商时把输入存回旧键、从新键带出,保存时合并落盘
-  const [keyDrafts, setKeyDrafts] = useState<Record<string, string>>({})
   // 手动锁定主题;null = 随机。主题面板弹/收与搜索词
   const [topicOverride, setTopicOverride] = useState<string | null>(null)
   const topicOpen = rt.overlays.includes('topic')
   const [topicQuery, setTopicQuery] = useState('')
   // 空闲自动重放:频率来自配置,activeTick 用于用户互动后重置计时
   const [activeTick, setActiveTick] = useState(0)
-  // 正在播的主动行为(供"提前掐断 = 负反馈"记账);onDone/stopEverything 清
-  const proactiveAct = useRef<{ kind: DismissableKind; since: number } | null>(null)
   /** 用户主动互动:重置空闲/自动重放计时 + 清降频连击(还在陪玩的观众不该被降频) */
   function noteUserActive() {
     setActiveTick((t) => t + 1)
     noteActivity()
     void resetDismissals()
   }
-  const [episodes, setEpisodes] = useState<Episode[]>([])
-  // 网页版生成:窗口/就绪状态的一行展示文本
-  const [webchatStatusText, setWebchatStatusText] = useState('')
-  // 角色布局(位置各自独立/缩放共享)与隐藏开关;ref 供拖动/滚轮事件读最新值
-  const [charCfg, setCharCfg] = useState<CharactersConfig>(DEFAULT_CONFIG.characters)
-  const charCfgRef = useRef(charCfg)
   const charHidden = rt.charHidden
-  const charSaveTimer = useRef(0)
-  // 退出两段确认:第一次点亮,3 秒内再点才真正退出
-  const [exitArmed, setExitArmed] = useState(false)
-  const exitTimer = useRef(0)
-  // 控制栏位置(可拖动);ref 供拖动事件读最新值
-  const [ctrlBar, setCtrlBar] = useState<CtrlBarPos>(DEFAULT_CONFIG.ctrlBar)
-  const ctrlBarRef = useRef(ctrlBar)
-  const ctrlBarTimer = useRef(0)
-  // 左上角水印开关
-  const [showWatermark, setShowWatermark] = useState(DEFAULT_CONFIG.showWatermark)
-  // 角色语音配置(开关 + 双角色音色,改即落盘)
-  const [voice, setVoice] = useState(DEFAULT_CONFIG.voice)
-  // 账号下的克隆音色(打开设置时拉取),供音色下拉选择
-  const [clonedVoices, setClonedVoices] = useState<ClonedVoice[]>([])
-  // 使用者的兴趣爱好(设置面板填写,随机话题时按模式概率介入)
-  // 最近交互的角色显示在上层(z-order)
-  const [topActor, setTopActor] = useState<Speaker>('A')
-  // 活人感:当前说话者/听者惊讶脉冲/拖动落地回弹/拖动中的角色
-  const [speaking, setSpeaking] = useState<Speaker | null>(null)
-  const [pulseFor, setPulseFor] = useState<Speaker | null>(null)
-  const pulseTimer = useRef(0)
-  const [dropFor, setDropFor] = useState<Speaker | null>(null)
-  const dropTimer = useRef(0)
-  // 中途抉择:choice 点暂停后等待观众站队;30s 未选自动随机
-  const [choice, setChoice] = useState<ChoicePoint | null>(null)
-  const choiceTimer = useRef(0)
-  const pendingEpisode = useRef<{ before: DialogLine[]; after: Record<string, DialogLine[]>; mode: Mode; topic: string; chosen?: string } | null>(null)
-  // 中途抉择:choice 点暂停后等待观众站队;30s 未选自动随机
-  const [dragUi, setDragUi] = useState<Speaker | null>(null)
-  const finaleTimer = useRef(0)
-  // 远距离喊话:气泡加大加粗
-  const [loudBubble, setLoudBubble] = useState<Record<Speaker, boolean>>({ A: false, B: false, C: false })
-  const distLastAt = useRef<Record<string, number>>({})
-  // 时间感知:启动问候 + 空闲自发短聊天(时序状态在 proactiveScheduler 内)
-  const phaseRef = useRef(phase)
-  const greeted = useRef(false)
-  const dragRef = useRef<{ who: Speaker; startX: number; startY: number; orig: CharPos; moved: boolean } | null>(null)
-  const draggingWho = useRef<Speaker | null>(null)
-
-  const charA = useRef<HTMLDivElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
-  const charB = useRef<HTMLDivElement>(null)
   const topicPanelRef = useRef<HTMLDivElement>(null)
   const chatBoxRef = useRef<HTMLDivElement>(null)
   const cmdPanelRef = useRef<HTMLDivElement>(null)
   const choicePanelRef = useRef<HTMLDivElement>(null)
-  const timers = useRef<Record<Speaker, number>>({ A: 0, B: 0, C: 0 })
 
-  // 演出播放器：LLM 生成的 DialogLine[] 与硬编码脚本走同一条路
-  const player = useRef<PerformancePlayer | null>(null)
-  // 当前正在播放的台词数组,供 onLine 回调预合成下一句语音
-  const playingLines = useRef<DialogLine[]>([])
-  if (!player.current) {
-    player.current = new PerformancePlayer({
-      onStart: (first) => {
-        // 开播即预取第一句语音,消除首句文字先行
-        prefetchVoice(first.speaker, first.text, first.delivery)
-      },
-      onLineStart: (line, index) => {
-        if (nowPlaying.current) nowPlaying.current.index = index
-        // 气泡与说话动作在首帧声音出现时同步上屏(静音/首声超时按纯文本节奏显示)
-        const showTalk = () => {
-          setBubble((b) => ({ ...b, [line.speaker]: line.text }))
-          // 台词在笑 → 用大笑表情(LLM 词表有 laugh 时直接命中,否则启发式兜底)
-          const laughing = /哈哈+|嘿嘿|嘻嘻|笑死|233/.test(line.text)
-          const act = laughing ? 'laugh' : line.action || 'talk'
-          setAction((a) => ({ ...a, [line.speaker]: act }))
-          setSpeaking(line.speaker)
-          setDelivery((d) => ({ ...d, [line.speaker]: line.delivery }))
-          // 听者同步反应:LLM 指定听者动作(害羞/大笑/欲言又止…),与台词同拍
-          const listener: Speaker = line.speaker === 'A' ? 'B' : 'A'
-          const la = line.listenerAction
-          if (la) setAction((a) => ({ ...a, [listener]: la }))
-          // 台词带感叹/问号 → 听者惊讶脉冲
-          if (/[!?！？]/.test(line.text)) {
-            setPulseFor(listener)
-            window.clearTimeout(pulseTimer.current)
-            pulseTimer.current = window.setTimeout(() => setPulseFor(null), 600)
-          }
-        }
-        const handle = speakTracked(line.speaker, line.text, line.delivery, 'performance')
-        const next = playingLines.current[index + 1]
-        if (next) prefetchVoice(next.speaker, next.text, next.delivery)
-        const estimate = Math.round(bubbleDuration(line.text) / deliverySpeed(line.delivery))
-        let speechPhase: Promise<void>
-        if (!handle) {
-          showTalk() // 被更高优先级压制:纯文本节奏
-          speechPhase = sleepMs(estimate)
-        } else {
-          // 首声截止:超时取消本句 TTS 按纯文本播,杜绝迟到语音突然插入
-          let deadlineTimer = 0
-          speechPhase = Promise.race([
-            handle.started,
-            new Promise<'timeout'>((resolve) => {
-              deadlineTimer = window.setTimeout(() => resolve('timeout'), FIRST_AUDIO_DEADLINE_MS)
-            }),
-          ]).then((res) => {
-            window.clearTimeout(deadlineTimer)
-            showTalk() // 无论声音是否赶上截止,台词与表情都必须上屏
-            const plan = planLinePresentation(res, estimate)
-            if (plan.stopTts) handle.stop() // 首声超时:取消本句,按纯文本节奏走,杜绝迟到语音插入
-            if (plan.textDurationMs !== null) return sleepMs(plan.textDurationMs) // 静音/超时:纯文本节奏
-            return Promise.all([
-              sleepMs(MIN_READABLE_MS),
-              Promise.race([handle.ended, sleepMs(estimate + 8000)]),
-            ]).then(() => {})
-          })
-        }
-        return { speechPhase }
-      },
-      onSpeechEnd: (speaker) => {
-        // 声音结束立即闭嘴;气泡与听者反应留进句尾留白
-        setSpeaking(null)
-        setAction((a) => ({ ...a, [speaker]: 'idle' }))
-      },
-      onLineEnd: (speaker) => {
-        const listener: Speaker = speaker === 'A' ? 'B' : 'A'
-        setBubble((b) => ({ ...b, [speaker]: null }))
-        // 听者的反应动作不滞留到下一拍(说话者已在 onSpeechEnd 回 idle)
-        setAction((a) => ({ ...a, [listener]: 'idle' }))
-        setDelivery((d) => ({ ...d, [speaker]: undefined }))
-      },
-      onChoice: (cp) => {
-        setChoice(cp)
-        setRuntimeMode({ type: 'choosing', choiceId: String(Date.now()) })
-      },
-      onDone: () => {
-        // 选边集:播完(含所选分支)后补记后半段历史
-        const p = pendingEpisode.current
-        if (p?.chosen) {
-          const branchLines = p.after[p.chosen] ?? []
-          if (branchLines.length) void appendHistory(branchLines, p.mode, p.topic)
-          nowPlaying.current = { topic: p.topic, lines: branchLines, total: branchLines.length, index: -1, source: 'gen' }
-        }
-        pendingEpisode.current = null
-        proactiveAct.current = null // 自然播完不算忽略
-        setRuntimeMode({ type: 'idle' })
-        setSpeaking(null)
-        setDelivery({ A: undefined, B: undefined, C: undefined })
-        // 看完一集 = 弱正信号;自动重放是系统行为不计偏好,防"系统自播→自我强化"污染
-        const np = nowPlaying.current
-        if (np && np.source !== 'auto') bumpTopicWatched(np.topic)
-        // 新生成的集自然播完后才蒸馏角色世界:没看完不记,回放不重复蒸馏
-        if (np && np.source === 'gen' && np.lines) void distillStoryFrom(np.lines)
-        nowPlaying.current = null
-        // 收底拍:响底台词与表情定格 2.6s 给观众笑的时间,然后全员放松回 idle
-        window.clearTimeout(finaleTimer.current)
-        finaleTimer.current = window.setTimeout(() => {
-          setAction({ A: 'idle', B: 'idle', C: 'idle' })
-          setBubble({ A: null, B: null, C: null })
-        }, 2600)
-      },
-    })
+  // phase 的 ref 镜像:异步回调(LLM 返回)里判断此刻是否仍空闲
+  const phaseRef = useRef(phase)
+
+  // 角色舞台布局:拖动/缩放/落盘/距离演出(呈现与戳一戳回调注入)
+  const {
+    charCfg, ctrlBar, topActor, setTopActor, dragUi, dropFor,
+    charA, charB, draggingWho, applyChars, applyCtrlBar, resetLayout,
+    onCharPointerDown, onCharPointerMove, onCharPointerUp, onCharWheel,
+  } = useCharacterLayout({
+    isIdle: () => phaseRef.current === 'idle',
+    present: showPoke,
+    onPoke: poke,
+  })
+
+  // 角色呈现器:气泡/动作/说话态的唯一归属(演出回调、插话、聊天、直播统一走它)
+  const {
+    bubble, action, delivery, speaking, pulseFor, reacting, loudBubble,
+    showTalk, hush, endLine, pulse, settle, setPose, reset: resetStage,
+    say: presenterSay,
+  } = useActorPresenter()
+
+  // 演出导演:生成/回放/选边/停止/主动行为演出的唯一归属(逐句呈现委托给呈现器)
+  const director = usePerformanceDirector({
+    presenter: { say: presenterSay, showTalk, hush, endLine, settle, reset: resetStage, setPose },
+    isIdle: () => phaseRef.current === 'idle',
+    getTopicOverride: () => topicOverride,
+    getInterests: () =>
+      config.userProfile.likes
+        .split(/[,，、;；\n]/)
+        .map((x) => x.trim())
+        .filter(Boolean),
+    onLive: () => startStreaming(),
+    teardown: () => {
+      liveStopRef.current?.()
+      stopLiveSession()
+      clearProps()
+      setUserBubble(null)
+    },
+    onEpisodeCompleted: (lines) => void distillStoryFrom(lines),
+    sweepMemos: () => sweepMemos(),
+  })
+  const { choice } = director
+
+  /** 插话呈现(气泡+动作+到期回收):戳一戳/引导语/报错的统一入口 */
+  function showPoke(who: 'A' | 'B', line: string, action: string, ms = 1600, loud = false) {
+    presenterSay(who, line, { action, ms, loud, reacting: true })
   }
-  const generateAbort = useRef<AbortController | null>(null)
+
   // phase 的 ref 镜像:异步回调(LLM 返回)里判断此刻是否仍空闲
   useEffect(() => {
     phaseRef.current = phase
@@ -1007,8 +225,6 @@ function App() {
   // 截屏流程:capture-start 进入框选模式(主窗恢复交互,CaptureOverlay 铺满冻结图),
   // 失败反馈(capture.ts 内部 catch 后 emit 过来)走气泡
   const [captureShot, setCaptureShot] = useState<string | null>(null)
-  // 角色名(名牌与台词称呼),设置里可改
-  const [charNames, setCharNames] = useState<{ A: string; B: string }>({ A: '甲', B: '乙' })
   useEffect(() => {
     const start = listen('capture-start', ({ payload }) => {
       setCaptureMode(true)
@@ -1019,16 +235,14 @@ function App() {
     const fail = listen('capture-error', ({ payload }) => {
       pendingOcrTranslate.current = false // 本次框选没走完,别让下一次截图莫名触发翻译
       endCapture() // 冻结屏没拿到也恢复底下状态
-      const msg = String(payload).slice(0, 50)
-      setBubble({ A: `截图失败:${msg}`, B: null, C: null })
-      window.setTimeout(() => {
-        setBubble((b) => (b.A?.startsWith('截图失败') ? { A: null, B: null, C: null } : b))
-      }, 5000)
+      presenterSay('A', `截图失败:${String(payload).slice(0, 50)}`, { ms: 5000 })
     })
     return () => {
       void start.then((f) => f())
       void fail.then((f) => f())
     }
+    // 挂载一次的全局监听;回调里只依赖模块函数与呈现器稳定闭包
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // ---------- 翻译:OCR 链路对接与外围互动 ----------
@@ -1087,11 +301,7 @@ function App() {
   function startPlainScreenshot() {
     pendingOcrTranslate.current = false
     startScreenshot().catch((e) => {
-      const msg = String((e as Error)?.message ?? e).slice(0, 50)
-      setBubble({ A: `截图失败:${msg}`, B: null, C: null })
-      window.setTimeout(() => {
-        setBubble((b) => (b.A?.startsWith('截图失败') ? { A: null, B: null, C: null } : b))
-      }, 2400)
+      presenterSay('A', `截图失败:${String((e as Error)?.message ?? e).slice(0, 50)}`, { ms: 2400 })
     })
   }
 
@@ -1106,92 +316,21 @@ function App() {
   /** 命令面板:点播一段演出。话题一次性传入(不落盘,不永久锁定聊天主题) */
   function performNow(m: Mode, topic?: string) {
     setMode(m)
-    void playMode(m, topic)
+    void director.play(m, topic)
   }
 
   // ---------- 主播模式:直播弹幕互动 ----------
 
   /** 弹幕回复呈现:复用聊天通道的气泡+动作+TTS 节奏(stream 通道) */
-  const liveReplyTimer = useRef(0)
   function presentLiveReply(r: LiveReply) {
     setTopActor(r.speaker) // 呈现者置顶:气泡与道具不被另一角色压住
-    setBubble(r.speaker === 'A' ? { A: r.text, B: null, C: null } : { A: null, B: r.text, C: null })
-    setAction((a) => ({ ...a, [r.speaker]: r.action || 'talk' }))
-    setSpeaking(r.speaker)
+    presenterSay(r.speaker, r.text, { action: r.action || 'talk', ms: 2200 + r.text.length * 160, speaking: true })
+    pulse(r.speaker === 'A' ? 'B' : 'A')
     speak(r.speaker, r.text, undefined, 'stream')
-    const listener: Speaker = r.speaker === 'A' ? 'B' : 'A'
-    setPulseFor(listener)
-    window.clearTimeout(pulseTimer.current)
-    pulseTimer.current = window.setTimeout(() => setPulseFor(null), 600)
-    window.clearTimeout(liveReplyTimer.current)
-    liveReplyTimer.current = window.setTimeout(() => {
-      setBubble((b) => (b[r.speaker] === r.text ? { ...b, [r.speaker]: null } : b))
-      setAction((a) => ({ ...a, [r.speaker]: 'idle' }))
-      setSpeaking(null)
-    }, 2200 + r.text.length * 160)
   }
 
-  /** 下播句柄:stopEverything 时结束会话并让直播任务卡落定 */
+  /** 下播句柄:导演 stop() 时结束会话并让直播任务卡落定 */
   const liveStopRef = useRef<(() => void) | null>(null)
-
-  // ---------- 主播模式:B站扫码登录(免手贴 cookie) ----------
-  const qrHandleRef = useRef<QrLoginHandle | null>(null)
-  const [qrLogin, setQrLogin] = useState<{
-    phase: QrPhase | 'generating'
-    qrOfficial?: string
-    qrClassic?: string
-    hint?: string
-  } | null>(null)
-
-  /** 面板关闭/切走时停掉轮询,防止后台空转 */
-  useEffect(() => {
-    if (!settingsOpen) {
-      qrHandleRef.current?.cancel()
-      qrHandleRef.current = null
-      setQrLogin(null)
-    }
-  }, [settingsOpen])
-
-  function beginQrLogin() {
-    qrHandleRef.current?.cancel()
-    setQrLogin({ phase: 'generating', hint: '正在生成二维码…' })
-    qrHandleRef.current = startQrLogin({
-      onQr: (urls) => {
-        // 渲染失败必须可见:吞掉 rejection 会永远停在"生成中"
-        const render = (u: string) =>
-          QRCode.toDataURL(u, { width: 148, margin: 1 }).catch((e) =>
-            Promise.reject(String(e?.message ?? e)),
-          )
-        Promise.all([render(urls.official), render(urls.classic)])
-          .then(([official, classic]) => {
-            setQrLogin((s) => (s ? { ...s, phase: 'waiting', qrOfficial: official, qrClassic: classic } : s))
-          })
-          .catch((e) => {
-            setQrLogin((s) => (s ? { ...s, phase: 'error', hint: `二维码渲染失败:${String(e).slice(0, 80)}` } : s))
-          })
-      },
-      onPhase: (p, message) => {
-        // 过期自动刷新中:保留二维码,仅提示;error/ok 文案由 onPhase/message 带出
-        setQrLogin((s) => (s ? { ...s, phase: p, hint: message } : s))
-      },
-      onSuccess: ({ cookie, uid }) => {
-        // 从配置源取最新 live(闭包里的 form 可能过期),合并后落盘并同步表单
-        void (async () => {
-          const current = await getConfig()
-          const live = { ...current.live, cookie }
-          setForm((f) => ({ ...f, live }))
-          saveField({ live })
-        })()
-        setQrLogin({ phase: 'ok', hint: `登录成功(UID ${uid}),Cookie 已回填并保存` })
-      },
-    })
-  }
-
-  function cancelQrLogin() {
-    qrHandleRef.current?.cancel()
-    qrHandleRef.current = null
-    setQrLogin(null)
-  }
 
   /** 开播:前置校验(直播间号/平台)→ 清场 → streaming 态 → 连接弹幕源 + 启动管线。
    *  API Key 不再拦截:礼物互动完全免 AI,无 Key 照常收礼物;只有弹幕 AI 回复不可用 */
@@ -1200,27 +339,16 @@ function App() {
       const cfg = await getConfig()
       const hasApiKey = Boolean(cfg.apiKey.trim())
       if (!cfg.live.roomId.trim()) {
-        setBubble({ A: '先到 设置 → 直播设置 里填直播间号~', B: null, C: null })
-        setAction({ A: 'surprise', B: 'idle', C: 'idle' })
-        window.setTimeout(() => {
-          setBubble((b) => (b.A?.startsWith('先到 设置') ? { A: null, B: null, C: null } : b))
-          setAction((a) => ({ ...a, A: 'idle' }))
-        }, 3200)
+        presenterSay('A', '先到 设置 → 直播设置 里填直播间号~', { action: 'surprise', ms: 3200 })
         return
       }
       if (cfg.live.platform === 'douyin') {
-        setBubble({ A: '抖音弹幕还在路上,先用B站吧~', B: null, C: null })
-        window.setTimeout(() => setBubble((b) => (b.A === '抖音弹幕还在路上,先用B站吧~' ? { A: null, B: null, C: null } : b)), 3000)
+        presenterSay('A', '抖音弹幕还在路上,先用B站吧~', { ms: 3000 })
         return
       }
 
-      // 清场(与 playMode 同段):中止生成/演出/语音
-      generateAbort.current?.abort()
-      player.current!.stop()
-      stopSpeaking()
-      window.clearTimeout(finaleTimer.current)
-      setBubble({ A: null, B: null, C: null })
-      setAction({ A: 'idle', B: 'idle', C: 'idle' })
+      // 清场(与点播同段):中止生成/演出/语音
+      director.abortPending()
 
       beginStreaming()
       // 无 Key 提示一句:礼物互动照常,弹幕 AI 回复不可用(管线侧同步静默禁用)
@@ -1255,8 +383,7 @@ function App() {
 
   /** 命令面板:跳到备忘页手填(时间没解析出来时的兜底入口) */
   function openMemoSettings() {
-    switchSettingsTab('memo')
-    void openSettings()
+    openSettings('memo')
   }
 
   /** 命令注册表:新工具 = 注册一条,工具栏不再加按钮 */
@@ -1272,19 +399,19 @@ function App() {
     { id: 'crosstalk', label: '来一段相声', keywords: ['相声'], run: () => performNow('crosstalk') },
     { id: 'daily', label: '来一段日常', keywords: ['日常', '段子'], run: () => performNow('daily') },
     { id: 'live', label: '开播(直播弹幕互动,设置里填直播间号)', keywords: ['开播', '直播', '弹幕'], run: () => performNow('live') },
-    { id: 'live-stop', label: '下播(结束直播弹幕互动)', keywords: ['下播'], run: stopEverything },
+    { id: 'live-stop', label: '下播(结束直播弹幕互动)', keywords: ['下播'], run: () => director.stop() },
   ]
 
   /** 翻译成功后的角色搭腔:甲吹一句乙拆台,只在空闲时插话,20s 冷却 */
   function translateQuip() {
-    if (phaseRef.current !== 'idle' || player.current!.playing) return
+    if (phaseRef.current !== 'idle' || director.isPlaying()) return
     if (Date.now() - trQuipAt.current < TRANSLATE_QUIP_COOLDOWN_MS) return
     trQuipAt.current = Date.now()
     const q = TRANSLATE_QUIPS[Math.floor(Math.random() * TRANSLATE_QUIPS.length)]
     showPoke('A', q.a, 'happy', 2400)
     window.setTimeout(() => {
       // 2.5s 内开演了就不插话,别顶掉台词气泡
-      if (phaseRef.current !== 'idle' || player.current!.playing) return
+      if (phaseRef.current !== 'idle' || director.isPlaying()) return
       showPoke('B', q.b, 'talk', 2400)
     }, 2500)
   }
@@ -1295,50 +422,28 @@ function App() {
   useEffect(() => {
     void invoke('set_noactivate', { enable: !(overlaysOpen || !!captureShot) }).catch(() => {})
   }, [overlaysOpen, captureShot])
-  // 上一段台词（内存中），续播时喂给 LLM 做衔接
-  const lastLines = useRef<DialogLine[]>([])
-  // 上一次自动重放的集,连续重放时避开
-  const lastReplayTs = useRef(0)
-  // 正在播出的集:话题/台词/进度/信号来源,供完播/跳过记账与完播后蒸馏(auto 重放不计)
-  const nowPlaying = useRef<{
-    topic?: string
-    lines?: DialogLine[]
-    total: number
-    index: number
-    source: 'auto' | 'manual' | 'gen'
-  } | null>(null)
 
   useEffect(() => {
     void initPointerManager()
     preloadSprites(Object.values(SPRITE_SETS)) // 预热立绘,演出中切换动作零延迟
     preloadProps() // 预热道具 SVG,首次礼物/工具流程不闪
     void getConfig().then((c) => {
-      setForm(c) // form 与磁盘配置同步:兴趣/画像等在播放流程里也会读,不能等打开设置才回填
       applyChars(c.characters)
       setRuntimeCharHidden(c.charactersHidden)
       setRuntimeDnd(c.dnd) // 勿扰状态进运行时(工具栏按钮/TTS 同步)
       setTopicOverride(c.topicOverride)
       applyCtrlBar(c.ctrlBar)
-      setShowWatermark(c.showWatermark)
-      setVoice(c.voice)
       // 截屏:应用全局快捷键 + 按配置把本窗口从系统级屏幕捕获中排除
       void applyScreenshotHotkey()
       void invoke('set_capture_excluded', { enable: c.screenshot.hideSelf }).catch(() => {})
       // 用户自定义角色名:先应用(名牌与台词称呼)
       setCharacterNames(c.names.a, c.names.b)
-      setCharNames({ A: c.names.a, B: c.names.b })
       // 用户自定义人设:先应用,后续所有生成即采纳
       setPersonaOverride(c.persona.a, c.persona.b)
       // 环境感知:按配置低频轮询本机状态(电量/前台应用分类等)
       if (c.envSense) startEnvPolling()
       // 开机自启动:按配置对账系统注册状态(默认关;手改配置文件后重启同样生效)
       void applyLaunchOnBoot(c.launchOnBoot)
-    })
-    // 启动恢复：读最近历史，续集生成时衔接上次聊到的内容
-    void loadRecentHistory(20).then((entries) => {
-      if (entries.length > 0) {
-        lastLines.current = entries.map(({ ts: _ts, mode: _m, ...l }) => l)
-      }
     })
     const unsubs = [
       onHoverChange(setHovered),
@@ -1359,78 +464,67 @@ function App() {
       // 工具栏按钮的热区由 ui/ControlBar 自行注册
     ]
     return () => unsubs.forEach((u) => u())
+    // 挂载一次:命中区矩形经 getter 动态取,布局函数行为恒定
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // 设置面板打开期间整体可命中（否则穿透窗口里输入框点不进去）
-  useEffect(() => {
-    if (!settingsOpen) return
-    return registerHitRegion('panel', {
-      getRect: () =>
-        panelRef.current?.getBoundingClientRect() ?? new DOMRect(0, 0, 0, 0),
-    })
-  }, [settingsOpen])
-
-  // 主题面板打开期间整体可命中
-  useEffect(() => {
-    if (!topicOpen) return
-    return registerHitRegion('topic-panel', {
-      getRect: () =>
-        topicPanelRef.current?.getBoundingClientRect() ?? new DOMRect(0, 0, 0, 0),
-    })
-  }, [topicOpen])
-
-  // 聊天框打开期间整体可命中(输入框/发送按钮可点)
-  useEffect(() => {
-    if (!chatOpen) return
-    return registerHitRegion('chat-box', {
-      getRect: () =>
-        chatBoxRef.current?.getBoundingClientRect() ?? new DOMRect(0, 0, 0, 0),
-    })
-  }, [chatOpen])
-
-  // 翻译面板打开期间整体可命中(输入框/下拉/按钮可点)
-  useEffect(() => {
-    if (!translationOpen) return
-    return registerHitRegion('tr-panel', {
-      getRect: () =>
-        trPanelRef.current?.getBoundingClientRect() ?? new DOMRect(0, 0, 0, 0),
-    })
-  }, [translationOpen])
-
-  // 命令面板打开期间整体可命中
-  useEffect(() => {
-    if (!toolsOpen) return
-    return registerHitRegion('cmd-panel', {
-      getRect: () =>
-        cmdPanelRef.current?.getBoundingClientRect() ?? new DOMRect(0, 0, 0, 0),
-    })
-  }, [toolsOpen])
-
-  // 抉择面板出现期间整体可命中；透明穿透窗口否则只能看见、点不到按钮。
-  useEffect(() => {
-    if (!choice) return
-    return registerHitRegion('choice-panel', {
-      getRect: () =>
-        choicePanelRef.current?.getBoundingClientRect() ?? new DOMRect(0, 0, 0, 0),
-    })
-  }, [choice])
-
-  // 任一面板打开时注册全屏兜底热区:穿透窗口里面板外的屏幕点击也能送达 DOM,
-  // "点外部收起"才生效。注册顺序在最后 → hitTest 先命中面板/工具栏/角色等小热区,
-  // 只有落在它们之外的光标才会命中 outside
-  useEffect(() => {
-    if (!overlaysOpen) return
-    return registerHitRegion('outside', {
-      getRect: () => new DOMRect(0, 0, window.innerWidth, window.innerHeight),
-    })
-  }, [overlaysOpen])
+  // 面板命中区统一注册:抉择面板优先(观众投票即时),面板本就互斥,全屏兜底必须在最后
+  // (穿透窗口里面板外的屏幕点击也能送达 DOM,"点外部收起"才生效)
+  useOverlayHitRegions(
+    useMemo(
+      () => [
+        {
+          id: 'choice-panel',
+          active: choice != null,
+          getRect: () =>
+            choicePanelRef.current?.getBoundingClientRect() ?? new DOMRect(0, 0, 0, 0),
+        },
+        {
+          id: 'panel',
+          active: settingsOpen,
+          getRect: () =>
+            panelRef.current?.getBoundingClientRect() ?? new DOMRect(0, 0, 0, 0),
+        },
+        {
+          id: 'topic-panel',
+          active: topicOpen,
+          getRect: () =>
+            topicPanelRef.current?.getBoundingClientRect() ?? new DOMRect(0, 0, 0, 0),
+        },
+        {
+          id: 'chat-box',
+          active: chatOpen,
+          getRect: () =>
+            chatBoxRef.current?.getBoundingClientRect() ?? new DOMRect(0, 0, 0, 0),
+        },
+        {
+          id: 'tr-panel',
+          active: translationOpen,
+          getRect: () =>
+            trPanelRef.current?.getBoundingClientRect() ?? new DOMRect(0, 0, 0, 0),
+        },
+        {
+          id: 'cmd-panel',
+          active: toolsOpen,
+          getRect: () =>
+            cmdPanelRef.current?.getBoundingClientRect() ?? new DOMRect(0, 0, 0, 0),
+        },
+        {
+          id: 'outside',
+          active: overlaysOpen,
+          getRect: () => new DOMRect(0, 0, window.innerWidth, window.innerHeight),
+        },
+      ],
+      [settingsOpen, topicOpen, chatOpen, translationOpen, toolsOpen, choice, overlaysOpen],
+    ),
+  )
 
   // Escape 只关最后打开的面板(runtime overlays 栈顶;语音录制中锁定:先停止录制才能关闭)
   useEffect(() => {
     if (!overlaysOpen) return
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
-      if (voiceRecording.current && settingsOpen) return
+      if (getCaps().recording && settingsOpen) return
       const target = getCaps().escapeTarget
       if (target) closeOverlay(target)
     }
@@ -1438,321 +532,9 @@ function App() {
     return () => window.removeEventListener('keydown', onKey)
   }, [overlaysOpen, settingsOpen])
 
-  /** 播放指定的一集(自动重放与历史行点击共用):不调 LLM、不写历史 */
-  function playEpisode(ep: Episode, source: 'auto' | 'manual') {
-    generateAbort.current?.abort() // 若有生成在途,直接作废
-    player.current!.stop()
-    stopSpeaking()
-    lastReplayTs.current = ep.ts
-    lastLines.current = ep.lines // 衔接后续手动生成
-    // 仅手动回放是口味正反馈;空闲自动重放是系统行为,计进去会让权重自我强化
-    if (source === 'manual') bumpTopicReplays(ep.topic)
-    nowPlaying.current = { topic: ep.topic, lines: ep.lines, total: ep.lines.length, index: -1, source }
-    setBubble({ A: null, B: null, C: null })
-    setAction({ A: 'idle', B: 'idle', C: 'idle' })
-    beginPerforming()
-    playingLines.current = ep.lines
-    player.current!.play(withFinalePause(ep.lines), { gap: modeOf(ep.mode).gap })
-  }
-
-  /** 加权随机抽一集历史重放(收藏权重 5):不调 LLM、不写历史。返回是否真的播了(调度器记账用) */
-  async function autoReplay(): Promise<boolean> {
-    if (player.current!.playing) return false
-    if (isFullscreenApp()) return false // 用户在全屏应用(视频/游戏/演示)里,别打扰
-    const eps = await listEpisodes(100)
-    // 读历史(可能数百 ms)期间用户点了生成/聊天 → 不抢场
-    if (phaseRef.current !== 'idle' || player.current!.playing) return false
-    if (eps.length === 0) return false
-    const pool = eps.length > 1 ? eps.filter((e) => e.ts !== lastReplayTs.current) : eps
-    const bag: Episode[] = []
-    for (const e of pool) {
-      for (let i = 0; i < (e.fav ? 5 : 1); i++) bag.push(e)
-    }
-    const ep = bag[Math.floor(Math.random() * bag.length)]
-    proactiveAct.current = { kind: 'replay', since: Date.now() }
-    playEpisode(ep, 'auto')
-    return true
-  }
-
-  /** 点击历史行:关闭面板并回放该集 */
   function replayFromHistory(ep: Episode) {
     closeOverlay('settings')
-    playEpisode(ep, 'manual')
-  }
-
-  /** 观众选边:播对应分支并补记历史;30s 未选由 effect 自动随机 */
-  function pickOption(option: ChoiceOption) {
-    window.clearTimeout(choiceTimer.current)
-    setChoice(null)
-    beginPerforming()
-    if (pendingEpisode.current) pendingEpisode.current.chosen = option.id
-    playingLines.current = pendingEpisode.current?.after[option.id] ?? []
-    nowPlaying.current = {
-      topic: pendingEpisode.current?.topic ?? '',
-      lines: playingLines.current,
-      total: playingLines.current.length,
-      index: -1,
-      source: 'gen',
-    }
-    player.current!.resume(option.id)
-    try { localStorage.setItem('vc-lastChoice', option.label) } catch { /* ignore */ }
-  }
-
-  // 抉择 30s 超时:自动随机选边,防止演出卡死
-  useEffect(() => {
-    if (phase !== 'choosing' || !choice) return
-    const t = window.setTimeout(() => {
-      const opt = choice.options[Math.floor(Math.random() * choice.options.length)]
-      pickOption(opt)
-    }, 30_000)
-    return () => window.clearTimeout(t)
-  }, [phase, choice])
-
-  /** 播出一段短聊天(问候/自发),计入历史,静默失败;开场先挥手。
-   *  短聊天无话题,不参与"看完/跳过"记账,清掉残留避免误记上一集 */
-  function playShortChat(lines: DialogLine[]) {
-    lastLines.current = lines
-    playingLines.current = lines
-    nowPlaying.current = null
-    setAction({ A: 'wave', B: 'wave', C: 'idle' })
-    window.setTimeout(() => {
-      beginPerforming()
-      player.current!.play(lines, { gap: 700 })
-      void appendHistory(lines, 'daily')
-    }, 900)
-  }
-
-  /** 自发短聊天:调度器闸门(空闲时长/冷却/配额/勿扰)已过,这里只做最后防御检查与执行。返回是否真的播了 */
-  async function spontaneous(): Promise<boolean> {
-    if (phaseRef.current !== 'idle' || player.current!.playing) return false
-    const cfg = await getConfig()
-    if (!cfg.apiKey.trim()) return false
-    try {
-      const lines = await generateShortChat('spontaneous', lastLines.current)
-      if (phaseRef.current !== 'idle' || player.current!.playing) return false
-      if (lines.length === 0) return false
-      proactiveAct.current = { kind: 'spontaneous', since: Date.now() }
-      playShortChat(lines)
-      return true
-    } catch {
-      return false // 生成失败静默——自发内容宁可错过
-    }
-  }
-
-  /** 久坐提醒:调度器已算好工作时长/冷却/守卫,这里只负责生成提醒并播出。返回是否提醒了 */
-  async function breakRemind(): Promise<boolean> {
-    if (phaseRef.current !== 'idle' || player.current!.playing) return false
-    try {
-      const lines = await generateShortChat('break', lastLines.current)
-      if (phaseRef.current !== 'idle' || player.current!.playing || lines.length === 0) return false
-      lastLines.current = lines
-      playingLines.current = lines
-      proactiveAct.current = { kind: 'break', since: Date.now() }
-      beginPerforming()
-      player.current!.play(lines, { gap: 700 })
-      return true
-    } catch {
-      return false // 静默:提醒宁可错过
-    }
-  }
-
-  // 主动行为调度器:备忘扫描/久坐/重放/自发的统一定时、优先级与配额(替代原先 4 个散装定时器)
-  useEffect(() => {
-    return startScheduler({ sweepMemos, breakRemind, autoReplay, spontaneous })
-    // deps 是组件内函数声明,行为恒定;首帧闭包即可(内部只依赖 ref 与模块函数)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  // 空闲 3 分钟无互动 → 角色打瞌睡(sleepy);任何互动/演出/面板恢复
-  const [sleepyOn, setSleepyOn] = useState(false)
-  useEffect(() => {
-    if (phase !== 'idle' || settingsOpen || topicOpen || chatOpen || charHidden) return
-    const t = window.setTimeout(() => setSleepyOn(true), 180_000)
-    return () => {
-      window.clearTimeout(t)
-      setSleepyOn(false)
-    }
-  }, [phase, settingsOpen, topicOpen, chatOpen, charHidden, activeTick])
-  // 久坐提醒(番茄钟)的计时/冷却/守卫已迁入 proactiveScheduler;breakRemind 只管执行
-
-  /** 启动问候:打开应用时按当前时段打招呼(失败静默);占用自发聊天的预算 */
-  useEffect(() => {
-    if (greeted.current) return
-    greeted.current = true
-    void (async () => {
-      const cfg = await getConfig()
-      if (!cfg.apiKey.trim()) return
-      try {
-        const lines = await generateShortChat('greeting', lastLines.current)
-        if (phaseRef.current !== 'idle' || player.current!.playing) return
-        if (lines.length === 0) return
-        noteSpontaneous(Date.now() - 14 * 60_000) // 问候后约 1 分钟起,自发聊天才可用
-        playShortChat(lines)
-      } catch {
-        // 问候失败静默
-      }
-    })()
-  }, [])
-
-  /** 单次点播：优先消费预生成(秒开,使用后移入 history);
-   *  未命中则生成当前轮,开播后后台再静默预生成下一轮(共两轮)。
-   *  topicArg = 一次性话题(命令面板"来一段关于X的相声"),不落盘不锁主题 */
-  async function playMode(m: Mode, topicArg?: string) {
-    // 主播模式不走剧本链路:开播 = 连弹幕源 + 事件驱动单句回复
-    if (m === 'live') {
-      startStreaming()
-      return
-    }
-    // 未配置 API Key:不进生成流程,气泡引导去设置
-    const { apiKey } = await getConfig()
-    if (!apiKey.trim()) {
-      setBubble({ A: '还没填 API Key,点 ⚙ 去设置里填一下~', B: null, C: null })
-      setAction({ A: 'surprise', B: 'idle', C: 'idle' })
-      window.setTimeout(() => {
-        setBubble((b) => (b.A?.startsWith('还没填') ? { A: null, B: null, C: null } : b))
-        setAction((a) => ({ ...a, A: 'idle' }))
-      }, 2600)
-      return
-    }
-
-    generateAbort.current?.abort()
-    player.current!.stop()
-    stopSpeaking()
-    window.clearTimeout(finaleTimer.current)
-    setBubble({ A: null, B: null, C: null })
-    setAction({ A: 'idle', B: 'idle', C: 'idle' })
-
-    // 主题:一次性话题(参数) > 手动锁定 > 连续剧情 > 使用者兴趣 > 话题池随机。
-    // 先消费预生成再选新题，避免抽到一条剧情拍后却因缓存命中而白占用。
-    const fixedTopic = topicArg ?? topicOverride
-    const interests = form.userProfile.likes
-      .split(/[,，、;；\n]/)
-      .map((x) => x.trim())
-      .filter(Boolean)
-    bumpMode(m)
-
-    // 预生成命中:有主题时只取同主题条目,无主题时 FIFO 任意条目
-    const hit = await takePrefetch(m, fixedTopic ?? undefined)
-    if (hit) {
-      const hitScript = hit.script
-      if (!hit.topic.startsWith('连续剧情')) {
-        bumpTopicSeen(hit.topic) // 口味记账对齐实际播出的主题(命中缓冲时≠本次抽中的主题)
-      }
-      nowPlaying.current = { topic: hit.topic, lines: hitScript.before, total: hitScript.before.length, index: -1, source: 'gen' }
-      lastLines.current = hitScript.before
-      pendingEpisode.current = {
-        before: hitScript.before,
-        after: hitScript.after,
-        mode: m,
-        topic: hit.topic,
-      }
-      void appendHistory(hitScript.before, hit.mode, hit.topic) // 使用后移入 history(fire-and-forget)
-      beginPerforming()
-      playingLines.current = hitScript.before
-      player.current!.play(withFinalePause(hitScript.before), {
-        gap: modeOf(hit.mode).gap,
-        choice: hitScript.choice,
-        after: Object.fromEntries(
-          Object.entries(hitScript.after).map(([id, seg]) => [id, withFinalePause(seg)]),
-        ),
-      })
-      // 当前剧情拍在完播蒸馏前仍占用，补货时不能再次生成同一拍。
-      void prefetchNext(m, hitScript.before, fixedTopic ?? undefined, hit.arc ? [hit.arc.id] : [])
-      return
-    }
-
-    // 约 30% 概率演出连续剧情的一拍；生成中与其他模式缓存里的剧情 ID 都视为占用。
-    const arcReservation = fixedTopic
-      ? null
-      : reserveArcBeat((await getStory()).arcs, new Set(await listPrefetchedArcIds()))
-    const arcBeat = arcReservation?.beat ?? null
-    const actualTopic = arcBeat
-      ? `连续剧情《${arcBeat.title}》:${arcBeat.hook}`
-      : fixedTopic ??
-        (interests.length > 0 && Math.random() < (modeOf(m).interestTopicChance ?? 0)
-          ? `使用者感兴趣的事:${interests[Math.floor(Math.random() * interests.length)]}`
-          : pickTopic(modeOf(m), {
-              ban: form.userProfile.banTopics,
-              weights: await getTopicWeights(),
-            }))
-
-    // 未命中：生成当前轮(等待期两人进入思考姿势)
-    setAction({ A: 'thinking', B: 'thinking', C: 'thinking' })
-    setRuntimeMode({ type: 'generating' })
-    const ctrl = new AbortController()
-    generateAbort.current = ctrl
-    const topic = actualTopic
-    try {
-      const script = await generateDialog(m, topic, lastLines.current, ctrl.signal, fixedTopic != null, arcBeat ?? undefined)
-      if (ctrl.signal.aborted) return
-      if (!arcBeat) bumpTopicSeen(topic) // 这轮真的播出了才记 seen;剧情线拍不入话题账
-      nowPlaying.current = { topic, lines: script.before, total: script.before.length, index: -1, source: 'gen' }
-      lastLines.current = script.before
-      pendingEpisode.current = { before: script.before, after: script.after, mode: m, topic }
-      void appendHistory(script.before, m, topic) // 前半段落盘;选边后半在播完后补记
-      beginPerforming()
-      playingLines.current = script.before
-      player.current!.play(withFinalePause(script.before), {
-        gap: MODES[m].gap,
-        choice: script.choice,
-        after: Object.fromEntries(
-          Object.entries(script.after).map(([id, seg]) => [id, withFinalePause(seg)]),
-        ),
-      })
-      void prefetchNext(
-        m,
-        script.before,
-        fixedTopic ?? undefined,
-        arcBeat ? [arcBeat.id] : [],
-      ) // 请求生成两轮：当前轮 + 后台预生成
-    } catch (e) {
-      if (ctrl.signal.aborted) return
-      console.error('LLM 生成失败，回退硬编码脚本', e)
-      lastLines.current = MODES[m].script
-      nowPlaying.current = null // 兜底剧本与抽中的话题无关,不参与看完/跳过记账
-      beginPerforming()
-      // 先出提示气泡(带具体原因),短暂停留后再开播,避免被第一句台词立即覆盖
-      const reason = await describeLlmError(e)
-      if (ctrl.signal.aborted) return
-      setBubble({ A: `${reason},先来段内置的~`, B: null, C: null })
-      window.setTimeout(() => {
-        if (ctrl.signal.aborted) return // 停止/切换期间不续播
-        setBubble({ A: null, B: null, C: null })
-        playingLines.current = MODES[m].script
-        player.current!.play(MODES[m].script, { gap: MODES[m].gap })
-      }, 1800)
-    } finally {
-      arcReservation?.release()
-    }
-  }
-
-  /** 停止一切：中止生成 + 停止演出 + 停语音 + 复位 */
-  function stopEverything() {
-    // 主播模式在播:先下播(断弹幕源 + 直播任务卡落定);道具层一并清空(不留残影与 timer)
-    liveStopRef.current?.()
-    stopLiveSession()
-    clearProps()
-    // 中途按停止 = 负反馈(演过 80% 以上视为看完,不罚);正在生成时无账可记
-    const np = nowPlaying.current
-    if (np && np.total > 0 && np.index / np.total < 0.8) bumpTopicSkipped(np.topic)
-    // 主动行为(重放/自发/久坐提醒)开播 15s 内就被掐 → 记一次忽略;连续 3 次该类冷却翻倍
-    const act = proactiveAct.current
-    if (act && Date.now() - act.since < 15_000) void logDismiss(act.kind)
-    proactiveAct.current = null
-    nowPlaying.current = null
-    generateAbort.current?.abort()
-    generateAbort.current = null
-    player.current!.stop()
-    stopSpeaking()
-    setRuntimeMode({ type: 'idle' })
-    setSpeaking(null)
-    setDelivery({ A: undefined, B: undefined, C: undefined })
-    setChoice(null)
-    window.clearTimeout(choiceTimer.current)
-    window.clearTimeout(finaleTimer.current)
-    setBubble({ A: null, B: null, C: null })
-    setAction({ A: 'idle', B: 'idle', C: 'idle' })
-    setUserBubble(null)
+    director.replay(ep, 'manual')
   }
 
   /** 聊天通道:解析 @角色 → 被指定角色回一句 → 后台提取记忆入库。
@@ -1775,25 +557,15 @@ function App() {
     noteUserActive()
     try {
       const reply = await generateUserChatReply(who, text)
-      setBubble((b) => ({ ...b, [who]: reply }))
-      setAction((a) => ({ ...a, [who]: 'talk' }))
-      setSpeaking(who)
+      presenterSay(who, reply, { action: 'talk', ms: 2200 + reply.length * 160, speaking: true })
+      pulse(who === 'A' ? 'B' : 'A')
       speak(who, reply, undefined, 'chat')
-      const listener: Speaker = who === 'A' ? 'B' : 'A'
-      setPulseFor(listener)
-      window.clearTimeout(pulseTimer.current)
-      pulseTimer.current = window.setTimeout(() => setPulseFor(null), 600)
       window.setTimeout(() => {
-        setBubble((b) => (b[who] === reply ? { ...b, [who]: null } : b))
-        setAction((a) => ({ ...a, [who]: 'idle' }))
-        setSpeaking(null)
         setUserBubble((u) => (u === text ? null : u)) // 应答结束,你说的这句一并收走
       }, 2200 + reply.length * 160)
     } catch {
       setUserBubble(null)
-      const fb = '（信号不好，没听清…再说一遍？）'
-      setBubble((b) => ({ ...b, [who]: fb }))
-      window.setTimeout(() => setBubble((b) => (b[who] === fb ? { ...b, [who]: null } : b)), 2200)
+      presenterSay(who, '（信号不好，没听清…再说一遍？）', { ms: 2200 })
     } finally {
       setChatBusy(false)
     }
@@ -1803,163 +575,44 @@ function App() {
         const mem = await getMemory()
         const known = topFacts(mem, 8)
         const candidates = await extractFacts(text, known)
-        if (candidates.length > 0) {
-          await mergeFacts(candidates)
-          setMemoryFacts((await getMemory()).facts)
-        }
+        if (candidates.length > 0) await mergeFacts(candidates)
       } catch {
         // 静默
       }
     })()
   }
 
-  /** 记忆页:刷新事实列表 */
-  async function refreshMemoryFacts() {
-    setMemoryFacts((await getMemory()).facts)
-  }
+  // 命令直达的分页请求(窗口挂载时读取一次;关闭后复位)
+  const [settingsTabRequest, setSettingsTabRequest] = useState<SettingsTab>('general')
 
-  /** 记忆页:刷新角色世界列表 + 长期关系摘要 */
-  async function refreshStory() {
-    setStoryData(await getStory())
-    const bond = await getBond()
-    const tier = bondTierOf(bond.trust, bond.rivalry)
-    setBondLine(
-      tier === 'warm'
-        ? '怎么闹都闹不散的老搭档——嘴上互相嫌弃,底线下护着对方'
-        : tier === 'strained'
-          ? '见面就掐,旧账摞了一摞——但谁也没真走过'
-          : bond.rivalry >= 3
-            ? '最近摩擦升级,见面就较劲,谁也不服谁'
-            : '平平淡淡的老搭档,偶尔斗嘴,基本和睦',
-    )
+  /** 打开设置(tab 直达某分页):草稿回填与各页数据由 SettingsWindow 挂载时自取 */
+  function openSettings(tab?: SettingsTab) {
+    setSettingsTabRequest(tab ?? 'general')
+    openOverlayExclusive('settings')
+  }
+  useEffect(() => {
+    if (!settingsOpen) setSettingsTabRequest('general')
+  }, [settingsOpen])
+
+  /** 设置窗口的跨模块行为:只经由这三个回调触碰应用其余部分 */
+  const settingsBridge: SettingsBridge = {
+    onReplay: replayFromHistory,
+    onResetLayout: resetLayout,
+    onPrivacyTip: showPrivacyTip,
   }
 
   /** 完播后蒸馏角色世界素材:对照库存记账(新素材入库/老梗回收计数/事件线结案)。
    *  仅新生成集(gen)自然播完后调用——用户没看完的集不蒸馏,回放不重复蒸馏;静默失败 */
   async function distillStoryFrom(lines: DialogLine[]) {
     try {
-      const inv = await storyInventory(3)
-      await mergeStory(await distillStory(lines, inv))
-      await refreshStory() // 记忆页若开着,列表顺带刷新
+      await curateEpisode(lines)
     } catch {
       // 静默:蒸馏宁可错过
     }
   }
 
-  /** 打开设置：读当前配置回填表单，加载历史分集 */
-  async function openSettings() {
-    openOverlayExclusive('settings')
-    const cfg = await getConfig()
-    // 人设输入框显示生效中的全文(自定义或内置默认),编辑后保存即采纳
-    setForm({
-      ...cfg,
-      persona: {
-        a: cfg.persona.a || defaultPersonaText('A'),
-        b: cfg.persona.b || defaultPersonaText('B'),
-      },
-    })
-    const id = vendorIdOfBaseUrl(cfg.baseUrl)
-    setVendorId(id)
-    // 各厂商 key 草稿 = 已保存的 apiKeys + 当前生效 key 归位到它的键
-    setKeyDrafts({ ...cfg.apiKeys, [vendorKeyOf(id, cfg.baseUrl)]: cfg.apiKey })
-    setVoice(cfg.voice)
-    setEpisodes(await listEpisodes())
-    // 拉取账号下的克隆音色(失败静默,下拉只是少了自定义项;克隆是硅基流动独有)
-    if (cfg.voice.provider === 'siliconflow' && cfg.voice.apiKey.trim()) {
-      listCustomVoices(cfg.voice.apiKey)
-        .then(setClonedVoices)
-        .catch((e) => console.warn('克隆音色列表拉取失败(静默)', e))
-    }
-  }
-
-  /** 切换分页:数据管理三页的列表需要现拉最新数据 */
-  function switchSettingsTab(tab: SettingsTab) {
-    setSettingsTab(tab)
-    if (tab === 'memory') {
-      void refreshMemoryFacts()
-      void refreshStory()
-    } else if (tab === 'memo') {
-      void refreshMemos()
-    } else if (tab === 'history') {
-      void refreshEpisodes()
-    }
-  }
-
-  /** 搜索结果跳转:清关键词 → 切分页 → 高亮目标卡片并滚动到位 */
-  function jumpToSetting(tab: SettingsTab, card: string) {
-    setSettingsQuery('')
-    switchSettingsTab(tab)
-    setFlashCard(card)
-    window.clearTimeout(flashTimer.current)
-    flashTimer.current = window.setTimeout(() => setFlashCard(null), 2200)
-  }
-
-  // 高亮卡片渲染完成后滚动到可视区(切分页时内容尚未挂载,稍等一拍)
-  useEffect(() => {
-    if (!flashCard) return
-    const t = window.setTimeout(() => {
-      const el = setBodyRef.current?.querySelector(`[data-card="${CSS.escape(flashCard)}"]`)
-      el?.scrollIntoView({ block: 'start', behavior: 'smooth' })
-    }, 40)
-    return () => window.clearTimeout(t)
-  }, [flashCard])
-
-  /** 保存配置：落盘 + 刷新缓存，下一次生成即生效。
-   *  只写设置面板拥有的字段(连接信息/画像/自动重放/语音),布局、主题等
-   *  由各自的保存通道维护,避免用打开面板时刻的旧快照覆盖拖动等并发改动。
-   *  apiKeys = 已存值 ∪ 面板草稿 ∪ 当前输入(归位到当前厂商键),各厂商 key 一并持久化 */
-  // 即存管线:字段变更 → saveField(防抖合并) → commitSettings(落盘+副作用)
-  const saveDebounce = useRef(0)
-  const pendingSave = useRef<Partial<AppConfig>>({})
-
-  /** 落盘一批字段并执行关联副作用(快捷键换绑/角色排除/环境轮询/空闲计时) */
-  async function commitSettings(partial: Partial<AppConfig>) {
-    try {
-      const next = await saveConfig(partial)
-      void applyScreenshotHotkey() // 快捷键按新配置换绑
-      void invoke('set_capture_excluded', { enable: next.screenshot.hideSelf }).catch(() => {})
-      if (next.envSense) startEnvPolling()
-      else stopEnvPolling()
-      if (partial.persona) setPersonaOverride(partial.persona.a, partial.persona.b) // 新人设立即采纳
-      if (partial.names) {
-        setCharacterNames(partial.names.a, partial.names.b)
-        setCharNames({ A: partial.names.a, B: partial.names.b })
-      }
-      setSavedTick(Date.now())
-      window.setTimeout(() => setSavedTick(0), 2500)
-    } catch (e) {
-      console.error('配置保存失败', e)
-      setSaveError(true)
-      window.setTimeout(() => setSaveError(false), 2500)
-    }
-  }
-
-  /** 字段即存入口:immediate=true 立即落盘(开关/下拉等离散操作),否则 400ms 防抖合并(文本输入) */
-  function saveField(partial: Partial<AppConfig>, immediate = false) {
-    pendingSave.current = { ...pendingSave.current, ...partial }
-    window.clearTimeout(saveDebounce.current)
-    if (immediate) {
-      const p = pendingSave.current
-      pendingSave.current = {}
-      void commitSettings(p)
-      return
-    }
-    saveDebounce.current = window.setTimeout(() => {
-      const p = pendingSave.current
-      pendingSave.current = {}
-      void commitSettings(p)
-    }, 400)
-  }
-
   // ---------- 备忘录:调度与常驻提醒 ----------
   const [memoAlerts, setMemoAlerts] = useState<{ id: string; text: string }[]>([])
-  // 备忘列表(设置-备忘页)与添加草稿
-  const [memos, setMemos] = useState<Memo[]>([])
-  const [memoDraft, setMemoDraft] = useState<{ text: string; due: string; advance: string }>({
-    text: '',
-    due: '',
-    advance: '',
-  })
   const memoSweepBusy = useRef(false)
   const privacyTipIdx = useRef(0)
   const PRIVACY_TIPS = [
@@ -1974,29 +627,6 @@ function App() {
     showPoke(who, tip, 'surprise', 3600)
   }
 
-  /** 备忘页:刷新列表 */
-  async function refreshMemos() {
-    setMemos(await getMemos())
-  }
-
-  /** 添加备忘:隐私气泡提醒 + 入库 + 刷新列表 */
-  async function submitMemo() {
-    const text = memoDraft.text.trim()
-    if (!text || !memoDraft.due) return
-    const dueAt = new Date(memoDraft.due).getTime()
-    if (!Number.isFinite(dueAt)) return
-    showPrivacyTip()
-    await addMemo(text, dueAt, memoDraft.advance.trim() === '' ? null : Number(memoDraft.advance))
-    setMemoDraft({ text: '', due: '', advance: '' })
-    await refreshMemos()
-  }
-
-  /** 备忘列表行的时间文案 */
-  function formatDue(dueAt: number): string {
-    const d = new Date(dueAt)
-    const pad = (x: number) => String(x).padStart(2, '0')
-    return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
-  }
 
   /** 到点备忘扫描(调度器每 tick 调一次,内部幂等):卡片永远即时;
    *  画外音与甲乙讨论仅在空闲时追加,勿扰时 TTS 自静、卡片照弹 */
@@ -2017,13 +647,8 @@ function App() {
           }
         }
         try {
-          const lines = await generateShortChat('memo', lastLines.current, memo.text)
-          if (phaseRef.current === 'idle' && !player.current!.playing && lines.length) {
-            lastLines.current = lines
-            playingLines.current = lines
-            beginPerforming()
-            player.current!.play(lines, { gap: 700 })
-          }
+          const lines = await generateShortChat('memo', director.recentLines(), memo.text)
+          director.discuss(lines)
         } catch { /* 讨论失败静默 */ }
       }
     } finally {
@@ -2031,211 +656,6 @@ function App() {
     }
   }
 
-  // ---------- 网页版生成:Edge 窗口与状态 ----------
-
-  // 登录就绪轮询句柄(登录成功自动恢复角色)
-  const webchatPollRef = useRef(0)
-
-  /** 打开 Edge 窗口给用户登录(角色暂时隐藏让路);轮询就绪后自动恢复角色 */
-  async function openWebchatWindow() {
-    try {
-      setWebchatStatusText('正在打开 Edge 窗口…')
-      await webchatLogin(form.webchatSite)
-      setWebchatStatusText('Edge 已打开:登录一次,成功后角色自动恢复')
-      startWebchatReadyPoll()
-    } catch (e) {
-      setWebchatStatusText(`打开失败:${String(e)}`)
-    }
-  }
-
-  /** 每 4 秒探测一次目标站点可否发消息,登录成功即恢复角色;最多等 5 分钟 */
-  function startWebchatReadyPoll() {
-    window.clearInterval(webchatPollRef.current)
-    const started = Date.now()
-    webchatPollRef.current = window.setInterval(() => {
-      if (Date.now() - started > 5 * 60_000) {
-        window.clearInterval(webchatPollRef.current)
-        setWebchatStatusText('等待登录超时:登录完成后可点「查状态」或「恢复角色」')
-        return
-      }
-      void webchatProbe()
-        .then((p) => {
-          if (!p.ready) {
-            setWebchatStatusText(`探测中:${p.detail}`)
-            return
-          }
-          window.clearInterval(webchatPollRef.current)
-          setWebchatStatusText('已就绪 ✓ 登录成功,角色已恢复——可以直接点播了')
-        })
-        .catch((e) => setWebchatStatusText(`探测异常:${String(e)}`))
-    }, 4000)
-  }
-
-  async function refreshWebchatStatus() {
-    try {
-      setWebchatStatusText('检查中…')
-      const p = await webchatProbe()
-      setWebchatStatusText(p.ready ? '已就绪 ✓(角色已恢复)' : `未就绪:${p.detail}`)
-    } catch (e) {
-      setWebchatStatusText(`状态获取失败:${String(e)}`)
-    }
-  }
-
-  async function restoreMain() {
-    try {
-      await webchatRestoreMain()
-      setWebchatStatusText('角色已恢复')
-    } catch (e) {
-      setWebchatStatusText(`恢复失败:${String(e)}`)
-    }
-  }
-
-  async function refreshEpisodes() {
-    setEpisodes(await listEpisodes())
-  }
-
-  async function onToggleFav(ep: Episode) {
-    const nowFav = await toggleFavorite(ep)
-    if (nowFav) bumpTopicFavored(ep.topic) // 收藏 = 口味正信号
-    await refreshEpisodes()
-  }
-
-  async function onDeleteEpisode(ep: Episode) {
-    await deleteEpisodes(new Set([ep.ts]))
-    setEpisodes(await listEpisodes())
-  }
-
-  async function onClearUnfavorited() {
-    await deleteEpisodes(new Set(episodes.filter((e) => !e.fav).map((e) => e.ts)))
-    await refreshEpisodes()
-  }
-
-  // ---------- 角色布局:拖动移动(各自独立)/ 滚轮缩放(全局一致) ----------
-
-  /** 更新布局;persist='now' 立即落盘,'debounced' 防抖落盘(滚轮连续滚动只写一次) */
-  function applyChars(next: CharactersConfig, persist: 'now' | 'debounced' | 'no' = 'no') {
-    charCfgRef.current = next
-    setCharCfg(next)
-    if (persist === 'no') return
-    window.clearTimeout(charSaveTimer.current)
-    const write = () =>
-      saveConfig({ characters: next }).catch((e) => console.warn('布局保存失败(静默)', e))
-    if (persist === 'now') void write()
-    else charSaveTimer.current = window.setTimeout(write, 500)
-  }
-
-  function onCharPointerDown(e: ReactPointerEvent, who: 'A' | 'B') {
-    setTopActor(who) // 最近交互的角色置顶
-    setDragUi(who) // 拎起态(轻微缩小提亮)
-    dragRef.current = {
-      who,
-      startX: e.clientX,
-      startY: e.clientY,
-      orig: { ...charCfgRef.current[who] },
-      moved: false,
-    }
-    try {
-      ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
-    } catch {
-      // 合成事件/指针已释放时无活动指针可捕获,忽略
-    }
-  }
-
-  function onCharPointerMove(e: ReactPointerEvent, who: 'A' | 'B') {
-    const d = dragRef.current
-    if (!d || d.who !== who) return
-    const dx = e.clientX - d.startX
-    const dy = e.clientY - d.startY
-    if (!d.moved) {
-      if (Math.hypot(dx, dy) < 6) return // 小位移视为点击,留给戳一戳
-      d.moved = true
-      draggingWho.current = who
-    }
-    const cur = charCfgRef.current
-    applyChars(
-      {
-        ...cur,
-        [who]: {
-          xPct: Math.min(97, Math.max(3, d.orig.xPct + (dx / window.innerWidth) * 100)),
-          bottom: Math.min(
-            Math.max(0, window.innerHeight - 80),
-            Math.max(0, d.orig.bottom - dy),
-          ),
-        },
-      },
-      'no',
-    )
-  }
-
-  function onCharPointerUp(who: 'A' | 'B') {
-    const d = dragRef.current
-    dragRef.current = null
-    setDragUi(null)
-    if (!d || d.who !== who) return
-    if (d.moved) {
-      draggingWho.current = null
-      applyChars(charCfgRef.current, 'now')
-      setDropFor(who) // 落地 squash 回弹
-      window.clearTimeout(dropTimer.current)
-      dropTimer.current = window.setTimeout(() => setDropFor(null), 500)
-      maybeDistancePlay(who)
-    } else {
-      poke(who) // 原地点一下 = 戳一戳
-    }
-  }
-
-  /** 拖拽结束后的距离演出:按长期关系(bond)给出不同文案与表现,并缓慢回写关系。
-   *  贴近=亲近信号(trust+0.1);叠一起/拖太远=摩擦信号(rivalry+);12s 冷却 */
-  async function maybeDistancePlay(who: 'A' | 'B') {
-    if (phaseRef.current !== 'idle') return
-    const other: Speaker = who === 'A' ? 'B' : 'A'
-    const ax = (charCfg.A.xPct / 100) * window.innerWidth
-    const bx = (charCfg.B.xPct / 100) * window.innerWidth
-    const dx = Math.abs(ax - bx)
-    const bands = distanceBands(charCfg.height)
-    const now = Date.now()
-    const cooled = (kind: string) => now - (distLastAt.current[kind] ?? 0) > 12_000
-    const mark = (kind: string) => { distLastAt.current[kind] = now }
-
-    const bond = await getBond()
-    const tier = bondTierOf(bond.trust, bond.rivalry)
-
-    if (dx < bands.overlap && cooled('overlap')) {
-      mark('overlap')
-      showPoke(other, reactBonded(other, 'overlap', tier), tier === 'strained' ? 'angry' : 'surprise', 2000)
-      // 推开:被拖者向远离方向挪 6%(关系好时推开幅度减半,挤挤更热闹)
-      const cfg = charCfgRef.current
-      const dir = (cfg[who].xPct <= cfg[other].xPct ? -6 : 6) * (tier === 'warm' ? 0.5 : 1)
-      applyChars({ ...cfg, [who]: { ...cfg[who], xPct: Math.min(97, Math.max(3, cfg[who].xPct + dir)) } }, 'now')
-      void shiftBond(0, 0.3)
-      void logDrag()
-      return
-    }
-    if (dx < bands.close && cooled('close')) {
-      mark('close')
-      const act = tier === 'warm' ? 'happy' : tier === 'strained' ? 'angry' : 'surprise'
-      showPoke(other, reactBonded(other, 'close', tier), act, 2200)
-      void shiftBond(0.1, 0)
-      void logDrag()
-      return
-    }
-    if (dx > window.innerWidth * 0.6 && cooled('far')) {
-      mark('far')
-      const act = tier === 'strained' ? 'angry' : tier === 'warm' ? 'sad' : 'talk'
-      showPoke('A', reactBonded('A', 'far', tier), act, 2400, true)
-      showPoke('B', reactBonded('B', 'far', tier), act, 2400, true)
-      void shiftBond(-0.1, 0.4)
-      void logDrag()
-    }
-  }
-
-  function onCharWheel(e: ReactWheelEvent) {
-    const cur = charCfgRef.current
-    const maxHeight = Math.max(240, window.innerHeight - 40)
-    const height = Math.min(maxHeight, Math.max(140, cur.height + (e.deltaY < 0 ? 12 : -12)))
-    if (height === cur.height) return
-    applyChars({ ...cur, height }, 'debounced') // 缩放全局一致:两个角色同步
-  }
 
   /** 隐藏/显示角色(立即落盘) */
   function setCharsHidden(v: boolean) {
@@ -2243,28 +663,13 @@ function App() {
     saveConfig({ charactersHidden: v }).catch((e) => console.warn('显示开关保存失败(静默)', e))
   }
 
-  // ---------- 控制栏位置:按住栏空白处拖动 ----------
-
-  function applyCtrlBar(next: CtrlBarPos, persist: 'now' | 'debounced' | 'no' = 'no') {
-    ctrlBarRef.current = next
-    setCtrlBar(next)
-    if (persist === 'no') return
-    window.clearTimeout(ctrlBarTimer.current)
-    const write = () =>
-      saveConfig({ ctrlBar: next }).catch((e) => console.warn('控制栏位置保存失败(静默)', e))
-    if (persist === 'now') void write()
-    else ctrlBarTimer.current = window.setTimeout(write, 500)
-  }
-
-  // 工具栏拖动的指针处理已迁入 ui/ControlBar(经 onPosChange 回调到这里落盘)
-
   /** 手动锁定主题:立即落盘 + 按新主题预生成一单(旧缓冲保留,无主题时照常消费) */
   function applyTopic(topic: string) {
     const norm = topic.trim()
     setTopicOverride(norm)
     closeOverlay('topic')
     void saveConfig({ topicOverride: norm }).catch((e) => console.warn('主题保存失败(静默)', e))
-    if (norm) void prefetchNext(mode, lastLines.current, norm)
+    if (norm) director.rearmPrefetch(mode, norm)
   }
 
   /** 清除主题,回到话题池随机 */
@@ -2272,37 +677,17 @@ function App() {
     setTopicOverride(null)
     closeOverlay('topic')
     void saveConfig({ topicOverride: null }).catch((e) => console.warn('主题清除失败(静默)', e))
-    void prefetchNext(mode, lastLines.current) // 重新随机补一单
+    director.rearmPrefetch(mode, null) // 重新随机补一单
   }
 
-  /** 退出程序:两段确认,3 秒内再点一次才真正关闭,防误触 */
+  /** 退出程序:两段确认的"已武装"态在 SettingsWindow 内,这里只真正关窗 */
   function requestExit() {
-    if (exitArmed) {
-      void getCurrentWindow().close()
-      return
-    }
-    setExitArmed(true)
-    window.clearTimeout(exitTimer.current)
-    exitTimer.current = window.setTimeout(() => setExitArmed(false), 3000)
+    void getCurrentWindow().close()
   }
 
   /** 连戳计数(60s 滑动窗口),决定反应强度 */
   const pokeCounts = useRef<Record<Speaker, number[]>>({ A: [], B: [], C: [] })
   const improvLastAt = useRef(0)
-
-  function showPoke(who: 'A' | 'B', line: string, action: string, ms = 1600, loud = false) {
-    setBubble((b) => ({ ...b, [who]: line }))
-    setLoudBubble((l) => ({ ...l, [who]: loud }))
-    setAction((a) => ({ ...a, [who]: action }))
-    setReacting((r) => ({ ...r, [who]: true }))
-    window.clearTimeout(timers.current[who])
-    timers.current[who] = window.setTimeout(() => {
-      setBubble((b) => ({ ...b, [who]: null }))
-      setAction((a) => ({ ...a, [who]: 'idle' }))
-      setReacting((r) => ({ ...r, [who]: false }))
-      setLoudBubble((l) => ({ ...l, [who]: false }))
-    }, ms)
-  }
 
   function poke(who: 'A' | 'B') {
     noteUserActive()
@@ -2343,15 +728,15 @@ function App() {
       now - improvLastAt.current >= IMPROV_COOLDOWN_MS
     ) {
       improvLastAt.current = now
-      improvPokeLine(who, lastLines.current)
+      improvPokeLine(who, director.recentLines())
         .then((line) => {
           // 返回时已超窗或开始正式演出 → 丢弃,防止顶掉台词气泡
           if (Date.now() - now >= 4500) return
-          if (phaseRef.current !== 'idle' || player.current!.playing) return
+          if (phaseRef.current !== 'idle' || director.isPlaying()) return
           showPoke(who, line, 'talk', 2200)
         })
         .catch(() => {
-          if (phaseRef.current !== 'idle' || player.current!.playing) return
+          if (phaseRef.current !== 'idle' || director.isPlaying()) return
           showPoke(who, fallback, fallbackAction)
         })
       // 先给一个占位反应,LLM 返回后替换
@@ -2361,18 +746,20 @@ function App() {
     showPoke(who, fallback, fallbackAction)
   }
 
+  // 空闲 3 分钟无互动 → 角色打瞌睡(sleepy);任何互动/演出/面板恢复
+  const [sleepyOn, setSleepyOn] = useState(false)
+  useEffect(() => {
+    if (phase !== 'idle' || settingsOpen || topicOpen || chatOpen || charHidden) return
+    const t = window.setTimeout(() => setSleepyOn(true), 180_000)
+    return () => {
+      window.clearTimeout(t)
+      setSleepyOn(false)
+    }
+  }, [phase, settingsOpen, topicOpen, chatOpen, charHidden, activeTick])
+
   // 显示用动作:打瞌睡仅覆盖 idle 态,任何明确动作优先
   const displayAction = (who: Speaker) =>
     sleepyOn && action[who] === 'idle' ? 'sleepy' : action[who]
-  // 设置搜索:标签/卡片/关键词任一包含即命中(不区分大小写)
-  const settingsQueryNorm = settingsQuery.trim().toLowerCase()
-  const searchHits = settingsQueryNorm
-    ? SETTINGS_SEARCH_INDEX.filter((e) =>
-        `${e.label} ${e.card} ${e.keywords ?? ''}`.toLowerCase().includes(settingsQueryNorm),
-      )
-    : []
-  const currentTabLabel =
-    SETTINGS_NAV.flatMap((g) => g.items).find((i) => i.id === settingsTab)?.label ?? '设置'
 
   return (
     <div
@@ -2380,7 +767,7 @@ function App() {
       onPointerDown={(e) => {
         // 点在面板/工具栏之外 → 收起已打开的面板(穿透窗口下 e.target 即 .stage 本体)
         // 录音中点击外部不收面板(防止丢失停止入口)
-        if (voiceRecording.current && settingsOpen) return
+        if (rt.mode.type === 'recording' && settingsOpen) return
         if (e.target === e.currentTarget) closeAllOverlays()
       }}
     >
@@ -2391,8 +778,8 @@ function App() {
         onModeChange={setMode}
         busy={phase === 'generating' || phase === 'performing'}
         canStop={phase !== 'idle'}
-        onGenerate={() => void playMode(mode)}
-        onStop={stopEverything}
+        onGenerate={() => void director.play(mode)}
+        onStop={director.stop}
         toolsOpen={toolsOpen}
         onTools={() => {
           if (toolsOpen) closeOverlay('tools')
@@ -2407,1229 +794,19 @@ function App() {
         onDnd={toggleDnd}
         settingsOpen={settingsOpen}
         onSettings={() => {
-          if (settingsOpen && voiceRecording.current) return // 录音中锁定
+          if (settingsOpen && rt.mode.type === 'recording') return // 录音中锁定
           if (settingsOpen) closeOverlay('settings')
           else openSettings()
         }}
       />
 
       {settingsOpen && (
-        <div ref={panelRef} className="settings-window">
-          <aside className="set-side">
-            <div className="set-brand">
-              <span className="set-brand-mark" aria-hidden="true">
-                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                  <circle cx="12" cy="12" r="3" />
-                  <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33 1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82 1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-                </svg>
-              </span>
-              <strong>设置</strong>
-            </div>
-            <div className="set-search">
-              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
-                <circle cx="11" cy="11" r="7" />
-                <line x1="16.5" y1="16.5" x2="21" y2="21" />
-              </svg>
-              <input
-                type="text"
-                value={settingsQuery}
-                placeholder="搜索设置…"
-                onChange={(e) => setSettingsQuery(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Escape') {
-                    e.stopPropagation() // 先清搜索词,别把整个设置窗口关了
-                    setSettingsQuery('')
-                  } else if (e.key === 'Enter' && searchHits[0]) {
-                    jumpToSetting(searchHits[0].tab, searchHits[0].card)
-                  }
-                }}
-              />
-            </div>
-            {SETTINGS_NAV.map((group) => (
-              <div key={group.group} className="set-nav-group">
-                <div className="set-nav-caption">{group.group}</div>
-                <nav className="set-nav">
-                  {group.items.map((item) => (
-                    <button
-                      key={item.id}
-                      className={`set-nav-item${settingsTab === item.id ? ' on' : ''}`}
-                      onClick={() => {
-                        setSettingsQuery('')
-                        switchSettingsTab(item.id)
-                      }}
-                    >
-                      <span className="set-nav-icon">{item.icon}</span>
-                      {item.label}
-                    </button>
-                  ))}
-                </nav>
-              </div>
-            ))}
-            <div className="set-side-note">所有设置自动保存,仅保存在本机。</div>
-          </aside>
-          <section className="set-main">
-            <header className="set-head">
-              <div className="set-head-title">
-                <span className="set-eyebrow">{TAB_GROUP[settingsTab]}</span>
-                <h1>{currentTabLabel}</h1>
-              </div>
-              <div className="set-head-actions">
-                <span
-                  className={`set-save${saveError ? ' err' : savedTick !== 0 ? ' ok' : ''}`}
-                  title={saveError ? '保存失败,详见控制台日志' : '所有更改自动保存,即时生效'}
-                >
-                  {saveError ? '保存失败' : savedTick !== 0 ? '已保存' : '自动保存'}
-                </span>
-                <button
-                  className={`set-exit${exitArmed ? ' armed' : ''}`}
-                  title={exitArmed ? '再点一次确认退出' : '退出程序(3 秒内再点确认)'}
-                  onClick={requestExit}
-                >
-                  {exitArmed ? '确认退出' : '退出程序'}
-                </button>
-              </div>
-            </header>
-            <div ref={setBodyRef} className="set-body">
-              {settingsQuery.trim() !== '' ? (
-                <div className="set-results">
-                  <div className="set-note">
-                    {searchHits.length > 0
-                      ? `找到 ${searchHits.length} 个设置项,点击跳转`
-                      : `没有找到与「${settingsQuery.trim()}」相关的设置`}
-                  </div>
-                  {searchHits.map((hit) => (
-                    <button
-                      key={`${hit.tab}-${hit.card}-${hit.label}`}
-                      className="set-result"
-                      onClick={() => jumpToSetting(hit.tab, hit.card)}
-                    >
-                      <span className="set-result-label">{hit.label}</span>
-                      <span className="set-result-crumb">
-                        {TAB_GROUP[hit.tab]} · {hit.card}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              ) : (
-                <>
-                  {settingsTab === 'general' && (
-                    <>
-                      <SettingsCard card="显示与布局" flash={flashCard} title="显示与布局">
-                        <SetLine title="显示角色" hint="在桌面上显示两位角色立绘">
-                          <SetSwitch checked={!charHidden} onChange={(v) => setCharsHidden(!v)} />
-                        </SetLine>
-                        <SetLine title="角色与控制栏位置" hint="拖动角色可移动,悬停滚轮可同步缩放">
-                          <button
-                            className="panel-btn"
-                            onClick={() => {
-                              applyChars(DEFAULT_CONFIG.characters, 'now')
-                              applyCtrlBar(DEFAULT_CONFIG.ctrlBar, 'now')
-                            }}
-                          >
-                            恢复默认布局
-                          </button>
-                        </SetLine>
-                      </SettingsCard>
-                      <SettingsCard card="演出与主动行为" flash={flashCard} title="演出与主动行为">
-                        <SetField
-                          label="空闲自动重放"
-                          htmlFor="cfg-replay"
-                          hint="空闲多少分钟后自动重放一集历史,留空 = 关闭"
-                        >
-                          <input
-                            id="cfg-replay"
-                            type="number"
-                            min={1}
-                            max={1440}
-                            step={1}
-                            placeholder="留空则不自动重放"
-                            value={form.autoReplayMin || ''}
-                            onChange={(e) => {
-                              const raw = e.target.value
-                              // 空串/非法输入按 0(关闭)存,不往输入框里塞 0 硬占位
-                              const v = raw.trim() === '' ? 0 : Math.max(0, Number(raw) || 0)
-                              setForm({ ...form, autoReplayMin: v })
-                              saveField({ autoReplayMin: v })
-                            }}
-                          />
-                        </SetField>
-                        <SetLine title="主动程度" hint="自发闲聊/提醒/重放的频率上限(每小时)">
-                          <div className="seg-group">
-                            {(
-                              [
-                                ['quiet', '安静(3)'],
-                                ['balanced', '平衡(6)'],
-                                ['lively', '热闹(12)'],
-                              ] as const
-                            ).map(([v, label]) => (
-                              <button
-                                key={v}
-                                className={`seg-btn${form.proactivity === v ? ' on' : ''}`}
-                                onClick={() => {
-                                  setForm({ ...form, proactivity: v })
-                                  saveField({ proactivity: v }, true)
-                                }}
-                              >
-                                {label}
-                              </button>
-                            ))}
-                          </div>
-                        </SetLine>
-                        <SetLine title="久坐提醒" hint="连续活跃一段时间后,角色会提醒你休息">
-                          <SetSwitch
-                            checked={form.breakReminder.enabled}
-                            label="久坐提醒"
-                            onChange={(v) => {
-                              const next = { ...form.breakReminder, enabled: v }
-                              setForm({ ...form, breakReminder: next })
-                              saveField({ breakReminder: next }, true)
-                            }}
-                          />
-                          <input
-                            type="number"
-                            min={15}
-                            max={120}
-                            step={5}
-                            className="break-min-input"
-                            title="连续活跃多少分钟后提醒(15~120)"
-                            value={form.breakReminder.minutes}
-                            onChange={(e) => {
-                              const next = {
-                                ...form.breakReminder,
-                                minutes: Math.min(120, Math.max(15, Number(e.target.value) || 45)),
-                              }
-                              setForm({ ...form, breakReminder: next })
-                              saveField({ breakReminder: next })
-                            }}
-                          />
-                          <span className="set-note">分钟后</span>
-                        </SetLine>
-                        <div className="set-note">使用者的兴趣爱好在「记忆」页维护 — 日常闲聊会偶尔聊到</div>
-                      </SettingsCard>
-                      <SettingsCard card="环境与桌面" flash={flashCard} title="环境与桌面">
-                        <SetLine title="桌面环境感知" hint="识别电量与前台应用类型,仅在本机分类,不上传明细">
-                          <SetSwitch
-                            checked={form.envSense}
-                            label="桌面环境感知"
-                            onChange={(v) => {
-                              setForm({ ...form, envSense: v })
-                              saveField({ envSense: v }, true)
-                            }}
-                          />
-                        </SetLine>
-                        <SetLine title="显示左上角水印" hint="在录屏或直播画面里标识本应用">
-                          <SetSwitch
-                            checked={showWatermark}
-                            label="显示左上角水印"
-                            onChange={(v) => {
-                              setShowWatermark(v)
-                              saveField({ showWatermark: v }, true)
-                            }}
-                          />
-                        </SetLine>
-                        <SetLine title="开机自启动" hint="登录系统后自动运行本应用">
-                          <SetSwitch
-                            checked={form.launchOnBoot}
-                            label="开机自启动"
-                            onChange={(v) => {
-                              setForm({ ...form, launchOnBoot: v })
-                              saveField({ launchOnBoot: v }, true)
-                              void applyLaunchOnBoot(v)
-                            }}
-                          />
-                        </SetLine>
-                      </SettingsCard>
-                    </>
-                  )}
-
-                  {settingsTab === 'model' && (
-                    <>
-                      <SettingsCard card="主模型" flash={flashCard} title="主模型" desc="对话 / 演出 / 台词生成">
-                        <SetField label="厂商" htmlFor="cfg-vendor">
-                          <select
-                            id="cfg-vendor"
-                            value={vendorId}
-                            onChange={(e) => {
-                              const id = e.target.value
-                              // 当前输入的 key 存回旧厂商的键,再从新厂商的键带出(没有则空)
-                              const drafts = { ...keyDrafts, [vendorKeyOf(vendorId, form.baseUrl)]: form.apiKey }
-                              setKeyDrafts(drafts)
-                              setVendorId(id)
-                              let baseUrl = form.baseUrl
-                              let model = form.model
-                              if (id !== CUSTOM_VENDOR_ID) {
-                                const v = VENDORS.find((x) => x.id === id)!
-                                baseUrl = v.baseUrl
-                                model = v.models[0] ?? ''
-                              }
-                              const apiKey = drafts[vendorKeyOf(id, baseUrl)] ?? ''
-                              setForm({ ...form, baseUrl, model, apiKey })
-                              saveField(
-                                {
-                                  baseUrl,
-                                  model,
-                                  apiKey,
-                                  apiKeys: { ...form.apiKeys, ...drafts },
-                                },
-                                true,
-                              )
-                            }}
-                          >
-                            {VENDORS.map((v) => (
-                              <option key={v.id} value={v.id}>
-                                {v.label}
-                              </option>
-                            ))}
-                            <option value={CUSTOM_VENDOR_ID}>本地 / 自定义</option>
-                          </select>
-                        </SetField>
-                        <SetField
-                          label={`API Key${vendorId === CUSTOM_VENDOR_ID ? '(本地服务可为空)' : ''}`}
-                          htmlFor="cfg-key"
-                          hint="每个厂商(自定义按接口地址)分别记忆,切换自动带出"
-                        >
-                          <input
-                            id="cfg-key"
-                            type="password"
-                            value={form.apiKey}
-                            onChange={(e) => {
-                              const v = e.target.value
-                              setForm({ ...form, apiKey: v })
-                              setKeyDrafts((d) => ({ ...d, [vendorKeyOf(vendorId, form.baseUrl)]: v }))
-                              saveField({ apiKey: v, apiKeys: { ...form.apiKeys, [vendorKeyOf(vendorId, form.baseUrl)]: v } })
-                            }}
-                            onBlur={() => saveField({}, true)}
-                          />
-                        </SetField>
-                        <SetField label="接口地址" htmlFor="cfg-url">
-                          <input
-                            id="cfg-url"
-                            value={form.baseUrl}
-                            placeholder={
-                              vendorId === CUSTOM_VENDOR_ID ? 'http://localhost:11434/v1' : 'https://api.deepseek.com/v1'
-                            }
-                            onChange={(e) => {
-                              // 自定义端点键含 baseUrl:先把 key 存回旧地址的键,换地址互不串
-                              const drafts = { ...keyDrafts, [vendorKeyOf(vendorId, form.baseUrl)]: form.apiKey }
-                              setKeyDrafts(drafts)
-                              setForm({ ...form, baseUrl: e.target.value })
-                              saveField({ baseUrl: e.target.value, apiKeys: { ...form.apiKeys, ...drafts } })
-                            }}
-                          />
-                        </SetField>
-                        <SetField label="模型" htmlFor="cfg-model">
-                          {vendorId === CUSTOM_VENDOR_ID ? (
-                            <input
-                              id="cfg-model"
-                              value={form.model}
-                              placeholder="如 qwen2.5:7b(Ollama 模型名)"
-                              onChange={(e) => {
-                                setForm({ ...form, model: e.target.value })
-                                saveField({ model: e.target.value })
-                              }}
-                            />
-                          ) : (
-                            <select
-                              id="cfg-model"
-                              value={form.model}
-                              onChange={(e) => {
-                                setForm({ ...form, model: e.target.value })
-                                saveField({ model: e.target.value }, true)
-                              }}
-                            >
-                              {(VENDORS.find((v) => v.id === vendorId)?.models ?? []).map((m) => (
-                                <option key={m} value={m}>
-                                  {m}
-                                </option>
-                              ))}
-                            </select>
-                          )}
-                        </SetField>
-                      </SettingsCard>
-                      <SettingsCard
-                        card="提取文字"
-                        flash={flashCard}
-                        title="提取文字"
-                        desc="AI 视觉模型优先,失败自动本地兜底;智谱 glm-4.6v-flash 免费,与主模型相互独立"
-                      >
-                        <SetField
-                          label="OCR API Key(留空 = 只用本地识别)"
-                          htmlFor="cfg-ocr-key"
-                          hint="bigmodel.cn 注册即得"
-                        >
-                          <input
-                            id="cfg-ocr-key"
-                            type="password"
-                            value={form.ocr.apiKey}
-                            onChange={(e) => {
-                              const ocr = { ...form.ocr, apiKey: e.target.value }
-                              setForm({ ...form, ocr })
-                              saveField({ ocr })
-                            }}
-                          />
-                        </SetField>
-                        <SetField label="OCR 接口地址(OpenAI 兼容)" htmlFor="cfg-ocr-url">
-                          <input
-                            id="cfg-ocr-url"
-                            value={form.ocr.baseUrl}
-                            onChange={(e) => {
-                              const ocr = { ...form.ocr, baseUrl: e.target.value }
-                              setForm({ ...form, ocr })
-                              saveField({ ocr })
-                            }}
-                          />
-                        </SetField>
-                        <SetField label="OCR 视觉模型" htmlFor="cfg-ocr-model">
-                          <input
-                            id="cfg-ocr-model"
-                            value={form.ocr.model}
-                            placeholder="glm-4.6v-flash"
-                            onChange={(e) => {
-                              const ocr = { ...form.ocr, model: e.target.value }
-                              setForm({ ...form, ocr })
-                              saveField({ ocr })
-                            }}
-                          />
-                        </SetField>
-                      </SettingsCard>
-                    </>
-                  )}
-
-                  {settingsTab === 'persona' && (
-                    <>
-                      <SettingsCard card="角色名字" flash={flashCard} title="角色名字" desc="名牌与台词称呼">
-                        <SetField label="角色A的名字" htmlFor="cfg-name-a">
-                          <input
-                            id="cfg-name-a"
-                            value={form.names.a}
-                            maxLength={12}
-                            onChange={(e) => {
-                              const next = { ...form.names, a: e.target.value }
-                              setForm({ ...form, names: next })
-                              saveField({ names: next })
-                            }}
-                          />
-                        </SetField>
-                        <SetField label="角色B的名字" htmlFor="cfg-name-b">
-                          <input
-                            id="cfg-name-b"
-                            value={form.names.b}
-                            maxLength={12}
-                            onChange={(e) => {
-                              const next = { ...form.names, b: e.target.value }
-                              setForm({ ...form, names: next })
-                              saveField({ names: next })
-                            }}
-                          />
-                        </SetField>
-                      </SettingsCard>
-                      <SettingsCard
-                        card="角色人设"
-                        flash={flashCard}
-                        title="角色人设"
-                        desc="自由编辑,输入后自动保存并采纳"
-                      >
-                        <SetField
-                          label={`${charNames.A} 的人设`}
-                          htmlFor="cfg-persona-a"
-                          hint="性别/职业/性格/日常素材,自由发挥"
-                        >
-                          <textarea
-                            id="cfg-persona-a"
-                            rows={4}
-                            value={form.persona.a || defaultPersonaText('A')}
-                            onChange={(e) => {
-                              setForm({ ...form, persona: { ...form.persona, a: e.target.value } })
-                              saveField({ persona: { ...form.persona, a: e.target.value } })
-                            }}
-                          />
-                        </SetField>
-                        <SetField label={`${charNames.B} 的人设`} htmlFor="cfg-persona-b">
-                          <textarea
-                            id="cfg-persona-b"
-                            rows={4}
-                            value={form.persona.b || defaultPersonaText('B')}
-                            onChange={(e) => {
-                              setForm({ ...form, persona: { ...form.persona, b: e.target.value } })
-                              saveField({ persona: { ...form.persona, b: e.target.value } })
-                            }}
-                          />
-                        </SetField>
-                        <div className="set-actions">
-                          <span className="set-note">清空输入框 = 恢复该角色的内置人设</span>
-                          <button
-                            className="panel-btn"
-                            onClick={() => {
-                              setForm({
-                                ...form,
-                                persona: { a: defaultPersonaText('A'), b: defaultPersonaText('B') },
-                              })
-                              saveField({ persona: { a: defaultPersonaText('A'), b: defaultPersonaText('B') } }, true)
-                            }}
-                          >
-                            还原默认人设
-                          </button>
-                        </div>
-                      </SettingsCard>
-                    </>
-                  )}
-                  {settingsTab === 'voice' && (
-                    <>
-                      <SettingsCard card="语音与供应商" flash={flashCard} title="语音与供应商">
-                        <SetLine title="角色语音" hint="关闭后角色只动不出声">
-                          <SetSwitch
-                            checked={voice.enabled}
-                            label="角色语音"
-                            onChange={(v) => {
-                              const next = { ...voice, enabled: v }
-                              setVoice(next)
-                              saveField({ voice: next }, true)
-                            }}
-                          />
-                        </SetLine>
-                        {voice.enabled && (
-                          <>
-                            <SetField
-                              label="语音供应商"
-                              htmlFor="cfg-voice-provider"
-                              hint="硅基流动 CosyVoice2:流式快、便宜稳定;MiniMax Speech 2.8:情绪与语气表现力更强,按量价格更高"
-                            >
-                              <select
-                                id="cfg-voice-provider"
-                                value={voice.provider}
-                                onChange={(e) => {
-                                  const next = { ...voice, provider: e.target.value as typeof voice.provider }
-                                  setVoice(next)
-                                  saveField({ voice: next }, true)
-                                }}
-                              >
-                                {PROVIDER_OPTIONS.map((p) => (
-                                  <option key={p.id} value={p.id}>
-                                    {p.label}
-                                  </option>
-                                ))}
-                              </select>
-                            </SetField>
-                            {voice.provider === 'siliconflow' ? (
-                              <SetField
-                                label="语音 API Key"
-                                htmlFor="cfg-voice-key"
-                                hint="siliconflow.cn 的 API Key,与 AI 模型页的 key 相互独立"
-                              >
-                                <input
-                                  id="cfg-voice-key"
-                                  type="password"
-                                  placeholder="sk-...(siliconflow.cn)"
-                                  value={voice.apiKey}
-                                  onChange={(e) => {
-                                    const next = { ...voice, apiKey: e.target.value }
-                                    setVoice(next)
-                                    saveField({ voice: next })
-                                  }}
-                                  onBlur={(e) => {
-                                    const next = { ...voice, apiKey: e.target.value }
-                                    setVoice(next)
-                                    saveField({ voice: next }, true)
-                                  }}
-                                />
-                              </SetField>
-                            ) : (
-                              <>
-                                <SetField label="MiniMax API Key" htmlFor="cfg-mm-key" hint="MiniMax 开放平台的 API Key,与硅基流动相互独立">
-                                  <input
-                                    id="cfg-mm-key"
-                                    type="password"
-                                    placeholder="eyJ...(MiniMax)"
-                                    value={voice.minimax.apiKey}
-                                    onChange={(e) => {
-                                      const next = { ...voice, minimax: { ...voice.minimax, apiKey: e.target.value } }
-                                      setVoice(next)
-                                      saveField({ voice: next })
-                                    }}
-                                    onBlur={(e) => {
-                                      const next = { ...voice, minimax: { ...voice.minimax, apiKey: e.target.value } }
-                                      setVoice(next)
-                                      saveField({ voice: next }, true)
-                                    }}
-                                  />
-                                </SetField>
-                                <SetField label="MiniMax GroupId" htmlFor="cfg-mm-group" hint="MiniMax 开放平台账号的 GroupId">
-                                  <input
-                                    id="cfg-mm-group"
-                                    value={voice.minimax.groupId}
-                                    onChange={(e) => {
-                                      const next = { ...voice, minimax: { ...voice.minimax, groupId: e.target.value } }
-                                      setVoice(next)
-                                      saveField({ voice: next })
-                                    }}
-                                    onBlur={(e) => {
-                                      const next = { ...voice, minimax: { ...voice.minimax, groupId: e.target.value } }
-                                      setVoice(next)
-                                      saveField({ voice: next }, true)
-                                    }}
-                                  />
-                                </SetField>
-                                <SetField label="MiniMax 模型" htmlFor="cfg-mm-model" hint="turbo:便宜、流式快;hd:质量优先,价格更高">
-                                  <select
-                                    id="cfg-mm-model"
-                                    value={voice.minimax.model}
-                                    onChange={(e) => {
-                                      const next = { ...voice, minimax: { ...voice.minimax, model: e.target.value as typeof voice.minimax.model } }
-                                      setVoice(next)
-                                      saveField({ voice: next }, true)
-                                    }}
-                                  >
-                                    <option value="speech-2.8-turbo">speech-2.8-turbo(快)</option>
-                                    <option value="speech-2.8-hd">speech-2.8-hd(高质)</option>
-                                  </select>
-                                </SetField>
-                              </>
-                            )}
-                          </>
-                        )}
-                      </SettingsCard>
-                      {voice.enabled && (
-                        <SettingsCard card="音色与表现" flash={flashCard} title="音色与表现">
-                          <SetLine
-                            title="情感指令"
-                            hint="把 deadpan/excited/slow 语气映射为情感指令(CosyVoice2 经 <|endofprompt|> 引导,不会被朗读;MiniMax 走情绪参数),角色差异更可听"
-                          >
-                            <SetSwitch
-                              checked={voice.emotionHints}
-                              label="情感指令"
-                              onChange={(v) => {
-                                const next = { ...voice, emotionHints: v }
-                                setVoice(next)
-                                saveField({ voice: next }, true)
-                              }}
-                            />
-                          </SetLine>
-                          {(
-                            [
-                              ['A', '角色甲音色', 'cfg-voice-a'],
-                              ['B', '角色乙音色', 'cfg-voice-b'],
-                              ['C', '场外客串音色(第三人乱入时用)', 'cfg-voice-c'],
-                            ] as const
-                          ).map(([slot, label, id]) => (
-                            <SetField key={slot} label={label} htmlFor={id}>
-                              <select
-                                id={id}
-                                value={voice.assignments[voice.provider][slot]}
-                                onChange={(e) => {
-                                  const next = {
-                                    ...voice,
-                                    assignments: {
-                                      ...voice.assignments,
-                                      [voice.provider]: { ...voice.assignments[voice.provider], [slot]: e.target.value },
-                                    },
-                                  }
-                                  setVoice(next)
-                                  saveField({ voice: next }, true)
-                                }}
-                              >
-                                {providerById(voice.provider).voices.map((v) => (
-                                  <option key={v.id} value={v.id}>
-                                    {v.label}
-                                  </option>
-                                ))}
-                                {voice.provider === 'siliconflow' && clonedVoices.length > 0 && (
-                                  <optgroup label="我的克隆音色">
-                                    {clonedVoices.map((v) => (
-                                      <option key={v.uri} value={v.uri}>
-                                        {v.name}
-                                      </option>
-                                    ))}
-                                  </optgroup>
-                                )}
-                              </select>
-                            </SetField>
-                          ))}
-                          {voice.provider === 'siliconflow' && (
-                            <CloneVoiceRow
-                              apiKey={voice.apiKey}
-                              onRecordingChange={(rec) => (voiceRecording.current = rec)}
-                              onCloned={(v) => {
-                                setClonedVoices((list) => [...list.filter((x) => x.uri !== v.uri), v])
-                                const next = {
-                                  ...voice,
-                                  assignments: {
-                                    ...voice.assignments,
-                                    siliconflow: { ...voice.assignments.siliconflow, B: v.uri },
-                                  },
-                                }
-                                setVoice(next)
-                                saveConfig({ voice: next }).catch(() => {})
-                              }}
-                            />
-                          )}
-                          <SetLine
-                            title="试听"
-                            hint="用角色甲的音色读一句固定台词;切换供应商后再点一次,可做同台词 A/B 对比"
-                          >
-                            <button id="cfg-voice-preview" className="panel-btn" type="button" onClick={() => previewSample()}>
-                              ▶ 试听一句
-                            </button>
-                          </SetLine>
-                        </SettingsCard>
-                      )}
-                    </>
-                  )}
-                  {settingsTab === 'live' && (
-                    <>
-                      <SettingsCard
-                        card="直播间"
-                        flash={flashCard}
-                        title="直播间"
-                        desc="直播弹幕互动;点工具栏「主播」→「开播」启动,平台 v1 仅B站可用"
-                      >
-                        <SetField label="直播平台" htmlFor="cfg-live-platform">
-                          <select
-                            id="cfg-live-platform"
-                            value={form.live.platform}
-                            onChange={(e) => {
-                              const live = { ...form.live, platform: e.target.value as 'bilibili' | 'douyin' }
-                              setForm({ ...form, live })
-                              saveField({ live })
-                            }}
-                          >
-                            <option value="bilibili">B站</option>
-                            <option value="douyin" disabled>
-                              抖音(即将支持)
-                            </option>
-                          </select>
-                        </SetField>
-                        <SetField label="直播间号(B站房间号)" htmlFor="cfg-live-room" hint="直播间网址 live.bilibili.com/ 后面的数字">
-                          <input
-                            id="cfg-live-room"
-                            value={form.live.roomId}
-                            placeholder="如 21452505"
-                            inputMode="numeric"
-                            onChange={(e) => {
-                              const roomId = e.target.value.replace(/\D/g, '').slice(0, 32)
-                              const live = { ...form.live, roomId }
-                              setForm({ ...form, live })
-                              saveField({ live })
-                            }}
-                          />
-                        </SetField>
-                      </SettingsCard>
-                      <SettingsCard card="B站登录" flash={flashCard} title="B站登录" desc="选填;不填也能播,只是观众名被打码">
-                        <SetField
-                          label="B站 Cookie"
-                          htmlFor="cfg-live-cookie"
-                          hint="浏览器登录B站后 F12 → 应用 → Cookie 里的 SESSDATA,只填值或整串 Cookie 都行,建议用小号。填后以该账号身份连弹幕服务器,可看到观众真实用户名与舰长等级;不填功能照常,名字显示为「某***」打码样式"
-                        >
-                          <input
-                            id="cfg-live-cookie"
-                            type="password"
-                            value={form.live.cookie}
-                            placeholder="SESSDATA 值或完整 Cookie 串,建议小号"
-                            onChange={(e) => {
-                              const live = { ...form.live, cookie: e.target.value.trim().slice(0, 600) }
-                              setForm({ ...form, live })
-                              saveField({ live })
-                            }}
-                          />
-                        </SetField>
-                        <SetLine
-                          title="礼物互动(道具动效与感谢语)"
-                          hint="观众送礼物时角色旁飞入道具并道谢,完全免 AI、无 API Key 也可用;关闭后礼物只记观众活动"
-                        >
-                          <SetSwitch
-                            checked={form.live.giftReactionsEnabled !== false}
-                            label="礼物互动(道具动效与感谢语)"
-                            onChange={(v) => {
-                              const live = { ...form.live, giftReactionsEnabled: v }
-                              setForm({ ...form, live })
-                              saveField({ live })
-                            }}
-                          />
-                        </SetLine>
-                        <SetLine title="扫码登录" hint="不想手贴?用手机B站App扫一下,自动回填并保存">
-                          {qrLogin ? (
-                            <button className="panel-btn" onClick={cancelQrLogin}>
-                              取消扫码
-                            </button>
-                          ) : (
-                            <button className="panel-btn" onClick={beginQrLogin}>
-                              扫码登录B站
-                            </button>
-                          )}
-                        </SetLine>
-                        {qrLogin && (
-                          <div className="qr-row">
-                            {(qrLogin.qrOfficial || qrLogin.qrClassic) && (
-                              <div style={{ display: 'flex', gap: 10 }}>
-                                {qrLogin.qrOfficial && (
-                                  <div style={{ textAlign: 'center' }}>
-                                    <img src={qrLogin.qrOfficial} alt="二维码A(新版App)" width={148} height={148} />
-                                    <div className="set-note">格式A(新版App)</div>
-                                  </div>
-                                )}
-                                {qrLogin.qrClassic && (
-                                  <div style={{ textAlign: 'center' }}>
-                                    <img src={qrLogin.qrClassic} alt="二维码B(旧版App)" width={148} height={148} />
-                                    <div className="set-note">格式B(旧版App)</div>
-                                  </div>
-                                )}
-                              </div>
-                            )}
-                            <span className="set-note">
-                              {qrLogin.hint ??
-                                (qrLogin.phase === 'waiting'
-                                  ? '两个码各扫一次:哪个在手机上弹出登录确认就点确认(两码同一会话);都报错请升级手机B站App'
-                                  : '')}
-                            </span>
-                          </div>
-                        )}
-                      </SettingsCard>
-                    </>
-                  )}
-                  {settingsTab === 'privacy' && (
-                    <>
-                      <SettingsCard card="截屏" flash={flashCard} title="截屏">
-                        <SetLine title="全局截屏快捷键" hint="框选一块区域,截图复制到剪贴板">
-                          <div className="shot-key-row">
-                            <SetSwitch
-                              checked={form.screenshot.enabled}
-                              label="启用全局截屏快捷键"
-                              onChange={(v) => {
-                                const next = { ...form.screenshot, enabled: v }
-                                setForm({ ...form, screenshot: next })
-                                saveField({ screenshot: next }, true)
-                              }}
-                            />
-                            <HotkeyRecorder
-                              value={form.screenshot.hotkey}
-                              onChange={(hotkey) => {
-                                const next = { ...form.screenshot, hotkey }
-                                setForm({ ...form, screenshot: next })
-                                saveField({ screenshot: next }, true)
-                              }}
-                            />
-                          </div>
-                        </SetLine>
-                        <SetLine title="截屏/录屏时排除角色" hint="角色不进任何截图与录屏(Win10 2004+)">
-                          <SetSwitch
-                            checked={form.screenshot.hideSelf}
-                            label="截屏/录屏时排除角色"
-                            onChange={(v) => {
-                              const next = { ...form.screenshot, hideSelf: v }
-                              setForm({ ...form, screenshot: next })
-                              saveField({ screenshot: next }, true) // commit 内统一执行角色排除
-                            }}
-                          />
-                        </SetLine>
-                      </SettingsCard>
-                      <SettingsCard card="网页版生成" flash={flashCard} title="网页版生成" desc="实验">
-                        <SetLine
-                          title="主演出改用网页模型生成"
-                          hint="仅相声/日常段子走网页模型,记忆提取等小调用仍走 API;失败自动回退"
-                        >
-                          <SetSwitch
-                            checked={form.webchatEnabled}
-                            label="主演出改用网页模型生成"
-                            onChange={(v) => {
-                              setForm({ ...form, webchatEnabled: v })
-                              saveField({ webchatEnabled: v }, true)
-                            }}
-                          />
-                        </SetLine>
-                        {form.webchatEnabled && (
-                          <>
-                            <SetField label="网页模型站点" htmlFor="cfg-webchat-site">
-                              <select
-                                id="cfg-webchat-site"
-                                value={form.webchatSite}
-                                onChange={(e) => {
-                                  setForm({ ...form, webchatSite: e.target.value as AppConfig['webchatSite'] })
-                                  saveField({ webchatSite: e.target.value as AppConfig['webchatSite'] }, true)
-                                }}
-                              >
-                                {WEBCHAT_SITES.map((s) => (
-                                  <option key={s.id} value={s.id}>
-                                    {s.label}
-                                  </option>
-                                ))}
-                              </select>
-                            </SetField>
-                            <SetLine title="网页窗口" hint="首次需登录一次,登录态长期有效">
-                              <div className="shot-key-row">
-                                <button id="cfg-webchat-login" className="panel-btn" onClick={openWebchatWindow}>
-                                  打开窗口
-                                </button>
-                                <button className="panel-btn" onClick={() => void refreshWebchatStatus()}>
-                                  查状态
-                                </button>
-                                <button className="panel-btn" onClick={() => void restoreMain()}>
-                                  恢复角色
-                                </button>
-                              </div>
-                            </SetLine>
-                            {webchatStatusText && <div className="set-note">{webchatStatusText}</div>}
-                            <div className="set-note">
-                              生成用系统 Edge 的独立窗口(独立 profile,不影响日常浏览):登录一次长期有效;生成时会出现
-                              Edge 标签页,可最小化,完成后自动关闭。
-                            </div>
-                          </>
-                        )}
-                      </SettingsCard>
-                      <SettingsCard card="隐私与数据" flash={flashCard} title="隐私与数据">
-                        <div className="set-note">
-                          所有设置、记忆与历史仅保存在本机;桌面环境感知只在本机给应用分类,不上传窗口内容;截屏只在你按快捷键时进行;备忘里别写密码、验证码这类敏感信息。
-                        </div>
-                      </SettingsCard>
-                    </>
-                  )}
-
-                  {settingsTab === 'memory' && (
-                    <>
-                      <SettingsCard card="使用者画像" flash={flashCard} title="使用者画像" desc="角色据此认识你">
-                        <SetField label="你的称呼" htmlFor="cfg-mem-name">
-                          <input
-                            id="cfg-mem-name"
-                            placeholder="角色会这样叫你"
-                            value={form.userProfile.userName}
-                            onChange={(e) => {
-                              const next = { ...form.userProfile, userName: e.target.value }
-                              setForm({ ...form, userProfile: next })
-                              saveField({ userProfile: next })
-                            }}
-                          />
-                        </SetField>
-                        <SetField label="职业 / 身份" htmlFor="cfg-mem-occ">
-                          <input
-                            id="cfg-mem-occ"
-                            placeholder="如:在读研究生"
-                            value={form.userProfile.occupation}
-                            onChange={(e) => {
-                              const next = { ...form.userProfile, occupation: e.target.value }
-                              setForm({ ...form, userProfile: next })
-                              saveField({ userProfile: next })
-                            }}
-                          />
-                        </SetField>
-                        <div className="set-grid">
-                          <SetField label="喜欢(逗号分隔)" htmlFor="cfg-mem-likes">
-                            <input
-                              id="cfg-mem-likes"
-                              value={form.userProfile.likes}
-                              onChange={(e) => {
-                                const next = { ...form.userProfile, likes: e.target.value }
-                                setForm({ ...form, userProfile: next })
-                                saveField({ userProfile: next })
-                              }}
-                            />
-                          </SetField>
-                          <SetField label="不喜欢(逗号分隔)" htmlFor="cfg-mem-dis">
-                            <input
-                              id="cfg-mem-dis"
-                              value={form.userProfile.dislikes}
-                              onChange={(e) => {
-                                const next = { ...form.userProfile, dislikes: e.target.value }
-                                setForm({ ...form, userProfile: next })
-                                saveField({ userProfile: next })
-                              }}
-                            />
-                          </SetField>
-                        </div>
-                        <SetField label="雷区(完全不聊)" htmlFor="cfg-mem-ban">
-                          <input
-                            id="cfg-mem-ban"
-                            placeholder="如:考试,前任"
-                            value={form.userProfile.banTopics}
-                            onChange={(e) => {
-                              const next = { ...form.userProfile, banTopics: e.target.value }
-                              setForm({ ...form, userProfile: next })
-                              saveField({ userProfile: next })
-                            }}
-                          />
-                        </SetField>
-                      </SettingsCard>
-                      <SettingsCard
-                        card="记住的事"
-                        flash={flashCard}
-                        title={`记住的事(${memoryFacts.length})`}
-                        desc="和角色聊天时透露的信息会被自动记住"
-                        action={
-                          <button
-                            className={`hist-clear${clearMemArmed ? ' danger' : ''}`}
-                            disabled={memoryFacts.length === 0}
-                            onClick={() => {
-                              if (!clearMemArmed) {
-                                setClearMemArmed(true)
-                                window.setTimeout(() => setClearMemArmed(false), 3000)
-                                return
-                              }
-                              void (async () => {
-                                await clearMemory()
-                                setMemoryFacts([])
-                                setClearMemArmed(false)
-                              })()
-                            }}
-                          >
-                            {clearMemArmed ? '确认清空?' : '清空全部'}
-                          </button>
-                        }
-                      >
-                        {memoryFacts.length === 0 && (
-                          <div className="set-note">还没有记忆 — 聊天中透露的信息会出现在这里</div>
-                        )}
-                        {memoryFacts.map((f) => (
-                          <div className="mem-fact" key={f.id}>
-                            <span className="mem-cat">{MEM_CAT_LABEL[f.category]}</span>
-                            <span className="mem-content">{f.content}</span>
-                            <button
-                              className={`mem-btn${f.pinned ? ' on' : ''}`}
-                              title={f.pinned ? '取消置顶' : '置顶(永不遗忘)'}
-                              onClick={() => void (async () => { await togglePinFact(f.id); await refreshMemoryFacts() })()}
-                            >
-                              📌
-                            </button>
-                            <button
-                              className="mem-btn"
-                              title="忘记这条"
-                              onClick={() => void (async () => { await deleteFact(f.id); await refreshMemoryFacts() })()}
-                            >
-                              ✕
-                            </button>
-                          </div>
-                        ))}
-                      </SettingsCard>
-                      <SettingsCard
-                        card="角色世界"
-                        flash={flashCard}
-                        title="角色世界"
-                        desc="两人之间的老梗/未了结事件,演出中会偶尔回收"
-                      >
-                        {(storyData?.gags.length ?? 0) === 0 && (storyData?.threads.length ?? 0) === 0 && (
-                          <div className="set-note">还没有角色共同记忆 — 演出几集后会自动积累</div>
-                        )}
-                        {storyData?.gags.map((g) => (
-                          <div className="mem-fact" key={g.id}>
-                            <span className="mem-cat">老梗</span>
-                            <span className="mem-content">{g.text}</span>
-                            <button
-                              className="mem-btn"
-                              title="删掉这条老梗"
-                              onClick={() => void (async () => { await removeStoryItem('gags', g.id); await refreshStory() })()}
-                            >
-                              ✕
-                            </button>
-                          </div>
-                        ))}
-                        {storyData?.threads.map((t) => (
-                          <div className="mem-fact" key={t.id}>
-                            <span className="mem-cat">未了结</span>
-                            <span className="mem-content">{t.text}</span>
-                            <button
-                              className="mem-btn"
-                              title="删掉这条事件线"
-                              onClick={() => void (async () => { await removeStoryItem('threads', t.id); await refreshStory() })()}
-                            >
-                              ✕
-                            </button>
-                          </div>
-                        ))}
-                        {bondLine && (
-                          <div className="mem-fact">
-                            <span className="mem-cat">关系</span>
-                            <span className="mem-content">{bondLine}</span>
-                          </div>
-                        )}
-                      </SettingsCard>
-                      <SettingsCard
-                        card="连续剧情"
-                        flash={flashCard}
-                        title="连续剧情"
-                        desc="多集推进的剧情线,约 30% 的集数会演下一拍"
-                      >
-                        {(storyData?.arcs.length ?? 0) === 0 && (
-                          <div className="set-note">还没有剧情线 — 演出中冒出的连续剧情会出现在这里</div>
-                        )}
-                        {storyData?.arcs.map((a) => (
-                          <div className="mem-fact" key={a.id}>
-                            <span className="mem-cat">{a.status === 'done' ? '完结' : `第${a.stage}拍`}</span>
-                            <span className="mem-content">《{a.title}》下一拍:{a.nextHook}</span>
-                            <button
-                              className="mem-btn"
-                              title="删掉这条剧情线"
-                              onClick={() => void (async () => { await removeArc(a.id); await refreshStory() })()}
-                            >
-                              ✕
-                            </button>
-                          </div>
-                        ))}
-                      </SettingsCard>
-                    </>
-                  )}
-
-                  {settingsTab === 'memo' && (
-                    <>
-                      <SettingsCard card="添加备忘" flash={flashCard} title="添加备忘">
-                        <SetField label="要办的事" htmlFor="memo-text">
-                          <textarea
-                            id="memo-text"
-                            rows={2}
-                            placeholder="如:周三下午 3 点取快递(别写密码、验证码这类)"
-                            value={memoDraft.text}
-                            onChange={(e) => setMemoDraft({ ...memoDraft, text: e.target.value })}
-                          />
-                        </SetField>
-                        <div className="set-grid">
-                          <SetField label="截止时间" htmlFor="memo-due">
-                            <input
-                              id="memo-due"
-                              type="datetime-local"
-                              value={memoDraft.due}
-                              onChange={(e) => setMemoDraft({ ...memoDraft, due: e.target.value })}
-                            />
-                          </SetField>
-                          <SetField label="提前提醒(分钟)" htmlFor="memo-adv" hint={`留空 = 默认 ${form.memo.advanceMin}`}>
-                            <input
-                              id="memo-adv"
-                              type="number"
-                              min={1}
-                              value={memoDraft.advance}
-                              placeholder={`默认 ${form.memo.advanceMin}`}
-                              onChange={(e) => setMemoDraft({ ...memoDraft, advance: e.target.value })}
-                            />
-                          </SetField>
-                        </div>
-                        <div className="set-actions">
-                          <button className="panel-btn primary" onClick={() => void submitMemo()}>
-                            添加备忘
-                          </button>
-                        </div>
-                      </SettingsCard>
-                      <SettingsCard
-                        card="备忘列表"
-                        flash={flashCard}
-                        title={`备忘列表(${memos.length})`}
-                        desc="到点画外音会提醒"
-                        action={
-                          <button
-                            className="hist-clear"
-                            disabled={!memos.some((m) => m.done)}
-                            onClick={() => void (async () => {
-                              for (const m of memos.filter((x) => x.done)) await removeMemo(m.id)
-                              await refreshMemos()
-                            })()}
-                          >
-                            清已完成
-                          </button>
-                        }
-                      >
-                        {memos.length === 0 && <div className="set-note">还没有备忘 — 添加一条试试</div>}
-                        {memos.map((m) => (
-                          <div className="mem-fact" key={m.id}>
-                            <input
-                              type="checkbox"
-                              checked={m.done}
-                              title="标记完成"
-                              onChange={() => void (async () => { await updateMemo(m.id, { done: !m.done }); await refreshMemos() })()}
-                            />
-                            <span className="mem-content" style={m.done ? { textDecoration: 'line-through', opacity: 0.55 } : undefined}>
-                              {m.text}
-                            </span>
-                            <span className="memo-meta">
-                              {formatDue(m.dueAt)}
-                              {m.advanceMin !== null ? ` · 提前 ${m.advanceMin} 分` : ''}
-                              {m.done ? ' · 已完成' : ''}
-                            </span>
-                            <button
-                              className="mem-btn"
-                              title="删除"
-                              onClick={() => void (async () => { await removeMemo(m.id); await refreshMemos() })()}
-                            >
-                              ✕
-                            </button>
-                          </div>
-                        ))}
-                      </SettingsCard>
-                    </>
-                  )}
-
-                  {settingsTab === 'history' && (
-                    <SettingsCard
-                      card="演出历史"
-                      flash={flashCard}
-                      title={`演出历史(${episodes.length})`}
-                      desc="点击一行即可回放;收藏不会被清理且重放权重更高"
-                      action={
-                        <button
-                          className={`hist-clear${clearHistArmed ? ' danger' : ''}`}
-                          disabled={episodes.every((e) => e.fav) || episodes.length === 0}
-                          onClick={() => {
-                            if (!clearHistArmed) {
-                              setClearHistArmed(true)
-                              window.setTimeout(() => setClearHistArmed(false), 3000)
-                              return
-                            }
-                            setClearHistArmed(false)
-                            void onClearUnfavorited()
-                          }}
-                        >
-                          {clearHistArmed ? '确认清空?' : '清空未收藏'}
-                        </button>
-                      }
-                    >
-                      <div className="hist-list">
-                        {episodes.length === 0 && (
-                          <div className="hist-empty">还没有历史对话，点 ▶ 生成一集试试</div>
-                        )}
-                        {episodes.map((ep) => {
-                          const bm = modeOf(ep.mode)
-                          return (
-                            <div
-                              className="hist-row"
-                              key={ep.ts}
-                              title="点击回放此段"
-                              onClick={() => replayFromHistory(ep)}
-                            >
-                              <span className="hist-mode" style={{ background: bm.accent }}>
-                                {bm.label}
-                              </span>
-                              <div className="hist-main">
-                                <div className="hist-preview">{ep.lines[0]?.text ?? ''}</div>
-                                <div className="hist-meta">
-                                  {fmtTime(ep.ts)} · {ep.lines.length} 句
-                                  {ep.topic ? ` · ${ep.topic}` : ''}
-                                </div>
-                              </div>
-                              <button
-                                className={`hist-fav${ep.fav ? ' on' : ''}`}
-                                title={ep.fav ? '取消收藏' : '收藏（不会被删除，重放权重更高）'}
-                                onClick={(e) => {
-                                  e.stopPropagation()
-                                  void onToggleFav(ep)
-                                }}
-                              >
-                                {ep.fav ? '★' : '☆'}
-                              </button>
-                              <button
-                                className="hist-del"
-                                title={ep.fav ? '收藏对话不可删除' : '删除此段'}
-                                disabled={ep.fav}
-                                onClick={(e) => {
-                                  e.stopPropagation()
-                                  void onDeleteEpisode(ep)
-                                }}
-                              >
-                                ✕
-                              </button>
-                            </div>
-                          )
-                        })}
-                      </div>
-                    </SettingsCard>
-                  )}
-
-                </>
-              )}
-            </div>
-          </section>
-        </div>
+        <SettingsWindow
+          innerRef={panelRef}
+          bridge={settingsBridge}
+          initialTab={settingsTabRequest}
+          onExit={requestExit}
+        />
       )}
 
       {topicOpen && (
@@ -3797,7 +974,7 @@ function App() {
             choice={choice}
             left={`${Math.min(88, Math.max(12, ctrlBar.xPct))}%`}
             top={Math.min(window.innerHeight - 180, Math.max(12, ctrlBar.top + 46))}
-            onPick={pickOption}
+            onPick={director.choose}
           />
         )}
 
@@ -3868,7 +1045,7 @@ function App() {
             onClose={() => closeOverlay('tools')}
             onAddMemo={(text, dueAt) => {
               showPrivacyTip()
-              void addMemo(text, dueAt, null).then(() => void refreshMemos())
+              void addMemo(text, dueAt, null)
             }}
             onPerform={performNow}
           />
