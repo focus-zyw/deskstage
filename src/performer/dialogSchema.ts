@@ -53,9 +53,11 @@ export interface ChoicePoint {
   options: ChoiceOption[]
 }
 
-/** 完整演出脚本:choice 前的台词、抉择点、按分支分组的后续台词 */
+/** 完整演出脚本:choice 前的台词、抉择点、按分支分组的后续台词;
+ *  card 为本集场景卡(剧本的正式组成部分,随集历史落盘) */
 export interface PerformanceScript {
   before: DialogLine[]
+  card?: SceneCard
   choice?: ChoicePoint
   after: Record<string, DialogLine[]>
 }
@@ -204,6 +206,68 @@ export function sanitizeChoicePoint(v: unknown): ChoicePoint | undefined {
     .slice(0, 2)
   if (options.length !== 2 || options[0].id === options[1].id) return undefined
   return { prompt, options }
+}
+
+/** 剧本结构校验:清洗保证"每行合法",这里保证"整集结构可播放"。
+ *  fatal = 无法播放的结构缺陷(调用方应重试一次生成,仍失败走兜底剧本);
+ *  warnings = 可播放的质量瑕疵,记录不拦截——等局部修复循环(P2)接管后再升级 */
+export interface ScriptValidation {
+  fatal: string[]
+  warnings: string[]
+}
+
+/** 同一角色最大连说句数:喜剧节奏允许顶嘴连发,但不能一个人说评书 */
+const MAX_SPEAKER_STREAK = 2
+/** 抉择分支最少句数:低于此值视作模型漏写分支(选了就是死路) */
+const MIN_BRANCH_LINES = 2
+/** 单句长度提示线:超长不截断,只记录(气泡可滚动) */
+const MAX_LINE_CHARS = 100
+
+function speakerStreakWarning(lines: DialogLine[]): string | null {
+  let streak = 1
+  for (let i = 1; i < lines.length; i++) {
+    if (lines[i].speaker === lines[i - 1].speaker) {
+      streak += 1
+      if (streak > MAX_SPEAKER_STREAK) {
+        return `第 ${i + 1} 句起 ${lines[i].speaker} 连说超过 ${MAX_SPEAKER_STREAK} 句,节奏像独角戏`
+      }
+    } else {
+      streak = 1
+    }
+  }
+  return null
+}
+
+export function validatePerformanceScript(script: PerformanceScript, minLines = 4): ScriptValidation {
+  const fatal: string[] = []
+  const warnings: string[] = []
+  const lines = script.before
+  if (lines.length < minLines) {
+    fatal.push(`正片台词不足 ${minLines} 句(实际 ${lines.length} 句)`)
+  }
+  const streak = speakerStreakWarning(lines)
+  if (streak) warnings.push(streak)
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].text.length > MAX_LINE_CHARS) {
+      warnings.push(`第 ${i + 1} 句 ${lines[i].text.length} 字偏长`)
+    }
+  }
+  // 抉择完整性:两个 option 都必须有可播分支,否则观众选了就是死路
+  if (script.choice) {
+    for (const opt of script.choice.options) {
+      const branch = script.after[opt.id] ?? []
+      if (branch.length < MIN_BRANCH_LINES) {
+        fatal.push(`抉择分支「${opt.label}」缺失或不足 ${MIN_BRANCH_LINES} 句(实际 ${branch.length} 句)`)
+        continue
+      }
+      if (branch[branch.length - 1].speaker === 'C') {
+        warnings.push(`分支「${opt.label}」以场外角色收底,剧情可能没收束`)
+      }
+      const branchStreak = speakerStreakWarning(branch)
+      if (branchStreak) warnings.push(`分支「${opt.label}」${branchStreak}`)
+    }
+  }
+  return { fatal, warnings }
 }
 
 /** 解析 LLM 生成的原始输出:容忍代码围栏/混杂文本;不合规抛错由调用方兜底。

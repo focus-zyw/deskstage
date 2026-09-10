@@ -21,6 +21,7 @@ import {
   clampPauseMs,
   parseGeneratedDialog,
   sanitizeDelivery,
+  validatePerformanceScript,
   VALID_ACTIONS,
   type DialogLine,
   type PerformanceScript,
@@ -137,7 +138,12 @@ export async function generateDialog(
   if (cfg.webchatEnabled) {
     try {
       const raw = await webchatAsk(mergeMessages(messages), signal, 180_000)
-      return parseDialog(raw)
+      const script = parseDialog(raw)
+      // 结构不合格 → 抛错回落 API 通道重新生成,不让死抉择/残缺剧本上台
+      const v = validatePerformanceScript(script)
+      if (v.fatal.length > 0) throw new Error(`剧本结构不合格:${v.fatal.join(';')}`)
+      if (v.warnings.length > 0) console.warn('[剧本校验]', v.warnings)
+      return script
     } catch (e) {
       if (signal?.aborted || (e as Error)?.name === 'AbortError') throw e
       console.warn('[webchat] 网页生成失败,本次回退 API:', e)
@@ -150,6 +156,10 @@ export async function generateDialog(
     try {
       const raw = await chatRaw(messages, signal, !noJsonMode)
       const script = parseDialog(raw)
+      // 结构不合格视同生成失败:吃掉一次重试机会重新生成;仍不合格走调用方兜底剧本
+      const v = validatePerformanceScript(script)
+      if (v.fatal.length > 0) throw new Error(`剧本结构不合格:${v.fatal.join(';')}`)
+      if (v.warnings.length > 0) console.warn('[剧本校验]', v.warnings)
       if (lastChoice) {
         try { localStorage.removeItem('vc-lastChoice') } catch { /* ignore */ }
       }
