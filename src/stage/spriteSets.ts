@@ -34,6 +34,13 @@ export const SPRITE_SETS: Record<'A' | 'B', SpriteSet> = {
     accent: '#3d8bd4', // 便利店店员:蓝黄制服主色
     height: 320,
     actions: [...ART_ACTIONS, ...UTILITY_ACTIONS, 'laugh', 'shy', 'sleepy', 'wave', 'thinking', 'jump'],
+    variants: {
+      talk: [
+        { file: 'talk.png', weight: 6 },
+        { file: 'talk-point.png', weight: 1, cooldownMs: 45_000, transitionMode: 'dip' },
+        { file: 'talk-aside.png', weight: 1, cooldownMs: 45_000, transitionMode: 'dip' },
+      ],
+    },
   },
   B: {
     dir: 'sprites/b',
@@ -41,6 +48,13 @@ export const SPRITE_SETS: Record<'A' | 'B', SpriteSet> = {
     accent: '#5a6472', // 程序员:深灰蓝主色
     height: 320,
     actions: [...ART_ACTIONS, ...UTILITY_ACTIONS, 'shy', 'laugh', 'sleepy', 'wave', 'thinking', 'jump'],
+    variants: {
+      talk: [
+        { file: 'talk.png', weight: 6 },
+        { file: 'talk-deadpan.png', weight: 1, cooldownMs: 45_000, transitionMode: 'dip' },
+        { file: 'talk-glasses.png', weight: 1, cooldownMs: 45_000, transitionMode: 'dip' },
+      ],
+    },
   },
 }
 

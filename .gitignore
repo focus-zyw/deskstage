@@ -26,6 +26,7 @@ dist-ssr
 
 # 本地素材暂存与立绘管线中间产物(可用脚本重新生成)
 temp/
+tmp/imagegen/
 scripts/__pycache__/
 scripts/ai_raw/
 scripts/ai_edit/

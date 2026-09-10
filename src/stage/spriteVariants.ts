@@ -1,3 +1,5 @@
+import type { TransitionMode } from './spriteMotion'
+
 export interface SpriteVariant {
   /** public/sprites/{角色目录} 下的文件名（含扩展名） */
   file: string
@@ -5,6 +7,8 @@ export interface SpriteVariant {
   weight?: number
   /** 本候选被抽中后，在该时长内不再参与抽取 */
   cooldownMs?: number
+  /** 姿势轮廓变化大时可覆盖动作的默认切图方式 */
+  transitionMode?: TransitionMode
 }
 
 /**

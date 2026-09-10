@@ -102,7 +102,10 @@ export function CharacterSprite({
   }
   const src = spriteFileSrc(sprite, variant.file)
   const fidget = useIdleFidget(artAction === 'idle')
-  const motion = motionForAction(action)
+  const defaultMotion = motionForAction(action)
+  const variantMotion = sprite.variants?.[artAction]?.find(
+    (candidate) => candidate.file === variant.file,
+  )?.transitionMode
 
   // 渲染期检测动作切换：旧图挪到下层兜底，新图重新走加载→淡入流程；
   // 淡入结束后卸载旧图 —— 各形态姿态差异大,旧图宽出的部分会从新图边缘露出形成重影
@@ -112,11 +115,27 @@ export function CharacterSprite({
     ready: false,
     broken: false,
     underGone: false,
+    prevTransitionMode: undefined as typeof variantMotion,
+    currTransitionMode: variantMotion,
   })
   if (src !== fade.curr) {
-    setFade({ prev: fade.curr, curr: src, ready: false, broken: false, underGone: false })
+    setFade({
+      prev: fade.curr,
+      curr: src,
+      ready: false,
+      broken: false,
+      underGone: false,
+      prevTransitionMode: fade.currTransitionMode,
+      currTransitionMode: variantMotion,
+    })
   }
-  const { prev, curr, ready, broken, underGone } = fade
+  const { prev, curr, ready, broken, underGone, prevTransitionMode, currTransitionMode } = fade
+  // 大轮廓姿势离场时同样使用 dip，避免它与下一张基础图交叠出多余手臂。
+  const transitionMode =
+    !underGone && prevTransitionMode === 'dip'
+      ? 'dip'
+      : (currTransitionMode ?? defaultMotion.mode)
+  const motion = { ...defaultMotion, mode: transitionMode }
 
   const cls = [
     'char',
