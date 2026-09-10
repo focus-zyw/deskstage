@@ -3,6 +3,7 @@
 // 分段按钮/历史徽标/重放节奏/LLM 指令全部自动感知，其余代码零改动。
 import { crosstalkMode } from './crosstalk'
 import { dailyMode } from './daily'
+import { liveMode } from './live'
 import type { DialogLine } from '../player'
 
 export interface DialogMode<ID extends string = string> {
@@ -28,6 +29,7 @@ export interface DialogMode<ID extends string = string> {
 export const MODES = {
   daily: dailyMode,
   crosstalk: crosstalkMode,
+  live: liveMode,
 } satisfies Record<string, DialogMode>
 
 /** 由注册表键自动派生；注册表加一项，类型自动扩展 */

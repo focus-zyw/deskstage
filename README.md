@@ -15,9 +15,15 @@ Windows 桌面虚拟角色(桌宠)应用:两个 Q 版角色(甲·便利店店员
 - **工具循环**:命令面板(工具按钮)聚合翻译/截图翻译/提取文字/添加提醒/主题/隐藏角色/点播,
   支持搜索与整句指令("明天下午三点提醒我交报告",关键词路由 + LLM 兜底,时间先确认再入库);
   任务进度/结果走右下浮层卡,角色气泡不掺和正文。翻译面板支持自然/直译/润色、复制、朗读。
+  提取文字走 AI 视觉模型优先(默认智谱 glm-4.6v-flash,免费,设置里单独填 key)、
+  失败/未配置自动回退本地 Windows OCR。
 - **主动行为调度**:单一调度器统管问候/自发闲聊/久坐提醒/备忘到点/空闲重放,
   优先级 + 小时配额(主动程度:安静/平衡/热闹)+ 勿扰一键全静(提醒卡片照弹);
   主动行为被连续掐断 3 次自动降频,用户一互动即清零。
+- **主播模式**:与日常/相声平级的演出模式,直播弹幕互动——弹幕源走统一 Provider 接口
+  (src/live,B站真实实现+抖音桩),过滤/限流管线(去重/雷区/队列上限/每分钟AI调用上限)
+  攒批喂给 AI 挑一条回,甲乙都能被点名,气泡+TTS(stream 通道)+表情即时呈现;
+  连接状态走任务卡,断线自动重连。设置里填B站直播间号,命令"开播/下播"或主播段按钮启动。
 - **记忆系统**:手填画像(称呼/身份/喜好/雷区)+ 机器自动提取的事实(pinned 置顶防遗忘),
   注入所有对话 prompt;行为信号(戳/收藏/重放)反馈到话题权重。
 - **语音**:硅基流动 CosyVoice2 合成,甲乙各自音色,两级缓存(内存 blob → 磁盘 base64)逐句预合成;
@@ -35,9 +41,13 @@ src/
               dialogPrefetch+topicSeeds(预生成/话题池)、timeAware、envAware(环境感知)
   performer/  演出层:player(台词队列,LLM/硬编码剧本同一条路)、modes(模式注册表)
   runtime/    运行时地基:runtimeMode(统一状态机+capabilities)、proactiveScheduler(主动行为
-              调度:优先级/配额/降频)、utilityTasks(工具任务状态)
+              调度:优先级/配额/降频)、utilityTasks(工具任务状态)、liveDanmaku(主播模式管线:
+              弹幕过滤/去重/限流→AI决策→单句回复)
   features/   commands(命令注册表+整句路由+中文时间解析)
-  translation/ 翻译:types(语言表)、prompt(防注入协议)、translator(切块/容错)、TranslationPanel
+  live/       直播弹幕源抽象:types(DanmakuMessage/Provider 接口)、providers/bilibili
+              (WS+auth+zlib 解包+DANMU_MSG,经 getConf 避风控)、providers/douyin(桩)、注册表
+  translation/ 翻译:types(语言表)、prompt(防注入协议)、translator(切块/容错)、ocr(AI 视觉
+              识别优先+本地兜底)、TranslationPanel
   ui/         ControlBar(工具栏,自带热区注册)、CommandPanel(命令面板)、UtilityCard(任务浮层卡)
   storage/    持久化:configStore / historyStore(jsonl 分集+收藏) / memoryStore(事实+口味统计) /
               storyStore(角色世界:老梗/事件线/连续剧情/关系) / interactionStore(互动账本+降频记账) /
@@ -48,7 +58,7 @@ src-tauri/
   src/lib.rs            窗口 NOACTIVATE 切换、光标轮询线程、插件注册(单实例/fs/http/log)
   src/audio_capture.rs  WASAPI 环回录音(按进程/整系统),OBS 式录制目标列表,结束事件回传前端
   src/capture.rs        冻结全屏→框选裁剪→写剪贴板(WDA_EXCLUDEFROMCAPTURE 角色不进截图)
-  src/ocr.rs            Windows 自带 OCR(剪贴板图片→文本行,专用 STA 线程)
+  src/ocr.rs            剪贴板图片→文本行(Windows 自带 OCR,专用 STA 线程)+ PNG base64 导出(供视觉模型)
   src/env.rs            桌面快照:电量/前台应用类别/全屏/键鼠空闲/音频在播
 ```
 

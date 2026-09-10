@@ -31,7 +31,7 @@ import { bondTierOf } from './engine/interactionRules'
 import { getBond, shiftBond } from './storage/storyStore'
 import { logInteraction, logInterrupt, logDrag, logDismiss, resetDismissals, type DismissableKind } from './storage/interactionStore'
 import { startScheduler, noteActivity, noteSpontaneous } from './runtime/proactiveScheduler'
-import { speak, prefetchVoice, stopSpeaking, VOICES, cloneVoice, listCustomVoices, type ClonedVoice } from './engine/tts'
+import { speak, prefetchVoice, stopSpeaking, cloneVoice, listCustomVoices, previewSample, providerById, PROVIDER_OPTIONS, type ClonedVoice } from './engine/tts'
 import { prefetchNext } from './engine/dialogPrefetch'
 import { WEBCHAT_SITES, webchatLogin, webchatProbe, webchatRestoreMain } from './engine/webchat'
 import { TOPIC_SEEDS, pickTopic } from './engine/topicSeeds'
@@ -43,6 +43,8 @@ import { listPrefetchedArcIds, takePrefetch } from './storage/prefetchStore'
 import { reserveArcBeat } from './engine/arcReservation'
 import { appendHistory, loadRecentHistory, listEpisodes, deleteEpisodes, toggleFavorite, type Episode } from './storage/historyStore'
 import { TranslationPanel, type TranslationInject } from './translation/TranslationPanel'
+import { extractTextFromClipboard } from './translation/ocr'
+import { startLiveSession, stopLiveSession, type LiveReply } from './runtime/liveDanmaku'
 import { CommandPanel } from './ui/CommandPanel'
 import { ChoicePanel } from './ui/ChoicePanel'
 import type { Command } from './features/commands/commands'
@@ -51,6 +53,7 @@ import {
   getCaps,
   setMode as setRuntimeMode,
   beginPerforming,
+  beginStreaming,
   beginCapture,
   endCapture,
   beginRecording,
@@ -458,7 +461,7 @@ function App() {
       ? 'generating'
       : rt.mode.type === 'choosing'
         ? 'choosing'
-        : rt.mode.type === 'performing'
+        : rt.mode.type === 'performing' || rt.mode.type === 'streaming'
           ? 'performing'
           : 'idle'
   // 分段选择器当前选中模式；生成按钮按它点播
@@ -673,19 +676,17 @@ function App() {
   // ---------- 翻译:OCR 链路对接与外围互动 ----------
 
   /** 剪贴板图片 OCR → 填入翻译面板(工具循环:进度与结果走右上浮层卡,角色气泡不再播报)。
+   *  AI 视觉模型优先、本地 OCR 兜底(链路在 translation/ocr.ts)。
    *  auto=true(截图翻译入口)时面板填入后立即翻译;命令/按钮入口只填入,让用户先看/改识别结果 */
   function startOcrIntoTranslation(auto: boolean) {
     void runUtilityTask(auto ? 'capture-translate' : 'ocr', auto ? '截图翻译' : '提取文字', async (report) => {
-      report('识别剪贴板图片中…')
-      const r = await invoke<{ lines: string[]; lang: string }>('ocr_clipboard')
-      if (r.lines.length === 0) {
-        throw new Error('没识别出文字(该区域可能没有可识别文本)')
-      }
+      const r = await extractTextFromClipboard(report)
       openOverlayExclusive('translation')
       setTrInject({ text: r.lines.join('\n'), nonce: Date.now(), auto })
+      const via = r.via === 'api' ? '(AI)' : '(本地)'
       return auto
-        ? `已识别 ${r.lines.length} 行,翻译面板处理中`
-        : `已识别 ${r.lines.length} 行,已填入翻译面板`
+        ? `已识别 ${r.lines.length} 行${via},翻译面板处理中`
+        : `已识别 ${r.lines.length} 行${via},已填入翻译面板`
     })
   }
 
@@ -723,6 +724,93 @@ function App() {
     void playMode(m, topic)
   }
 
+  // ---------- 主播模式:直播弹幕互动 ----------
+
+  /** 弹幕回复呈现:复用聊天通道的气泡+动作+TTS 节奏(stream 通道) */
+  const liveReplyTimer = useRef(0)
+  function presentLiveReply(r: LiveReply) {
+    setBubble(r.speaker === 'A' ? { A: r.text, B: null, C: null } : { A: null, B: r.text, C: null })
+    setAction((a) => ({ ...a, [r.speaker]: r.action || 'talk' }))
+    setSpeaking(r.speaker)
+    speak(r.speaker, r.text, undefined, 'stream')
+    const listener: Speaker = r.speaker === 'A' ? 'B' : 'A'
+    setPulseFor(listener)
+    window.clearTimeout(pulseTimer.current)
+    pulseTimer.current = window.setTimeout(() => setPulseFor(null), 600)
+    window.clearTimeout(liveReplyTimer.current)
+    liveReplyTimer.current = window.setTimeout(() => {
+      setBubble((b) => (b[r.speaker] === r.text ? { ...b, [r.speaker]: null } : b))
+      setAction((a) => ({ ...a, [r.speaker]: 'idle' }))
+      setSpeaking(null)
+    }, 2200 + r.text.length * 160)
+  }
+
+  /** 下播句柄:stopEverything 时结束会话并让直播任务卡落定 */
+  const liveStopRef = useRef<(() => void) | null>(null)
+
+  /** 开播:前置校验(密钥/直播间号/平台)→ 清场 → streaming 态 → 连接弹幕源 + 启动管线 */
+  function startStreaming() {
+    void (async () => {
+      const cfg = await getConfig()
+      if (!cfg.apiKey.trim()) {
+        setBubble({ A: '还没填 API Key,点 ⚙ 去设置里填一下~', B: null, C: null })
+        setAction({ A: 'surprise', B: 'idle', C: 'idle' })
+        window.setTimeout(() => {
+          setBubble((b) => (b.A?.startsWith('还没填') ? { A: null, B: null, C: null } : b))
+          setAction((a) => ({ ...a, A: 'idle' }))
+        }, 2600)
+        return
+      }
+      if (!cfg.live.roomId.trim()) {
+        setBubble({ A: '先到 设置 → 常规 → 主播模式 里填直播间号~', B: null, C: null })
+        setAction({ A: 'surprise', B: 'idle', C: 'idle' })
+        window.setTimeout(() => {
+          setBubble((b) => (b.A?.startsWith('先到 设置') ? { A: null, B: null, C: null } : b))
+          setAction((a) => ({ ...a, A: 'idle' }))
+        }, 3200)
+        return
+      }
+      if (cfg.live.platform === 'douyin') {
+        setBubble({ A: '抖音弹幕还在路上,先用B站吧~', B: null, C: null })
+        window.setTimeout(() => setBubble((b) => (b.A === '抖音弹幕还在路上,先用B站吧~' ? { A: null, B: null, C: null } : b)), 3000)
+        return
+      }
+
+      // 清场(与 playMode 同段):中止生成/演出/语音
+      generateAbort.current?.abort()
+      player.current!.stop()
+      stopSpeaking()
+      window.clearTimeout(finaleTimer.current)
+      setBubble({ A: null, B: null, C: null })
+      setAction({ A: 'idle', B: 'idle', C: 'idle' })
+
+      beginStreaming()
+      // 连接状态走常驻任务卡(exec 挂起到下播才落定,done 卡 6s 后自动消失)
+      void runUtilityTask('live', '直播', (report) => {
+        return new Promise<string>((resolve) => {
+          liveStopRef.current = () => {
+            liveStopRef.current = null
+            resolve('直播已结束')
+          }
+          void startLiveSession(cfg.live.platform, cfg.live.roomId, {
+            onReply: presentLiveReply,
+            onStatus: (s) => {
+              report(
+                s.state === 'live'
+                  ? '已连接,读弹幕中'
+                  : s.state === 'connecting'
+                    ? `连接中${s.detail ? `(${s.detail})` : ''}`
+                    : s.state === 'error'
+                      ? `异常:${s.detail ?? ''}(自动重连)`
+                      : (s.detail ?? s.state),
+              )
+            },
+          })
+        })
+      })
+    })()
+  }
+
   /** 命令面板:跳到备忘页手填(时间没解析出来时的兜底入口) */
   function openMemoSettings() {
     setSettingsTab('memo')
@@ -734,13 +822,15 @@ function App() {
     { id: 'clipboard-translate', label: '把剪贴板图片翻译出来(先截屏)', keywords: ['剪贴板'], run: () => startOcrIntoTranslation(true) },
     { id: 'translate', label: '翻译文字(打开翻译面板)', keywords: ['翻译', 'translate'], run: () => openOverlayExclusive('translation') },
     { id: 'capture-translate', label: '截图翻译(框选→识别→翻译)', keywords: ['截图翻译', '截屏翻译'], run: startScreenshotTranslate },
-    { id: 'ocr', label: '提取文字(剪贴板图片→文字)', keywords: ['提取', '识别', 'ocr'], run: () => startOcrIntoTranslation(false) },
+    { id: 'ocr', label: '提取文字(剪贴板图片,AI 识别+本地兜底)', keywords: ['提取', '识别', 'ocr'], run: () => startOcrIntoTranslation(false) },
     { id: 'screenshot', label: '截屏(框选→复制到剪贴板)', keywords: ['截屏', '截图'], run: startPlainScreenshot },
     { id: 'memo', label: '添加提醒(打开备忘页)', keywords: ['备忘页'], run: openMemoSettings },
     { id: 'topic', label: '设置聊天主题', keywords: ['话题', '主题'], run: () => openOverlayExclusive('topic') },
     { id: 'toggle-chars', label: charHidden ? '显示角色' : '隐藏角色', keywords: ['隐藏角色', '显示角色'], run: () => setCharsHidden(!charHidden) },
     { id: 'crosstalk', label: '来一段相声', keywords: ['相声'], run: () => performNow('crosstalk') },
     { id: 'daily', label: '来一段日常', keywords: ['日常', '段子'], run: () => performNow('daily') },
+    { id: 'live', label: '开播(直播弹幕互动,设置里填直播间号)', keywords: ['开播', '直播', '弹幕'], run: () => performNow('live') },
+    { id: 'live-stop', label: '下播(结束直播弹幕互动)', keywords: ['下播'], run: stopEverything },
   ]
 
   /** 翻译成功后的角色搭腔:甲吹一句乙拆台,只在空闲时插话,20s 冷却 */
@@ -1063,6 +1153,11 @@ function App() {
    *  未命中则生成当前轮,开播后后台再静默预生成下一轮(共两轮)。
    *  topicArg = 一次性话题(命令面板"来一段关于X的相声"),不落盘不锁主题 */
   async function playMode(m: Mode, topicArg?: string) {
+    // 主播模式不走剧本链路:开播 = 连弹幕源 + 事件驱动单句回复
+    if (m === 'live') {
+      startStreaming()
+      return
+    }
     // 未配置 API Key:不进生成流程,气泡引导去设置
     const { apiKey } = await getConfig()
     if (!apiKey.trim()) {
@@ -1188,6 +1283,9 @@ function App() {
 
   /** 停止一切：中止生成 + 停止演出 + 停语音 + 复位 */
   function stopEverything() {
+    // 主播模式在播:先下播(断弹幕源 + 直播任务卡落定)
+    liveStopRef.current?.()
+    stopLiveSession()
     // 中途按停止 = 负反馈(演过 80% 以上视为看完,不罚);正在生成时无账可记
     const np = nowPlaying.current
     if (np && np.total > 0 && np.index / np.total < 0.8) bumpTopicSkipped(np.topic)
@@ -1320,8 +1418,8 @@ function App() {
     setKeyDrafts({ ...cfg.apiKeys, [vendorKeyOf(id, cfg.baseUrl)]: cfg.apiKey })
     setVoice(cfg.voice)
     setEpisodes(await listEpisodes())
-    // 拉取账号下的克隆音色(失败静默,下拉只是少了自定义项)
-    if (cfg.voice.apiKey.trim()) {
+    // 拉取账号下的克隆音色(失败静默,下拉只是少了自定义项;克隆是硅基流动独有)
+    if (cfg.voice.provider === 'siliconflow' && cfg.voice.apiKey.trim()) {
       listCustomVoices(cfg.voice.apiKey)
         .then(setClonedVoices)
         .catch((e) => console.warn('克隆音色列表拉取失败(静默)', e))
@@ -2017,6 +2115,82 @@ function App() {
             />
           </div>
           <div className="settings-sep">
+            <span>提取文字(AI 视觉模型优先,失败自动本地兜底;智谱 glm-4.6v-flash 免费,与主模型相互独立)</span>
+          </div>
+          <div className="settings-row">
+            <label htmlFor="cfg-ocr-key" title="bigmodel.cn 注册即得;留空 = 只用本地识别">OCR API Key(留空 = 只用本地识别)</label>
+            <input
+              id="cfg-ocr-key"
+              type="password"
+              value={form.ocr.apiKey}
+              onChange={(e) => {
+                const ocr = { ...form.ocr, apiKey: e.target.value }
+                setForm({ ...form, ocr })
+                saveField({ ocr })
+              }}
+            />
+          </div>
+          <div className="settings-row">
+            <label htmlFor="cfg-ocr-url">OCR 接口地址(OpenAI 兼容)</label>
+            <input
+              id="cfg-ocr-url"
+              value={form.ocr.baseUrl}
+              onChange={(e) => {
+                const ocr = { ...form.ocr, baseUrl: e.target.value }
+                setForm({ ...form, ocr })
+                saveField({ ocr })
+              }}
+            />
+          </div>
+          <div className="settings-row">
+            <label htmlFor="cfg-ocr-model">OCR 视觉模型</label>
+            <input
+              id="cfg-ocr-model"
+              value={form.ocr.model}
+              placeholder="glm-4.6v-flash"
+              onChange={(e) => {
+                const ocr = { ...form.ocr, model: e.target.value }
+                setForm({ ...form, ocr })
+                saveField({ ocr })
+              }}
+            />
+          </div>
+          <div className="settings-sep">
+            <span>主播模式(直播弹幕互动;点"主播"→"开播"启动,平台 v1 仅B站可用)</span>
+          </div>
+          <div className="settings-row">
+            <label htmlFor="cfg-live-platform">直播平台</label>
+            <select
+              id="cfg-live-platform"
+              value={form.live.platform}
+              onChange={(e) => {
+                const live = { ...form.live, platform: e.target.value as 'bilibili' | 'douyin' }
+                setForm({ ...form, live })
+                saveField({ live })
+              }}
+            >
+              <option value="bilibili">B站</option>
+              <option value="douyin" disabled>
+                抖音(即将支持)
+              </option>
+            </select>
+          </div>
+          <div className="settings-row">
+            <label htmlFor="cfg-live-room" title="直播间网址 live.bilibili.com/ 后面的数字">直播间号(B站房间号)</label>
+            <input
+              id="cfg-live-room"
+              value={form.live.roomId}
+              placeholder="如 21452505"
+              inputMode="numeric"
+              onChange={(e) => {
+                const roomId = e.target.value.replace(/\D/g, '').slice(0, 32)
+                const live = { ...form.live, roomId }
+                setForm({ ...form, live })
+                saveField({ live })
+              }}
+            />
+          </div>
+          <div className="settings-sep">
             <span>人设(自由编辑,输入后自动保存并采纳;"还原默认"恢复出厂搭档)</span>
           </div>
           <div className="settings-row">
@@ -2290,7 +2464,7 @@ function App() {
           {settingsTab === 'voice' && (
             <>
           <div className="settings-row">
-            <label htmlFor="cfg-voice">角色语音(硅基流动)</label>
+            <label htmlFor="cfg-voice">角色语音</label>
             <input
               id="cfg-voice"
               type="checkbox"
@@ -2305,84 +2479,180 @@ function App() {
           {voice.enabled && (
             <>
               <div className="settings-row">
-                <label htmlFor="cfg-voice-key" title="siliconflow.cn 的 API Key,与常规页 LLM 的 key 相互独立">
-                  语音 API Key
+                <label htmlFor="cfg-voice-provider" title="硅基流动 CosyVoice2:流式快、便宜稳定;MiniMax Speech 2.8:情绪与语气表现力更强,按量价格更高">
+                  语音供应商
+                </label>
+                <select
+                  id="cfg-voice-provider"
+                  value={voice.provider}
+                  onChange={(e) => {
+                    const next = { ...voice, provider: e.target.value as typeof voice.provider }
+                    setVoice(next)
+                    saveField({ voice: next }, true)
+                  }}
+                >
+                  {PROVIDER_OPTIONS.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              {voice.provider === 'siliconflow' ? (
+                <div className="settings-row">
+                  <label htmlFor="cfg-voice-key" title="siliconflow.cn 的 API Key,与常规页 LLM 的 key 相互独立">
+                    语音 API Key
+                  </label>
+                  <input
+                    id="cfg-voice-key"
+                    type="password"
+                    placeholder="sk-...(siliconflow.cn)"
+                    value={voice.apiKey}
+                    onChange={(e) => {
+                      const next = { ...voice, apiKey: e.target.value }
+                      setVoice(next)
+                      saveField({ voice: next })
+                    }}
+                    onBlur={(e) => {
+                      const next = { ...voice, apiKey: e.target.value }
+                      setVoice(next)
+                      saveField({ voice: next }, true)
+                    }}
+                  />
+                </div>
+              ) : (
+                <>
+                  <div className="settings-row">
+                    <label htmlFor="cfg-mm-key" title="MiniMax 开放平台的 API Key,与硅基流动相互独立">
+                      MiniMax API Key
+                    </label>
+                    <input
+                      id="cfg-mm-key"
+                      type="password"
+                      placeholder="eyJ...(MiniMax)"
+                      value={voice.minimax.apiKey}
+                      onChange={(e) => {
+                        const next = { ...voice, minimax: { ...voice.minimax, apiKey: e.target.value } }
+                        setVoice(next)
+                        saveField({ voice: next })
+                      }}
+                      onBlur={(e) => {
+                        const next = { ...voice, minimax: { ...voice.minimax, apiKey: e.target.value } }
+                        setVoice(next)
+                        saveField({ voice: next }, true)
+                      }}
+                    />
+                  </div>
+                  <div className="settings-row">
+                    <label htmlFor="cfg-mm-group" title="MiniMax 开放平台账号的 GroupId">
+                      MiniMax GroupId
+                    </label>
+                    <input
+                      id="cfg-mm-group"
+                      value={voice.minimax.groupId}
+                      onChange={(e) => {
+                        const next = { ...voice, minimax: { ...voice.minimax, groupId: e.target.value } }
+                        setVoice(next)
+                        saveField({ voice: next })
+                      }}
+                      onBlur={(e) => {
+                        const next = { ...voice, minimax: { ...voice.minimax, groupId: e.target.value } }
+                        setVoice(next)
+                        saveField({ voice: next }, true)
+                      }}
+                    />
+                  </div>
+                  <div className="settings-row">
+                    <label htmlFor="cfg-mm-model" title="turbo:便宜、流式快;hd:质量优先,价格更高">
+                      MiniMax 模型
+                    </label>
+                    <select
+                      id="cfg-mm-model"
+                      value={voice.minimax.model}
+                      onChange={(e) => {
+                        const next = { ...voice, minimax: { ...voice.minimax, model: e.target.value as typeof voice.minimax.model } }
+                        setVoice(next)
+                        saveField({ voice: next }, true)
+                      }}
+                    >
+                      <option value="speech-2.8-turbo">speech-2.8-turbo(快)</option>
+                      <option value="speech-2.8-hd">speech-2.8-hd(高质)</option>
+                    </select>
+                  </div>
+                </>
+              )}
+              <div className="settings-row">
+                <label htmlFor="cfg-voice-emotion" title="把 deadpan/excited/slow 语气映射为自然语言情感指令(CosyVoice2)或情绪参数(MiniMax),角色差异更可听;若指令被念出来可关闭">
+                  情感指令
                 </label>
                 <input
-                  id="cfg-voice-key"
-                  type="password"
-                  placeholder="sk-...(siliconflow.cn)"
-                  value={voice.apiKey}
+                  id="cfg-voice-emotion"
+                  type="checkbox"
+                  checked={voice.emotionHints}
                   onChange={(e) => {
-                    const next = { ...voice, apiKey: e.target.value }
-                    setVoice(next)
-                    saveField({ voice: next })
-                  }}
-                  onBlur={(e) => {
-                    const next = { ...voice, apiKey: e.target.value }
+                    const next = { ...voice, emotionHints: e.target.checked }
                     setVoice(next)
                     saveField({ voice: next }, true)
                   }}
                 />
               </div>
-              {([['a', '角色甲音色', 'cfg-voice-a'], ['b', '角色乙音色', 'cfg-voice-b']] as const).map(
+              {([['A', '角色甲音色', 'cfg-voice-a'], ['B', '角色乙音色', 'cfg-voice-b'], ['C', '场外客串音色(第三人乱入时用)', 'cfg-voice-c']] as const).map(
                 ([slot, label, id]) => (
                   <div className="settings-row" key={slot}>
                     <label htmlFor={id}>{label}</label>
                     <select
                       id={id}
-                      value={voice[slot.toUpperCase() as 'A' | 'B']}
+                      value={voice.assignments[voice.provider][slot]}
                       onChange={(e) => {
-                        const next = { ...voice, [slot.toUpperCase()]: e.target.value }
+                        const next = {
+                          ...voice,
+                          assignments: {
+                            ...voice.assignments,
+                            [voice.provider]: { ...voice.assignments[voice.provider], [slot]: e.target.value },
+                          },
+                        }
                         setVoice(next)
                         saveField({ voice: next }, true)
                       }}
                     >
-                      {VOICES.map((v) => (
+                      {providerById(voice.provider).voices.map((v) => (
                         <option key={v.id} value={v.id}>
                           {v.label}
                         </option>
                       ))}
-                      {clonedVoices.length > 0 && <optgroup label="我的克隆音色">{clonedVoices.map((v) => (
+                      {voice.provider === 'siliconflow' && clonedVoices.length > 0 && <optgroup label="我的克隆音色">{clonedVoices.map((v) => (
                         <option key={v.uri} value={v.uri}>{v.name}</option>
                       ))}</optgroup>}
                     </select>
                   </div>
                 ),
               )}
-              <div className="settings-row">
-                <label htmlFor="cfg-voice-c">场外客串音色(第三人乱入时用)</label>
-                <select
-                  id="cfg-voice-c"
-                  value={voice.C}
-                  onChange={(e) => {
-                    const next = { ...voice, C: e.target.value }
+              {voice.provider === 'siliconflow' && (
+                <CloneVoiceRow
+                  apiKey={voice.apiKey}
+                  onRecordingChange={(rec) => (voiceRecording.current = rec)}
+                  onCloned={(v) => {
+                    setClonedVoices((list) => [...list.filter((x) => x.uri !== v.uri), v])
+                    const next = {
+                      ...voice,
+                      assignments: {
+                        ...voice.assignments,
+                        siliconflow: { ...voice.assignments.siliconflow, B: v.uri },
+                      },
+                    }
                     setVoice(next)
-                    saveConfig({ voice: next }).catch((err) =>
-                      console.warn('客串音色保存失败(静默)', err),
-                    )
+                    saveConfig({ voice: next }).catch(() => {})
                   }}
-                >
-                  {VOICES.map((v) => (
-                    <option key={v.id} value={v.id}>
-                      {v.label}
-                    </option>
-                  ))}
-                  {clonedVoices.length > 0 && <optgroup label="我的克隆音色">{clonedVoices.map((v) => (
-                    <option key={v.uri} value={v.uri}>{v.name}</option>
-                  ))}</optgroup>}
-                </select>
+                />
+              )}
+              <div className="settings-row">
+                <label htmlFor="cfg-voice-preview" title="用角色甲的音色读一句固定台词;切换供应商后再点一次,可做同台词 A/B 对比">
+                  试听
+                </label>
+                <button id="cfg-voice-preview" className="panel-btn" type="button" onClick={() => previewSample()}>
+                  ▶ 试听一句
+                </button>
               </div>
-              <CloneVoiceRow
-                apiKey={voice.apiKey}
-                onRecordingChange={(rec) => (voiceRecording.current = rec)}
-                onCloned={(v) => {
-                  setClonedVoices((list) => [...list.filter((x) => x.uri !== v.uri), v])
-                  const next = { ...voice, B: v.uri }
-                  setVoice(next)
-                  saveConfig({ voice: next }).catch(() => {})
-                }}
-              />
             </>
           )}
             </>

@@ -96,6 +96,16 @@ export function deliverySpeed(delivery?: string): number {
   return (delivery && { deadpan: 0.92, excited: 1.15, slow: 0.85 }[delivery]) || 1
 }
 
+/** 语气→自然语言情感指令(CosyVoice2 拼在台词前,MiniMax 等供应商自行转换表达):
+ *  仅靠语速区分角色差异太单薄,语气描述让情感可听 */
+export function deliveryInstruction(delivery?: string): string {
+  return (delivery && {
+    deadpan: '用冷静、面无表情、略带讽刺的语气说:',
+    excited: '用兴奋、活泼的语气说:',
+    slow: '用慢条斯理、从容的语气说:',
+  }[delivery]) || ''
+}
+
 /** 清洗单条台词:speaker/text 必须合法,否则整条丢弃(null)。
  *  可选演出字段逐一钳位/校验,来源不限(LLM 输出/JSONL/收藏/预取缓冲) */
 export function sanitizeDialogLine(raw: unknown): DialogLine | null {

@@ -20,6 +20,9 @@ importers:
       '@tauri-apps/plugin-http':
         specifier: ^2.6.0
         version: 2.6.0
+      pako:
+        specifier: ^3.0.1
+        version: 3.0.1
       react:
         specifier: ^19.2.8
         version: 19.2.8
@@ -506,6 +509,9 @@ packages:
       vite-plus:
         optional: true
 
+  pako@3.0.1:
+    resolution: {integrity: sha512-GupotUUI0mlhugKjUs4bjOwLt3nrehy9Ys2dxC0GtgVef5cnKggkDMmf2bq2poCCuVXopWPmqsc9VDT2iJUy+w==}
+
   picocolors@1.1.1:
     resolution: {integrity: sha512-xceH2snhtb5M9liqDsmEw56le376mTZkEX/jEb/RxNFyegNul7eNslCXP9FDj/Lcu0X8KEyMceP2ntpaHrDEVA==}
 
@@ -862,6 +868,8 @@ snapshots:
       '@oxlint/binding-win32-arm64-msvc': 1.81.0
       '@oxlint/binding-win32-ia32-msvc': 1.81.0
       '@oxlint/binding-win32-x64-msvc': 1.81.0
+
+  pako@3.0.1: {}
 
   picocolors@1.1.1: {}
 

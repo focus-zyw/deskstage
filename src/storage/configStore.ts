@@ -25,16 +25,27 @@ export interface CharactersConfig {
   B: CharPos
 }
 
-/** 角色语音(硅基流动 CosyVoice2):开关 + TTS key + 两角色各自音色 */
+/** 语音供应商:硅基流动 CosyVoice2(默认)/ MiniMax Speech 2.8 / 本地 CosyVoice(预留) */
+export const TTS_PROVIDERS = ['siliconflow', 'minimax', 'local'] as const
+export type TtsProviderId = (typeof TTS_PROVIDERS)[number]
+
+/** 语音合成用的模型档位(MiniMax):turbo 便宜流式 / hd 质量优先 */
+export type MiniMaxModel = 'speech-2.8-turbo' | 'speech-2.8-hd'
+
+/** 角色语音:开关 + 当前供应商 + 每供应商各自的角色音色分配(切换供应商互不影响) */
 export interface VoiceConfig {
   enabled: boolean
+  /** 当前语音供应商 */
+  provider: TtsProviderId
   /** 硅基流动 API key(与 LLM 的 key 相互独立) */
   apiKey: string
-  /** 音色名(如 bella,完整 voice = 模型名:音色名) */
-  A: string
-  B: string
-  /** 场外角色(客串)音色 */
-  C: string
+  /** MiniMax 独立凭据(key 与 GroupId 都必填) */
+  minimax: { apiKey: string; groupId: string; model: MiniMaxModel }
+  /** 每供应商的角色音色分配(A/B 主角,C = 场外客串);
+   *  旧配置的顶层 A/B/C 是硅基流动音色,清洗时迁移进 assignments.siliconflow */
+  assignments: Record<TtsProviderId, { A: string; B: string; C: string }>
+  /** 自然语言情感指令:把 deadpan/excited/slow 映射成语气描述(供应商自行表达) */
+  emotionHints: boolean
 }
 
 /** 使用者画像:手填的"角色认识你"信息(多值字段逗号/顿号/换行分隔) */
@@ -99,6 +110,10 @@ export interface AppConfig {
   proactivity: 'quiet' | 'balanced' | 'lively'
   /** 翻译面板:语言方向/风格/自动朗读(与演出模块完全隔离,不进对话与记忆) */
   translation: TranslationConfig
+  /** 提取文字:AI 视觉模型优先 + 本地 OCR 兜底 */
+  ocr: OcrConfig
+  /** 主播模式:直播弹幕互动 */
+  live: LiveConfig
 }
 
 /** 翻译面板配置 */
@@ -112,6 +127,25 @@ export interface TranslationConfig {
   autoSpeak: boolean
 }
 
+/** 提取文字的 AI 识别配置:视觉模型(OpenAI 兼容)优先,失败自动回退本地 Windows OCR。
+ *  与主 LLM 相互独立——主模型可能是纯文本(如 deepseek-chat),发图会直接报错。
+ *  默认指向智谱的免费视觉模型,只需在 bigmodel.cn 注册拿个 key */
+export interface OcrConfig {
+  /** API Key;空 = 未配置,直接走本地识别 */
+  apiKey: string
+  /** OpenAI 兼容端点根(不含 /chat/completions) */
+  baseUrl: string
+  /** 视觉模型名 */
+  model: string
+}
+
+/** 主播模式(直播弹幕互动):平台 + 直播间号。
+ *  roomId 留空 = 点"开播"时气泡引导去设置;platform v1 只有 bilibili 可用(douyin 为桩) */
+export interface LiveConfig {
+  platform: 'bilibili' | 'douyin'
+  roomId: string
+}
+
 // 默认值（首启写入）。想换端点：改 appData/data/config.json 后重启。
 // apiKey 默认空,在设置面板填写;勿将真实 key 提交进仓库
 export const DEFAULT_CONFIG: AppConfig = {
@@ -121,10 +155,16 @@ export const DEFAULT_CONFIG: AppConfig = {
   model: 'deepseek-chat',
   voice: {
     enabled: true,
+    provider: 'siliconflow',
     apiKey: '',
-    A: 'bella', // 女声·轻快 → 便利店店员
-    B: 'alex', // 男声·沉稳 → 程序员
-    C: 'david', // 场外客串(房东/快递员/老板等画外音)
+    minimax: { apiKey: '', groupId: '', model: 'speech-2.8-turbo' },
+    assignments: {
+      // 女声·轻快 → 便利店店员 / 男声·沉稳 → 程序员 / 场外客串(房东/快递员等画外音)
+      siliconflow: { A: 'bella', B: 'alex', C: 'david' },
+      minimax: { A: 'female-shaonv', B: 'male-qn-qingse', C: 'male-qn-jingying' },
+      local: { A: '', B: '', C: '' },
+    },
+    emotionHints: true,
   },
   autoReplayMin: 10,
   characters: {
@@ -149,6 +189,12 @@ export const DEFAULT_CONFIG: AppConfig = {
   dnd: false,
   proactivity: 'balanced',
   translation: { sourceLanguage: 'auto', targetLanguage: 'zh-CN', style: 'natural', autoSpeak: false },
+  ocr: {
+    apiKey: '',
+    baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+    model: 'glm-4.6v-flash',
+  },
+  live: { platform: 'bilibili', roomId: '' },
 }
 
 /** 清洗使用者画像:逐字段裁剪;likes 为空时回落旧 userInterests 字段(老配置平滑迁移) */
@@ -173,30 +219,61 @@ function sanitizeReplayMin(v: unknown): number {
   return Math.min(1440, n)
 }
 
-/** 清洗语音配置:开关缺省视为开(老配置平滑升级);音色不在当前音色表内(如
- *  Edge 时代的 zh-CN-* 旧值)自动回落默认,防止把非法音色发给 API 得 400 静默无声。
- *  TTS_VOICE_IDS 由 tts.ts 注入(避免 storage → engine 的反向依赖) */
-export let TTS_VOICE_IDS: Set<string> = new Set()
+/** 清洗语音配置:开关缺省视为开(老配置平滑升级);音色不在对应供应商的注册名单内
+ *  自动回落默认,防止把非法音色发给 API 得 400 静默无声。
+ *  各供应商的音色名单由 tts 模块注入(避免 storage → engine 的反向依赖);
+ *  硅基流动的克隆音色(speech: 开头)是账号侧资源,单独放行不参与名单校正 */
+const TTS_VOICE_IDS: Record<TtsProviderId, Set<string>> = {
+  siliconflow: new Set(),
+  minimax: new Set(),
+  local: new Set(),
+}
 
-export function registerVoiceIds(ids: string[]): void {
-  TTS_VOICE_IDS = new Set(ids)
+export function registerVoiceIds(provider: TtsProviderId, ids: string[]): void {
+  TTS_VOICE_IDS[provider] = new Set(ids)
 }
 
 function sanitizeVoice(v: unknown): VoiceConfig {
   const d = DEFAULT_CONFIG.voice
   const o = (v ?? {}) as Record<string, unknown>
-  const name = (x: unknown, fb: string): string => {
+  const nameOf = (provider: TtsProviderId, x: unknown, fb: string): string => {
     const s = typeof x === 'string' ? x.trim().slice(0, 200) : ''
     // 克隆音色(speech: 开头,账号侧资源)直接放行;内置音色须在注册名单内
-    if (s.startsWith('speech:')) return s
-    return TTS_VOICE_IDS.size === 0 || TTS_VOICE_IDS.has(s) ? s || fb : fb
+    if (provider === 'siliconflow' && s.startsWith('speech:')) return s
+    const allowed = TTS_VOICE_IDS[provider]
+    return allowed.size === 0 || allowed.has(s) ? s || fb : fb
   }
+  // 旧配置迁移:顶层 A/B/C 就是硅基流动音色;新配置 assignments 优先
+  const rawAssign = (o.assignments ?? {}) as Record<string, unknown>
+  const slot3 = (provider: TtsProviderId, src: unknown): { A: string; B: string; C: string } => {
+    const s = (src ?? {}) as Record<string, unknown>
+    const dd = d.assignments[provider]
+    return {
+      A: nameOf(provider, s.A, dd.A),
+      B: nameOf(provider, s.B, dd.B),
+      C: nameOf(provider, s.C, dd.C),
+    }
+  }
+  const mm = (o.minimax ?? {}) as Record<string, unknown>
+  const str = (x: unknown, cap: number): string =>
+    typeof x === 'string' ? x.trim().slice(0, cap) : ''
   return {
     enabled: o.enabled !== false,
+    provider: (TTS_PROVIDERS as readonly string[]).includes(String(o.provider))
+      ? (o.provider as TtsProviderId)
+      : d.provider,
     apiKey: typeof o.apiKey === 'string' ? o.apiKey.slice(0, 200) : d.apiKey,
-    A: name(o.A, d.A),
-    B: name(o.B, d.B),
-    C: name(o.C, d.C),
+    minimax: {
+      apiKey: str(mm.apiKey, 200),
+      groupId: str(mm.groupId, 64),
+      model: mm.model === 'speech-2.8-hd' ? 'speech-2.8-hd' : 'speech-2.8-turbo',
+    },
+    assignments: {
+      siliconflow: slot3('siliconflow', rawAssign.siliconflow ?? ('A' in o ? o : undefined)),
+      minimax: slot3('minimax', rawAssign.minimax),
+      local: slot3('local', rawAssign.local),
+    },
+    emotionHints: o.emotionHints !== false,
   }
 }
 
@@ -343,6 +420,27 @@ function sanitizeConfig(obj: unknown): AppConfig {
             ? t.style
             : DEFAULT_CONFIG.translation.style,
         autoSpeak: t.autoSpeak === true,
+      }
+    })(),
+    ocr: ((): OcrConfig => {
+      const d = DEFAULT_CONFIG.ocr
+      const c = (o.ocr ?? {}) as Record<string, unknown>
+      const str = (x: unknown, cap: number): string =>
+        typeof x === 'string' ? x.trim().slice(0, cap) : ''
+      // key 留空 = 关闭 AI 识别;地址/模型清空则回默认,防止拼出打不通的端点
+      return {
+        apiKey: str(c.apiKey, 200),
+        baseUrl: str(c.baseUrl, 200) || d.baseUrl,
+        model: str(c.model, 100) || d.model,
+      }
+    })(),
+    live: ((): LiveConfig => {
+      const c = (o.live ?? {}) as Record<string, unknown>
+      // platform 只认白名单值(抖音为桩,v1 恒回 bilibili);roomId 纯数字校验
+      const roomId = typeof c.roomId === 'string' ? c.roomId.trim().slice(0, 32) : ''
+      return {
+        platform: c.platform === 'douyin' ? 'douyin' : 'bilibili',
+        roomId: /^\d*$/.test(roomId) ? roomId : '',
       }
     })(),
   }

@@ -81,7 +81,8 @@ pub fn run() {
       webchat::webchat_edge_launch,
       webchat::webchat_edge_kill,
       webchat::webchat_main_visible,
-      ocr::ocr_clipboard
+      ocr::ocr_clipboard,
+      ocr::clipboard_image_base64
     ])
     .setup(|app| {
       if cfg!(debug_assertions) {

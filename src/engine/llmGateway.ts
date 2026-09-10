@@ -4,13 +4,23 @@
 import { fetch as rustFetch } from '@tauri-apps/plugin-http'
 import { getConfig, inTauri } from '../storage/configStore'
 
+/** 多模态消息内容:纯文本,或 文本+图片 混排(OpenAI 兼容视觉格式,智谱/通义等一致) */
+export type GatewayContent =
+  | string
+  | Array<{ type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } }>
+
 export interface GatewayMessage {
   role: string
-  content: string
+  content: GatewayContent
 }
 
 export interface CompletionOptions {
   messages: GatewayMessage[]
+  /** 模型覆盖(如 OCR 用免费的视觉模型);缺省 = 配置的主模型 */
+  model?: string
+  /** 端点与密钥覆盖:OCR 等辅助能力和主 LLM 用不同厂商时使用;缺省 = 主配置 */
+  baseUrl?: string
+  apiKey?: string
   temperature?: number
   maxTokens?: number
   /** true = 请求 response_format json_object;端点不支持时调用方自行降级重试 */
@@ -52,21 +62,24 @@ export async function complete(options: CompletionOptions): Promise<string> {
   signal?.addEventListener('abort', onAbort, { once: true })
   try {
     const cfg = await getConfig()
-    const res = await fetchLlm(`${cfg.baseUrl}/chat/completions`, {
+    const baseUrl = options.baseUrl?.trim() || cfg.baseUrl
+    const apiKey = options.apiKey?.trim() || cfg.apiKey
+    const model = options.model?.trim() || cfg.model
+    const res = await fetchLlm(`${baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${cfg.apiKey}`,
+        Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: cfg.model,
+        model,
         messages,
         temperature,
         max_tokens: maxTokens,
         ...(jsonMode ? { response_format: { type: 'json_object' } } : {}),
         // 火山方舟 doubao-seed 系默认深度思考,工具型调用用不上还拖慢数倍,显式关掉。
         // 该参数仅 ark 认识,按 baseUrl+模型前缀收紧,避免污染其他厂商
-        ...(cfg.baseUrl.includes('volces.com') && cfg.model.startsWith('doubao-seed')
+        ...(baseUrl.includes('volces.com') && model.startsWith('doubao-seed')
           ? { thinking: { type: 'disabled' } }
           : {}),
       }),

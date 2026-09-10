@@ -301,6 +301,75 @@ export async function generateUserChatReply(who: 'A' | 'B', userText: string): P
   }
 }
 
+// ---------- 主播模式:弹幕 → 单句回复的 AI 决策 ----------
+
+export interface LiveDanmakuBrief {
+  username: string
+  content: string
+}
+
+export interface LivePetAction {
+  /** 被选中的弹幕下标(调用方批次内);-1 = 全部不回 */
+  pick: number
+  reply: string
+  speaker: 'A' | 'B'
+  action: string
+}
+
+/**
+ * 弹幕回复决策:攒批弹幕一次调用,挑一条最值得回的,由甲或乙回一句。
+ * 与 generateDialog 的两遍标注剧本不同,这里是轻量单次调用(10s 超时,弹幕过期不等人);
+ * JSON 解析失败/字段不合规抛错,调用方按"这批不回"静默处理。
+ */
+export async function generateLiveReply(
+  batch: LiveDanmakuBrief[],
+  recentReplies: string[],
+  signal?: AbortSignal,
+): Promise<LivePetAction> {
+  const cfg = await getConfig()
+  const mem = await getMemory()
+  const p: UserProfile = cfg.userProfile
+  const bits: string[] = []
+  if (p.userName) bits.push(`主播称呼"${p.userName}"`)
+  if (p.occupation) bits.push(`身份:${p.occupation}`)
+  if (p.likes) bits.push(`喜欢:${p.likes}`)
+  if (p.dislikes) bits.push(`不喜欢:${p.dislikes}`)
+  if (p.banTopics) bits.push(`绝对不要聊:${p.banTopics}`)
+  const facts = topFacts(mem, 3)
+  if (facts.length) bits.push(`记住的观众的事:${facts.join(';')}`)
+
+  const danmakuList = batch.map((d, i) => `${i}. ${d.username}:${d.content}`).join('\n')
+  const messages: { role: string; content: string }[] = [
+    {
+      role: 'system',
+      content: `桌面双人情景剧正在"直播读弹幕"。两位角色:${duoShortPersona()}。${p.userName ? `主播(用户)叫"${p.userName}",角色偶尔可以提到TA。` : ''}下面是最新一批直播间弹幕。挑一条最值得回的(优先问角色的、有趣的、能接梗的;刷屏/无意义/人身攻击的直接不回),由甲或乙用各自口吻回一句。要求:15~40字,口语化像真说话,可以怼可以捧,延续搭档互怼感;不要复读弹幕原文。
+${p.banTopics ? `雷区(绝对不聊):${p.banTopics}。` : ''}
+只输出一个 JSON 对象:{"pick":<弹幕序号>,"reply":"<回复,不回则空串>","speaker":"A"或"B","action":"<动作词>"}
+action 只能是这些词之一:${[...VALID_ACTIONS].join('|')}。${bits.length ? `\n关于观众:${bits.join(';')}。` : ''}${recentReplies.length ? `\n最近已说过(不要重复,保持话题推进):${recentReplies.join(' / ')}` : ''}`,
+    },
+    { role: 'user', content: danmakuList },
+  ]
+  const raw = await complete({
+    messages,
+    temperature: 0.9,
+    maxTokens: 400,
+    jsonMode: true,
+    timeoutMs: 10_000,
+    signal,
+  })
+  const m = raw.match(/\{[\s\S]*\}/)
+  if (!m) throw new Error('弹幕决策未返回 JSON')
+  const obj = JSON.parse(m[0]) as Record<string, unknown>
+  const reply = typeof obj.reply === 'string' ? obj.reply.trim().slice(0, 60) : ''
+  const pick = Number(obj.pick)
+  const speaker = obj.speaker === 'B' ? 'B' : 'A'
+  const action = typeof obj.action === 'string' && VALID_ACTIONS.has(obj.action) ? obj.action : 'talk'
+  // 不回:模型明确给空回复;下标越界时保留回复但标记为无目标(上游不记弹幕历史)
+  if (!reply) return { pick: -1, reply: '', speaker, action }
+  const validPick = Number.isInteger(pick) && pick >= 0 && pick < batch.length ? pick : -1
+  return { pick: validPick, reply, speaker, action }
+}
+
 /**
  * 记忆提取:从观众的一句话里挖"关于观众本人的长期事实",与已知事实去重后由调用方入库。
  * 6s 超时、不重试;失败抛错由调用方静默。

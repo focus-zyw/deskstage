@@ -154,7 +154,7 @@ export function ControlBar({
         ref={btnGen}
         className={`ctrl-btn icon${hovered === 'gen' ? ' hot' : ''}${busy ? ' loading' : ''}`}
         disabled={busy}
-        title="生成"
+        title={mode === 'live' ? '开播(直播弹幕互动)' : '生成'}
         onClick={onGenerate}
       >
         <PlayIcon />

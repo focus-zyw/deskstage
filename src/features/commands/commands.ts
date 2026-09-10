@@ -14,7 +14,7 @@ export interface Command {
 export type NlRoute =
   | { kind: 'command'; command: Command }
   | { kind: 'memo'; text: string; due: Date | null }
-  | { kind: 'perform'; mode: 'daily' | 'crosstalk'; topic?: string }
+  | { kind: 'perform'; mode: 'daily' | 'crosstalk' | 'live'; topic?: string }
   | { kind: 'none' }
 
 /** 命令搜索:字面包含即命中(空串返回全量) */
@@ -36,7 +36,8 @@ export async function nlRoute(input: string, commands: Command[]): Promise<NlRou
     return { kind: 'memo', text: extractMemoText(q) || q, due: parseChineseTime(q) }
   }
 
-  // 2) 演出类:"来一段关于加班的相声"
+  // 2) 演出类:"来一段关于加班的相声";主播模式单独认"开播/读弹幕"
+  if (/开(个)?直播|开播|读弹幕|弹幕互动/.test(q)) return { kind: 'perform', mode: 'live' }
   const perform = q.match(/(?:来|说|演|放|讲)?一?段(.{0,12}?)(相声|日常|段子|闲聊)/)
   if (perform) {
     const mode = perform[2] === '日常' || perform[2] === '闲聊' ? 'daily' : 'crosstalk'
