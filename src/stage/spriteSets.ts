@@ -20,20 +20,23 @@ export interface SpriteSet {
 // 有独立贴图的六个表情;shake/jump 不出图,复用 idle 图 + CSS 位移动画
 export const ART_ACTIONS = ['idle', 'talk', 'happy', 'angry', 'sad', 'surprise'] as const
 
+// 工具任务专用姿势:由 OCR/翻译/提醒等本地流程触发,不加入 LLM 对话动作词表
+export const UTILITY_ACTIONS = ['reading', 'present'] as const
+
 export const SPRITE_SETS: Record<'A' | 'B', SpriteSet> = {
   A: {
     dir: 'sprites/a',
     name: '甲',
     accent: '#3d8bd4', // 便利店店员:蓝黄制服主色
     height: 320,
-    actions: [...ART_ACTIONS, 'laugh', 'shy', 'sleepy', 'wave', 'thinking', 'jump'],
+    actions: [...ART_ACTIONS, ...UTILITY_ACTIONS, 'laugh', 'shy', 'sleepy', 'wave', 'thinking', 'jump'],
   },
   B: {
     dir: 'sprites/b',
     name: '乙',
     accent: '#5a6472', // 程序员:深灰蓝主色
     height: 320,
-    actions: [...ART_ACTIONS, 'shy', 'laugh', 'sleepy', 'wave', 'thinking', 'jump'],
+    actions: [...ART_ACTIONS, ...UTILITY_ACTIONS, 'shy', 'laugh', 'sleepy', 'wave', 'thinking', 'jump'],
   },
 }
 
