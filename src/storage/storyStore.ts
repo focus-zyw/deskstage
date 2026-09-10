@@ -14,12 +14,16 @@ export interface StoryGag {
   text: string
   lastSeen: number
   hits: number
+  /** 最近一次被放进创作提示词的时间；用于冷却轮换，0 = 从未注入 */
+  lastInjectedAt: number
 }
 
 export interface StoryThread {
   id: string
   text: string
   lastSeen: number
+  /** 最近一次被放进创作提示词的时间；用于冷却轮换，0 = 从未注入 */
+  lastInjectedAt: number
 }
 
 export interface StoryArc {
@@ -89,6 +93,7 @@ function sanitizeGag(v: unknown): StoryGag | null {
     text,
     lastSeen: Number(o.lastSeen) || now,
     hits: Math.max(0, Number(o.hits) || 0),
+    lastInjectedAt: Math.max(0, Number(o.lastInjectedAt) || 0),
   }
 }
 
@@ -101,6 +106,7 @@ function sanitizeThread(v: unknown): StoryThread | null {
     id: typeof o.id === 'string' && o.id ? o.id.slice(0, 40) : newId('t'),
     text,
     lastSeen: Number(o.lastSeen) || now,
+    lastInjectedAt: Math.max(0, Number(o.lastInjectedAt) || 0),
   }
 }
 
@@ -264,7 +270,7 @@ export async function mergeStory(result: DistilledStory): Promise<void> {
         existing.lastSeen = now
         existing.hits += 1
       } else {
-        story.gags.push({ id: newId('g'), text, lastSeen: now, hits: 0 })
+        story.gags.push({ id: newId('g'), text, lastSeen: now, hits: 0, lastInjectedAt: 0 })
       }
     }
     for (const raw of result.newThreads) {
@@ -274,7 +280,7 @@ export async function mergeStory(result: DistilledStory): Promise<void> {
       if (existing) {
         existing.lastSeen = now
       } else {
-        story.threads.push({ id: newId('t'), text, lastSeen: now })
+        story.threads.push({ id: newId('t'), text, lastSeen: now, lastInjectedAt: 0 })
       }
     }
     if (story.gags.length > MAX_GAGS) {
@@ -319,13 +325,98 @@ export function pickArcBeat(
   return { id: arc.id, title: arc.title, hook: arc.nextHook, stage: arc.stage }
 }
 
-/** 注入用:老梗按热度、事件线按新近度取前 n 条文本(空数组 = 没有素材) */
-export async function storyContext(maxEach = 2): Promise<{ gags: string[]; threads: string[] }> {
-  const inv = await storyInventory(maxEach)
-  return {
-    gags: inv.gags.map((g) => g.text),
-    threads: inv.threads.map((t) => t.text),
+const GENERIC_TOPIC_TERMS = new Set([
+  '一个', '一下', '已经', '还是', '不是', '这个', '那个', '怎么', '什么', '为什', '到底',
+  '可以', '继续', '当前', '本集', '剧情', '下一', '一拍', '观众', '使用', '相关', '事情',
+  '进行', '发现', '结果', '最后', '两人', '时候', '现场', '视角',
+])
+
+/** 中文没有空格，按 2~4 字片段提取保守关键词；宁可少注入，也不把无关老梗硬塞进新主题。 */
+function topicTerms(text: string): Set<string> {
+  const out = new Set<string>()
+  const chunks = text.toLowerCase().match(/[\p{Script=Han}]{2,}|[a-z\d]{2,}/gu) ?? []
+  for (const chunk of chunks) {
+    if (/^[a-z\d]+$/.test(chunk)) {
+      out.add(chunk)
+      continue
+    }
+    for (const width of [2, 3, 4]) {
+      for (let i = 0; i <= chunk.length - width; i++) {
+        const term = chunk.slice(i, i + width)
+        if (!GENERIC_TOPIC_TERMS.has(term)) out.add(term)
+      }
+    }
   }
+  return out
+}
+
+function isTopicRelated(text: string, topicTermsSet: Set<string>): boolean {
+  if (topicTermsSet.size === 0) return false
+  for (const term of topicTerms(text)) {
+    if (topicTermsSet.has(term)) return true
+  }
+  return false
+}
+
+export interface StoryContextSelection {
+  gags: StoryGag[]
+  threads: StoryThread[]
+}
+
+/**
+ * 从完整角色世界里挑本轮可注入素材：先按当前主题过滤，再按“最久没注入”轮换。
+ * hits 只作低频优先的次级条件，避免越复用越霸榜的正反馈循环。
+ */
+export function selectStoryItems(
+  story: StoryData,
+  topic: string,
+  maxEach = 2,
+): StoryContextSelection {
+  const terms = topicTerms(topic)
+  const byCooldown = <T extends { lastInjectedAt: number; lastSeen: number; hits?: number }>(
+    a: T,
+    b: T,
+  ): number =>
+    a.lastInjectedAt - b.lastInjectedAt ||
+    (a.hits ?? 0) - (b.hits ?? 0) ||
+    b.lastSeen - a.lastSeen
+  return {
+    gags: story.gags
+      .filter((item) => isTopicRelated(item.text, terms))
+      .sort(byCooldown)
+      .slice(0, maxEach),
+    threads: story.threads
+      .filter((item) => isTopicRelated(item.text, terms))
+      .sort(byCooldown)
+      .slice(0, maxEach),
+  }
+}
+
+/** 注入用：只取与本轮主题相关且已冷却的素材，并持久化本次注入时间用于下轮换位。 */
+export async function storyContext(
+  topic: string,
+  maxEach = 2,
+): Promise<{ gags: string[]; threads: string[] }> {
+  return withFileLock('story', async () => {
+    const story = await getStory()
+    const selected = selectStoryItems(story, topic, maxEach)
+    const selectedGags = new Set(selected.gags.map((item) => item.id))
+    const selectedThreads = new Set(selected.threads.map((item) => item.id))
+    if (selectedGags.size > 0 || selectedThreads.size > 0) {
+      const now = Date.now()
+      for (const item of story.gags) {
+        if (selectedGags.has(item.id)) item.lastInjectedAt = now
+      }
+      for (const item of story.threads) {
+        if (selectedThreads.has(item.id)) item.lastInjectedAt = now
+      }
+      await persist(story)
+    }
+    return {
+      gags: selected.gags.map((item) => item.text),
+      threads: selected.threads.map((item) => item.text),
+    }
+  })
 }
 
 /** 读长期关系:按距上次更新的自然日数做缓慢衰减(每天 trust 向 0 回 0.5、rivalry 降 0.5),

@@ -87,6 +87,8 @@ export async function generateDialog(
   topicFixed?: boolean,
   /** 连续剧情节拍(可选):本集演剧情线的一拍,prompt 话题让位 */
   arc?: { title: string; hook: string; stage: number },
+  /** 只有显式续聊时才带上一段原始台词；普通新主题与连续剧情都靠各自结构化上下文 */
+  continueFromPrevious = false,
 ): Promise<PerformanceScript> {
   const cfg = await getConfig()
   const mem = await getMemory()
@@ -102,8 +104,8 @@ export async function generateDialog(
   const userCtx: UserContext = {
     profile: cfg.userProfile,
     taste: await tasteSummary(3) || undefined,
-    // 50% 概率注入角色世界:老梗高频复读比没有更糟
-    story: Math.random() < 0.5 ? await storyContext(2) : undefined,
+    // 50% 概率注入与本轮主题相关、且已按冷却时间轮换的角色世界素材
+    story: Math.random() < 0.5 ? await storyContext(topic, 2) : undefined,
     facts: topFacts(mem, 8),
   }
   // 本集临时关系:随机局势决定攻守姿态,场景卡据此构建(重试沿用同一关系,保持一致)
@@ -120,7 +122,7 @@ export async function generateDialog(
         : bond.rivalry >= 3
           ? '两人近期摩擦变多,互相较劲谁也不服谁'
           : undefined
-  const messages = buildMessages(mode, topic, recentLines, topicFixed, cfg.userInterests, userCtx, relationship, interactionRecap, allowChoice, lastChoice ?? undefined, arc, envNote, guest, bondNote)
+  const messages = buildMessages(mode, topic, recentLines, topicFixed, cfg.userInterests, userCtx, relationship, interactionRecap, allowChoice, lastChoice ?? undefined, arc, envNote, guest, bondNote, continueFromPrevious)
   // 网页版生成(设置里开启):主演出改经隐藏网页窗口由网页模型生成。
   // 网页端没有 json_mode/temperature,格式服从度靠协议本身(手动验证 6/6 通过,
   // 见 docs/webchat-prompt-test.md)。生成慢(几十秒级),点播与预生成都有耐心等;

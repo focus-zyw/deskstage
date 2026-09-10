@@ -42,14 +42,14 @@ export function renderAudienceContext(ctx: UserContext): string {
 /** 角色世界:两人之间的老梗/未了结事件。这是笑点 callback 的唯一合法来源 */
 export function renderStoryContext(story?: UserContext['story']): string {
   const parts: string[] = []
-  if (story?.gags.length) parts.push(`可回收的老梗(最多自然回收 1 个,别强行):${story.gags.join(';')}。`)
-  if (story?.threads.length) parts.push(`未了结的事件(适合在包袱里了结):${story.threads.join(';')}。`)
+  if (story?.gags.length) parts.push(`与本段话题相关的老梗:${story.gags.join(';')}。最多自然回收 1 个;接不上就不用,不得为了 callback 扭曲本段话题。`)
+  if (story?.threads.length) parts.push(`与本段话题相关的未了结事件(适合时再了结):${story.threads.join(';')}。`)
   if (!parts.length) return ''
   parts.push('笑点素材只能来自本集场景卡和角色世界;观众的私人信息不是包袱。')
   return `\n\n角色世界（两人的共同经历）：${parts.join(' ')}`
 }
 
-/** 组装 prompt：人设 + 使用者画像 + 输出协议 + 模式指令 + 上段结尾衔接 + 话题。
+/** 组装 prompt：人设 + 使用者画像 + 输出协议 + 模式指令 + 可选续聊上下文 + 话题。
  *  人设/协议是所有模式共享的"父类公共代码"，模式差异来自 DialogMode.prompt。
  *  topicFixed = 用户手动锁定的主题:措辞升级为硬约束,防跑题。
  *  relationship = 本集临时关系(可选):决定双方攻守姿态,写进场景卡
@@ -74,6 +74,8 @@ export function buildMessages(
   guest?: string,
   /** 长期关系底色(可选):信任/摩擦的当前状态描述 */
   bondNote?: string,
+  /** 只有显式“续聊”才携带上一段原始台词；新主题默认 false，避免内容串味 */
+  continueFromPrevious = false,
 ): ChatMessage[] {
   const persona = fullPersona()
 
@@ -149,7 +151,7 @@ export function buildMessages(
 `
     : ''
 
-  const history = recentLines.length
+  const history = continueFromPrevious && recentLines.length
     ? `上一段的结尾（新的一段要自然衔接，不要重复内容）：\n${recentLines
         .slice(-4)
         .map((l) => `${l.speaker === 'A' ? nameOf('A') : nameOf('B')}：${l.text}`)

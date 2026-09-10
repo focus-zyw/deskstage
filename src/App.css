@@ -397,6 +397,9 @@
   gap: 6px;
   margin-top: 4px;
 }
+.choice-opts .panel-btn {
+  width: 100%;
+}
 
 /* 远距离互相喊话:加大加粗 */
 .bubble.loud {

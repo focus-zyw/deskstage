@@ -36,13 +36,15 @@ import { prefetchNext } from './engine/dialogPrefetch'
 import { WEBCHAT_SITES, webchatLogin, webchatProbe, webchatRestoreMain } from './engine/webchat'
 import { TOPIC_SEEDS, pickTopic } from './engine/topicSeeds'
 import { bumpTopicSeen, bumpTopicFavored, bumpTopicReplays, bumpTopicWatched, bumpTopicSkipped, bumpMode, bumpPoke, getTopicWeights, getMemory, clearMemory, deleteFact, togglePinFact, topFacts, mergeFacts, type MemoryFact } from './storage/memoryStore'
-import { getStory, mergeStory, removeArc, removeStoryItem, pickArcBeat, storyInventory, type StoryData } from './storage/storyStore'
+import { getStory, mergeStory, removeArc, removeStoryItem, storyInventory, type StoryData } from './storage/storyStore'
 import { getDueMemos, getMemos, addMemo, updateMemo, removeMemo, type Memo } from './storage/memoStore'
 import { VENDORS, CUSTOM_VENDOR_ID, vendorIdOfBaseUrl } from './engine/vendors'
-import { takePrefetch } from './storage/prefetchStore'
+import { listPrefetchedArcIds, takePrefetch } from './storage/prefetchStore'
+import { reserveArcBeat } from './engine/arcReservation'
 import { appendHistory, loadRecentHistory, listEpisodes, deleteEpisodes, toggleFavorite, type Episode } from './storage/historyStore'
 import { TranslationPanel, type TranslationInject } from './translation/TranslationPanel'
 import { CommandPanel } from './ui/CommandPanel'
+import { ChoicePanel } from './ui/ChoicePanel'
 import type { Command } from './features/commands/commands'
 import {
   useRuntime,
@@ -563,6 +565,7 @@ function App() {
   const topicPanelRef = useRef<HTMLDivElement>(null)
   const chatBoxRef = useRef<HTMLDivElement>(null)
   const cmdPanelRef = useRef<HTMLDivElement>(null)
+  const choicePanelRef = useRef<HTMLDivElement>(null)
   const timers = useRef<Record<Speaker, number>>({ A: 0, B: 0, C: 0 })
 
   // 演出播放器：LLM 生成的 DialogLine[] 与硬编码脚本走同一条路
@@ -868,6 +871,15 @@ function App() {
     })
   }, [toolsOpen])
 
+  // 抉择面板出现期间整体可命中；透明穿透窗口否则只能看见、点不到按钮。
+  useEffect(() => {
+    if (!choice) return
+    return registerHitRegion('choice-panel', {
+      getRect: () =>
+        choicePanelRef.current?.getBoundingClientRect() ?? new DOMRect(0, 0, 0, 0),
+    })
+  }, [choice])
+
   // 任一面板打开时注册全屏兜底热区:穿透窗口里面板外的屏幕点击也能送达 DOM,
   // "点外部收起"才生效。注册顺序在最后 → hitTest 先命中面板/工具栏/角色等小热区,
   // 只有落在它们之外的光标才会命中 outside
@@ -1070,40 +1082,59 @@ function App() {
     setBubble({ A: null, B: null, C: null })
     setAction({ A: 'idle', B: 'idle', C: 'idle' })
 
-    // 主题:一次性话题(参数) > 手动锁定 > 按模式概率聊使用者画像/兴趣 > 话题池随机(雷区过滤+偏好加权)
+    // 主题:一次性话题(参数) > 手动锁定 > 连续剧情 > 使用者兴趣 > 话题池随机。
+    // 先消费预生成再选新题，避免抽到一条剧情拍后却因缓存命中而白占用。
     const fixedTopic = topicArg ?? topicOverride
     const interests = form.userProfile.likes
       .split(/[,，、;；\n]/)
       .map((x) => x.trim())
       .filter(Boolean)
-    // 约 30% 概率演出连续剧情的一拍(手动锁定主题时让位)
-    const arcBeat = fixedTopic ? null : pickArcBeat((await getStory()).arcs)
-    const actualTopic = arcBeat
-      ? `连续剧情《${arcBeat.title}》:${arcBeat.hook}`
-      : fixedTopic ??
-      (interests.length > 0 && Math.random() < (modeOf(m).interestTopicChance ?? 0)
-        ? `使用者感兴趣的事:${interests[Math.floor(Math.random() * interests.length)]}`
-        : pickTopic(modeOf(m), {
-            ban: form.userProfile.banTopics,
-            weights: await getTopicWeights(),
-          }))
     bumpMode(m)
 
     // 预生成命中:有主题时只取同主题条目,无主题时 FIFO 任意条目
     const hit = await takePrefetch(m, fixedTopic ?? undefined)
     if (hit) {
+      const hitScript = hit.script
       if (!hit.topic.startsWith('连续剧情')) {
         bumpTopicSeen(hit.topic) // 口味记账对齐实际播出的主题(命中缓冲时≠本次抽中的主题)
       }
-      nowPlaying.current = { topic: hit.topic, lines: hit.lines, total: hit.lines.length, index: -1, source: 'gen' }
-      lastLines.current = hit.lines
-      void appendHistory(hit.lines, hit.mode, hit.topic) // 使用后移入 history(fire-and-forget)
+      nowPlaying.current = { topic: hit.topic, lines: hitScript.before, total: hitScript.before.length, index: -1, source: 'gen' }
+      lastLines.current = hitScript.before
+      pendingEpisode.current = {
+        before: hitScript.before,
+        after: hitScript.after,
+        mode: m,
+        topic: hit.topic,
+      }
+      void appendHistory(hitScript.before, hit.mode, hit.topic) // 使用后移入 history(fire-and-forget)
       beginPerforming()
-      playingLines.current = hit.lines
-      player.current!.play(withFinalePause(hit.lines), { gap: modeOf(hit.mode).gap })
-      void prefetchNext(m, hit.lines, fixedTopic ?? undefined) // 补货下一轮(静默)
+      playingLines.current = hitScript.before
+      player.current!.play(withFinalePause(hitScript.before), {
+        gap: modeOf(hit.mode).gap,
+        choice: hitScript.choice,
+        after: Object.fromEntries(
+          Object.entries(hitScript.after).map(([id, seg]) => [id, withFinalePause(seg)]),
+        ),
+      })
+      // 当前剧情拍在完播蒸馏前仍占用，补货时不能再次生成同一拍。
+      void prefetchNext(m, hitScript.before, fixedTopic ?? undefined, hit.arc ? [hit.arc.id] : [])
       return
     }
+
+    // 约 30% 概率演出连续剧情的一拍；生成中与其他模式缓存里的剧情 ID 都视为占用。
+    const arcReservation = fixedTopic
+      ? null
+      : reserveArcBeat((await getStory()).arcs, new Set(await listPrefetchedArcIds()))
+    const arcBeat = arcReservation?.beat ?? null
+    const actualTopic = arcBeat
+      ? `连续剧情《${arcBeat.title}》:${arcBeat.hook}`
+      : fixedTopic ??
+        (interests.length > 0 && Math.random() < (modeOf(m).interestTopicChance ?? 0)
+          ? `使用者感兴趣的事:${interests[Math.floor(Math.random() * interests.length)]}`
+          : pickTopic(modeOf(m), {
+              ban: form.userProfile.banTopics,
+              weights: await getTopicWeights(),
+            }))
 
     // 未命中：生成当前轮(等待期两人进入思考姿势)
     setAction({ A: 'thinking', B: 'thinking', C: 'thinking' })
@@ -1128,7 +1159,12 @@ function App() {
           Object.entries(script.after).map(([id, seg]) => [id, withFinalePause(seg)]),
         ),
       })
-      void prefetchNext(m, script.before, fixedTopic ?? undefined) // 请求生成两轮：当前轮 + 后台预生成
+      void prefetchNext(
+        m,
+        script.before,
+        fixedTopic ?? undefined,
+        arcBeat ? [arcBeat.id] : [],
+      ) // 请求生成两轮：当前轮 + 后台预生成
     } catch (e) {
       if (ctrl.signal.aborted) return
       console.error('LLM 生成失败，回退硬编码脚本', e)
@@ -1145,6 +1181,8 @@ function App() {
         playingLines.current = MODES[m].script
         player.current!.play(MODES[m].script, { gap: MODES[m].gap })
       }, 1800)
+    } finally {
+      arcReservation?.release()
     }
   }
 
@@ -2821,6 +2859,16 @@ function App() {
               </button>
             </div>
           </div>
+        )}
+
+        {choice && (
+          <ChoicePanel
+            innerRef={choicePanelRef}
+            choice={choice}
+            left={`${Math.min(88, Math.max(12, ctrlBar.xPct))}%`}
+            top={Math.min(window.innerHeight - 180, Math.max(12, ctrlBar.top + 46))}
+            onPick={pickOption}
+          />
         )}
 
         {bubble.C && (
