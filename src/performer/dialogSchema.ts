@@ -53,6 +53,14 @@ export interface ChoicePoint {
   options: ChoiceOption[]
 }
 
+/** 预生成暂缓的上下文采纳:prompt 已消费这些素材,但注入冷却/recap 消费等持久副作用
+ *  等真正开播时由播放侧调 adoptDeferredContext 一次性提交(预生成零副作用) */
+export interface ContextAdoption {
+  gagIds: string[]
+  threadIds: string[]
+  hasRecap: boolean
+}
+
 /** 完整演出脚本:choice 前的台词、抉择点、按分支分组的后续台词;
  *  card 为本集场景卡(剧本的正式组成部分,随集历史落盘) */
 export interface PerformanceScript {
@@ -60,6 +68,8 @@ export interface PerformanceScript {
   card?: SceneCard
   choice?: ChoicePoint
   after: Record<string, DialogLine[]>
+  /** 仅预生成(deferContextAdoption)时携带 */
+  adoption?: ContextAdoption
 }
 
 export interface SceneCard {

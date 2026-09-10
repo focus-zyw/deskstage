@@ -6,13 +6,15 @@ import { mergeMessages, webchatAsk } from './webchat'
 import { getMemory, topFacts, tasteSummary, type FactCategory } from '../storage/memoryStore'
 import {
   storyContext,
+  previewStoryContext,
+  commitStoryInjection,
   getBond,
   type StoryAssertion,
   type StoryCandidate,
   type DistilledStory,
   type StoryInventory,
 } from '../storage/storyStore'
-import { takeRecap } from '../storage/interactionStore'
+import { peekRecap, takeRecap } from '../storage/interactionStore'
 import { pickRelationship } from '../performer/modes/relationships'
 import { currentTimeSlot } from './timeAware'
 import { duoShortPersona, nameOf, soloShortPersona } from './persona'
@@ -23,6 +25,7 @@ import {
   sanitizeDelivery,
   validatePerformanceScript,
   VALID_ACTIONS,
+  type ContextAdoption,
   type DialogLine,
   type PerformanceScript,
 } from '../performer/dialogSchema'
@@ -97,6 +100,9 @@ export async function generateDialog(
   arc?: { title: string; hook: string; stage: number },
   /** 只有显式续聊时才带上一段原始台词；普通新主题与连续剧情都靠各自结构化上下文 */
   continueFromPrevious = false,
+  /** 预生成模式:上下文只预览不消费——注入冷却/recap 消费挂到 script.adoption,
+   *  真正开播时由播放侧调 adoptDeferredContext 一次性提交(预生成零副作用) */
+  opts: { deferContextAdoption?: boolean } = {},
 ): Promise<PerformanceScript> {
   const cfg = await getConfig()
   const mem = await getMemory()
@@ -112,13 +118,26 @@ export async function generateDialog(
   const userCtx: UserContext = {
     profile: cfg.userProfile,
     taste: await tasteSummary(3) || undefined,
-    // 50% 概率注入与本轮主题相关、且已按冷却时间轮换的角色世界素材
-    story: Math.random() < 0.5 ? await storyContext(topic, 2) : undefined,
     facts: topFacts(mem, 8),
+  }
+  // 50% 概率注入与本轮主题相关、且已按冷却时间轮换的角色世界素材;
+  // 预生成模式只预览不消费,冷却与 recap 的持久副作用推迟到开播采纳
+  const injectStory = Math.random() < 0.5
+  let adoption: ContextAdoption | null = null
+  let interactionRecap: string | undefined
+  if (opts.deferContextAdoption) {
+    const preview = injectStory
+      ? await previewStoryContext(topic, 2)
+      : { gags: [] as string[], threads: [] as string[], gagIds: [] as string[], threadIds: [] as string[] }
+    userCtx.story = injectStory ? { gags: preview.gags, threads: preview.threads } : undefined
+    interactionRecap = (await peekRecap()) ?? undefined
+    adoption = { gagIds: preview.gagIds, threadIds: preview.threadIds, hasRecap: interactionRecap !== undefined }
+  } else {
+    userCtx.story = injectStory ? await storyContext(topic, 2) : undefined
+    interactionRecap = (await takeRecap()) ?? undefined
   }
   // 本集临时关系:随机局势决定攻守姿态,场景卡据此构建(重试沿用同一关系,保持一致)
   const relationship = pickRelationship(mode)
-  const interactionRecap = (await takeRecap()) ?? undefined
   const envNote = cfg.envSense ? envContext() : undefined
   // 长期关系底色:随互动缓慢漂移,给当集台词定相互态度
   const bond = await getBond()
@@ -135,15 +154,24 @@ export async function generateDialog(
   // 网页端没有 json_mode/temperature,格式服从度靠协议本身(手动验证 6/6 通过,
   // 见 docs/webchat-prompt-test.md)。生成慢(几十秒级),点播与预生成都有耐心等;
   // 任何失败(未登录/超时/解析失败)都静默回退走下方 API 通道。
+  // 校验+采纳收尾:两条生成路径共用(fatal 抛错由各自的失败路径处理)
+  const finish = (script: PerformanceScript): PerformanceScript => {
+    const v = validatePerformanceScript(script)
+    if (v.fatal.length > 0) throw new Error(`剧本结构不合格:${v.fatal.join(';')}`)
+    if (v.warnings.length > 0) console.warn('[剧本校验]', v.warnings)
+    if (adoption) script.adoption = adoption
+    // 上一集的观众选择注入一次即清除(成功才算消费;失败重试时 prompt 重建仍可用)
+    if (lastChoice) {
+      try { localStorage.removeItem('vc-lastChoice') } catch { /* ignore */ }
+    }
+    return script
+  }
   if (cfg.webchatEnabled) {
     try {
       const raw = await webchatAsk(mergeMessages(messages), signal, 180_000)
       const script = parseDialog(raw)
       // 结构不合格 → 抛错回落 API 通道重新生成,不让死抉择/残缺剧本上台
-      const v = validatePerformanceScript(script)
-      if (v.fatal.length > 0) throw new Error(`剧本结构不合格:${v.fatal.join(';')}`)
-      if (v.warnings.length > 0) console.warn('[剧本校验]', v.warnings)
-      return script
+      return finish(script)
     } catch (e) {
       if (signal?.aborted || (e as Error)?.name === 'AbortError') throw e
       console.warn('[webchat] 网页生成失败,本次回退 API:', e)
@@ -157,13 +185,7 @@ export async function generateDialog(
       const raw = await chatRaw(messages, signal, !noJsonMode)
       const script = parseDialog(raw)
       // 结构不合格视同生成失败:吃掉一次重试机会重新生成;仍不合格走调用方兜底剧本
-      const v = validatePerformanceScript(script)
-      if (v.fatal.length > 0) throw new Error(`剧本结构不合格:${v.fatal.join(';')}`)
-      if (v.warnings.length > 0) console.warn('[剧本校验]', v.warnings)
-      if (lastChoice) {
-        try { localStorage.removeItem('vc-lastChoice') } catch { /* ignore */ }
-      }
-      return script
+      return finish(script)
     } catch (e) {
       // 用户主动中止不重试，直接抛
       if (signal?.aborted || (e as Error)?.name === 'AbortError') throw e
@@ -176,6 +198,13 @@ export async function generateDialog(
     }
   }
   throw lastErr
+}
+
+/** 预生成的集真正开播时采纳暂缓的上下文副作用:补记注入冷却 + 消费互动 recap。
+ *  若开播前用户又有新互动,recap 会被一并消费——宁多勿丢,不影响正确性 */
+export async function adoptDeferredContext(adoption: ContextAdoption): Promise<void> {
+  await commitStoryInjection(adoption.gagIds, adoption.threadIds)
+  if (adoption.hasRecap) await takeRecap()
 }
 
 /**

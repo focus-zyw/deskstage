@@ -34,7 +34,17 @@ export async function prefetchNext(
   const actualTopic =
     topic?.trim() ||
     (arcBeat ? `连续剧情《${arcBeat.title}》:${arcBeat.hook}` : pickTopic(modeOf(mode)))
-  void generateDialog(mode, actualTopic, recentLines, undefined, !!topic?.trim(), arcBeat ?? undefined)
+  // 预生成零副作用:上下文只预览,注入冷却/recap 消费随 script.adoption 推迟到开播采纳
+  void generateDialog(
+    mode,
+    actualTopic,
+    recentLines,
+    undefined,
+    !!topic?.trim(),
+    arcBeat ?? undefined,
+    undefined, // continueFromPrevious:预取总是新主题结构
+    { deferContextAdoption: true },
+  )
     .then(async (script) => ({
       ...script,
       before: await addPerformanceCues(script.before),

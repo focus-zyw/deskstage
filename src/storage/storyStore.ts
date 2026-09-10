@@ -511,31 +511,52 @@ export function selectStoryItems(
   }
 }
 
+/** 预览模式:选材但不写注入冷却——预生成场景由采纳方在真正开播时调 commitStoryInjection 补记 */
+export async function previewStoryContext(
+  topic: string,
+  maxEach = 2,
+): Promise<{ gags: string[]; threads: string[]; gagIds: string[]; threadIds: string[] }> {
+  const story = await getStory()
+  const selected = selectStoryItems(story, topic, maxEach)
+  return {
+    gags: selected.gags.map((item) => item.text),
+    threads: selected.threads.map((item) => item.text),
+    gagIds: selected.gags.map((item) => item.id),
+    threadIds: selected.threads.map((item) => item.id),
+  }
+}
+
+/** 预览过的素材真正开播时补记注入冷却(下轮换位依据) */
+export async function commitStoryInjection(gagIds: string[], threadIds: string[]): Promise<void> {
+  if (gagIds.length === 0 && threadIds.length === 0) return
+  await withFileLock('story', async () => {
+    const story = await getStory()
+    const now = Date.now()
+    let touched = false
+    for (const item of story.gags) {
+      if (gagIds.includes(item.id)) {
+        item.lastInjectedAt = now
+        touched = true
+      }
+    }
+    for (const item of story.threads) {
+      if (threadIds.includes(item.id)) {
+        item.lastInjectedAt = now
+        touched = true
+      }
+    }
+    if (touched) await persist(story)
+  })
+}
+
 /** 注入用：只取与本轮主题相关且已冷却的素材，并持久化本次注入时间用于下轮换位。 */
 export async function storyContext(
   topic: string,
   maxEach = 2,
 ): Promise<{ gags: string[]; threads: string[] }> {
-  return withFileLock('story', async () => {
-    const story = await getStory()
-    const selected = selectStoryItems(story, topic, maxEach)
-    const selectedGags = new Set(selected.gags.map((item) => item.id))
-    const selectedThreads = new Set(selected.threads.map((item) => item.id))
-    if (selectedGags.size > 0 || selectedThreads.size > 0) {
-      const now = Date.now()
-      for (const item of story.gags) {
-        if (selectedGags.has(item.id)) item.lastInjectedAt = now
-      }
-      for (const item of story.threads) {
-        if (selectedThreads.has(item.id)) item.lastInjectedAt = now
-      }
-      await persist(story)
-    }
-    return {
-      gags: selected.gags.map((item) => item.text),
-      threads: selected.threads.map((item) => item.text),
-    }
-  })
+  const selected = await previewStoryContext(topic, maxEach)
+  await commitStoryInjection(selected.gagIds, selected.threadIds)
+  return { gags: selected.gags, threads: selected.threads }
 }
 
 /** 读长期关系:按距上次更新的自然日数做缓慢衰减(每天 trust 向 0 回 0.5、rivalry 降 0.5),

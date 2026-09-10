@@ -7,6 +7,8 @@ import { appDataDir, join } from '@tauri-apps/api/path'
 import {
   sanitizeChoicePoint,
   sanitizeDialog,
+  sanitizeSceneCard,
+  type ContextAdoption,
   type PerformanceScript,
 } from '../performer/dialogSchema'
 import { withFileLock } from './writeLock'
@@ -29,6 +31,18 @@ async function getFile(): Promise<string> {
   const dir = await join(base, 'data')
   if (!(await exists(dir))) await mkdir(dir, { recursive: true })
   return join(dir, 'prefetch.json')
+}
+
+/** 预生成暂缓的上下文采纳,缓存读取时原样恢复(坏形丢弃,不阻断命中) */
+function sanitizeAdoption(v: unknown): ContextAdoption | undefined {
+  if (!v || typeof v !== 'object') return undefined
+  const o = v as Record<string, unknown>
+  const ids = (x: unknown): string[] =>
+    Array.isArray(x) ? x.filter((s): s is string => typeof s === 'string').slice(0, 4) : []
+  const gagIds = ids(o.gagIds)
+  const threadIds = ids(o.threadIds)
+  if (gagIds.length === 0 && threadIds.length === 0 && o.hasRecap !== true) return undefined
+  return { gagIds, threadIds, hasRecap: o.hasRecap === true }
 }
 
 function sanitizeEntries(v: unknown): PrefetchEntry[] {
@@ -60,8 +74,10 @@ function sanitizeEntries(v: unknown): PrefetchEntry[] {
         : undefined
     const script: PerformanceScript = {
       before,
+      card: sanitizeSceneCard(rawScript.card),
       choice: completeChoice,
       after: completeChoice ? after : {},
+      adoption: sanitizeAdoption(rawScript.adoption),
     }
     if (mode && topic && before.length > 0) out.push({ mode, topic, script, arc })
   }

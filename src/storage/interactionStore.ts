@@ -94,6 +94,14 @@ export async function takeRecap(): Promise<string | null> {
   return recapText(pokeA, pokeB, drags)
 }
 
+/** 预览版 takeRecap:判定条件与文案完全一致,但不重置计数——预生成场景先 peek,
+ *  真正开播时再 takeRecap() 消费(两次之间新增的互动会被一并消费,可接受) */
+export async function peekRecap(): Promise<string | null> {
+  const stats = await readAll()
+  if (stats.sinceInject < INJECT_THRESHOLD) return null
+  return recapText(stats.pokeA, stats.pokeB, stats.drags)
+}
+
 /** 打断是双倍恶劣行为:额外 +1 */
 export async function logInterrupt(target: 'A' | 'B'): Promise<void> {
   const stats = await readAll()

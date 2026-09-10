@@ -15,14 +15,15 @@ import {
   type ChoicePoint,
   type DialogLine,
 } from '../performer/player'
-import { deliverySpeed } from '../performer/dialogSchema'
+import { deliverySpeed, type SceneCard } from '../performer/dialogSchema'
 import { MODES, modeOf, type Mode } from '../performer/modes'
 import {
   generateDialog,
   generateShortChat,
   describeLlmError,
+  adoptDeferredContext,
 } from '../engine/llmClient'
-import { appendHistory, listEpisodes, loadRecentHistory, type Episode } from '../storage/historyStore'
+import { appendHistory, listEpisodes, loadRecentHistory, newEpisodeId, type Episode } from '../storage/historyStore'
 import { takePrefetch, listPrefetchedArcIds } from '../storage/prefetchStore'
 import { reserveArcBeat } from '../engine/arcReservation'
 import { getStory } from '../storage/storyStore'
@@ -89,7 +90,8 @@ interface NowPlaying {
 export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
   const [choice, setChoice] = useState<ChoicePoint | null>(null)
   const choiceTimer = useRef(0)
-  const pendingEpisode = useRef<{ before: DialogLine[]; after: Record<string, DialogLine[]>; mode: Mode; topic: string; chosen?: string } | null>(null)
+  // 已开播待提交的集:单次落盘——完播提交完整路径,中止提交已播前缀(见 onDone/onStopped)
+  const pendingEpisode = useRef<{ eid: string; card?: SceneCard; before: DialogLine[]; after: Record<string, DialogLine[]>; mode: Mode; topic: string; chosen?: string } | null>(null)
   // 上一段台词(内存中),续播/即兴时喂给 LLM 做衔接;上次自动重放的集,连续重放时避开
   const lastLines = useRef<DialogLine[]>([])
   const lastReplayTs = useRef(0)
@@ -147,12 +149,19 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
         setRuntimeMode({ type: 'choosing', choiceId: String(Date.now()) })
       },
       onDone: () => {
-        // 选边集:播完(含所选分支)后补记后半段历史
+        // 单次落盘:一次提交完整已播路径(铺垫+所选分支);中止路径见 onStopped
         const p = pendingEpisode.current
+        let fullPath: DialogLine[] | null = null
         if (p?.chosen) {
           const branchLines = p.after[p.chosen] ?? []
-          if (branchLines.length) void appendHistory(branchLines, p.mode, p.topic)
+          fullPath = [...p.before, ...branchLines]
           nowPlaying.current = { topic: p.topic, lines: branchLines, total: branchLines.length, index: -1, source: 'gen' }
+        } else if (p) {
+          fullPath = p.before
+        }
+        if (p && fullPath) {
+          void appendHistory(fullPath, p.mode, { topic: p.topic, card: p.card, eid: p.eid })
+          lastLines.current = fullPath // 续播衔接上下文升级为完整路径(选边集原先是前半段)
         }
         pendingEpisode.current = null
         proactiveAct.current = null // 自然播完不算忽略
@@ -161,10 +170,20 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
         const np = nowPlaying.current
         if (np && np.source !== 'auto') bumpTopicWatched(np.topic)
         // 新生成的集自然播完后才蒸馏角色世界:没看完不记,回放不重复蒸馏
-        if (np && np.source === 'gen' && np.lines) deps.onEpisodeCompleted(np.lines)
+        if (np && np.source === 'gen' && np.lines) deps.onEpisodeCompleted(fullPath ?? np.lines)
         nowPlaying.current = null
         // 收底拍:响底台词与表情定格 2.6s 给观众笑的时间,然后全员放松回 idle
         deps.presenter.settle(2600)
+      },
+      onStopped: (played) => {
+        // 中止提交:同一集只落真实播出过的前缀(eid 不变);不蒸馏、不推进剧情——仅自然完播走 onDone。
+        // 回放/短聊天被打断时 pendingEpisode 为空,自然跳过
+        const p = pendingEpisode.current
+        if (p && played.length > 0) {
+          void appendHistory(played, p.mode, { topic: p.topic, card: p.card, eid: p.eid })
+          lastLines.current = played
+        }
+        pendingEpisode.current = null
       },
     })
   }
@@ -382,15 +401,19 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
       if (!hit.topic.startsWith('连续剧情')) {
         bumpTopicSeen(hit.topic) // 口味记账对齐实际播出的主题(命中缓冲时≠本次抽中的主题)
       }
+      // 真正开播:采纳预生成时暂缓的上下文副作用(注入冷却补记/recap 消费)
+      if (hitScript.adoption) void adoptDeferredContext(hitScript.adoption)
       nowPlaying.current = { topic: hit.topic, lines: hitScript.before, total: hitScript.before.length, index: -1, source: 'gen' }
       lastLines.current = hitScript.before
+      // 使用后即移出预取缓存;历史在完播/中止时按 eid 一次性提交(onDone/onStopped)
       pendingEpisode.current = {
+        eid: newEpisodeId(),
+        card: hitScript.card,
         before: hitScript.before,
         after: hitScript.after,
         mode: m,
         topic: hit.topic,
       }
-      void appendHistory(hitScript.before, hit.mode, hit.topic) // 使用后移入 history(fire-and-forget)
       beginPerforming()
       playingLines.current = hitScript.before
       player.current!.play(withFinalePause(hitScript.before), {
@@ -433,8 +456,8 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
       if (!arcBeat) bumpTopicSeen(topic) // 这轮真的播出了才记 seen;剧情线拍不入话题账
       nowPlaying.current = { topic, lines: script.before, total: script.before.length, index: -1, source: 'gen' }
       lastLines.current = script.before
-      pendingEpisode.current = { before: script.before, after: script.after, mode: m, topic }
-      void appendHistory(script.before, m, topic) // 前半段落盘;选边后半在播完后补记
+      // 单次落盘:不再生成时先记前半段;完播提交完整路径,中止提交已播前缀(onDone/onStopped)
+      pendingEpisode.current = { eid: newEpisodeId(), card: script.card, before: script.before, after: script.after, mode: m, topic }
       beginPerforming()
       playingLines.current = script.before
       player.current!.play(withFinalePause(script.before), {
