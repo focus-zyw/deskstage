@@ -19,9 +19,13 @@ import { deliverySpeed, type SceneCard } from '../performer/dialogSchema'
 import { MODES, modeOf, type Mode } from '../performer/modes'
 import {
   generateShortChat,
+  generateInterjectionBatch,
   describeLlmError,
 } from '../engine/llmClient'
 import { dialogue, newEpisodeId } from '../dialogue/director'
+import { planInterjectionTakeover, keepChoiceOpts } from '../dialogue/interjection'
+import { pushTurn, chatWindow } from '../dialogue/turnWindow'
+import { nameOf } from '../engine/persona'
 import type { CurateReport } from '../engine/storyCurator'
 import { listEpisodes, loadRecentHistory, type Episode } from '../storage/historyStore'
 import { takePrefetch, listPrefetchedArcIds } from '../storage/prefetchStore'
@@ -90,8 +94,13 @@ interface NowPlaying {
 export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
   const [choice, setChoice] = useState<ChoicePoint | null>(null)
   const choiceTimer = useRef(0)
-  // 已开播待提交的集:单次落盘——完播提交完整路径,中止提交已播前缀(见 onDone/onStopped)
-  const pendingEpisode = useRef<{ eid: string; card?: SceneCard; before: DialogLine[]; after: Record<string, DialogLine[]>; mode: Mode; topic: string; chosen?: string } | null>(null)
+  // 已开播待提交的集:单次落盘——完播提交完整真实路径(playedAccum,含插话反应),
+  // 中止提交已播前缀。choice/after 留存以便"插话接回"后继续未消费的抉择点
+  const pendingEpisode = useRef<{ eid: string; card?: SceneCard; before: DialogLine[]; after: Record<string, DialogLine[]>; choice?: ChoicePoint; playedAccum: DialogLine[]; mode: Mode; topic: string; chosen?: string } | null>(null)
+  // 演出中的用户插话队列:onLineEnd 安全缝处消费(反应回合后接回原剧本)
+  const interjectionQueue = useRef<{ text: string; target?: 'A' | 'B' }[]>([])
+  const handoff = useRef(false) // 接回换场中:onStopped 跳过中止提交
+  const interjectBusy = useRef(false)
   // 上一段台词(内存中),续播/即兴时喂给 LLM 做衔接;上次自动重放的集,连续重放时避开
   const lastLines = useRef<DialogLine[]>([])
   const lastReplayTs = useRef(0)
@@ -112,6 +121,7 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
       },
       onLineStart: (line, index) => {
         if (nowPlaying.current) nowPlaying.current.index = index
+        pendingEpisode.current?.playedAccum.push(line) // 真实已播路径:跨接回播放持续累计
         const handle = speakTracked(line.speaker, line.text, line.delivery, 'performance')
         const next = playingLines.current[index + 1]
         if (next) prefetchVoice(next.speaker, next.text, next.delivery)
@@ -143,23 +153,23 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
         return { speechPhase }
       },
       onSpeechEnd: deps.presenter.hush,
-      onLineEnd: deps.presenter.endLine,
+      onLineEnd: (speaker) => {
+        deps.presenter.endLine(speaker)
+        void maybeConsumeInterjection() // 句尾安全缝:有插话排队就在这里接管(P4)
+      },
       onChoice: (cp) => {
         setChoice(cp)
         setRuntimeMode({ type: 'choosing', choiceId: String(Date.now()) })
       },
       onDone: () => {
-        // 单次落盘:一次提交完整已播路径(铺垫+所选分支);中止路径见 onStopped
+        // 单次落盘:提交完整真实已播路径(playedAccum:铺垫+分支+插话反应);中止路径见 onStopped
         const p = pendingEpisode.current
-        let fullPath: DialogLine[] | null = null
+        const fullPath = p?.playedAccum ?? null
         if (p?.chosen) {
           const branchLines = p.after[p.chosen] ?? []
-          fullPath = [...p.before, ...branchLines]
           nowPlaying.current = { topic: p.topic, lines: branchLines, total: branchLines.length, index: -1, source: 'gen' }
-        } else if (p) {
-          fullPath = p.before
         }
-        if (p && fullPath) {
+        if (p && fullPath && fullPath.length > 0) {
           lastLines.current = fullPath // 续播衔接上下文升级为完整路径(选边集原先是前半段)
           void dialogue
             .commitEpisode({ eid: p.eid, mode: p.mode, topic: p.topic, card: p.card, played: fullPath, natural: true })
@@ -177,13 +187,15 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
         // 收底拍:响底台词与表情定格 2.6s 给观众笑的时间,然后全员放松回 idle
         deps.presenter.settle(2600)
       },
-      onStopped: (played) => {
-        // 中止提交:同一集只落真实播出过的前缀(eid 不变);不蒸馏、不推进剧情——仅自然完播走 onDone。
+      onStopped: () => {
+        // 接回换场:播放权交给"反应回合+剩余剧本",不动账、不提交
+        if (handoff.current) return
+        // 中止提交:同一集只落真实播出过的前缀(playedAccum,eid 不变);不蒸馏、不推进剧情——仅自然完播走 onDone。
         // 回放/短聊天被打断时 pendingEpisode 为空,自然跳过
         const p = pendingEpisode.current
-        if (p && played.length > 0) {
-          void dialogue.commitEpisode({ eid: p.eid, mode: p.mode, topic: p.topic, card: p.card, played, natural: false })
-          lastLines.current = played
+        if (p && p.playedAccum.length > 0) {
+          void dialogue.commitEpisode({ eid: p.eid, mode: p.mode, topic: p.topic, card: p.card, played: p.playedAccum, natural: false })
+          lastLines.current = p.playedAccum
         }
         pendingEpisode.current = null
       },
@@ -259,6 +271,70 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
     }
     player.current!.resume(option.id)
     try { localStorage.setItem('vc-lastChoice', option.label) } catch { /* ignore */ }
+  }
+
+  /** 演出中插话入队(P4):当前句结束的安全缝(onLineEnd)处消费 */
+  function queueInterjection(text: string, target?: 'A' | 'B'): void {
+    const t = text.trim()
+    if (t) interjectionQueue.current.push({ text: t, target })
+  }
+
+  /** 安全缝消费:句尾停播(handoff 标记下 onStopped 跳过中止提交)→ 生成 1~3 句
+   *  反应回合 → 接回剩余原剧本(未消费的抉择点原样保留)。整集仍单次落盘:
+   *  playedAccum 已累计含反应回合的完整真实路径 */
+  async function maybeConsumeInterjection(): Promise<void> {
+    if (interjectBusy.current || handoff.current) return
+    if (!interjectionQueue.current.length || !pendingEpisode.current) return
+    if (!player.current!.playing) return // 抉择等待等非播放态不接缝
+    const msg = interjectionQueue.current.shift()!
+    const p = pendingEpisode.current
+    const index = nowPlaying.current?.index ?? -1
+    interjectBusy.current = true
+    handoff.current = true
+    try {
+      player.current!.stop() // 安全缝停播(onStopped 被 handoff 跳过)
+      stopSpeaking() // 防 TTS 重叠
+      const speakerOf = (l: DialogLine) =>
+        l.speaker === 'A' ? nameOf('A') : l.speaker === 'B' ? nameOf('B') : '场外'
+      let reaction: DialogLine[] = []
+      try {
+        reaction = await generateInterjectionBatch({
+          userText: msg.text,
+          target: msg.target ?? (playingLines.current[index]?.speaker === 'A' ? 'B' : 'A'),
+          recentPlayed: p.playedAccum.slice(-3).map((l) => `${speakerOf(l)}:${l.text}`),
+          bridgeTo: playingLines.current[index + 1]?.text ?? '',
+          window: chatWindow(),
+        })
+      } catch {
+        reaction = [] // 生成失败:跳过反应直接续播,不卡演出
+      }
+      const plan = planInterjectionTakeover({
+        reaction,
+        playingLines: playingLines.current,
+        index,
+        chosen: !!p.chosen,
+      })
+      for (const l of reaction) {
+        if (l.speaker === 'A' || l.speaker === 'B') pushTurn({ who: l.speaker, text: l.text })
+      }
+      if (plan.list.length === 0) {
+        // 理论不可达(每段最后一句不触发 onLineEnd);保险收尾避免卡死在 performing
+        pendingEpisode.current = null
+        setRuntimeMode({ type: 'idle' })
+        return
+      }
+      nowPlaying.current = { topic: p.topic, lines: plan.list, total: plan.list.length, index: -1, source: 'gen' }
+      playingLines.current = plan.list
+      beginPerforming()
+      player.current!.play(plan.list, {
+        gap: modeOf(p.mode).gap,
+        choice: keepChoiceOpts(!!p.chosen, p.choice),
+        after: keepChoiceOpts(!!p.chosen, p.after),
+      })
+    } finally {
+      handoff.current = false
+      interjectBusy.current = false
+    }
   }
 
   // 抉择 30s 超时:自动随机选边,防止演出卡死
@@ -413,6 +489,8 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
         card: hitScript.card,
         before: hitScript.before,
         after: hitScript.after,
+        choice: hitScript.choice,
+        playedAccum: [],
         mode: m,
         topic: hit.topic,
       }
@@ -466,7 +544,7 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
       nowPlaying.current = { topic, lines: script.before, total: script.before.length, index: -1, source: 'gen' }
       lastLines.current = script.before
       // 单次落盘:不再生成时先记前半段;完播提交完整路径,中止提交已播前缀(onDone/onStopped)
-      pendingEpisode.current = { eid, card: script.card, before: script.before, after: script.after, mode: m, topic }
+      pendingEpisode.current = { eid, card: script.card, before: script.before, after: script.after, choice: script.choice, playedAccum: [], mode: m, topic }
       beginPerforming()
       playingLines.current = script.before
       player.current!.play(withFinalePause(script.before), {
@@ -541,6 +619,7 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
     breakRemind,
     discuss,
     playShortChat,
+    queueInterjection,
     isPlaying,
     recentLines,
     rearmPrefetch,

@@ -526,10 +526,11 @@ function App() {
   }
 
   /** 聊天通道:解析 @角色 → TurnBatch(被@角色先答,另一位有料才补,共 1~3 句) → 顺序播报。
-   *  短期会话窗口入列(下轮聊天/演出插话共用);无 @ 时按上次目标轮换;演出进行中禁发(P4 解锁) */
+   *  短期会话窗口入列(下轮聊天/演出插话共用);无 @ 时按上次目标轮换;
+   *  演出进行中改为入队插话(P4:句尾安全缝反应后接回剧情);抉择等待仍禁发 */
   async function sendUserChat() {
     const text = chatDraft.trim()
-    if (!text || chatBusy || phase !== 'idle') return
+    if (!text || chatBusy) return
     const esc = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
     const alt = new RegExp(`^\\s*@?(${esc(charNames.A)}|${esc(charNames.B)}|甲|乙|A|B)\\s*`)
     const m = text.match(alt)
@@ -538,6 +539,19 @@ function App() {
         ? 'A'
         : 'B'
       : (lastChatTarget.current = lastChatTarget.current === 'A' ? 'B' : 'A')
+    if (phase === 'performing') {
+      // P4 演出中插话:入队,当前句结束的安全缝处反应并接回剧情
+      director.queueInterjection(text, who)
+      setUserBubble(text)
+      setChatDraft('')
+      noteUserActive()
+      pushTurn({ who: 'user', text })
+      window.setTimeout(() => {
+        setUserBubble((u) => (u === text ? null : u))
+      }, 6000)
+      return
+    }
+    if (phase !== 'idle') return
     setUserBubble(text)
     setChatDraft('')
     setChatBusy(true)

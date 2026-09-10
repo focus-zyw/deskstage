@@ -446,6 +446,50 @@ export async function generateTurnBatch(input: {
   }
 }
 
+/** 演出中插话反应回合(P4):观众在演出进行时插话,安全缝处生成 1~3 句反应——
+ *  第一句回应观众插的话,最后一句把话头自然带回剧情(bridgeTo 为接回后的下一句)。
+ *  失败返回空数组,由调用方跳过反应直接续播 */
+export async function generateInterjectionBatch(input: {
+  userText: string
+  target: 'A' | 'B'
+  /** 已播剧情的结尾几句,接话要贴着刚才演到哪 */
+  recentPlayed: string[]
+  /** 剧情剩余部分的第一句内容(接回点) */
+  bridgeTo: string
+  window: { who: 'user' | 'A' | 'B'; text: string }[]
+}): Promise<DialogLine[]> {
+  const cfg = await getConfig()
+  const persona = duoShortPersona()
+  const p: UserProfile = cfg.userProfile
+  const targetName = nameOf(input.target)
+  const windowText = input.window.length
+    ? input.window
+        .map((t) => `${t.who === 'user' ? p.userName || '观众' : nameOf(t.who)}:${t.text}`)
+        .join('\n')
+    : ''
+  const messages: { role: string; content: string }[] = [
+    {
+      role: 'system',
+      content: `桌面双人情景剧:演出进行到一半,观众插了一句话。角色:${persona}。${p.userName ? `观众称呼"${p.userName}"。` : ''}口语化、有梗、像真说话。
+输出协议(严格遵守):只输出一个 JSON 对象,格式 {"dialog":[{"speaker":"A","text":"台词","target":"B"},...]}
+- 一共 1~3 句:${targetName}(speaker "${input.target}")第一句先回应观众插的话;最后一句必须自然把话头带回刚才的剧情,贴着"剧情刚才演到"与"接下来要演",不要生硬
+- 每句不超过 25 字,不要引号;speaker 只能是 A 或 B 且不连续同一人`,
+    },
+    {
+      role: 'user',
+      content: `${windowText ? `最近聊天:\n${windowText}\n\n` : ''}剧情刚才演到:\n${input.recentPlayed.join('\n') || '(刚开始)'}\n\n接下来剧情要演:${input.bridgeTo || '(收尾)'}\n\n观众插话:${input.userText}`,
+    },
+  ]
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(new DOMException('超时', 'TimeoutError')), 12_000)
+  try {
+    const raw = await chatRaw(messages, ctrl.signal)
+    return validateTurnBatch(parseDialog(raw, 1).before, input.target) ?? []
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 // ---------- 主播模式:弹幕 → 单句回复的 AI 决策 ----------
 
 export interface LiveDanmakuBrief {
