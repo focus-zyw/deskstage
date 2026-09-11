@@ -196,6 +196,15 @@ export function useCharacterLayout(deps: CharacterLayoutDeps) {
     applyChars({ ...cur, height }, 'debounced') // 缩放全局一致:两个角色同步
   }
 
+  /** C 的滚轮缩放:独立于 A/B 共享的 height——C 是视频宽度体系(640×360 素材等比),
+   *  钳位与 sanitizeCharacters 的 160~1200 一致,防抖落盘 */
+  function onResidentWheel(e: ReactWheelEvent) {
+    const cur = charCfgRef.current
+    const width = Math.min(1200, Math.max(160, cur.C.width + (e.deltaY < 0 ? 24 : -24)))
+    if (width === cur.C.width) return
+    applyChars({ ...cur, C: { ...cur.C, width } }, 'debounced')
+  }
+
   return {
     charCfg,
     charCfgRef,
@@ -214,6 +223,7 @@ export function useCharacterLayout(deps: CharacterLayoutDeps) {
     onCharPointerMove,
     onCharPointerUp,
     onCharWheel,
+    onResidentWheel,
   }
 }
 

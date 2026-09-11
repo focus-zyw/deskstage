@@ -215,7 +215,7 @@ function App() {
   const {
     charCfg, charCfgRef, ctrlBar, topActor, setTopActor, dragUi, dropFor,
     charA, charB, draggingWho, applyChars, applyCtrlBar, resetLayout,
-    onCharPointerDown, onCharPointerMove, onCharPointerUp, onCharWheel,
+    onCharPointerDown, onCharPointerMove, onCharPointerUp, onCharWheel, onResidentWheel,
   } = useCharacterLayout({
     isIdle: () => phaseRef.current === 'idle',
     present: showPoke,
@@ -489,7 +489,6 @@ function App() {
     { id: 'toggle-chars', label: charHidden ? '显示角色' : '隐藏角色', keywords: ['隐藏角色', '显示角色'], run: () => setCharsHidden(!charHidden) },
     { id: 'crosstalk', label: '来一段相声', keywords: ['相声'], run: () => performNow('crosstalk') },
     { id: 'daily', label: '来一段日常', keywords: ['日常', '段子'], run: () => performNow('daily') },
-    { id: 'debate', label: '来一段辩论', keywords: ['辩论'], run: () => performNow('debate') },
     { id: 'live', label: '开播(直播弹幕互动,设置里填直播间号)', keywords: ['开播', '直播', '弹幕'], run: () => performNow('live') },
     { id: 'live-stop', label: '下播(结束直播弹幕互动)', keywords: ['下播'], run: () => director.stop() },
   ]
@@ -1121,6 +1120,7 @@ function App() {
         onPointerDown={(e) => onCharPointerDown(e, 'C')}
         onPointerMove={(e) => onCharPointerMove(e, 'C')}
         onPointerUp={() => onCharPointerUp('C')}
+        onWheel={(e) => onResidentWheel(e)}
       >
         <ResidentActor
           hitBoxRef={residentHitBox}

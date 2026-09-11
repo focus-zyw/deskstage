@@ -34,7 +34,7 @@ export function GeneralSettings() {
             }}
           />
         </SetLine>
-        <SetLine title="角色与控制栏位置" hint="拖动角色可移动,悬停滚轮可同步缩放">
+        <SetLine title="角色与控制栏位置" hint="拖动角色可移动;悬停滚轮缩放(A/B 同步调高度,C 独立调宽度)">
           <button className="panel-btn" onClick={bridge.onResetLayout}>
             恢复默认布局
           </button>
