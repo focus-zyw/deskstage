@@ -11,6 +11,7 @@ import { SETTINGS_NAV, SETTINGS_SEARCH_INDEX, TAB_GROUP, type SettingsTab } from
 import { GeneralSettings } from './tabs/GeneralSettings'
 import { ModelSettings } from './tabs/ModelSettings'
 import { PersonaSettings } from './tabs/PersonaSettings'
+import { CustomModesSettings } from './tabs/CustomModesSettings'
 import { VoiceSettings } from './tabs/VoiceSettings'
 import { LiveSettings } from './tabs/LiveSettings'
 import { HotkeysSettings } from './tabs/HotkeysSettings'
@@ -34,6 +35,7 @@ const TAB_CONTENT: Record<SettingsTab, () => React.JSX.Element> = {
   general: GeneralSettings,
   model: ModelSettings,
   persona: PersonaSettings,
+  modes: CustomModesSettings,
   voice: VoiceSettings,
   live: LiveSettings,
   hotkeys: HotkeysSettings,

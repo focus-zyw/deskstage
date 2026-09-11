@@ -6,6 +6,7 @@ export type SettingsTab =
   | 'general'
   | 'model'
   | 'persona'
+  | 'modes'
   | 'voice'
   | 'live'
   | 'hotkeys'
@@ -61,6 +62,17 @@ export const SETTINGS_NAV: { group: string; items: { id: SettingsTab; label: str
           <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
             <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
             <circle cx="12" cy="7" r="4" />
+          </svg>
+        ),
+      },
+      {
+        id: 'modes',
+        label: '模式工坊',
+        icon: (
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z" />
+            <line x1="19" y1="17" x2="19" y2="21" />
+            <line x1="17" y1="19" x2="21" y2="19" />
           </svg>
         ),
       },
@@ -151,6 +163,7 @@ export const TAB_GROUP: Record<SettingsTab, string> = {
   general: '偏好设置',
   model: '偏好设置',
   persona: '偏好设置',
+  modes: '偏好设置',
   voice: '偏好设置',
   live: '偏好设置',
   hotkeys: '偏好设置',
@@ -190,6 +203,11 @@ export const SETTINGS_SEARCH_INDEX: { tab: SettingsTab; card: string; label: str
   { tab: 'persona', card: '角色人设', label: '角色B的人设', keywords: '人设 性格 职业 背景' },
   { tab: 'persona', card: '角色人设', label: '角色C的人设', keywords: '人设 性格 小管家 字面 执行' },
   { tab: 'persona', card: '角色人设', label: '还原默认人设', keywords: '重置 出厂 内置' },
+  // 模式工坊
+  { tab: 'modes', card: 'AI 创建模式', label: 'AI 创建模式', keywords: '自定义 新模式 玩法 点播 生成 模式工坊' },
+  { tab: 'modes', card: '编辑模式', label: '模式草稿编辑', keywords: '编辑 修改 模式 触发词 兜底剧本' },
+  { tab: 'modes', card: '自定义模式', label: '自定义模式列表', keywords: '自定义 删除 模式 列表' },
+  { tab: 'modes', card: '内置模式', label: '内置模式', keywords: '内置 相声 日常 主播 模式' },
   // 角色语音
   { tab: 'voice', card: '语音与供应商', label: '角色语音开关', keywords: '朗读 配音 开关' },
   { tab: 'voice', card: '语音与供应商', label: '语音供应商', keywords: '硅基流动 minimax cosyvoice' },

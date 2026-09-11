@@ -3,6 +3,7 @@
 // 提醒的时间解析在 parseTime.ts,认不出时间时回落"预填文本用户确认",绝不猜错时间默默设上。
 import { complete } from '../../engine/llmGateway'
 import { parseChineseTime, extractMemoText } from './parseTime'
+import { allModes } from '../../performer/modes'
 
 export interface Command {
   id: string
@@ -14,7 +15,7 @@ export interface Command {
 export type NlRoute =
   | { kind: 'command'; command: Command }
   | { kind: 'memo'; text: string; due: Date | null }
-  | { kind: 'perform'; mode: 'daily' | 'crosstalk' | 'debate' | 'live'; topic?: string }
+  | { kind: 'perform'; mode: string; topic?: string }
   | { kind: 'none' }
 
 /** 命令搜索:字面包含即命中(空串返回全量) */
@@ -24,6 +25,11 @@ export function filterCommands(input: string, commands: Command[]): Command[] {
   return commands.filter(
     (c) => c.label.toLowerCase().includes(q) || c.keywords.some((k) => q.includes(k.toLowerCase()) || k.includes(q)),
   )
+}
+
+/** 演出触发词拼正则用:转义保留字面量语义(触发词一般是纯中文,防御性处理) */
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
 /** 整句路由:优先零成本关键词,拿不准再花一次 LLM 调用 */
@@ -36,13 +42,18 @@ export async function nlRoute(input: string, commands: Command[]): Promise<NlRou
     return { kind: 'memo', text: extractMemoText(q) || q, due: parseChineseTime(q) }
   }
 
-  // 2) 演出类:"来一段关于加班的相声";主播模式单独认"开播/读弹幕"
+  // 2) 演出类:"来一段关于加班的相声";主播模式单独认"开播/读弹幕"。
+  //    触发词来自各模式自带的 triggers(数据驱动):模式工坊新加的自定义模式自动可点播
   if (/开(个)?直播|开播|读弹幕|弹幕互动/.test(q)) return { kind: 'perform', mode: 'live' }
-  const perform = q.match(/(?:来|说|演|放|讲)?一?段(.{0,12}?)(相声|日常|段子|闲聊|辩论)/)
+  const performable = allModes().filter((m) => m.id !== 'live' && (m.triggers?.length ?? 0) > 0)
+  const alt = performable.flatMap((m) => m.triggers ?? []).map(escapeRegExp).join('|')
+  const perform = alt ? q.match(new RegExp(`(?:来|说|演|放|讲)?一?段(.{0,12}?)(${alt})`)) : null
   if (perform) {
-    const mode = perform[2] === '日常' || perform[2] === '闲聊' ? 'daily' : perform[2] === '辩论' ? 'debate' : 'crosstalk'
-    const topic = perform[1].replace(/^关于|关于$|^的|的$/g, '').trim()
-    return { kind: 'perform', mode, topic: topic || undefined }
+    const hit = performable.find((m) => (m.triggers ?? []).includes(perform[2]))
+    if (hit) {
+      const topic = perform[1].replace(/^关于|关于$|^的|的$/g, '').trim()
+      return { kind: 'perform', mode: hit.id, topic: topic || undefined }
+    }
   }
 
   // 3) 命令关键词字面命中

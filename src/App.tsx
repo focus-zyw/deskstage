@@ -14,7 +14,7 @@ import { SPRITE_SETS, preloadSprites } from './stage/spriteSets'
 import { ResidentActor } from './stage/resident/ResidentActor'
 import { preloadResident } from './stage/resident/residentManifest'
 import type { DialogLine, Speaker } from './performer/player'
-import type { Mode } from './performer/modes'
+import { useAllModes, type Mode } from './performer/modes'
 import { generateShortChat, generateTurnBatch, improvPokeLine, generateUserChatReply, extractFacts, memoReminderLine } from './engine/llmClient'
 import { pushTurn, chatWindow } from './dialogue/turnWindow'
 import { react } from './engine/interactionRules'
@@ -161,6 +161,12 @@ function App() {
           : 'idle'
   // 分段选择器当前选中模式；生成按钮按它点播
   const [mode, setMode] = useState<Mode>('daily')
+  // 内置+自定义模式(模式工坊增删时重渲染,命令注册表随之更新)
+  const allModeList = useAllModes()
+  // 当前选中的自定义模式被删除时回落日常,避免分段控件失去选中项
+  useEffect(() => {
+    if (!allModeList.some((m) => m.id === mode)) setMode('daily')
+  }, [allModeList, mode])
   const settingsOpen = rt.overlays.includes('settings')
   // 配置事实源:读同一份已落盘配置(任何 saveConfig 成功后即时发布),不再各自维护镜像
   const config = useConfigSnapshot()
@@ -487,8 +493,15 @@ function App() {
     { id: 'memo', label: '添加提醒(打开备忘页)', keywords: ['备忘页'], run: openMemoSettings },
     { id: 'topic', label: '设置聊天主题', keywords: ['话题', '主题'], run: () => openOverlayExclusive('topic') },
     { id: 'toggle-chars', label: charHidden ? '显示角色' : '隐藏角色', keywords: ['隐藏角色', '显示角色'], run: () => setCharsHidden(!charHidden) },
-    { id: 'crosstalk', label: '来一段相声', keywords: ['相声'], run: () => performNow('crosstalk') },
-    { id: 'daily', label: '来一段日常', keywords: ['日常', '段子'], run: () => performNow('daily') },
+    // 点播命令从模式注册表生成:内置+自定义(模式工坊)自动进命令面板与 LLM 兜底路由
+    ...allModeList
+      .filter((m) => m.id !== 'live')
+      .map((m) => ({
+        id: m.id,
+        label: `来一段${m.label}`,
+        keywords: [...new Set([...(m.triggers ?? []), m.label])],
+        run: () => performNow(m.id),
+      })),
     { id: 'live', label: '开播(直播弹幕互动,设置里填直播间号)', keywords: ['开播', '直播', '弹幕'], run: () => performNow('live') },
     { id: 'live-stop', label: '下播(结束直播弹幕互动)', keywords: ['下播'], run: () => director.stop() },
   ]

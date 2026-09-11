@@ -5,8 +5,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { PlayIcon, StopIcon, GearIcon, PokeballIcon, ChatIcon, GridIcon, BellOffIcon } from '../stage/icons'
 import { registerHitRegion, onHoverChange } from '../input/pointerManager'
-import { modeList } from '../performer/modes'
-import type { Mode } from '../performer/modes'
+import { useAllModes, type Mode } from '../performer/modes'
 import type { CtrlBarPos } from '../storage/configStore'
 
 interface Props {
@@ -49,6 +48,8 @@ export function ControlBar({
   settingsOpen,
   onSettings,
 }: Props) {
+  // 内置+自定义模式(模式工坊增删时重渲染,分段控件与滑块随之伸缩)
+  const modeList = useAllModes()
   const [hovered, setHovered] = useState<string | null>(null)
   const gripRef = useRef<HTMLSpanElement>(null)
   const segCtl = useRef<HTMLDivElement>(null)

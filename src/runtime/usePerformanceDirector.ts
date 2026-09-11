@@ -16,7 +16,7 @@ import {
   type DialogLine,
 } from '../performer/player'
 import { deliverySpeed, type SceneCard, type Speaker } from '../performer/dialogSchema'
-import { MODES, modeOf, type Mode } from '../performer/modes'
+import { modeOf, type Mode } from '../performer/modes'
 import {
   generateShortChat,
   generateInterjectionBatch,
@@ -556,7 +556,7 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
       beginPerforming()
       playingLines.current = script.before
       player.current!.play(withFinalePause(script.before), {
-        gap: MODES[m].gap,
+        gap: modeOf(m).gap,
         choice: script.choice,
         after: Object.fromEntries(
           Object.entries(script.after).map(([id, seg]) => [id, withFinalePause(seg)]),
@@ -571,7 +571,7 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
     } catch (e) {
       if (ctrl.signal.aborted) return
       console.error('LLM 生成失败，回退硬编码脚本', e)
-      lastLines.current = MODES[m].script
+      lastLines.current = modeOf(m).script
       nowPlaying.current = null // 兜底剧本与抽中的话题无关,不参与看完/跳过记账
       beginPerforming()
       // 先出提示气泡(带具体原因),短暂停留后再开播,避免被第一句台词立即覆盖
@@ -581,8 +581,8 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
       window.setTimeout(() => {
         if (ctrl.signal.aborted) return // 停止/切换期间不续播
         deps.presenter.reset()
-        playingLines.current = MODES[m].script
-        player.current!.play(MODES[m].script, { gap: MODES[m].gap })
+        playingLines.current = modeOf(m).script
+        player.current!.play(modeOf(m).script, { gap: modeOf(m).gap })
       }, 1800)
     } finally {
       arcReservation?.release()

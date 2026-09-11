@@ -1,10 +1,12 @@
 // 模式注册表：DialogMode 是"抽象父类"契约，每个模式文件是一个"子类"。
-// 新增模式 = 新建一个 ts 文件导出 DialogMode + 在 MODES 里加一项，
+// 新增内置模式 = 新建一个 ts 文件导出 DialogMode + 在 MODES 里加一项，
 // 分段按钮/历史徽标/重放节奏/LLM 指令全部自动感知，其余代码零改动。
+// 用户自定义模式(模式工坊)运行时经 allModes()/modeOf() 动态并入,同享以上全部链路。
+import { useMemo } from 'react'
 import { crosstalkMode } from './crosstalk'
 import { dailyMode } from './daily'
-import { debateMode } from './debate'
 import { liveMode } from './live'
+import { getCustomModesSnapshot, useCustomModes } from '../../storage/customModesStore'
 import type { DialogLine } from '../player'
 
 export interface DialogMode<ID extends string = string> {
@@ -25,22 +27,48 @@ export interface DialogMode<ID extends string = string> {
   /** 可选：随机话题时改用"使用者兴趣"作主题的概率(0~1,缺省 0)。
    *  日常闲聊适合高些,相声等结构化模式只宜点缀 */
   interestTopicChance?: number
+  /** 可选：自然语言路由触发词("来一段关于加班的相声"里的"相声");
+   *  缺省不可被自然语言点播,只能从分段按钮进。内置模式与模式工坊新模式都靠它进路由 */
+  triggers?: string[]
 }
 
 export const MODES = {
   daily: dailyMode,
   crosstalk: crosstalkMode,
-  debate: debateMode,
   live: liveMode,
 } satisfies Record<string, DialogMode>
 
-/** 由注册表键自动派生；注册表加一项，类型自动扩展 */
-export type Mode = keyof typeof MODES
+/** 内置模式的注册键(编译期可枚举) */
+export type BuiltinMode = keyof typeof MODES
 
-/** UI 按此顺序渲染分段选择器 */
+/** 模式 id:内置键保留自动补全,同时放行自定义模式等任意字符串(历史落盘兼容) */
+export type Mode = BuiltinMode | (string & {})
+
+/** UI 按此顺序渲染内置分段选择器(自定义模式追加在后,见 allModes) */
 export const modeList = Object.values(MODES)
 
-/** 历史/落盘里的 mode 是任意字符串，未知 id 回退日常 */
+/** 内置 + 自定义的完整模式列表:分段按钮/命令注册/自然语言路由的动态事实源 */
+export function allModes(): DialogMode[] {
+  const custom = getCustomModesSnapshot()
+  if (custom.length === 0) return modeList
+  const builtin = new Set(Object.keys(MODES))
+  return [...modeList, ...custom.filter((m) => !builtin.has(m.id))]
+}
+
+/** useSyncExternalStore 版 allModes:自定义模式增删时触发重渲染(UI 组件用) */
+export function useAllModes(): DialogMode[] {
+  const custom = useCustomModes()
+  return useMemo(() => {
+    const builtin = new Set(Object.keys(MODES))
+    return [...modeList, ...custom.filter((m) => !builtin.has(m.id))]
+  }, [custom])
+}
+
+/** 历史/落盘里的 mode 是任意字符串:内置 → 自定义 → 都没有则回退日常 */
 export function modeOf(id: string): DialogMode {
-  return (MODES as Record<string, DialogMode>)[id] ?? MODES.daily
+  return (
+    (MODES as Record<string, DialogMode>)[id] ??
+    getCustomModesSnapshot().find((m) => m.id === id) ??
+    MODES.daily
+  )
 }
