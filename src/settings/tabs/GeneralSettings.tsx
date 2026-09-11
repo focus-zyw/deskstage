@@ -70,7 +70,7 @@ export function GeneralSettings() {
             ).map(([v, label]) => (
               <button
                 key={v}
-                className={`seg-btn${form.bubbleStyle === v ? ' on' : ''}`}
+                className={`seg-btn${saved.bubbleStyle === v ? ' on' : ''}`}
                 onClick={() => saveField({ bubbleStyle: v }, true)}
               >
                 {label}
