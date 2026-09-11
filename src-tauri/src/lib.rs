@@ -60,6 +60,46 @@ fn set_noactivate(window: tauri::WebviewWindow, enable: bool) {
   let _ = (window, enable);
 }
 
+// 置顶看门狗:TOPMOST 位偶尔会被系统弄丢(休眠唤醒/分辨率切换/隐藏再显示/DWM 重排),
+// 丢失后普通窗口就能盖住角色,而窗口免激活(WS_EX_NOACTIVATE)无法靠点击拉回,
+// 只能被动被埋。低频巡检:TOPMOST 位还在时不动作(不压便签/PiP 等其他置顶工具的层序),
+// 发现丢了才重新 SetWindowPos 拉回最上层(带 NOACTIVATE,不抢焦点)。
+fn spawn_topmost_watchdog(handle: tauri::AppHandle) {
+  #[cfg(windows)]
+  thread::spawn(move || {
+    use tauri::Manager;
+    use windows::Win32::UI::WindowsAndMessaging::{
+      GetWindowLongPtrW, SetWindowPos, GWL_EXSTYLE, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE,
+      SWP_NOSIZE, WS_EX_TOPMOST,
+    };
+    loop {
+      thread::sleep(Duration::from_secs(3));
+      let Some(win) = handle.get_webview_window("main") else {
+        continue;
+      };
+      let Ok(hwnd) = win.hwnd() else {
+        continue;
+      };
+      unsafe {
+        let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        if ex & WS_EX_TOPMOST.0 as isize == 0 {
+          let _ = SetWindowPos(
+            hwnd,
+            Some(HWND_TOPMOST),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+          );
+        }
+      }
+    }
+  });
+  #[cfg(not(windows))]
+  let _ = handle;
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
@@ -106,6 +146,7 @@ pub fn run() {
       }
       spawn_cursor_poll(app.handle().clone());
       pointer_hook::spawn(app.handle().clone());
+      spawn_topmost_watchdog(app.handle().clone());
       Ok(())
     })
     .run(tauri::generate_context!())
