@@ -15,6 +15,7 @@ export type SettingsTab =
   | 'memo'
   | 'favorites'
   | 'history'
+  | 'support'
 
 /** 左侧导航:偏好设置 / 数据管理 两组 */
 export const SETTINGS_NAV: { group: string; items: { id: SettingsTab; label: string; icon: ReactElement }[] }[] = [
@@ -166,6 +167,20 @@ export const SETTINGS_NAV: { group: string; items: { id: SettingsTab; label: str
       },
     ],
   },
+  {
+    group: '支持',
+    items: [
+      {
+        id: 'support',
+        label: '支持作者',
+        icon: (
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z" />
+          </svg>
+        ),
+      },
+    ],
+  },
 ]
 
 /** 分页 → 所属分组(标题栏眉标与搜索结果面包屑用) */
@@ -182,6 +197,7 @@ export const TAB_GROUP: Record<SettingsTab, string> = {
   memo: '数据管理',
   favorites: '数据管理',
   history: '数据管理',
+  support: '支持',
 }
 
 /** 搜索索引:每个可搜索的设置项 → 所在分页 + 卡片(点击结果跳转并高亮卡片) */
@@ -273,4 +289,8 @@ export const SETTINGS_SEARCH_INDEX: { tab: SettingsTab; card: string; label: str
   { tab: 'favorites', card: '收藏的对话', label: '收藏的对话', keywords: '收藏 星标 精选 管理 重放 取消' },
   // 历史
   { tab: 'history', card: '演出历史', label: '演出历史', keywords: '回放 收藏 删除 历史' },
+  // 支持作者
+  { tab: 'support', card: '请作者喝杯奶茶', label: '支持作者', keywords: '支持 捐赠 打赏 赞助 收款码 微信 支付宝 抽奖' },
+  { tab: 'support', card: '心意扭蛋机', label: '心意扭蛋机', keywords: '抽奖 扭蛋 单抽 十连 次数 保底 稀有' },
+  { tab: 'support', card: '心意图鉴', label: '心意图鉴', keywords: '图鉴 收集 感谢语 稀有度 彩蛋 集齐' },
 ]

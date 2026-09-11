@@ -74,6 +74,7 @@ import { useOverlayHitRegions } from './runtime/useOverlayHitRegion'
 import { SettingsWindow } from './settings/SettingsWindow'
 import type { SettingsBridge } from './settings/useSettingsSession'
 import type { SettingsTab } from './settings/settingsCatalog'
+import type { Rarity } from './features/support/pool'
 import './App.css'
 
 // 点击反应台词池,按连戳强度分级(60s 滑动窗口计数)
@@ -864,6 +865,7 @@ function App() {
     onResetLayout: resetLayout,
     onResetC: resetResidentLayout,
     onPrivacyTip: showPrivacyTip,
+    onSupportThanks: showSupportThanks,
   }
 
   // ---------- 备忘录:调度与常驻提醒 ----------
@@ -883,6 +885,44 @@ function App() {
     const tip = PRIVACY_TIPS[privacyTipIdx.current % PRIVACY_TIPS.length]
     privacyTipIdx.current += 1
     showPoke(who, tip, 'surprise', 3600)
+  }
+
+  // ---------- 支持作者:抽奖答谢演出 ----------
+  // 稀有度定规格:普通/稀有插一句话,史诗加道具,传说 A→B→C 全员谢幕。
+  // 连抽时旧演出被新答谢顶掉(token 失配的定时器自弃),感谢语由设置页解析好 {name} 再交进来
+  const supportThanksToken = useRef(0)
+  const SUPPORT_UR_LINES = [
+    { b: '传说级心意!老板大气!', c: '已将这位老板记入荣誉名册!' },
+    { b: '这排面,全体起立鼓掌!', c: '老板的名字,小管家刻进功劳簿了!' },
+  ]
+  function showSupportThanks(content: { rarity: Rarity; text: string }) {
+    const token = ++supportThanksToken.current
+    // token 失配即自弃:连点抽奖时上一轮的 B/C 跟话不再插进来
+    const later = (ms: number, fn: () => void) =>
+      window.setTimeout(() => {
+        if (supportThanksToken.current === token) fn()
+      }, ms)
+    const who: 'A' | 'B' = Math.random() < 0.5 ? 'A' : 'B'
+    if (content.rarity === 'legendary') {
+      const lines = SUPPORT_UR_LINES[Math.floor(Math.random() * SUPPORT_UR_LINES.length)]
+      showProp('A', 'microphone')
+      presenterSay('A', content.text, { action: 'happy', ms: 3200 })
+      pulseOther('A')
+      later(3400, () => {
+        presenterSay('B', lines.b, { action: 'laugh', ms: 2800 })
+        pulseOther('B')
+      })
+      later(6300, () => presenterSay('C', lines.c, { ms: 2600 }))
+    } else if (content.rarity === 'epic') {
+      showProp(who, 'milk-tea')
+      presenterSay(who, content.text, { action: 'happy', ms: 3200 })
+      pulseOther(who)
+    } else {
+      presenterSay(who, content.text, {
+        action: content.rarity === 'rare' ? 'laugh' : 'happy',
+        ms: 2800,
+      })
+    }
   }
 
 

@@ -21,6 +21,7 @@ import { MemorySettings } from './tabs/MemorySettings'
 import { MemoSettings } from './tabs/MemoSettings'
 import { FavoritesSettings } from './tabs/FavoritesSettings'
 import { HistorySettings } from './tabs/HistorySettings'
+import { SupportSettings } from './tabs/SupportSettings'
 
 export interface SettingsWindowProps {
   /** 命中区注册用:App 需要拿到窗口根元素的屏幕矩形 */
@@ -46,6 +47,7 @@ const TAB_CONTENT: Record<SettingsTab, () => React.JSX.Element> = {
   memo: MemoSettings,
   favorites: FavoritesSettings,
   history: HistorySettings,
+  support: SupportSettings,
 }
 
 export function SettingsWindow({ innerRef, bridge, initialTab = 'general', onExit }: SettingsWindowProps) {

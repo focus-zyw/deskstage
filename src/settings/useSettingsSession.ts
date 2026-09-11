@@ -21,6 +21,7 @@ import { CUSTOM_VENDOR_ID, vendorIdOfBaseUrl } from '../engine/vendors'
 import { startQrLogin, type QrLoginHandle, type QrPhase } from '../live/biliLogin'
 import QRCode from 'qrcode'
 import type { Episode } from '../storage/historyStore'
+import type { Rarity } from '../features/support/pool'
 
 /** apiKeys 的存储键:预设厂商用 id,自定义端点按 baseUrl 区分(与 configStore 注释约定一致) */
 export function vendorKeyOf(id: string, baseUrl: string): string {
@@ -35,7 +36,7 @@ export interface QrLoginState {
   hint?: string
 }
 
-/** 跨模块行为:设置窗口只通过这三个回调触碰应用其余部分(回放/布局复位/备忘隐私插话) */
+/** 跨模块行为:设置窗口只通过这些回调触碰应用其余部分(回放/布局复位/备忘隐私插话/支持答谢) */
 export interface SettingsBridge {
   /** 历史页点击一行:回放该集(窗口关闭由 App 侧负责) */
   onReplay(ep: Episode): void
@@ -45,6 +46,8 @@ export interface SettingsBridge {
   onResetC(): void
   /** 备忘页添加备忘时的隐私提示插话(角色气泡) */
   onPrivacyTip(): void
+  /** 支持页抽奖:本轮最高稀有度的感谢语交给舞台角色当场答谢(rarity 决定演出规格) */
+  onSupportThanks(content: { rarity: Rarity; text: string }): void
 }
 
 export interface SettingsSessionApi {
