@@ -1700,6 +1700,43 @@
   display: flex;
   gap: 6px;
 }
+/* @ 补全面板:在流子元素撑高 chat-box(原生热区矩形随实际尺寸取,穿透下可点选) */
+.mention-pop {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 8px;
+  padding: 6px;
+  border: 1px solid rgba(133, 119, 244, 0.4);
+  border-radius: 10px;
+  background: rgba(20, 20, 31, 0.92);
+  animation: bubble-in 0.15s ease;
+}
+.mention-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: #fff;
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+}
+.mention-item.on,
+.mention-item:hover {
+  background: rgba(133, 119, 244, 0.28);
+}
+.mention-item .mention-key {
+  margin-left: auto;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: rgba(133, 119, 244, 0.22);
+  color: rgba(255, 255, 255, 0.75);
+  font-size: 12px;
+}
 .chat-row input[type='text'] {
   flex: 1;
   min-width: 0;

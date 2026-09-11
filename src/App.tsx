@@ -31,6 +31,13 @@ import { extractTextFromClipboard } from './translation/ocr'
 import { startLiveSession, stopLiveSession, type LiveReply } from './runtime/liveDanmaku'
 import { CommandPanel } from './ui/CommandPanel'
 import { ChoicePanel } from './ui/ChoicePanel'
+import {
+  applyMention,
+  filterMentionTargets,
+  mentionContext,
+  mentionTargets,
+  type MentionTarget,
+} from './ui/mention'
 import type { Command } from './features/commands/commands'
 import {
   useRuntime,
@@ -179,6 +186,22 @@ function App() {
   const [chatBusy, setChatBusy] = useState(false)
   const [userBubble, setUserBubble] = useState<string | null>(null)
   const lastChatTarget = useRef<Speaker>('A')
+  // @ 补全(QQ/微信式):输入 @ 唤起候选,随已输文本过滤;面板打开时接管回车/方向键/Esc
+  const [mention, setMention] = useState<{ query: string } | null>(null)
+  const [mentionIdx, setMentionIdx] = useState(0)
+  const chatInputRef = useRef<HTMLInputElement>(null)
+  const mentionCandidates = useMemo(
+    () => mentionTargets({ A: config.names.a, B: config.names.b, C: config.names.c }),
+    [config.names.a, config.names.b, config.names.c],
+  )
+  const mentionMatches = useMemo(
+    () => filterMentionTargets(mentionCandidates, mention?.query ?? ''),
+    [mentionCandidates, mention],
+  )
+  // 关闭聊天面板时补全面板一并收起(草稿保留是原有行为)
+  useEffect(() => {
+    if (!chatOpen) setMention(null)
+  }, [chatOpen])
   // 翻译面板:开合由 runtime overlays 管;OCR 链路注入的原文(auto=截图翻译入口,填入即自动翻)
   const translationOpen = rt.overlays.includes('translation')
   const toolsOpen = rt.overlays.includes('tools')
@@ -662,6 +685,19 @@ function App() {
   function replayFromHistory(ep: Episode) {
     closeOverlay('settings')
     director.replay(ep, 'manual')
+  }
+
+  /** 选中 @ 候选:替换光标前的 "@过滤词" 为 "@全名␣",光标落到空格后,面板收起 */
+  function pickMention(c: MentionTarget) {
+    const input = chatInputRef.current
+    const caret = input?.selectionStart ?? chatDraft.length
+    const { text, caret: nextCaret } = applyMention(chatDraft, caret, c.name)
+    setChatDraft(text)
+    setMention(null)
+    requestAnimationFrame(() => {
+      input?.focus()
+      input?.setSelectionRange(nextCaret, nextCaret)
+    })
   }
 
   /** 聊天通道:解析 @角色 → TurnBatch(被@角色先答,其他人有料才补,共 1~3 句) → 顺序播报。
@@ -1165,13 +1201,58 @@ function App() {
             style={{ left: `${ctrlBar.xPct}%`, top: ctrlBar.top + 46 }}
           >
             {userBubble && <div className="user-bubble">你说:{userBubble}</div>}
+            {/* @ 补全面板:在流子元素撑高容器,原生热区矩形自动覆盖,穿透下可点选 */}
+            {mention && mentionMatches.length > 0 && (
+              <div className="mention-pop">
+                {mentionMatches.map((c: MentionTarget, i: number) => (
+                  <button
+                    key={c.id}
+                    type="button"
+                    className={`mention-item${i === mentionIdx % mentionMatches.length ? ' on' : ''}`}
+                    onMouseDown={(e) => {
+                      e.preventDefault() // 保持输入框焦点
+                      pickMention(c)
+                    }}
+                  >
+                    @{c.name}
+                    <span className="mention-key">{c.key}</span>
+                  </button>
+                ))}
+              </div>
+            )}
             <div className="chat-row">
               <input
+                ref={chatInputRef}
                 type="text"
                 placeholder="和角色说话…(@甲/@乙/@丙 指定谁回)"
                 value={chatDraft}
-                onChange={(e) => setChatDraft(e.target.value)}
+                onChange={(e) => {
+                  const v = e.target.value
+                  setChatDraft(v)
+                  const caret = e.target.selectionStart ?? v.length
+                  setMention(mentionContext(v.slice(0, caret)))
+                  setMentionIdx(0)
+                }}
                 onKeyDown={(e) => {
+                  if (mention && mentionMatches.length > 0) {
+                    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                      e.preventDefault()
+                      const step = e.key === 'ArrowDown' ? 1 : mentionMatches.length - 1
+                      setMentionIdx((i) => (i + step) % mentionMatches.length)
+                      return
+                    }
+                    if (e.key === 'Enter' || e.key === 'Tab') {
+                      e.preventDefault()
+                      pickMention(mentionMatches[mentionIdx % mentionMatches.length])
+                      return
+                    }
+                    if (e.key === 'Escape') {
+                      e.preventDefault()
+                      e.stopPropagation() // 只收起补全,不连带关掉聊天面板
+                      setMention(null)
+                      return
+                    }
+                  }
                   if (e.key === 'Enter') void sendUserChat()
                 }}
               />
