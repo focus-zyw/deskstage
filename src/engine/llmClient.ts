@@ -20,6 +20,7 @@ import { peekRecap, takeRecap } from '../storage/interactionStore'
 import { pickRelationship } from '../performer/modes/relationships'
 import { currentTimeSlot } from './timeAware'
 import { duoShortPersona, nameOf, soloShortPersona } from './persona'
+import type { TurnWho } from '../dialogue/turnWindow'
 import { envContext } from './envAware'
 import {
   clampPauseMs,
@@ -30,6 +31,7 @@ import {
   type ContextAdoption,
   type DialogLine,
   type PerformanceScript,
+  type Speaker,
 } from '../performer/dialogSchema'
 import type { Mode } from '../performer/modes'
 
@@ -110,10 +112,7 @@ export async function generateDialog(
   const mem = await getMemory()
   // 约 30% 的集数包含观众抉择点(由应用侧掷骰,重试保持一致)
   const allowChoice = Math.random() < 0.3
-  // 约 25% 的集数允许场外角色乱入(与抉择点互斥,重试保持一致):
-  // 打破双人固定结构,第三人只用画外音/电话,不占立绘
-  const GUESTS = ['房东', '快递员', '老板', `${nameOf('A')}的神秘朋友`, `${nameOf('B')}的债主`, '邻居的猫(只会喵呜)']
-  const guest = !allowChoice && Math.random() < 0.25 ? GUESTS[Math.floor(Math.random() * GUESTS.length)] : undefined
+  // 丙(C)是常驻正式角色,随 prompt 永久参与,不再走随机客串掷骰
   // 上一集的观众选择:注入一次即清除
   let lastChoice: string | null = null
   try { lastChoice = localStorage.getItem('vc-lastChoice') } catch { /* ignore */ }
@@ -151,7 +150,7 @@ export async function generateDialog(
         : bond.rivalry >= 3
           ? '两人近期摩擦变多,互相较劲谁也不服谁'
           : undefined
-  const messages = buildMessages(mode, topic, recentLines, topicFixed, cfg.userInterests, userCtx, relationship, interactionRecap, allowChoice, lastChoice ?? undefined, arc, envNote, guest, bondNote, continueFromPrevious)
+  const messages = buildMessages(mode, topic, recentLines, topicFixed, cfg.userInterests, userCtx, relationship, interactionRecap, allowChoice, lastChoice ?? undefined, arc, envNote, bondNote, continueFromPrevious)
   // 网页版生成(设置里开启):主演出改经隐藏网页窗口由网页模型生成。
   // 网页端没有 json_mode/temperature,格式服从度靠协议本身(手动验证 6/6 通过,
   // 见 docs/webchat-prompt-test.md)。生成慢(几十秒级),点播与预生成都有耐心等;
@@ -274,7 +273,7 @@ export async function generateShortChat(
   const interests = profileBits ? `${profileBits}\n` : ''
   const prev = recentLines
     .slice(-2)
-    .map((l) => `${l.speaker === 'A' ? nameOf('A') : l.speaker === 'C' ? '丙(场外)' : nameOf('B')}:${l.text}`)
+    .map((l) => `${nameOf(l.speaker)}:${l.text}`)
     .join('\n')
   const task =
     (kind === 'greeting'
@@ -307,13 +306,13 @@ export async function generateShortChat(
  * 4s 超时、不重试——戳一戳场景宁可快速回退固定台词。
  */
 export async function improvPokeLine(
-  who: 'A' | 'B',
+  who: Speaker,
   recentLines: DialogLine[],
 ): Promise<string> {
   const persona = soloShortPersona(who)
   const ctx = recentLines
     .slice(-4)
-    .map((l) => `${l.speaker === 'A' ? nameOf('A') : l.speaker === 'C' ? '丙(场外)' : nameOf('B')}:${l.text}`)
+    .map((l) => `${nameOf(l.speaker)}:${l.text}`)
     .join('\n')
   const messages: { role: string; content: string }[] = [
     {
@@ -351,7 +350,7 @@ export async function improvPokeLine(
  * 聊天通道:观众对指定角色说了一句话,该角色用自己的口吻回一句(15~25 字)。
  * 注入称呼/画像/记忆事实,命中雷区的话题不接。8s 超时、不重试,失败由调用方静默兜底。
  */
-export async function generateUserChatReply(who: 'A' | 'B', userText: string): Promise<string> {
+export async function generateUserChatReply(who: Speaker, userText: string): Promise<string> {
   const cfg = await getConfig()
   const mem = await getMemory()
   const p: UserProfile = cfg.userProfile
@@ -392,28 +391,28 @@ export async function generateUserChatReply(who: 'A' | 'B', userText: string): P
   }
 }
 
-/** TurnBatch 轻校验(纯函数,导出供测试):1~3 句、speaker 只能 A/B、被@角色必须首答。
+/** TurnBatch 轻校验(纯函数,导出供测试):1~3 句、speaker 只能 A/B/C、被@角色必须首答。
  *  不合格返回 null,由调用方回落单句应答 */
-export function validateTurnBatch(lines: DialogLine[], target: 'A' | 'B'): DialogLine[] | null {
+export function validateTurnBatch(lines: DialogLine[], target: Speaker): DialogLine[] | null {
   if (lines.length < 1 || lines.length > 3) return null
-  if (lines.some((l) => l.speaker !== 'A' && l.speaker !== 'B')) return null
+  if (lines.some((l) => l.speaker !== 'A' && l.speaker !== 'B' && l.speaker !== 'C')) return null
   if (lines[0].speaker !== target) return null
   return lines
 }
 
-/** 用户聊天 TurnBatch(P3):观众对角色说了一句话,生成 1~3 句双角色回合。
- *  被 @ 的角色必须先答;另一位确有新信息或包袱才补 1 句;带短期会话窗口。
+/** 用户聊天 TurnBatch:观众对角色说了一句话,生成 1~3 句多人回合。
+ *  被 @ 的角色必须先答;其他角色确有新信息或包袱才各补 1 句;带短期会话窗口。
  *  12s 超时、不重试;失败由调用方回落 generateUserChatReply 单句应答 */
 export async function generateTurnBatch(input: {
   userText: string
   /** 被 @ 的角色(显式或轮换决定);该角色必须第一句先答 */
-  target: 'A' | 'B'
+  target: Speaker
   /** 短期会话窗口(最近若干句,含观众) */
-  window: { who: 'user' | 'A' | 'B'; text: string }[]
+  window: { who: TurnWho; text: string }[]
 }): Promise<DialogLine[]> {
   const cfg = await getConfig()
   const mem = await getMemory()
-  const persona = duoShortPersona()
+  const persona = `${duoShortPersona()};${soloShortPersona('C')}`
   const p: UserProfile = cfg.userProfile
   const facts = topFacts(mem, 3)
   const windowText = input.window.length
@@ -422,14 +421,17 @@ export async function generateTurnBatch(input: {
         .join('\n')
     : ''
   const targetName = nameOf(input.target)
-  const otherName = nameOf(input.target === 'A' ? 'B' : 'A')
+  const others = (['A', 'B', 'C'] as const)
+    .filter((id) => id !== input.target)
+    .map((id) => `${nameOf(id)}(speaker "${id}")`)
+    .join('和')
   const messages: { role: string; content: string }[] = [
     {
       role: 'system',
-      content: `桌面双人情景剧的聊天编剧。角色:${persona}。${p.userName ? `观众称呼"${p.userName}"。` : ''}口语化、有梗、像真说话。
+      content: `桌面情景剧的聊天编剧。角色:${persona}。${p.userName ? `观众称呼"${p.userName}"。` : ''}口语化、有梗、像真说话。
 输出协议(严格遵守):只输出一个 JSON 对象,格式 {"dialog":[{"speaker":"A","text":"台词","target":"B"},...]}
-- 一共 1~3 句:观众这句话是对${targetName}说的,${targetName}(speaker "${input.target}")必须第一句先答;${otherName}只有确实有新信息或好包袱时才补 1 句,没有就只回 1 句
-- 每句不超过 25 字,不要引号;speaker 只能是 A 或 B 且不连续同一人;"target" 填这句对谁说("A"/"B"/"audience" 对观众)${facts.length ? `\n- 记住的观众的事:${facts.join(';')}` : ''}`,
+- 一共 1~3 句:观众这句话是对${targetName}说的,${targetName}(speaker "${input.target}")必须第一句先答;${others}只在确实有新信息或好包袱时才各补 1 句,没有就只回 1 句
+- 每句不超过 25 字,不要引号;speaker 只能是 A、B 或 C 且不连续同一人;"target" 填这句对谁说("A"/"B"/"C"/"audience" 对观众)${facts.length ? `\n- 记住的观众的事:${facts.join(';')}` : ''}`,
     },
     {
       role: 'user',
@@ -451,15 +453,15 @@ export async function generateTurnBatch(input: {
  *  失败返回空数组,由调用方跳过反应直接续播 */
 export async function generateInterjectionBatch(input: {
   userText: string
-  target: 'A' | 'B'
+  target: Speaker
   /** 已播剧情的结尾几句,接话要贴着刚才演到哪 */
   recentPlayed: string[]
   /** 剧情剩余部分的第一句内容(接回点) */
   bridgeTo: string
-  window: { who: 'user' | 'A' | 'B'; text: string }[]
+  window: { who: TurnWho; text: string }[]
 }): Promise<DialogLine[]> {
   const cfg = await getConfig()
-  const persona = duoShortPersona()
+  const persona = `${duoShortPersona()};${soloShortPersona('C')}`
   const p: UserProfile = cfg.userProfile
   const targetName = nameOf(input.target)
   const windowText = input.window.length
@@ -470,10 +472,10 @@ export async function generateInterjectionBatch(input: {
   const messages: { role: string; content: string }[] = [
     {
       role: 'system',
-      content: `桌面双人情景剧:演出进行到一半,观众插了一句话。角色:${persona}。${p.userName ? `观众称呼"${p.userName}"。` : ''}口语化、有梗、像真说话。
+      content: `桌面情景剧:演出进行到一半,观众插了一句话。角色:${persona}。${p.userName ? `观众称呼"${p.userName}"。` : ''}口语化、有梗、像真说话。
 输出协议(严格遵守):只输出一个 JSON 对象,格式 {"dialog":[{"speaker":"A","text":"台词","target":"B"},...]}
-- 一共 1~3 句:${targetName}(speaker "${input.target}")第一句先回应观众插的话;最后一句必须自然把话头带回刚才的剧情,贴着"剧情刚才演到"与"接下来要演",不要生硬
-- 每句不超过 25 字,不要引号;speaker 只能是 A 或 B 且不连续同一人`,
+- 一共 1~3 句:${targetName}(speaker "${input.target}")第一句先回应观众插的话;其他角色只在有新信息或好包袱时补 1 句;最后一句必须自然把话头带回刚才的剧情,贴着"剧情刚才演到"与"接下来要演",不要生硬
+- 每句不超过 25 字,不要引号;speaker 只能是 A、B 或 C 且不连续同一人`,
     },
     {
       role: 'user',
@@ -501,12 +503,13 @@ export interface LivePetAction {
   /** 被选中的弹幕下标(调用方批次内);-1 = 全部不回 */
   pick: number
   reply: string
-  speaker: 'A' | 'B'
+  speaker: Speaker
   action: string
 }
 
 /**
- * 弹幕回复决策:攒批弹幕一次调用,挑一条最值得回的,由甲或乙回一句。
+ * 弹幕回复决策:攒批弹幕一次调用,挑一条最值得回的,由甲/乙/丙回一句。
+ * 弹幕点名丙(@丙/C 的名字)时丙优先回答;未点名时丙只在低概率下补充。
  * 与 generateDialog 的两遍标注剧本不同,这里是轻量单次调用(10s 超时,弹幕过期不等人);
  * JSON 解析失败/字段不合规抛错,调用方按"这批不回"静默处理。
  */
@@ -531,9 +534,9 @@ export async function generateLiveReply(
   const messages: { role: string; content: string }[] = [
     {
       role: 'system',
-      content: `桌面双人情景剧正在"直播读弹幕"。两位角色:${duoShortPersona()}。${p.userName ? `主播(用户)叫"${p.userName}",角色偶尔可以提到TA。` : ''}下面是最新一批直播间弹幕。挑一条最值得回的(优先问角色的、有趣的、能接梗的;刷屏/无意义/人身攻击的直接不回),由甲或乙用各自口吻回一句。要求:15~40字,口语化像真说话;语气跟各自人设走,优先友好捧场和接梗,偶尔斗嘴点缀即可,别句句抬杠;不要复读弹幕原文。
+      content: `桌面情景剧正在"直播读弹幕"。两位主角:${duoShortPersona()}。常驻第三角色:${soloShortPersona('C')}(speaker "C",话少,弹幕没点名她就不抢话)。${p.userName ? `主播(用户)叫"${p.userName}",角色偶尔可以提到TA。` : ''}下面是最新一批直播间弹幕。挑一条最值得回的(优先问角色的、有趣的、能接梗的;刷屏/无意义/人身攻击的直接不回),由甲/乙/丙中的一位用各自口吻回一句——弹幕点名了丙(@${nameOf('C')}/C)就由丙回答,否则优先甲乙,丙只在内容确实与她的小管家职责相关时才接。要求:15~40字,口语化像真说话;语气跟各自人设走,优先友好捧场和接梗,偶尔斗嘴点缀即可,别句句抬杠;不要复读弹幕原文。
 ${p.banTopics ? `雷区(绝对不聊):${p.banTopics}。` : ''}
-只输出一个 JSON 对象:{"pick":<弹幕序号>,"reply":"<回复,不回则空串>","speaker":"A"或"B","action":"<动作词>"}
+只输出一个 JSON 对象:{"pick":<弹幕序号>,"reply":"<回复,不回则空串>","speaker":"A"或"B"或"C","action":"<动作词>"}
 action 只能是这些词之一:${[...VALID_ACTIONS].join('|')}。${bits.length ? `\n关于观众:${bits.join(';')}。` : ''}${recentReplies.length ? `\n最近已说过(不要重复,保持话题推进):${recentReplies.join(' / ')}` : ''}`,
     },
     { role: 'user', content: danmakuList },
@@ -551,7 +554,7 @@ action 只能是这些词之一:${[...VALID_ACTIONS].join('|')}。${bits.length 
   const obj = JSON.parse(m[0]) as Record<string, unknown>
   const reply = typeof obj.reply === 'string' ? obj.reply.trim().slice(0, 60) : ''
   const pick = Number(obj.pick)
-  const speaker = obj.speaker === 'B' ? 'B' : 'A'
+  const speaker: Speaker = obj.speaker === 'B' || obj.speaker === 'C' ? obj.speaker : 'A'
   const action = typeof obj.action === 'string' && VALID_ACTIONS.has(obj.action) ? obj.action : 'talk'
   // 不回:模型明确给空回复;下标越界时保留回复但标记为无目标(上游不记弹幕历史)
   if (!reply) return { pick: -1, reply: '', speaker, action }
@@ -599,7 +602,7 @@ export async function extractFacts(
 }
 
 /**
- * 备忘提醒短句:以场外角色(C)的口吻播报一条到点的待办。
+ * 备忘提醒短句:以常驻小管家(C)的口吻播报一条到点的待办。
  * 8s 超时、不重试;失败由调用方回退固定模板。
  */
 export async function memoReminderLine(memoText: string): Promise<string> {
@@ -607,7 +610,7 @@ export async function memoReminderLine(memoText: string): Promise<string> {
     {
       role: 'system',
       content:
-        '你是桌面情景剧的场外画外音(播报员)。用一句 15~25 字的口吻播报一条到点的待办,可以带点综艺感(比如"叮——"),但要把事情说清楚,只输出这一句话,不要引号。',
+        '你是桌面情景剧的常驻小管家(播报员)。用一句 15~25 字的口吻播报一条到点的待办,可以带点综艺感(比如"叮——"),但要把事情说清楚,只输出这一句话,不要引号。',
     },
     { role: 'user', content: `到点的待办:${memoText}` },
   ]
@@ -630,7 +633,7 @@ export async function memoReminderLine(memoText: string): Promise<string> {
  * 输出是按行号的编辑表(~100 token),合并时钳位校验;8s 超时,失败原样返回。
  */
 export async function addPerformanceCues(lines: DialogLine[]): Promise<DialogLine[]> {
-  const script = lines.map((l, i) => `${i}.${l.speaker === 'A' ? nameOf('A') : l.speaker === 'C' ? '丙(场外)' : nameOf('B')}:${l.text}`).join('\n')
+  const script = lines.map((l, i) => `${i}.${nameOf(l.speaker)}:${l.text}`).join('\n')
   const messages: { role: string; content: string }[] = [
     {
       role: 'system',
@@ -674,7 +677,7 @@ export async function addPerformanceCues(lines: DialogLine[]): Promise<DialogLin
 /** 本集台词文本:蒸馏输入与 curator 的证据校验用同一拼写,避免两边格式漂移 */
 export function transcriptOf(lines: DialogLine[]): string {
   return lines
-    .map((l) => `${l.speaker === 'A' ? nameOf('A') : l.speaker === 'C' ? '丙(场外)' : nameOf('B')}:${l.text}`)
+    .map((l) => `${nameOf(l.speaker)}:${l.text}`)
     .join('\n')
 }
 

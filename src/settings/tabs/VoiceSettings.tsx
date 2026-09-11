@@ -142,7 +142,7 @@ export function VoiceSettings() {
             [
               ['A', '角色甲音色', 'cfg-voice-a'],
               ['B', '角色乙音色', 'cfg-voice-b'],
-              ['C', '场外客串音色(第三人乱入时用)', 'cfg-voice-c'],
+              ['C', '角色C音色(常驻小管家)', 'cfg-voice-c'],
             ] as const
           ).map(([slot, label, id]) => (
             <SetField key={slot} label={label} htmlFor={id}>

@@ -491,6 +491,62 @@
   vertical-align: middle;
 }
 
+/* 常驻角色 C:WebM 视频舞台。双 video 交叉淡入的 opacity 由 JS 直接改——
+   初始 0 写在这里而不是 React style,否则重渲染会把 JS 设置值重置回 0 造成黑帧 */
+.resident {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  /* 底部留 12px,让 bottom:-10px 的名牌完整落在窗口内(与 .char 一致) */
+  margin-bottom: 12px;
+}
+/* 角色贴近窗口顶部:气泡翻到角色下方(与 .actor.flip 同思路) */
+.resident.below {
+  flex-direction: column-reverse;
+}
+.resident-stage {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9; /* 素材 640×360 */
+}
+.resident-video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  pointer-events: none;
+  user-select: none;
+}
+/* 精确身体命中框:只覆盖画面中央的身体,大片透明区域不拦截桌面点击 */
+.resident-hitbox {
+  position: absolute;
+  left: 27%;
+  bottom: 2%;
+  width: 46%;
+  height: 86%;
+}
+.resident-name {
+  position: absolute;
+  bottom: -10px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 2px 14px;
+  border-radius: 10px;
+  background: rgba(20, 20, 31, 0.85);
+  color: #fff;
+  font-size: 13px;
+  white-space: nowrap;
+  /* 仅鼠标悬停时显示(与 .char-name 同交互) */
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+.resident.hot .resident-name {
+  opacity: 1;
+}
+
 /* 选边面板:抉择问题 + 两个站队按钮 */
 .choice-panel {
   width: 320px;

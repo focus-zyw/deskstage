@@ -22,7 +22,7 @@ export interface CharacterLayoutDeps {
   /** 角色插话呈现(气泡+动作+计时回收) */
   present(who: Speaker, line: string, action: string, ms?: number, loud?: boolean): void
   /** 原地点一下(位移 < 6px)= 戳一戳 */
-  onPoke(who: 'A' | 'B'): void
+  onPoke(who: Speaker): void
 }
 
 export function useCharacterLayout(deps: CharacterLayoutDeps) {
@@ -79,7 +79,7 @@ export function useCharacterLayout(deps: CharacterLayoutDeps) {
     applyCtrlBar(DEFAULT_CONFIG.ctrlBar, 'now')
   }
 
-  function onCharPointerDown(e: ReactPointerEvent, who: 'A' | 'B') {
+  function onCharPointerDown(e: ReactPointerEvent, who: Speaker) {
     setTopActor(who) // 最近交互的角色置顶
     setDragUi(who) // 拎起态(轻微缩小提亮)
     dragRef.current = {
@@ -96,7 +96,7 @@ export function useCharacterLayout(deps: CharacterLayoutDeps) {
     }
   }
 
-  function onCharPointerMove(e: ReactPointerEvent, who: 'A' | 'B') {
+  function onCharPointerMove(e: ReactPointerEvent, who: Speaker) {
     const d = dragRef.current
     if (!d || d.who !== who) return
     const dx = e.clientX - d.startX
@@ -109,8 +109,10 @@ export function useCharacterLayout(deps: CharacterLayoutDeps) {
     const cur = charCfgRef.current
     applyChars(
       {
+        // 保留槽位自有字段(C 的 width/enabled):只改几何两项
         ...cur,
         [who]: {
+          ...cur[who],
           xPct: Math.min(97, Math.max(3, d.orig.xPct + (dx / window.innerWidth) * 100)),
           bottom: Math.min(
             Math.max(0, window.innerHeight - 80),
@@ -122,7 +124,7 @@ export function useCharacterLayout(deps: CharacterLayoutDeps) {
     )
   }
 
-  function onCharPointerUp(who: 'A' | 'B') {
+  function onCharPointerUp(who: Speaker) {
     const d = dragRef.current
     dragRef.current = null
     setDragUi(null)
@@ -140,8 +142,10 @@ export function useCharacterLayout(deps: CharacterLayoutDeps) {
   }
 
   /** 拖拽结束后的距离演出:按长期关系(bond)给出不同文案与表现,并缓慢回写关系。
-   *  贴近=亲近信号(trust+0.1);叠一起/拖太远=摩擦信号(rivalry+);12s 冷却 */
-  async function maybeDistancePlay(who: 'A' | 'B') {
+   *  贴近=亲近信号(trust+0.1);叠一起/拖太远=摩擦信号(rivalry+);12s 冷却。
+   *  C 不参与距离演出(她按自己的逻辑漫游,不进甲乙的关系物理) */
+  async function maybeDistancePlay(who: Speaker) {
+    if (who === 'C') return
     if (!deps.isIdle()) return
     const other: Speaker = who === 'A' ? 'B' : 'A'
     const ax = (charCfg.A.xPct / 100) * window.innerWidth
@@ -194,6 +198,7 @@ export function useCharacterLayout(deps: CharacterLayoutDeps) {
 
   return {
     charCfg,
+    charCfgRef,
     ctrlBar,
     topActor,
     setTopActor,

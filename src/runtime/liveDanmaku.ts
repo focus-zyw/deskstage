@@ -11,9 +11,10 @@ import { getConfig } from '../storage/configStore'
 import { noteActivity } from './proactiveScheduler'
 import { showProp } from './propEffects'
 import { createGiftReactions, type GiftReactions } from './giftReactions'
+import type { Speaker } from '../performer/dialogSchema'
 
 export interface LiveReply {
-  speaker: 'A' | 'B'
+  speaker: Speaker
   text: string
   action: string
   /** 该条回复对应的弹幕作者(供气泡/称呼用) */

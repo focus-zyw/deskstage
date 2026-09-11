@@ -12,6 +12,11 @@ export const POKE_INTERRUPT = {
     '（深吸一口气）本来有句特别狠的,现在没了',
     '打断别人的人,今晚睡觉会落枕',
   ],
+  C: [
+    '诶？手停下来了…没关系,我重新数一遍！',
+    '（认真看着你）刚刚的事,要从头做吗？',
+    '咦,台词被打断了…那我先把手里的活干完',
+  ],
 } as const
 
 export const TOO_CLOSE = {
@@ -22,6 +27,10 @@ export const TOO_CLOSE = {
   B: [
     '（往旁边挪了半步）请保持社交距离,谢谢',
     '太近了。说正事,或者退后',
+  ],
+  C: [
+    '（后退半步,鞠躬）请问需要什么服务吗？',
+    '（歪头）站这么近…是在排队吗？',
   ],
 } as const
 
@@ -34,11 +43,16 @@ export const TOO_FAR = {
     '（拢着嘴）又不是我要站远的——！',
     '喂——有话当面说,喊什么——！',
   ],
+  C: [
+    '（小步跟上）等等我,不要落单呀',
+    '（原地挥手）这里这里,我在这边',
+  ],
 } as const
 
 export const OVERLAP = {
   A: ['好家伙,叠罗汉都不带商量的？！'],
   B: ['（面无表情推开）重。下去。'],
+  C: ['（被挤得晃了晃）哇,叠在一起了'],
 } as const
 
 type Voice = keyof typeof POKE_INTERRUPT
@@ -154,7 +168,8 @@ export function distanceBands(height: number) {
   return { overlap: height * 0.35, close: height * 0.95 }
 }
 
-/** 注入下一集的账本文案(次数由调用方填) */
-export function recapText(pokeA: number, pokeB: number, drags: number): string {
-  return `上集演出时,观众没少捣乱——戳了甲 ${pokeA} 次、戳了乙 ${pokeB} 次,还把你们拖近又拽远 ${drags} 次。开场先让两人抱怨一下"观众今天特别欠",再自然进入正题。`
+/** 注入下一集的账本文案(次数由调用方填);丙被戳才提丙 */
+export function recapText(pokeA: number, pokeB: number, drags: number, pokeC = 0): string {
+  const cPart = pokeC > 0 ? `,连小管家都被戳了 ${pokeC} 回` : ''
+  return `上集演出时,观众没少捣乱——戳了甲 ${pokeA} 次、戳了乙 ${pokeB} 次${cPart},还把你们拖近又拽远 ${drags} 次。开场先让两人抱怨一下"观众今天特别欠",再自然进入正题。`
 }

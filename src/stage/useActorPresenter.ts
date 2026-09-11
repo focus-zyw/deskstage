@@ -7,6 +7,7 @@
 // 视觉之外的事(TTS、演出推进)不归这里。
 import { useEffect, useRef, useState } from 'react'
 import type { DialogLine, Speaker } from '../performer/player'
+import { listenersOf, reactionsOf } from '../performer/dialogSchema'
 
 const NO_BUBBLE: Record<Speaker, string | null> = { A: null, B: null, C: null }
 const IDLE_POSE: Record<Speaker, string> = { A: 'idle', B: 'idle', C: 'idle' }
@@ -82,7 +83,7 @@ export function useActorPresenter() {
     }, ms)
   }
 
-  /** 演出逐句上屏:气泡/表情/语气/说话态 + 听者同步反应与惊讶脉冲。
+  /** 演出逐句上屏:气泡/表情/语气/说话态 + 各角色同步反应与惊讶脉冲。
    *  台词在笑 → 用大笑表情(LLM 词表有 laugh 时直接命中,否则启发式兜底) */
   function showTalk(line: DialogLine) {
     const laughing = /哈哈+|嘿嘿|嘻嘻|笑死|233/.test(line.text)
@@ -92,14 +93,18 @@ export function useActorPresenter() {
     setAction((a) => ({ ...a, [line.speaker]: act }))
     setSpeaking(line.speaker)
     setDelivery((d) => ({ ...d, [line.speaker]: line.delivery }))
-    // 听者同步反应:LLM 指定听者动作(害羞/大笑/欲言又止…),与台词同拍
-    const listener: Speaker = line.speaker === 'A' ? 'B' : 'A'
-    if (line.listenerAction) {
-      cancelRelax(listener)
-      setAction((a) => ({ ...a, [listener]: line.listenerAction }))
+    // 各角色同步无声反应:reactions(三人协议,A 说话时 B 害羞/C 惊讶可同帧)优先,
+    // 缺省按旧协议从 listenerAction 按 target 转换——转换逻辑收在 dialogSchema
+    const reactions = reactionsOf(line)
+    for (const who of Object.keys(reactions) as Speaker[]) {
+      const reaction = reactions[who]
+      if (!reaction) continue
+      cancelRelax(who)
+      setAction((a) => ({ ...a, [who]: reaction }))
     }
-    // 台词带感叹/问号 → 听者惊讶脉冲
-    if (/[!?！？]/.test(line.text)) pulse(listener)
+    // 台词带感叹/问号 → 指定听者惊讶脉冲(room 时取任一听者,脉冲只是视觉点缀)
+    const listeners = listenersOf(line)
+    if (/[!?！？]/.test(line.text) && listeners.length > 0) pulse(listeners[0])
   }
 
   /** 声音结束:立即闭嘴;姿势保持到放松计时(句间不再弹回 idle) */
@@ -108,11 +113,12 @@ export function useActorPresenter() {
     scheduleRelax(speaker)
   }
 
-  /** 句尾留白结束:清气泡;听者反应动作同样延迟放松,句间保持画面张力 */
+  /** 句尾留白结束:清气泡;其他角色的反应动作同样延迟放松,句间保持画面张力 */
   function endLine(speaker: Speaker) {
-    const listener: Speaker = speaker === 'A' ? 'B' : 'A'
     setBubble((b) => ({ ...b, [speaker]: null }))
-    scheduleRelax(listener)
+    for (const who of ['A', 'B', 'C'] as const) {
+      if (who !== speaker) scheduleRelax(who)
+    }
     setDelivery((d) => ({ ...d, [speaker]: undefined }))
   }
 

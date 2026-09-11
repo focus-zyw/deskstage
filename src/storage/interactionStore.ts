@@ -6,10 +6,12 @@ import { readTextFile, writeTextFile, exists, mkdir } from '@tauri-apps/plugin-f
 import { appDataDir, join } from '@tauri-apps/api/path'
 import { inTauri } from './configStore'
 import { recapText } from '../engine/interactionRules'
+import type { Speaker } from '../performer/dialogSchema'
 
 export interface InteractionStats {
   pokeA: number
   pokeB: number
+  pokeC: number
   interrupts: number
   drags: number
   sinceInject: number
@@ -20,7 +22,7 @@ export interface InteractionStats {
 }
 
 const DEFAULTS: InteractionStats = {
-  pokeA: 0, pokeB: 0, interrupts: 0, drags: 0, sinceInject: 0,
+  pokeA: 0, pokeB: 0, pokeC: 0, interrupts: 0, drags: 0, sinceInject: 0,
   dismissSpontaneous: 0, dismissReplay: 0, dismissBreak: 0,
 }
 const LS_KEY = 'vc-interactions'
@@ -33,7 +35,7 @@ function sanitize(v: unknown): InteractionStats {
   const o = (v ?? {}) as Record<string, unknown>
   const num = (x: unknown) => (Number.isFinite(Number(x)) ? Math.max(0, Math.floor(Number(x))) : 0)
   return {
-    pokeA: num(o.pokeA), pokeB: num(o.pokeB),
+    pokeA: num(o.pokeA), pokeB: num(o.pokeB), pokeC: num(o.pokeC),
     interrupts: num(o.interrupts), drags: num(o.drags),
     sinceInject: num(o.sinceInject),
     dismissSpontaneous: num(o.dismissSpontaneous),
@@ -78,7 +80,7 @@ async function writeAll(stats: InteractionStats): Promise<void> {
 }
 
 /** 记录一次捣乱行为 */
-export async function logInteraction(kind: 'pokeA' | 'pokeB' | 'interrupts' | 'drags'): Promise<void> {
+export async function logInteraction(kind: 'pokeA' | 'pokeB' | 'pokeC' | 'interrupts' | 'drags'): Promise<void> {
   const stats = await readAll()
   const next = sanitize({ ...stats, [kind]: (stats as unknown as Record<string, number>)[kind] + 1, sinceInject: stats.sinceInject + 1 })
   await writeAll(next)
@@ -88,10 +90,9 @@ export async function logInteraction(kind: 'pokeA' | 'pokeB' | 'interrupts' | 'd
 export async function takeRecap(): Promise<string | null> {
   const stats = await readAll()
   if (stats.sinceInject < INJECT_THRESHOLD) return null
-  const pokeA = stats.pokeA, pokeB = stats.pokeB, drags = stats.drags
   const next = sanitize({ ...stats, sinceInject: 0 })
   await writeAll(next)
-  return recapText(pokeA, pokeB, drags)
+  return recapText(stats.pokeA, stats.pokeB, stats.drags, stats.pokeC)
 }
 
 /** 预览版 takeRecap:判定条件与文案完全一致,但不重置计数——预生成场景先 peek,
@@ -99,13 +100,16 @@ export async function takeRecap(): Promise<string | null> {
 export async function peekRecap(): Promise<string | null> {
   const stats = await readAll()
   if (stats.sinceInject < INJECT_THRESHOLD) return null
-  return recapText(stats.pokeA, stats.pokeB, stats.drags)
+  return recapText(stats.pokeA, stats.pokeB, stats.drags, stats.pokeC)
 }
 
+/** 记被打断的角色对应的账本键 */
+const POKE_KEY: Record<Speaker, 'pokeA' | 'pokeB' | 'pokeC'> = { A: 'pokeA', B: 'pokeB', C: 'pokeC' }
+
 /** 打断是双倍恶劣行为:额外 +1 */
-export async function logInterrupt(target: 'A' | 'B'): Promise<void> {
+export async function logInterrupt(target: Speaker): Promise<void> {
   const stats = await readAll()
-  const key = target === 'A' ? 'pokeA' : 'pokeB'
+  const key = POKE_KEY[target]
   await writeAll(sanitize({
     ...stats,
     [key]: (stats as unknown as Record<string, number>)[key] + 1,

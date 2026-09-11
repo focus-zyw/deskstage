@@ -36,6 +36,18 @@ export function PersonaSettings() {
             }}
           />
         </SetField>
+        <SetField label="角色C的名字" htmlFor="cfg-name-c" hint="常驻小管家的称呼">
+          <input
+            id="cfg-name-c"
+            value={form.names.c}
+            maxLength={12}
+            onChange={(e) => {
+              const next = { ...form.names, c: e.target.value }
+              setForm({ ...form, names: next })
+              saveField({ names: next })
+            }}
+          />
+        </SetField>
       </SettingsCard>
       <SettingsCard
         card="角色人设"
@@ -69,16 +81,33 @@ export function PersonaSettings() {
             }}
           />
         </SetField>
+        <SetField
+          label={`${names.c} 的人设`}
+          htmlFor="cfg-persona-c"
+          hint="常驻第三角色;她按字面理解并立刻执行"
+        >
+          <textarea
+            id="cfg-persona-c"
+            rows={4}
+            value={form.persona.c || defaultPersonaText('C')}
+            onChange={(e) => {
+              setForm({ ...form, persona: { ...form.persona, c: e.target.value } })
+              saveField({ persona: { ...form.persona, c: e.target.value } })
+            }}
+          />
+        </SetField>
         <div className="set-actions">
           <span className="set-note">清空输入框 = 恢复该角色的内置人设</span>
           <button
             className="panel-btn"
             onClick={() => {
-              setForm({
-                ...form,
-                persona: { a: defaultPersonaText('A'), b: defaultPersonaText('B') },
-              })
-              saveField({ persona: { a: defaultPersonaText('A'), b: defaultPersonaText('B') } }, true)
+              const persona = {
+                a: defaultPersonaText('A'),
+                b: defaultPersonaText('B'),
+                c: defaultPersonaText('C'),
+              }
+              setForm({ ...form, persona })
+              saveField({ persona }, true)
             }}
           >
             还原默认人设

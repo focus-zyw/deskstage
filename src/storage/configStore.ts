@@ -19,11 +19,21 @@ export interface CharPos {
   bottom: number
 }
 
-/** 角色布局:缩放(height)全局一致,位置各自独立 */
+/** 常驻角色 C 的布局:视频素材 640×360,与 A/B 立绘不同尺寸体系,独立宽度与启用开关 */
+export interface ResidentPos {
+  xPct: number
+  bottom: number
+  /** 视频舞台显示宽度(px);实际身体约占宽度一半高 */
+  width: number
+  enabled: boolean
+}
+
+/** 角色布局:缩放(height)A/B 全局一致,C 独立;位置各自独立 */
 export interface CharactersConfig {
   height: number
   A: CharPos
   B: CharPos
+  C: ResidentPos
 }
 
 /** 语音供应商:硅基流动 CosyVoice2(默认)/ MiniMax Speech 2.8 / 本地 CosyVoice(预留) */
@@ -99,10 +109,10 @@ export interface AppConfig {
   envSense: boolean
   /** 久坐提醒(番茄钟):连续活跃 X 分钟后用角色口吻提醒休息 */
   breakReminder: { enabled: boolean; minutes: number }
-  /** 用户自定义人设(甲/乙的生效文本;空串 = 内置默认) */
-  persona: { a: string; b: string }
+  /** 用户自定义人设(甲/乙/丙的生效文本;空串 = 内置默认) */
+  persona: { a: string; b: string; c: string }
   /** 角色名(名牌与台词称呼) */
-  names: { a: string; b: string }
+  names: { a: string; b: string; c: string }
   /** 备忘默认提前提醒分钟数 */
   memo: { advanceMin: number }
   /** 勿扰:一键全静(TTS 静音 + 主动行为暂停;备忘卡片仍弹) */
@@ -182,6 +192,8 @@ export const DEFAULT_CONFIG: AppConfig = {
     height: 320,
     A: { xPct: 20, bottom: 0 },
     B: { xPct: 80, bottom: 0 },
+    // C 站在甲乙之间的小型常驻角色:462px 舞台宽时身体约 200px 高
+    C: { xPct: 50, bottom: 0, width: 462, enabled: true },
   },
   charactersHidden: false,
   topicOverride: null,
@@ -194,8 +206,8 @@ export const DEFAULT_CONFIG: AppConfig = {
   webchatSite: 'deepseek',
   envSense: true,
   breakReminder: { enabled: false, minutes: 45 },
-  persona: { a: '', b: '' },
-  names: { a: '甲', b: '乙' },
+  persona: { a: '', b: '', c: '' },
+  names: { a: '甲', b: '乙', c: '丙' },
   memo: { advanceMin: 30 },
   dnd: false,
   proactivity: 'balanced',
@@ -348,8 +360,9 @@ function clampNum(v: unknown, lo: number, hi: number, fallback: number): number 
   return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : fallback
 }
 
-/** 清洗角色布局:非法/缺字段逐项回退默认并钳位 */
-function sanitizeCharacters(v: unknown): CharactersConfig {
+/** 清洗角色布局:非法/缺字段逐项回退默认并钳位(导出供配置迁移测试)。
+ *  老配置缺少 C 时补默认值,A/B 原值完全不动 */
+export function sanitizeCharacters(v: unknown): CharactersConfig {
   const d = DEFAULT_CONFIG.characters
   const o = (v ?? {}) as Record<string, Record<string, unknown>>
   const pos = (p: unknown, dft: CharPos): CharPos => {
@@ -359,11 +372,18 @@ function sanitizeCharacters(v: unknown): CharactersConfig {
       bottom: clampNum(q.bottom, 0, 4000, dft.bottom),
     }
   }
+  const cq = (o.C ?? {}) as Record<string, unknown>
   return {
     // 上下限放宽:真正的屏幕级钳位在 App 内按实际分辨率做
     height: clampNum(o.height, 140, 2000, d.height),
     A: pos(o.A, d.A),
     B: pos(o.B, d.B),
+    C: {
+      xPct: clampNum(cq.xPct, 3, 97, d.C.xPct),
+      bottom: clampNum(cq.bottom, 0, 4000, d.C.bottom),
+      width: clampNum(cq.width, 160, 1200, d.C.width),
+      enabled: cq.enabled !== false,
+    },
   }
 }
 
@@ -400,15 +420,15 @@ function sanitizeConfig(obj: unknown): AppConfig {
         minutes: Math.min(120, Math.max(15, Number(b.minutes) || 45)),
       }
     })(),
-    persona: ((): { a: string; b: string } => {
+    persona: ((): { a: string; b: string; c: string } => {
       const pr = (o.persona ?? {}) as Record<string, unknown>
       const cap = (x: unknown): string => (typeof x === 'string' ? x.trim().slice(0, 600) : '')
-      return { a: cap(pr.a), b: cap(pr.b) }
+      return { a: cap(pr.a), b: cap(pr.b), c: cap(pr.c) }
     })(),
-    names: ((): { a: string; b: string } => {
+    names: ((): { a: string; b: string; c: string } => {
       const nm = (o.names ?? {}) as Record<string, unknown>
       const name = (x: unknown, dft: string): string => (typeof x === 'string' ? x.trim().slice(0, 12) : '') || dft
-      return { a: name(nm.a, '甲'), b: name(nm.b, '乙') }
+      return { a: name(nm.a, '甲'), b: name(nm.b, '乙'), c: name(nm.c, '丙') }
     })(),
     memo: ((): { advanceMin: number } => {
       const mm = (o.memo ?? {}) as Record<string, unknown>

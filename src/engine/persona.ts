@@ -1,6 +1,8 @@
 // 角色人设的唯一事实源:内置默认人设在这里定义,用户可在设置里自定义覆盖(可还原)。
 // 各 prompt 场合(主演出/短聊/戳一戳/聊天回复)都从 personaText() 取生效文本,
 // 用户保存新人设后,下一次生成即采纳。
+// 甲乙(A/B)是立绘主角;丙(C)是常驻在场的第三角色(WebM 小管家),
+// 行为模式是"按字面理解并立刻执行"——她是行动型变量,不是第三个轮流说话的人。
 
 export interface PersonaDefaults {
   gender: '女' | '男'
@@ -22,7 +24,9 @@ export interface PersonaDimensions {
   defense: string
 }
 
-const DIMENSIONS: Record<'A' | 'B', PersonaDimensions> = {
+export type ActorSlot = 'A' | 'B' | 'C'
+
+const DIMENSIONS: Record<ActorSlot, PersonaDimensions> = {
   A: {
     attention: '先看人和机会——谁有意思、哪里有便宜可占',
     judgment: '联想、夸张、先下结论再找理由',
@@ -35,25 +39,32 @@ const DIMENSIONS: Record<'A' | 'B', PersonaDimensions> = {
     risk: '保守,但会被激将上头',
     defense: '用冷淡和毒舌掩饰关心',
   },
+  C: {
+    attention: '先听字面意思——别人说了什么就当真什么',
+    judgment: '逐字理解、直接执行,从不怀疑前提',
+    risk: '毫无风险意识,说到就做',
+    defense: '用认真和忙碌掩饰误解,被拆穿也先承认"我照做了"',
+  },
 }
 
-export function personaDimensions(id: 'A' | 'B'): PersonaDimensions {
+export function personaDimensions(id: ActorSlot): PersonaDimensions {
   return DIMENSIONS[id]
 }
 
 /** 四维画像提示词块:主演出注入。措辞围绕行为维度而非"像甲/像乙" */
 export function dimensionsPrompt(): string {
-  const row = (id: 'A' | 'B') => {
+  const row = (id: ActorSlot) => {
     const d = DIMENSIONS[id]
     return `- ${nameOf(id)}(speaker "${id}"):注意力——${d.attention};判断——${d.judgment};风险——${d.risk};情绪防御——${d.defense}`
   }
   return `行为底色(台词的判断方式与反应速度要符合它,比口头禅更重要):
 ${row('A')}
 ${row('B')}
+${row('C')}
 - 口头禅/标志性语气词每集合计最多 1~2 次:角色差异靠上面的行为底色体现,不靠口头禅堆砌`
 }
 
-const DEFAULTS: Record<'A' | 'B', PersonaDefaults> = {
+const DEFAULTS: Record<ActorSlot, PersonaDefaults> = {
   A: {
     gender: '女',
     job: '便利店店员',
@@ -68,52 +79,65 @@ const DEFAULTS: Record<'A' | 'B', PersonaDefaults> = {
     catchphrases: ['就这?', '然后呢'],
     world: '改不完的 bug、半夜上线翻车、永远在变的需求',
   },
+  C: {
+    gender: '女',
+    job: '住在桌面上的小管家',
+    traits: '表面乖巧认真,理解语言过于字面,执行力极强:A 随口吹的牛她会当真立刻去落实,B 发现危险时通常已经晚了;平时话少,更多通过动作表达态度',
+    catchphrases: ['好的,马上办', '诶?'],
+    world: '桌面角落的小家务、收拾甲乙闯的祸、把玩笑话逐字执行',
+  },
 }
 
 // 用户自定义人设(完整描述文本);空串 = 使用内置默认
-const overrides: Record<'A' | 'B', string> = { A: '', B: '' }
+const overrides: Record<ActorSlot, string> = { A: '', B: '', C: '' }
 
-// 角色名(名牌与台词称呼);默认 甲/乙
-const displayNames: Record<'A' | 'B', string> = { A: '甲', B: '乙' }
+// 角色名(名牌与台词称呼);默认 甲/乙/丙
+const displayNames: Record<ActorSlot, string> = { A: '甲', B: '乙', C: '丙' }
+
+const NAME_FALLBACKS: Record<ActorSlot, string> = { A: '甲', B: '乙', C: '丙' }
 
 /** 应用用户设置的角色名(启动与保存设置后调用;空串回落默认) */
-export function setCharacterNames(a: string, b: string): void {
-  displayNames.A = a.trim().slice(0, 12) || '甲'
-  displayNames.B = b.trim().slice(0, 12) || '乙'
+export function setCharacterNames(a: string, b: string, c = ''): void {
+  displayNames.A = a.trim().slice(0, 12) || NAME_FALLBACKS.A
+  displayNames.B = b.trim().slice(0, 12) || NAME_FALLBACKS.B
+  displayNames.C = c.trim().slice(0, 12) || NAME_FALLBACKS.C
 }
 
-export function nameOf(id: 'A' | 'B'): string {
+export function nameOf(id: ActorSlot): string {
   return displayNames[id]
 }
 
 /** 应用用户自定义人设(主窗启动与保存设置后调用;空串 = 还原内置人设) */
-export function setPersonaOverride(a: string, b: string): void {
+export function setPersonaOverride(a: string, b: string, c = ''): void {
   overrides.A = a.trim().slice(0, 600)
   overrides.B = b.trim().slice(0, 600)
+  overrides.C = c.trim().slice(0, 600)
 }
 
 /** 内置默认人设全文(设置页"还原默认"时回填输入框用) */
-export function defaultPersonaText(id: 'A' | 'B'): string {
+export function defaultPersonaText(id: ActorSlot): string {
   const d = DEFAULTS[id]
   return `${d.gender},${d.job}。${d.traits},口头禅"${d.catchphrases.join('" "')}"。日常舞台:${d.world}`
 }
 
 /** 生效中的人设全文:自定义优先,否则内置默认 */
-export function personaText(id: 'A' | 'B'): string {
+export function personaText(id: ActorSlot): string {
   return overrides[id] || defaultPersonaText(id)
 }
 
 /** 完整版:主演出(点播/预生成)的 system prompt 用 */
 export function fullPersona(): string {
-  const renamed = displayNames.A !== '甲' || displayNames.B !== '乙'
+  const renamed =
+    displayNames.A !== '甲' || displayNames.B !== '乙' || displayNames.C !== '丙'
   const namesLine = renamed
-    ? `观众给两人起了名字:甲叫"${displayNames.A}",乙叫"${displayNames.B}",台词里可以这样称呼。
+    ? `观众给三人起了名字:甲叫"${displayNames.A}",乙叫"${displayNames.B}",丙叫"${displayNames.C}",台词里可以这样称呼。
 `
     : ''
   return `角色设定：
 - 甲（speaker 用 "A"）：${personaText('A')}
 - 乙（speaker 用 "B"）：${personaText('B')}
-${namesLine}- 两人是老搭档,互怼但有默契,节奏像传统相声里的逗哏和捧哏;各自的生活片段都可以自然变成段子的舞台
+- 丙（speaker 用 "C"）：${personaText('C')}
+${namesLine}- 甲乙是老搭档,互怼但有默契,节奏像传统相声里的逗哏和捧哏;丙常驻现场,是正式角色(不是电话或画外音),平时话少、用行动把话变成现实;各自的生活片段都可以自然变成段子的舞台
 
 ${dimensionsPrompt()}`
 }
@@ -123,7 +147,7 @@ export function duoShortPersona(): string {
   return `${nameOf('A')}:${personaText('A')};${nameOf('B')}:${personaText('B')}。两人是互怼但有默契的老搭档`
 }
 
-/** 单人简版:戳一戳吐槽/聊天回复用 */
-export function soloShortPersona(id: 'A' | 'B'): string {
+/** 单人简版:戳一戳/聊天回复用 */
+export function soloShortPersona(id: ActorSlot): string {
   return `${nameOf(id)}:${personaText(id)}`
 }

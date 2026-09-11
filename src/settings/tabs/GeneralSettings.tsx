@@ -23,9 +23,23 @@ export function GeneralSettings() {
         <SetLine title="显示角色" hint="在桌面上显示两位角色立绘">
           <SetSwitch checked={!charHidden} onChange={(v) => setCharsHidden(!v)} />
         </SetLine>
+        <SetLine title="显示常驻角色C" hint="甲乙之间的 WebM 小管家;关闭后她的台词回落画外音">
+          <SetSwitch
+            checked={saved.characters.C.enabled}
+            label="显示常驻角色C"
+            onChange={(v) => {
+              const characters = { ...saved.characters, C: { ...saved.characters.C, enabled: v } }
+              setForm({ ...form, characters })
+              saveField({ characters }, true)
+            }}
+          />
+        </SetLine>
         <SetLine title="角色与控制栏位置" hint="拖动角色可移动,悬停滚轮可同步缩放">
           <button className="panel-btn" onClick={bridge.onResetLayout}>
             恢复默认布局
+          </button>
+          <button className="panel-btn" onClick={bridge.onResetC}>
+            恢复C的位置
           </button>
         </SetLine>
       </SettingsCard>

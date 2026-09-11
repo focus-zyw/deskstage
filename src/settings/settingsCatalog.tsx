@@ -148,6 +148,8 @@ export const TAB_GROUP: Record<SettingsTab, string> = {
 export const SETTINGS_SEARCH_INDEX: { tab: SettingsTab; card: string; label: string; keywords?: string }[] = [
   // 基础设置
   { tab: 'general', card: '显示与布局', label: '显示角色', keywords: '隐藏 角色 立绘 桌面' },
+  { tab: 'general', card: '显示与布局', label: '显示常驻角色C', keywords: '小管家 视频 webm 第三角色 常驻 隐藏' },
+  { tab: 'general', card: '显示与布局', label: '恢复C的位置', keywords: '位置 重置 常驻 小管家' },
   { tab: 'general', card: '显示与布局', label: '恢复默认布局', keywords: '位置 缩放 重置 拖动' },
   { tab: 'general', card: '演出与主动行为', label: '空闲自动重放', keywords: '重放 历史 自动 分钟' },
   { tab: 'general', card: '演出与主动行为', label: '主动程度', keywords: '频率 安静 平衡 热闹 闲聊' },
@@ -167,8 +169,10 @@ export const SETTINGS_SEARCH_INDEX: { tab: SettingsTab; card: string; label: str
   // 角色人设
   { tab: 'persona', card: '角色名字', label: '角色A的名字', keywords: '名字 称呼 名牌' },
   { tab: 'persona', card: '角色名字', label: '角色B的名字', keywords: '名字 称呼 名牌' },
+  { tab: 'persona', card: '角色名字', label: '角色C的名字', keywords: '名字 称呼 名牌 小管家' },
   { tab: 'persona', card: '角色人设', label: '角色A的人设', keywords: '人设 性格 职业 背景' },
   { tab: 'persona', card: '角色人设', label: '角色B的人设', keywords: '人设 性格 职业 背景' },
+  { tab: 'persona', card: '角色人设', label: '角色C的人设', keywords: '人设 性格 小管家 字面 执行' },
   { tab: 'persona', card: '角色人设', label: '还原默认人设', keywords: '重置 出厂 内置' },
   // 角色语音
   { tab: 'voice', card: '语音与供应商', label: '角色语音开关', keywords: '朗读 配音 开关' },
@@ -180,7 +184,7 @@ export const SETTINGS_SEARCH_INDEX: { tab: SettingsTab; card: string; label: str
   { tab: 'voice', card: '音色与表现', label: '情感指令', keywords: '情感 语气 情绪' },
   { tab: 'voice', card: '音色与表现', label: '角色甲音色', keywords: '声音 音色 分配' },
   { tab: 'voice', card: '音色与表现', label: '角色乙音色', keywords: '声音 音色 分配' },
-  { tab: 'voice', card: '音色与表现', label: '场外客串音色', keywords: '第三人 画外音' },
+  { tab: 'voice', card: '音色与表现', label: '角色C音色', keywords: '第三人 画外音 常驻 小管家' },
   { tab: 'voice', card: '音色与表现', label: '克隆音色', keywords: '克隆 录音 样本' },
   { tab: 'voice', card: '音色与表现', label: '试听', keywords: '预览 试听' },
   // 直播设置

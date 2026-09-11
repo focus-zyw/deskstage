@@ -15,7 +15,7 @@ import {
   type ChoicePoint,
   type DialogLine,
 } from '../performer/player'
-import { deliverySpeed, type SceneCard } from '../performer/dialogSchema'
+import { deliverySpeed, type SceneCard, type Speaker } from '../performer/dialogSchema'
 import { MODES, modeOf, type Mode } from '../performer/modes'
 import {
   generateShortChat,
@@ -98,7 +98,7 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
   // 中止提交已播前缀。choice/after 留存以便"插话接回"后继续未消费的抉择点
   const pendingEpisode = useRef<{ eid: string; card?: SceneCard; before: DialogLine[]; after: Record<string, DialogLine[]>; choice?: ChoicePoint; playedAccum: DialogLine[]; mode: Mode; topic: string; chosen?: string } | null>(null)
   // 演出中的用户插话队列:onLineEnd 安全缝处消费(反应回合后接回原剧本)
-  const interjectionQueue = useRef<{ text: string; target?: 'A' | 'B' }[]>([])
+  const interjectionQueue = useRef<{ text: string; target?: Speaker }[]>([])
   const handoff = useRef(false) // 接回换场中:onStopped 跳过中止提交
   const interjectBusy = useRef(false)
   // 上一段台词(内存中),续播/即兴时喂给 LLM 做衔接;上次自动重放的集,连续重放时避开
@@ -274,7 +274,7 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
   }
 
   /** 演出中插话入队(P4):当前句结束的安全缝(onLineEnd)处消费 */
-  function queueInterjection(text: string, target?: 'A' | 'B'): void {
+  function queueInterjection(text: string, target?: Speaker): void {
     const t = text.trim()
     if (t) interjectionQueue.current.push({ text: t, target })
   }
@@ -294,13 +294,19 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
     try {
       player.current!.stop() // 安全缝停播(onStopped 被 handoff 跳过)
       stopSpeaking() // 防 TTS 重叠
-      const speakerOf = (l: DialogLine) =>
-        l.speaker === 'A' ? nameOf('A') : l.speaker === 'B' ? nameOf('B') : '场外'
+      const speakerOf = (l: DialogLine) => nameOf(l.speaker)
+      // 插话未指定对象时:归当前说话者的对手戏搭档;当前是 C 或无上下文时给甲
+      const defaultTarget = (): Speaker => {
+        const cur = playingLines.current[index]?.speaker
+        if (cur === 'A') return 'B'
+        if (cur === 'B') return 'A'
+        return 'A'
+      }
       let reaction: DialogLine[] = []
       try {
         reaction = await generateInterjectionBatch({
           userText: msg.text,
-          target: msg.target ?? (playingLines.current[index]?.speaker === 'A' ? 'B' : 'A'),
+          target: msg.target ?? defaultTarget(),
           recentPlayed: p.playedAccum.slice(-3).map((l) => `${speakerOf(l)}:${l.text}`),
           bridgeTo: playingLines.current[index + 1]?.text ?? '',
           window: chatWindow(),
@@ -315,7 +321,7 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
         chosen: !!p.chosen,
       })
       for (const l of reaction) {
-        if (l.speaker === 'A' || l.speaker === 'B') pushTurn({ who: l.speaker, text: l.text })
+        pushTurn({ who: l.speaker, text: l.text })
       }
       if (plan.list.length === 0) {
         // 理论不可达(每段最后一句不触发 onLineEnd);保险收尾避免卡死在 performing
@@ -523,9 +529,10 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
               weights: await getTopicWeights(),
             }))
 
-    // 未命中：生成当前轮(等待期两人进入思考姿势)
+    // 未命中：生成当前轮(等待期三人进入思考姿势)
     deps.presenter.setPose('A', 'thinking')
     deps.presenter.setPose('B', 'thinking')
+    deps.presenter.setPose('C', 'thinking')
     setRuntimeMode({ type: 'generating' })
     const ctrl = new AbortController()
     generateAbort.current = ctrl

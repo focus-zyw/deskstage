@@ -19,7 +19,10 @@ export const VALID_ACTIONS = new Set([
   'jump',
 ])
 
-export type Speaker = 'A' | 'B' | 'C' // C = 场外角色(电话/画外音乱入,无立绘)
+export type Speaker = 'A' | 'B' | 'C' // C = 常驻第三角色(桌面小管家,WebM 立绘)
+
+/** 这句对谁说:A/B/C 指定单一听者;audience 对观众直说;room 对全场 */
+export type DialogueTarget = Speaker | 'audience' | 'room'
 
 /** 语气词表:deadpan 面瘫 / excited 兴奋 / slow 慢条斯理;缺省 normal(不标注) */
 export const DELIVERIES = ['deadpan', 'excited', 'slow'] as const
@@ -33,14 +36,18 @@ export interface DialogLine {
   pauseBefore?: number
   /** 句尾额外停留 ms:响底后留白(协议建议 900~1500) */
   pauseAfter?: number
-  /** 听者此刻的反应动作(词表同 action;缺省不改变) */
+  /** 听者此刻的反应动作(词表同 action;缺省不改变)。
+   *  旧协议字段,只表达一个听者;新协议用 reactions,两者并存时 reactions 优先 */
   listenerAction?: string
+  /** 各角色的同步无声反应(词表同 action;键不含说话者自己)。
+   *  三人协议:A 说话时 B 害羞、C 惊讶可以同帧发生 */
+  reactions?: Partial<Record<Speaker, string>>
   /** 语气:驱动说话节奏(CSS)与 TTS 语速 */
   delivery?: Delivery
   /** 抉择分支标记:choice 之后的台词标注所属分支 id */
   branch?: string
-  /** DialogueTurn 字段:这句对谁说——A/B(对方)/audience(对观众直说)/room(对全场);缺省按说话交替理解 */
-  target?: 'A' | 'B' | 'audience' | 'room'
+  /** DialogueTurn 字段:这句对谁说——A/B/C(指定听者)/audience(对观众直说)/room(对全场);缺省按说话交替理解 */
+  target?: DialogueTarget
   /** DialogueTurn 字段:承载的场景卡节拍(逐字引用 card.escalation 的一项),结构校验据此查覆盖 */
   beatId?: string
 }
@@ -81,6 +88,8 @@ export interface SceneCard {
   scene: string
   goalA: string
   goalB: string
+  /** 丙(C)在本集的行动职责(可选):她把哪句吹牛/误会当真并落实成后果 */
+  roleC?: string
   secret: string
   escalation: string[]
   callback: string
@@ -173,11 +182,54 @@ export function sanitizeDialogLine(raw: unknown): DialogLine | null {
     pauseBefore: clampPauseMs(o.pauseBefore),
     pauseAfter: clampPauseMs(o.pauseAfter),
     listenerAction,
+    reactions: sanitizeReactions(o.reactions, o.speaker),
     delivery: sanitizeDelivery(o.delivery),
     branch: typeof o.branch === 'string' && o.branch.trim() ? o.branch.trim().slice(0, 24) : undefined,
-    target: o.target === 'A' || o.target === 'B' || o.target === 'audience' || o.target === 'room' ? o.target : undefined,
+    target:
+      o.target === 'A' || o.target === 'B' || o.target === 'C' || o.target === 'audience' || o.target === 'room'
+        ? o.target
+        : undefined,
     beatId: typeof o.beatId === 'string' && o.beatId.trim() ? o.beatId.trim().slice(0, 40) : undefined,
   }
+}
+
+/** 清洗多角色反应:键只认 A/B/C 且跳过说话者自己,值必须在词表内;整体为空 → undefined */
+function sanitizeReactions(v: unknown, speaker: Speaker): Partial<Record<Speaker, string>> | undefined {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return undefined
+  const out: Partial<Record<Speaker, string>> = {}
+  for (const key of ['A', 'B', 'C'] as const) {
+    if (key === speaker) continue
+    const val = (v as Record<string, unknown>)[key]
+    if (typeof val === 'string' && VALID_ACTIONS.has(val)) out[key] = val
+  }
+  return Object.keys(out).length > 0 ? out : undefined
+}
+
+/** 这句话的听者集合(惊讶脉冲等"对单一看的对象"反应的作用点):
+ *  room → 除说话者外的全场;指向具体角色 → 该角色(自指除外);audience 或缺省 → 无指定 */
+export function listenersOf(line: Pick<DialogLine, 'speaker' | 'target'>): Speaker[] {
+  if (line.target === 'room') return (['A', 'B', 'C'] as const).filter((id) => id !== line.speaker)
+  if (line.target === 'A' || line.target === 'B' || line.target === 'C') {
+    return line.target === line.speaker ? [] : [line.target]
+  }
+  return []
+}
+
+/** 本句各角色的同步无声反应。
+ *  reactions(三人协议)优先;缺省时从旧协议 listenerAction 按 target 转换:
+ *  A/B 无 target 保持"互为听者"的旧约定;C 的旧画外音无 target 视为对全场(无单一听者) */
+export function reactionsOf(line: DialogLine): Partial<Record<Speaker, string>> {
+  if (line.reactions) return line.reactions
+  if (!line.listenerAction) return {}
+  if (line.speaker === 'C') {
+    // C 的旧画外音只有明确指向 A/B 时才归属单一听者
+    if (line.target === 'A' || line.target === 'B') return { [line.target]: line.listenerAction }
+    return {}
+  }
+  if (line.target === 'C') return { C: line.listenerAction }
+  if (line.target === 'audience' || line.target === 'room') return {}
+  const other: Speaker = line.speaker === 'A' ? 'B' : 'A'
+  return { [other]: line.listenerAction }
 }
 
 /** 清洗台词数组:丢坏行;给 minLines 时不足则抛错(LLM 解析用) */
@@ -197,13 +249,14 @@ export function sanitizeSceneCard(v: unknown): SceneCard | undefined {
   const scene = str(o.scene, 80)
   const goalA = str(o.goalA, 60)
   const goalB = str(o.goalB, 60)
+  const roleC = str(o.roleC, 80)
   const secret = str(o.secret, 80)
   const callback = str(o.callback, 80)
   const escalation = Array.isArray(o.escalation)
     ? o.escalation.map((x) => str(x, 40)).filter(Boolean).slice(0, 6)
     : []
   if (!relationship || !scene || !secret || escalation.length === 0) return undefined
-  return { relationship, scene, goalA, goalB, secret, escalation, callback }
+  return { relationship, scene, goalA, goalB, roleC: roleC || undefined, secret, escalation, callback }
 }
 
 /** 清洗抉择点:prompt 与恰好两个带唯一 id 的选项 */

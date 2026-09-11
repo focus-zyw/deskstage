@@ -70,8 +70,6 @@ export function buildMessages(
   arc?: { title: string; hook: string; stage: number },
   /** 环境感知语境(可选):电量/前台应用/连续工作时长,已在引擎侧做过冷却 */
   envNote?: string,
-  /** 场外角色乱入(可选):身份名,以电话/画外音形式出现,打破双人固定结构 */
-  guest?: string,
   /** 长期关系底色(可选):信任/摩擦的当前状态描述 */
   bondNote?: string,
   /** 只有显式“续聊”才携带上一段原始台词；新主题默认 false，避免内容串味 */
@@ -119,12 +117,16 @@ export function buildMessages(
     ? `\n\n连续剧情（本集属于多集剧情线的一拍,话题铺垫让位于它）：《${arc.title}》已演出 ${arc.stage} 拍。本拍必须演出的进展：${arc.hook}。结尾不收死,留下引向下一拍的新悬念/新进展。`
     : ''
 
-  // 场外角色乱入:电话/门外画外音形式,只占 C 的台词,不抢甲乙的场景卡
-  const guestRule = guest
-    ? `
+  // 丙的角色分工:C 是常驻在场的行动型变量,不是第三个轮流说话的人。
+  // 相声模式限制 0~2 句保住逗哏-捧哏结构;其余模式 1~4 句正式参与
+  const cRule =
+    mode === 'crosstalk'
+      ? `
 
-场外角色乱入(本段允许):${guest} 以“打电话/门外喊话”的画外音形式乱入 1~3 句,出现位置在中段或临近结尾;这些台词的 speaker 用 "C";C 不进场景卡,只搅局不接管剧情。`
-    : ''
+丙的角色分工（必须遵守）:丙(小管家)是常驻在场的正式角色,但本场只占 0~2 句;她的价值是实体包袱——按字面理解并立刻执行某个动作,让甲乙的口活落到实际后果上。甲乙仍是逗哏-捧哏主轴,丙不进入正活的结构编排。`
+      : `
+
+丙的角色分工（必须遵守）:丙(小管家)是常驻在场的正式角色,不是电话或画外音。每段她只说 1~4 句,可以大量用 reactions 做无声反应;不得机械地 A→B→C 轮流说话;丙只在行动能改变局面、带来新信息或能形成包袱时开口;丙的人设是"按字面理解并立刻执行"——她最好在中后段把某句吹牛或误会当真并落实成实际后果;最后一句优先由甲或乙收底,除非丙的行动本身就是底。`
 
   // 观众抉择点:由调用方掷骰决定(约 30% 的集数),中段安排一次站队,两分支各 3~5 句,结尾汇合同一包袱
   const choiceRule = allowChoice
@@ -137,15 +139,15 @@ export function buildMessages(
 
   const protocol = `输出协议（严格遵守）：
 - 只输出一个 JSON 对象，不要输出任何其他文字
-- 先写场景卡再写台词，格式：{"card":{"relationship":"关系标签","scene":"具体场景一句话","goalA":"甲想要什么","goalB":"乙想要什么","secret":"被隐瞒的关键信息(一方或双方知道)","escalation":["节拍1","节拍2","节拍3"],"callback":"结尾回收的本集铺垫"},"dialog":[{"speaker":"A","text":"台词","action":"动作","target":"B","beatId":"节拍1"},...]}
+- 先写场景卡再写台词，格式：{"card":{"relationship":"关系标签","scene":"具体场景一句话","goalA":"甲想要什么","goalB":"乙想要什么","roleC":"丙本集的行动职责(可选,不写丙就省略)","secret":"被隐瞒的关键信息(一方或双方知道)","escalation":["节拍1","节拍2","节拍3"],"callback":"结尾回收的本集铺垫"},"dialog":[{"speaker":"A","text":"台词","action":"动作","target":"B","beatId":"节拍1"},...]}
 - dialog 必须逐拍实现 card.escalation；secret 在结尾反转揭晓；callback 必须回收本集前面埋的线
-- 每句必填 "target"（这句对谁说："A"/"B"=对方；"audience"=对观众直说；"room"=对全场）和 "beatId"（这句话实现 card.escalation 的哪一拍,逐字引用该项；收底回收 callback 的句子标最后一拍）
-- speaker 只能是 "A" 或 "B"
+- 每句必填 "target"（这句对谁说："A"/"B"/"C"=指定听者；"audience"=对观众直说；"room"=对全场）和 "beatId"（这句话实现 card.escalation 的哪一拍,逐字引用该项；收底回收 callback 的句子标最后一拍）
+- speaker 只能是 "A"、"B" 或 "C"；甲乙承担主要语言冲突，丙按上面的角色分工参与
 - action 只能是这些词之一（禁止用 card 的字段名或其他词）：${ACTIONS}
-- 一段共 14~22 句，两人交替说话
+- 一段共 14~22 句；三人同场但禁止机械轮流（尤其不许固定 A→B→C 循环）
 - 每句口语化，不超过 25 个字
 - 台词可在 text/action 外带可选演出字段(用在该用的地方,没有就省略,别每句都加)：
-  "listenerAction":听者此刻的反应动作(词表同 action)、"delivery":"deadpan|excited|slow"(面瘫/兴奋/慢条斯理)、"pauseBefore":毫秒(包袱前 300~600 蓄势)、"pauseAfter":毫秒(只给响底的最后一句,900~1500 留白)
+  "reactions":{"B":"shy","C":"surprise"}(本句播出时其他角色的无声反应动作,键不含说话者自己,值同 action 词表;用了 reactions 就不要再写 listenerAction)、"delivery":"deadpan|excited|slow"(面瘫/兴奋/慢条斯理)、"pauseBefore":毫秒(包袱前 300~600 蓄势)、"pauseAfter":毫秒(只给响底的最后一句,900~1500 留白)
 - delivery 使用纪律:默认普通语气(不加字段);同一角色连续同种强情绪最多两句;excited 只用于冲突升级和抖包袱;slow 只用于铺垫、犹豫和揭底`
 
   const envBlock = envNote?.trim()
@@ -156,7 +158,7 @@ export function buildMessages(
   const history = continueFromPrevious && recentLines.length
     ? `上一段的结尾（新的一段要自然衔接，不要重复内容）：\n${recentLines
         .slice(-4)
-        .map((l) => `${l.speaker === 'A' ? nameOf('A') : nameOf('B')}：${l.text}`)
+        .map((l) => `${nameOf(l.speaker)}：${l.text}`)
         .join('\n')}\n\n`
     : ''
 
@@ -167,7 +169,7 @@ export function buildMessages(
   return [
     {
       role: 'system',
-      content: `你是一位擅长传统相声和网络脱口秀的资深喜剧编剧,给桌面双人情景剧写段子。${persona}${bondCtx}${relCtx}${arcCtx}${guestRule}${profile}${storyCtx}${timeCtx}${choiceRule}\n\n${craft}\n\n${protocol}\n\n${modeOf(mode).prompt}`,
+      content: `你是一位擅长传统相声和网络脱口秀的资深喜剧编剧,给桌面三人情景剧写段子。${persona}${bondCtx}${relCtx}${arcCtx}${cRule}${profile}${storyCtx}${timeCtx}${choiceRule}\n\n${craft}\n\n${protocol}\n\n${modeOf(mode).prompt}`,
     },
     {
       role: 'user',

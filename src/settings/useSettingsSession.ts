@@ -40,6 +40,8 @@ export interface SettingsBridge {
   onReplay(ep: Episode): void
   /** 基础设置"恢复默认布局" */
   onResetLayout(): void
+  /** 基础设置"恢复C的位置":只复位常驻角色 C,A/B 不动 */
+  onResetC(): void
   /** 备忘页添加备忘时的隐私提示插话(角色气泡) */
   onPrivacyTip(): void
 }
@@ -113,6 +115,7 @@ export function useSettingsSession(): SettingsSessionState {
         persona: {
           a: cfg.persona.a || defaultPersonaText('A'),
           b: cfg.persona.b || defaultPersonaText('B'),
+          c: cfg.persona.c || defaultPersonaText('C'),
         },
       })
       const id = vendorIdOfBaseUrl(cfg.baseUrl)
@@ -142,8 +145,8 @@ export function useSettingsSession(): SettingsSessionState {
       void invoke('set_capture_excluded', { enable: next.screenshot.hideSelf }).catch(() => {})
       if (next.envSense) startEnvPolling()
       else stopEnvPolling()
-      if (partial.persona) setPersonaOverride(partial.persona.a, partial.persona.b) // 新人设立即采纳
-      if (partial.names) setCharacterNames(partial.names.a, partial.names.b)
+      if (partial.persona) setPersonaOverride(partial.persona.a, partial.persona.b, partial.persona.c) // 新人设立即采纳
+      if (partial.names) setCharacterNames(partial.names.a, partial.names.b, partial.names.c)
       setSavedTick(Date.now())
       window.setTimeout(() => setSavedTick(0), 2500)
     } catch (e) {

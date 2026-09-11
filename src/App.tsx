@@ -10,6 +10,8 @@ import { startEnvPolling } from './engine/envAware'
 import { setCaptureMode, initPointerManager, registerHitRegion, onHoverChange } from './input/pointerManager'
 import { CaptureOverlay } from './CaptureOverlay'
 import { SPRITE_SETS, preloadSprites } from './stage/spriteSets'
+import { ResidentActor } from './stage/resident/ResidentActor'
+import { preloadResident } from './stage/resident/residentManifest'
 import type { DialogLine, Speaker } from './performer/player'
 import type { Mode } from './performer/modes'
 import { generateShortChat, generateTurnBatch, improvPokeLine, generateUserChatReply, extractFacts, memoReminderLine } from './engine/llmClient'
@@ -50,6 +52,7 @@ import { useActorPresenter } from './stage/useActorPresenter'
 import { ControlBar } from './ui/ControlBar'
 import { UtilityCards } from './ui/UtilityCard'
 import {
+  DEFAULT_CONFIG,
   getConfig,
   saveConfig,
   useConfigSnapshot,
@@ -133,7 +136,7 @@ function App() {
   const settingsOpen = rt.overlays.includes('settings')
   // 配置事实源:读同一份已落盘配置(任何 saveConfig 成功后即时发布),不再各自维护镜像
   const config = useConfigSnapshot()
-  const charNames = { A: config.names.a, B: config.names.b }
+  const charNames = { A: config.names.a, B: config.names.b, C: config.names.c }
   const showWatermark = config.showWatermark
   // 聊天通道:输入框开合/草稿/应答中;用户气泡(区别于角色气泡)
   const chatOpen = rt.overlays.includes('chat')
@@ -162,6 +165,8 @@ function App() {
     void resetDismissals()
   }
   const charHidden = rt.charHidden
+  // C 的启用开关独立于全局隐藏:enabled=false 时 C 完全退场(台词回落画外音横幅)
+  const cEnabled = config.characters.C.enabled
   const panelRef = useRef<HTMLDivElement>(null)
   // 备忘提醒卡容器:热区 getter 用;声明在使用(useMemo 依赖)之前,避免 TDZ
   const memoAlertsRef = useRef<HTMLDivElement>(null)
@@ -170,13 +175,15 @@ function App() {
   const chatBoxRef = useRef<HTMLDivElement>(null)
   const cmdPanelRef = useRef<HTMLDivElement>(null)
   const choicePanelRef = useRef<HTMLDivElement>(null)
+  // C 的身体命中框:原生热区按它取矩形(而非整个视频矩形,透明区域不能拦截桌面点击)
+  const residentHitBox = useRef<HTMLDivElement>(null)
 
   // phase 的 ref 镜像:异步回调(LLM 返回)里判断此刻是否仍空闲
   const phaseRef = useRef(phase)
 
   // 角色舞台布局:拖动/缩放/落盘/距离演出(呈现与戳一戳回调注入)
   const {
-    charCfg, ctrlBar, topActor, setTopActor, dragUi, dropFor,
+    charCfg, charCfgRef, ctrlBar, topActor, setTopActor, dragUi, dropFor,
     charA, charB, draggingWho, applyChars, applyCtrlBar, resetLayout,
     onCharPointerDown, onCharPointerMove, onCharPointerUp, onCharWheel,
   } = useCharacterLayout({
@@ -214,8 +221,14 @@ function App() {
   const { choice } = director
 
   /** 插话呈现(气泡+动作+到期回收):戳一戳/引导语/报错的统一入口 */
-  function showPoke(who: 'A' | 'B', line: string, action: string, ms = 1600, loud = false) {
+  function showPoke(who: Speaker, line: string, action: string, ms = 1600, loud = false) {
     presenterSay(who, line, { action, ms, loud, reacting: true })
+  }
+
+  /** 漫游步进回调:读布局 ref 的最新值合并——闭包旧值会拿老 A/B 位置整体覆盖 */
+  function moveResident(xPct: number) {
+    const cur = charCfgRef.current
+    applyChars({ ...cur, C: { ...cur.C, xPct } }, 'debounced')
   }
 
   // phase 的 ref 镜像:异步回调(LLM 返回)里判断此刻是否仍空闲
@@ -311,13 +324,19 @@ function App() {
     void director.play(m, topic)
   }
 
+  /** 旁听惊讶脉冲:挑一个非说话者的角色做反应(三人场景取固定顺序的第一个) */
+  function pulseOther(speaker: Speaker) {
+    const other = (['A', 'B', 'C'] as const).find((id) => id !== speaker)
+    if (other) pulse(other)
+  }
+
   // ---------- 主播模式:直播弹幕互动 ----------
 
   /** 弹幕回复呈现:复用聊天通道的气泡+动作+TTS 节奏(stream 通道) */
   function presentLiveReply(r: LiveReply) {
     setTopActor(r.speaker) // 呈现者置顶:气泡与道具不被另一角色压住
     presenterSay(r.speaker, r.text, { action: r.action || 'talk', ms: 2200 + r.text.length * 160, speaking: true })
-    pulse(r.speaker === 'A' ? 'B' : 'A')
+    pulseOther(r.speaker)
     speak(r.speaker, r.text, undefined, 'stream')
   }
 
@@ -417,6 +436,7 @@ function App() {
   useEffect(() => {
     void initPointerManager()
     preloadSprites(Object.values(SPRITE_SETS)) // 预热立绘,演出中切换动作零延迟
+    preloadResident() // 预热 C 的 WebM 片段,首次切换零等待
     preloadProps() // 预热道具 SVG,首次礼物/工具流程不闪
     void getConfig().then((c) => {
       applyChars(c.characters)
@@ -428,9 +448,9 @@ function App() {
       void applyScreenshotHotkey()
       void invoke('set_capture_excluded', { enable: c.screenshot.hideSelf }).catch(() => {})
       // 用户自定义角色名:先应用(名牌与台词称呼)
-      setCharacterNames(c.names.a, c.names.b)
+      setCharacterNames(c.names.a, c.names.b, c.names.c)
       // 用户自定义人设:先应用,后续所有生成即采纳
-      setPersonaOverride(c.persona.a, c.persona.b)
+      setPersonaOverride(c.persona.a, c.persona.b, c.persona.c)
       // 环境感知:按配置低频轮询本机状态(电量/前台应用分类等)
       if (c.envSense) startEnvPolling()
       // 开机自启动:按配置对账系统注册状态(默认关;手改配置文件后重启同样生效)
@@ -453,6 +473,15 @@ function App() {
             ? new DOMRect(0, 0, window.innerWidth, window.innerHeight)
             : charB.current!.getBoundingClientRect(),
         nativePointerTarget: () => charB.current,
+      }),
+      // C 的热区按身体命中框取矩形(透明区域不拦截桌面点击);C 禁用/隐藏时组件不渲染,
+      // ref 为空 → 零矩形 → 不注册。排在 A/B 之后:漫游重叠时 A/B 优先
+      registerHitRegion('charC', {
+        getRect: () =>
+          draggingWho.current === 'C'
+            ? new DOMRect(0, 0, window.innerWidth, window.innerHeight)
+            : (residentHitBox.current?.getBoundingClientRect() ?? new DOMRect(0, 0, 0, 0)),
+        nativePointerTarget: () => residentHitBox.current,
       }),
       // 工具栏按钮的热区由 ui/ControlBar 自行注册
     ]
@@ -545,19 +574,30 @@ function App() {
     director.replay(ep, 'manual')
   }
 
-  /** 聊天通道:解析 @角色 → TurnBatch(被@角色先答,另一位有料才补,共 1~3 句) → 顺序播报。
-   *  短期会话窗口入列(下轮聊天/演出插话共用);无 @ 时按上次目标轮换;
-   *  演出进行中改为入队插话(P4:句尾安全缝反应后接回剧情);抉择等待仍禁发 */
+  /** 聊天通道:解析 @角色 → TurnBatch(被@角色先答,其他人有料才补,共 1~3 句) → 顺序播报。
+   *  短期会话窗口入列(下轮聊天/演出插话共用);无 @ 时在甲乙间轮换(丙需显式点名);
+   *  演出进行中改为入队插话(句尾安全缝反应后接回剧情);抉择等待仍禁发 */
   async function sendUserChat() {
     const text = chatDraft.trim()
     if (!text || chatBusy) return
     const esc = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    const alt = new RegExp(`^\\s*@?(${esc(charNames.A)}|${esc(charNames.B)}|甲|乙|A|B)\\s*`)
+    const targetOf: Record<string, Speaker> = {
+      [charNames.A]: 'A',
+      [charNames.B]: 'B',
+      [charNames.C]: 'C',
+      甲: 'A',
+      乙: 'B',
+      丙: 'C',
+      A: 'A',
+      B: 'B',
+      C: 'C',
+    }
+    const alt = new RegExp(
+      `^\\s*@?(${esc(charNames.A)}|${esc(charNames.B)}|${esc(charNames.C)}|甲|乙|丙|A|B|C)\\s*`,
+    )
     const m = text.match(alt)
     const who: Speaker = m
-      ? m[1] === charNames.A || m[1] === 'A'
-        ? 'A'
-        : 'B'
+      ? (targetOf[m[1]] ?? 'A')
       : (lastChatTarget.current = lastChatTarget.current === 'A' ? 'B' : 'A')
     if (phase === 'performing') {
       // P4 演出中插话:入队,当前句结束的安全缝处反应并接回剧情
@@ -591,9 +631,8 @@ function App() {
         batch = [{ speaker: who, text: reply, action: 'talk' }]
       }
       for (const l of batch) {
-        if (l.speaker !== 'A' && l.speaker !== 'B') continue // 校验层已保证,防御兜底
         presenterSay(l.speaker, l.text, { action: 'talk', ms: 2200 + l.text.length * 160, speaking: true })
-        pulse(l.speaker === 'A' ? 'B' : 'A')
+        pulseOther(l.speaker)
         speak(l.speaker, l.text, undefined, 'chat')
         pushTurn({ who: l.speaker, text: l.text })
         await new Promise((r) => window.setTimeout(r, 2200 + l.text.length * 160))
@@ -632,10 +671,16 @@ function App() {
     if (!settingsOpen) setSettingsTabRequest('general')
   }, [settingsOpen])
 
-  /** 设置窗口的跨模块行为:只经由这三个回调触碰应用其余部分 */
+  /** 恢复 C 的默认位置(设置-基础设置入口);A/B 布局不动 */
+  function resetResidentLayout() {
+    applyChars({ ...charCfg, C: { ...DEFAULT_CONFIG.characters.C } }, 'now')
+  }
+
+  /** 设置窗口的跨模块行为:只经由这些回调触碰应用其余部分 */
   const settingsBridge: SettingsBridge = {
     onReplay: replayFromHistory,
     onResetLayout: resetLayout,
+    onResetC: resetResidentLayout,
     onPrivacyTip: showPrivacyTip,
   }
 
@@ -720,7 +765,7 @@ function App() {
   const pokeCounts = useRef<Record<Speaker, number[]>>({ A: [], B: [], C: [] })
   const improvLastAt = useRef(0)
 
-  function poke(who: 'A' | 'B') {
+  function poke(who: Speaker) {
     noteUserActive()
     setTopActor(who)
     bumpPoke() // 行为信号:互动频率
@@ -731,7 +776,7 @@ function App() {
       void logInterrupt(who)
       return
     }
-    void logInteraction(who === 'A' ? 'pokeA' : 'pokeB')
+    void logInteraction(who === 'A' ? 'pokeA' : who === 'B' ? 'pokeB' : 'pokeC')
 
     // 连戳分级:滑动窗口计数,生气期内不再响应
     const now = Date.now()
@@ -970,6 +1015,38 @@ function App() {
         />
       </div>
 
+      {/* 常驻角色 C:独立 WebM 视频模块,站在甲乙之间;拖拽/漫游经同一布局管线 */}
+      <div
+        className="actor"
+        style={{
+          left: `${charCfg.C.xPct}%`,
+          bottom: charCfg.C.bottom,
+          zIndex: topActor === 'C' ? 2 : 1,
+          display: charHidden || !cEnabled ? 'none' : undefined,
+        }}
+        onPointerDown={(e) => onCharPointerDown(e, 'C')}
+        onPointerMove={(e) => onCharPointerMove(e, 'C')}
+        onPointerUp={() => onCharPointerUp('C')}
+      >
+        <ResidentActor
+          hitBoxRef={residentHitBox}
+          action={displayAction('C')}
+          bubble={bubble.C}
+          loud={loudBubble.C}
+          speaking={speaking === 'C'}
+          dragging={dragUi === 'C'}
+          active={cEnabled && !charHidden}
+          calm={rt.dnd}
+          hidden={charHidden || !cEnabled}
+          width={charCfg.C.width}
+          below={charCfg.C.bottom + charCfg.C.width * 0.5625 > window.innerHeight - 110}
+          xPct={charCfg.C.xPct}
+          onMove={moveResident}
+          hot={hovered === 'charC'}
+          name={charNames.C}
+        />
+      </div>
+
       {chatOpen && (
           <div
             ref={chatBoxRef}
@@ -980,7 +1057,7 @@ function App() {
             <div className="chat-row">
               <input
                 type="text"
-                placeholder="和角色说话…(@甲/@乙 指定谁回)"
+                placeholder="和角色说话…(@甲/@乙/@丙 指定谁回)"
                 value={chatDraft}
                 onChange={(e) => setChatDraft(e.target.value)}
                 onKeyDown={(e) => {
@@ -1009,7 +1086,8 @@ function App() {
           />
         )}
 
-        {bubble.C && (
+        {/* C 已是常驻身体,台词气泡在角色头顶;仅在设置里禁用 C 时回落画外音横幅 */}
+        {bubble.C && !cEnabled && (
           <div className="guest-bubble">
             <span className="guest-tag">📞 画外音</span>
             {bubble.C}

@@ -44,7 +44,6 @@ function finalPrompt({ recentLines = [], storyContext, continueFromPrevious = fa
     undefined,
     undefined,
     undefined,
-    undefined,
     continueFromPrevious,
   )
     .map((message) => message.content)
