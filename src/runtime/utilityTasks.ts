@@ -21,6 +21,29 @@ let tasks: UtilityTask[] = []
 const listeners = new Set<() => void>()
 let seq = 0
 
+/** 任务生命周期订阅:C 的"围观"动画等外围表现用(开始进工作姿势,结束还原)。
+ *  与任务卡片状态解耦——卡片管结果反馈,这里只广播起止时刻 */
+export type UtilityTaskPhase = 'start' | 'end'
+export interface UtilityTaskLifecycle {
+  phase: UtilityTaskPhase
+  kind: UtilityKind
+  id: string
+}
+const lifecycleSubs = new Set<(l: UtilityTaskLifecycle) => void>()
+
+export function onUtilityTaskLifecycle(
+  cb: (l: UtilityTaskLifecycle) => void,
+): () => void {
+  lifecycleSubs.add(cb)
+  return () => {
+    lifecycleSubs.delete(cb)
+  }
+}
+
+function notifyLifecycle(l: UtilityTaskLifecycle): void {
+  lifecycleSubs.forEach((cb) => cb(l))
+}
+
 function emit(): void {
   listeners.forEach((l) => l())
 }
@@ -63,11 +86,15 @@ export async function runUtilityTask(
   const id = `ut-${seq}`
   tasks = [...tasks.slice(-3), { id, kind, label, actor, status: 'running', detail: '处理中…', ts: Date.now() }]
   emit()
+  notifyLifecycle({ phase: 'start', kind, id })
   try {
     const detail = await exec((d) => patch(id, { detail: d }))
     patch(id, { status: 'done', detail })
     window.setTimeout(() => removeTask(id), 6000)
   } catch (e) {
     patch(id, { status: 'error', error: String((e as Error)?.message ?? e).slice(0, 100) })
+  } finally {
+    // 无论成败都要收尾:end 漏发会让"工作姿势"永远不还原
+    notifyLifecycle({ phase: 'end', kind, id })
   }
 }

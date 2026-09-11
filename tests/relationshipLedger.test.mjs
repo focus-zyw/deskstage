@@ -91,3 +91,20 @@ test('没有关系事件的集:关系数值与账本都不动', async () => {
   assert.equal(after.bond.rivalry, before.bond.rivalry)
   assert.equal(after.bond.events?.length, before.bond.events?.length)
 })
+
+test('涉及丙的关系事件:只进账本当叙事记忆,不驱动甲乙数值(团宠不搞帮谁拆谁)', async () => {
+  const before = await story.getStory()
+  const report = await curator.curateEpisode(lines, {
+    eid: 'e-c-1',
+    distill: async () =>
+      distilled({
+        relationshipEvent: { kind: 'betrayal', actor: 'C', target: 'A', weight: 1, summary: '丙把甲的牛皮当真执行,让甲当众下不来台' },
+      }),
+  })
+  assert.ok(report.relationship, '报告带关系事件')
+  const after = await story.getStory()
+  assert.equal(after.bond.trust, before.bond.trust, 'C 事件不改信任')
+  assert.equal(after.bond.rivalry, before.bond.rivalry, 'C 事件不改摩擦')
+  assert.equal(after.bond.events?.length, (before.bond.events?.length ?? 0) + 1, '账本保留叙事记忆')
+  assert.equal(after.bond.events[0].eid, 'e-c-1')
+})

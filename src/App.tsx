@@ -44,7 +44,7 @@ import {
   setDnd as setRuntimeDnd,
   setCharHidden as setRuntimeCharHidden,
 } from './runtime/runtimeMode'
-import { runUtilityTask, useUtilityTasks } from './runtime/utilityTasks'
+import { runUtilityTask, useUtilityTasks, onUtilityTaskLifecycle } from './runtime/utilityTasks'
 import { showProp, dismissProps, clearProps } from './runtime/propEffects'
 import { preloadProps } from './stage/props'
 import { StageProps } from './stage/StageProps'
@@ -86,6 +86,32 @@ const ANGRY_LINES = [
   '够了！再戳我真的生气了！！',
   '（拍开你的手）烦不烦！',
   '再戳一下试试？信不信我下线！',
+]
+/** C(团宠)专属戳反应池:小管家的字面认真语气,与甲乙的互怼语气区分开 */
+const C_POKE_LINES = [
+  '（掏出小本本）此人今日戳丙一次',
+  '哼，丙可生气了（并没有）',
+  '（歪头）你的手…是在打招呼吗？',
+  '（认真脸）再戳丙就要预约了',
+  '（被戳得晃了晃）哇啊——',
+]
+const C_SHY_LINES = [
+  '（鼓脸）再、再戳丙就把家务全做完了！',
+  '（往后缩）你们两个都笑话我…',
+  '呜…（小声）其实也没有不开心…',
+]
+const C_ANGRY_LINES = [
+  '（傲娇鼓脸）哼！丙真的生气了！这次是真的！',
+  '（叉腰）再戳就把甲乙的零食全部收缴！',
+  '（转身背对，肩膀微微在抖）不理你们了！',
+]
+/** 戳团宠时另一角色起哄的概率:三人舞台感(甲乙是"同伙") */
+const TEASE_HYPE_CHANCE = 0.3
+const TEASE_HYPE_LINES = [
+  '哈哈，她又把小本本掏出来了',
+  '别逗了，她连生气都是圆的',
+  '（憋笑）你继续，我就看看',
+  '哎哎，团宠被你戳蔫了，赔！',
 ]
 /** 连戳计数窗口与阈值 */
 const POKE_WINDOW_MS = 60_000
@@ -239,6 +265,15 @@ function App() {
   useEffect(() => {
     phaseRef.current = phase
   }, [phase])
+
+  // C 围观工具任务:任务运行期间进工作姿势,结束(成败都)还原
+  useEffect(() => {
+    return onUtilityTaskLifecycle(({ phase: p }) => {
+      setPose('C', p === 'start' ? 'working' : 'idle')
+    })
+    // setPose 只依赖稳定的 setState,首帧闭包行为恒定
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // mode 的 ref 镜像同步
   useEffect(() => {
@@ -454,6 +489,7 @@ function App() {
     { id: 'toggle-chars', label: charHidden ? '显示角色' : '隐藏角色', keywords: ['隐藏角色', '显示角色'], run: () => setCharsHidden(!charHidden) },
     { id: 'crosstalk', label: '来一段相声', keywords: ['相声'], run: () => performNow('crosstalk') },
     { id: 'daily', label: '来一段日常', keywords: ['日常', '段子'], run: () => performNow('daily') },
+    { id: 'debate', label: '来一段辩论', keywords: ['辩论'], run: () => performNow('debate') },
     { id: 'live', label: '开播(直播弹幕互动,设置里填直播间号)', keywords: ['开播', '直播', '弹幕'], run: () => performNow('live') },
     { id: 'live-stop', label: '下播(结束直播弹幕互动)', keywords: ['下播'], run: () => director.stop() },
   ]
@@ -824,16 +860,21 @@ function App() {
       (t) => now - t < POKE_WINDOW_MS,
     ))
     const count = arr.length + 1
+    // 丙走团宠专属池,甲乙保持互怼语气池
+    const pools = who === 'C'
+      ? { poke: C_POKE_LINES, shy: C_SHY_LINES, angry: C_ANGRY_LINES }
+      : { poke: POKE_LINES, shy: SHY_LINES, angry: ANGRY_LINES }
     if (count >= ANGRY_AT) {
       arr.push(now)
-      showPoke(who, ANGRY_LINES[Math.floor(Math.random() * ANGRY_LINES.length)], 'angry', 2000)
+      showPoke(who, pools.angry[Math.floor(Math.random() * pools.angry.length)], 'angry', 2000)
+      scheduleHype(who)
       return
     }
     arr.push(now)
     const shy = count >= SHY_AT
     const fallback = shy
-      ? SHY_LINES[Math.floor(Math.random() * SHY_LINES.length)]
-      : POKE_LINES[Math.floor(Math.random() * POKE_LINES.length)]
+      ? pools.shy[Math.floor(Math.random() * pools.shy.length)]
+      : pools.poke[Math.floor(Math.random() * pools.poke.length)]
     const fallbackAction = shy ? 'shy' : Math.random() < 0.3 ? 'laugh' : 'talk'
 
     // 轻戳小概率走 LLM 即兴(冷却内/演出生成中不触发);失败静默用固定台词
@@ -857,9 +898,22 @@ function App() {
         })
       // 先给一个占位反应,LLM 返回后替换
       showPoke(who, '（被戳得一激灵）', 'surprise', 1200)
+      scheduleHype(who)
       return
     }
     showPoke(who, fallback, fallbackAction)
+    scheduleHype(who)
+  }
+
+  /** 戳团宠时另一角色延迟起哄:甲乙是"同伙",三人舞台感。
+   *  只在空闲时插话,触发时再次校验阶段,不顶掉演出台词 */
+  function scheduleHype(who: Speaker) {
+    if (who !== 'C' || Math.random() >= TEASE_HYPE_CHANCE) return
+    const other: Speaker = Math.random() < 0.5 ? 'A' : 'B'
+    window.setTimeout(() => {
+      if (phaseRef.current !== 'idle' || director.isPlaying()) return
+      showPoke(other, TEASE_HYPE_LINES[Math.floor(Math.random() * TEASE_HYPE_LINES.length)], 'laugh', 2000)
+    }, 1100)
   }
 
   // 空闲 3 分钟无互动 → 角色打瞌睡(sleepy);任何互动/演出/面板恢复

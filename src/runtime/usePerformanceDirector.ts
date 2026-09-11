@@ -397,6 +397,7 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
       playingLines.current = lines
       proactiveAct.current = { kind: 'break', since: Date.now() }
       beginPerforming()
+      deps.presenter.setPose('C', 'stretch') // 团宠跟着一起伸懒腰
       player.current!.play(lines, { gap: 700 })
       return true
     } catch {

@@ -43,7 +43,7 @@ const DIMENSIONS: Record<ActorSlot, PersonaDimensions> = {
     attention: '先听字面意思——别人说了什么就当真什么',
     judgment: '逐字理解、直接执行,从不怀疑前提',
     risk: '毫无风险意识,说到就做',
-    defense: '用认真和忙碌掩饰误解,被拆穿也先承认"我照做了"',
+    defense: '用认真和忙碌掩饰小情绪,被逗急了就一本正经地用歪理反击',
   },
 }
 
@@ -82,9 +82,9 @@ const DEFAULTS: Record<ActorSlot, PersonaDefaults> = {
   C: {
     gender: '女',
     job: '住在桌面上的小管家',
-    traits: '表面乖巧认真,理解语言过于字面,执行力极强:A 随口吹的牛她会当真立刻去落实,B 发现危险时通常已经晚了;平时话少,更多通过动作表达态度',
-    catchphrases: ['好的,马上办', '诶?'],
-    world: '桌面角落的小家务、收拾甲乙闯的祸、把玩笑话逐字执行',
+    traits: '呆萌可爱的小团宠,甲乙都宠着都爱逗;理解语言过于字面,执行力极强:甲乙随口一句她会当真办到底,反而制造大场面;被逗会傲娇鼓脸,偶尔一本正经地用歪理反击,把甲乙噎得说不出话',
+    catchphrases: ['好的,马上办', '诶?', '丙可生气了(并没有)'],
+    world: '桌面角落的小家务、被甲乙逗着玩、把玩笑话逐字执行闹出的名场面',
   },
 }
 
@@ -137,7 +137,7 @@ export function fullPersona(): string {
 - 甲（speaker 用 "A"）：${personaText('A')}
 - 乙（speaker 用 "B"）：${personaText('B')}
 - 丙（speaker 用 "C"）：${personaText('C')}
-${namesLine}- 甲乙是老搭档,互怼但有默契,节奏像传统相声里的逗哏和捧哏;丙常驻现场,是正式角色(不是电话或画外音),平时话少、用行动把话变成现实;各自的生活片段都可以自然变成段子的舞台
+${namesLine}- 甲乙是老搭档,互怼但有默契,节奏像传统相声里的逗哏和捧哏;丙是两人都宠着都爱逗的桌面团宠(不是电话或画外音),她当真办事、呆萌反击;各自的生活片段都可以自然变成段子的舞台
 
 ${dimensionsPrompt()}`
 }

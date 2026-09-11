@@ -29,6 +29,14 @@ const INTERNAL_CLIPS: Record<string, ResidentClipId[]> = {
   float: ['float'],
   drag: ['drag'],
   caught: ['caught'],
+  // 工具任务围观:写代码为主,忙碌点按作候选
+  working: ['working', 'focus'],
+  // 久坐提醒:伸懒腰
+  stretch: ['stretch'],
+  // 待机哼歌
+  hum: ['hum'],
+  // 点击回应:敲桌面互动
+  tap: ['tap'],
 }
 
 const FALLBACK: ResidentClipId[] = ['idle']
@@ -44,8 +52,8 @@ export function pickClip(action: string, rand: () => number = Math.random): Resi
   return candidates[Math.min(candidates.length - 1, Math.floor(rand() * candidates.length))]
 }
 
-/** 循环片段:持续状态(待机/说话/思考/移动/拖拽)循环播放;反应类单次播完停在末帧 */
-const LOOPING = new Set<ResidentClipId>(['idle', 'talk', 'think', 'walk', 'float', 'drag'])
+/** 循环片段:持续状态(待机/说话/思考/移动/拖拽/工作)循环播放;反应类单次播完停在末帧 */
+const LOOPING = new Set<ResidentClipId>(['idle', 'talk', 'think', 'walk', 'float', 'drag', 'working'])
 
 export function isLoopingClip(clip: ResidentClipId): boolean {
   return LOOPING.has(clip)

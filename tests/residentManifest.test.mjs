@@ -38,6 +38,13 @@ test('词表动作映射到候选片段,未知动作回退 idle', () => {
   assert.deepEqual(clipsForAction('不存在动作'), ['idle'])
 })
 
+test('C 内部动作(围观/互动/待机链)映射到专属片段', () => {
+  assert.deepEqual(clipsForAction('working'), ['working', 'focus'])
+  assert.deepEqual(clipsForAction('stretch'), ['stretch'])
+  assert.deepEqual(clipsForAction('hum'), ['hum'])
+  assert.deepEqual(clipsForAction('tap'), ['tap'])
+})
+
 test('多候选按随机源挑选,单候选不受随机影响', () => {
   assert.equal(pickClip('happy', () => 0), 'happy')
   assert.equal(pickClip('happy', () => 0.99), 'wave')
@@ -45,10 +52,10 @@ test('多候选按随机源挑选,单候选不受随机影响', () => {
 })
 
 test('持续状态循环播放,反应类单次播完停帧', () => {
-  for (const clip of ['idle', 'talk', 'think', 'walk', 'float', 'drag']) {
+  for (const clip of ['idle', 'talk', 'think', 'walk', 'float', 'drag', 'working']) {
     assert.equal(isLoopingClip(clip), true, clip)
   }
-  for (const clip of ['happy', 'wave', 'angry', 'surprise', 'startled', 'caught', 'turn']) {
+  for (const clip of ['happy', 'wave', 'angry', 'surprise', 'startled', 'caught', 'turn', 'hum', 'stretch', 'tap']) {
     assert.equal(isLoopingClip(clip), false, clip)
   }
 })
@@ -65,7 +72,7 @@ test('本地已抓取的素材文件真实存在(资源在库时不允许运行�
     // 素材未抓取时跳过(脚本 scripts/fetch-c-animations.mjs 可补齐),应用侧静默降级
     return
   }
-  for (const clip of ['idle', 'talk', 'think', 'happy', 'wave', 'angry', 'surprise', 'startled', 'caught', 'turn', 'walk', 'float', 'drag']) {
+  for (const clip of ['idle', 'talk', 'think', 'happy', 'wave', 'angry', 'surprise', 'startled', 'caught', 'turn', 'walk', 'float', 'drag', 'working', 'focus', 'stretch', 'hum', 'tap']) {
     assert.equal(existsSync(path.join(dir, `${clip}.webm`)), true, `${clip}.webm 缺失`)
   }
 })

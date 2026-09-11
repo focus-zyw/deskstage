@@ -165,3 +165,23 @@ test('显式续聊时才携带上一段原始结尾', () => {
 
   assert.match(prompt, /这份周报还没写完/)
 })
+
+test('逗弄动力学注入:日常模式写明甲乙逗丙的分工与丙的字面反击路线', () => {
+  const prompt = buildMessages('daily', '点外卖还是自己做饭', [])
+    .map((message) => message.content)
+    .join('\n')
+  assert.match(prompt, /甲爱用夸张的吹牛和离谱的请求逗她/)
+  assert.match(prompt, /乙爱用毒舌反问/)
+  assert.match(prompt, /字面反击/)
+  assert.match(prompt, /不许刻薄嘲笑/)
+  assert.match(prompt, /1~4 句/)
+})
+
+test('相声模式丙只占 0~2 句,保留逗哏-捧哏主轴', () => {
+  const prompt = buildMessages('crosstalk', '周报到底写给谁看', [])
+    .map((message) => message.content)
+    .join('\n')
+  assert.match(prompt, /本场只占 0~2 句/)
+  assert.match(prompt, /甲乙拿丙垫梗/)
+  assert.match(prompt, /甲乙仍是逗哏-捧哏主轴/)
+})

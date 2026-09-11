@@ -12,7 +12,7 @@ interface Props {
   /** 整句路由出"提醒"意图后的入库回调(App 侧带隐私气泡提醒) */
   onAddMemo: (text: string, dueAt: number) => void
   /** 整句路由出"演出"意图后的点播回调 */
-  onPerform: (mode: 'daily' | 'crosstalk' | 'live', topic?: string) => void
+  onPerform: (mode: 'daily' | 'crosstalk' | 'debate' | 'live', topic?: string) => void
 }
 
 function fmtLocal(d: Date): string {

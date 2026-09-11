@@ -52,12 +52,13 @@ export interface StoryData {
 /** 关系事件类别:先记具体事件,再小步聚合到 trust/rivalry(避免数值变化没有来由) */
 export type RelationshipEventKind = 'support' | 'betrayal' | 'repair' | 'rivalry' | 'user-sided'
 
-/** 一笔关系事件:台词里明确发生的和解/背叛/支持/较劲/观众站队 */
+/** 一笔关系事件:台词里明确发生的和解/背叛/支持/较劲/观众站队。
+ *  涉及丙(C)的事件只记进账本当叙事记忆,不驱动 A:B 的关系数值 */
 export interface RelationshipEvent {
   kind: RelationshipEventKind
   /** 谁发起,对谁 */
-  actor: 'A' | 'B' | 'audience'
-  target: 'A' | 'B'
+  actor: 'A' | 'B' | 'C' | 'audience'
+  target: 'A' | 'B' | 'C'
   /** 程度 0.5~1,聚合时缩放数值变化 */
   weight: number
   /** 一句话:谁对谁做了什么 */
@@ -290,7 +291,7 @@ export function validateStoryText(kind: StoryTextKind, text: string): string | n
   const t = text.trim()
   if (t.length < min) return `太短(至少${min}字)`
   if (t.length > max) return `太长(至多${max}字)`
-  if ((kind === 'gag' || kind === 'thread') && !/甲|乙/.test(t)) return '缺少甲/乙主体'
+  if ((kind === 'gag' || kind === 'thread') && !/甲|乙|丙/.test(t)) return '缺少甲/乙/丙主体'
   return null
 }
 
@@ -617,21 +618,24 @@ const RELATIONSHIP_DELTAS: Record<RelationshipEventKind, { dTrust: number; dRiva
 /** 蒸馏产出的关系事件候选(未落账,缺 ts/eid) */
 export interface RelationshipEventCandidate {
   kind: RelationshipEventKind
-  actor: 'A' | 'B' | 'audience'
-  target: 'A' | 'B'
+  actor: 'A' | 'B' | 'C' | 'audience'
+  target: 'A' | 'B' | 'C'
   weight: number
   summary: string
 }
 
 /** 记一笔关系事件进账本(新在前,最多 20 条)并小步聚合到 trust/rivalry。
- *  "一集最多一笔"由调用方(策展器)保证 */
+ *  "一集最多一笔"由调用方(策展器)保证。
+ *  涉及丙的事件只记账不驱动数值:A:B 的信任/摩擦语义对"甲乙逗丙"不成立,
+ *  账本保留它只作叙事记忆(下次蒸馏可见) */
 export async function applyRelationshipEvent(
   event: RelationshipEventCandidate,
   eid?: string,
 ): Promise<void> {
+  const involvesC = event.actor === 'C' || event.target === 'C'
   await withFileLock('story', async () => {
     const story = await getStory()
-    const delta = RELATIONSHIP_DELTAS[event.kind] ?? { dTrust: 0, dRivalry: 0 }
+    const delta = involvesC ? { dTrust: 0, dRivalry: 0 } : RELATIONSHIP_DELTAS[event.kind] ?? { dTrust: 0, dRivalry: 0 }
     story.bond.trust = clampTrust(story.bond.trust + delta.dTrust * event.weight)
     story.bond.rivalry = clampRivalry(story.bond.rivalry + delta.dRivalry * event.weight)
     story.bond.updatedAt = Date.now()

@@ -40,15 +40,15 @@ export function resolveResidentClip(intents: ResidentIntents): ResidentPlayback 
 
 // ---------- 生命感参数(组件按这些节奏驱动随机链/点击回应/漫游) ----------
 
-/** 随机待机链候选:都是单次片段,播完停帧片刻回待机 */
-export const AMBIENT_CLIPS: readonly ResidentClipId[] = ['turn', 'caught']
+/** 随机待机链候选:都是单次片段,播完停帧片刻回待机(哼歌穿插,偶尔切工作状态) */
+export const AMBIENT_CLIPS: readonly ResidentClipId[] = ['turn', 'caught', 'hum']
 export const AMBIENT_MIN_MS = 12_000
 export const AMBIENT_MAX_MS = 25_000
 /** 随机片段播完后的停帧停留 */
 export const AMBIENT_HOLD_MS = 3200
 
-/** 点击回应候选:乖巧管家式的反应(被抓包的偷吃是彩蛋) */
-export const POKE_CLIPS: readonly ResidentClipId[] = ['happy', 'wave', 'startled', 'caught']
+/** 点击回应候选:乖巧管家式的反应(敲桌面/被抓包的偷吃是彩蛋) */
+export const POKE_CLIPS: readonly ResidentClipId[] = ['happy', 'wave', 'startled', 'caught', 'tap']
 /** 点击回应持续时长(到期回待机) */
 export const POKE_HOLD_MS = 2800
 

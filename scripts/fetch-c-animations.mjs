@@ -26,6 +26,11 @@ const SOURCES = {
   walk: ['螃蟹走路'],
   float: ['原地漂浮踏步'],
   drag: ['被鼠标拖拽悬空反馈'],
+  working: ['写代码'],
+  focus: ['工作状态-忙碌点按'],
+  stretch: ['超大伸懒腰'],
+  hum: ['悠闲哼歌'],
+  tap: ['原地敲击桌面互动'],
 }
 
 const force = process.argv.includes('--force')

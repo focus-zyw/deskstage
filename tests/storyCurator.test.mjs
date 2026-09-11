@@ -124,8 +124,10 @@ test('纯函数:规范化统一"甲家"系主体,相似度识别换说法,校验
   )
   assert.ok(store.storyTextSimilarity('AI写请假条店长秒批', '赛博身体不适需接入床铺碎片整理') < 0.7)
   assert.ok(store.validateStoryText('gag', '太短了'))
-  assert.equal(store.validateStoryText('gag', '观众是打地鼠的锤子，戳人二十六下'), '缺少甲/乙主体')
+  assert.equal(store.validateStoryText('gag', '观众是打地鼠的锤子，戳人二十六下'), '缺少甲/乙/丙主体')
   assert.equal(store.validateStoryText('gag', '乙点无糖，甲喝全糖也要让乙背锅'), null)
+  // 丙为主语的呆萌名场面同样可以入库(团宠定位:她的梗要有长期记忆载体)
+  assert.equal(store.validateStoryText('gag', '丙把甲的泡面种进花盆等它长出办公椅'), null)
   assert.ok(store.validateStoryText('arcTitle', '这个剧情线标题实在是太长了不合规'))
 })
 

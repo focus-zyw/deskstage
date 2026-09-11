@@ -16,6 +16,11 @@ export type ResidentClipId =
   | 'walk'
   | 'float'
   | 'drag'
+  | 'working'
+  | 'focus'
+  | 'stretch'
+  | 'hum'
+  | 'tap'
 
 /** 仲裁结果:播哪个片段、循环还是单次(单次播完停在末帧,等外部状态变化接管) */
 export interface ResidentPlayback {
