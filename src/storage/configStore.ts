@@ -115,6 +115,8 @@ export interface AppConfig {
   webchatSite: 'deepseek' | 'doubao'
   /** 桌面环境感知(电量/前台应用分类等,仅本机分类不上传) */
   envSense: boolean
+  /** 环境感知注入冷却分钟数:同一条感知在此窗口内不重复进入提示词 */
+  envNoteCooldownMin: number
   /** 久坐提醒(番茄钟):连续活跃 X 分钟后用角色口吻提醒休息 */
   breakReminder: { enabled: boolean; minutes: number }
   /** 用户自定义人设(甲/乙/丙的生效文本;空串 = 内置默认) */
@@ -217,6 +219,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   webchatEnabled: false,
   webchatSite: 'deepseek',
   envSense: true,
+  envNoteCooldownMin: 360,
   breakReminder: { enabled: false, minutes: 45 },
   persona: { a: '', b: '', c: '' },
   names: { a: '甲', b: '乙', c: '丙' },
@@ -458,6 +461,11 @@ function sanitizeConfig(obj: unknown): AppConfig {
     webchatEnabled: o.webchatEnabled === true,
     webchatSite: o.webchatSite === 'doubao' ? 'doubao' : 'deepseek',
     envSense: o.envSense !== false,
+    envNoteCooldownMin: ((): number => {
+      const n = Number(o.envNoteCooldownMin)
+      // 10 分钟(防刷屏)~ 1440 分钟(一天);非法/缺省回 6 小时(历史行为)
+      return Number.isFinite(n) && n > 0 ? Math.min(1440, Math.max(10, Math.round(n))) : 360
+    })(),
     breakReminder: ((): { enabled: boolean; minutes: number } => {
       const b = (o.breakReminder ?? {}) as Record<string, unknown>
       return {

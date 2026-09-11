@@ -138,22 +138,37 @@ fn foreground_category() -> Option<String> {
 
 /// 进程名 → 面向观众的类别(本地映射表,命中不了归 other)
 fn categorize(exe: &str) -> String {
+    // 代码编辑器/IDE:传统 IDE + AI 编程工具(ZCode/Windsurf/Trae/Zed 等)
     const EDITORS: &[&str] = &[
-        "code.exe", "cursor.exe", "idea64.exe", "webstorm64.exe", "pycharm64.exe",
-        "clion64.exe", "goland64.exe", "rider64.exe", "devenv.exe", "sublime_text.exe",
-        "notepad++.exe", "notepad.exe",
+        "code.exe", "code - insiders.exe", "cursor.exe", "zcode.exe", "windsurf.exe",
+        "trae.exe", "zed.exe",
+        "idea64.exe", "webstorm64.exe", "pycharm64.exe", "clion64.exe", "goland64.exe",
+        "rider64.exe", "phpstorm64.exe", "rubymine64.exe", "datagrip64.exe",
+        "androidstudio64.exe", "devenv.exe", "eclipse.exe",
+        "sublime_text.exe", "notepad++.exe", "notepad.exe",
+        "gvim.exe", "neovide.exe", "emacs.exe",
+        "wechatdevtools.exe", "hbuilderx.exe",
     ];
     const TERMINALS: &[&str] = &[
         "windowsterminal.exe", "cmd.exe", "powershell.exe", "pwsh.exe", "conhost.exe",
         "openconsole.exe", "wezterm-gui.exe", "alacritty.exe",
+        "mintty.exe", "hyper.exe", "tabby.exe",
+        "xshell.exe", "putty.exe", "mobaxterm.exe", "finalshell.exe", "windterm.exe",
+        "ttermpro.exe",
     ];
     const BROWSERS: &[&str] = &[
         "chrome.exe", "msedge.exe", "firefox.exe", "browser.exe", "360se.exe",
         "360chrome.exe", "qqbrowser.exe", "opera.exe", "brave.exe",
+        "vivaldi.exe", "arc.exe", "maxthon.exe", "sogouexplorer.exe",
+        "huaweibrowser.exe", "quark.exe",
     ];
     const MEDIA: &[&str] = &[
         "cloudmusic.exe", "qqmusic.exe", "kugou.exe", "kuwo.exe", "potplayermini64.exe",
         "vlc.exe", "wmplayer.exe", "bilibili.exe", "mpv.exe", "dandanplay.exe",
+        // 视频客户端:腾讯视频已确认;爱奇艺/优酷为高置信惯例名,不命中也只是不分类
+        "qqlive.exe", "qyclient.exe", "youkuclient.exe", "douyin.exe",
+        "spotify.exe", "foobar2000.exe", "aimp.exe", "musicbee.exe", "kodi.exe",
+        "mpc-hc.exe", "mpc-hc64.exe", "mpc-be64.exe", "potplayer.exe",
     ];
 
     let is = |list: &[&str]| list.iter().any(|n| exe == *n);

@@ -185,7 +185,8 @@ export const SETTINGS_SEARCH_INDEX: { tab: SettingsTab; card: string; label: str
   { tab: 'general', card: '演出与主动行为', label: '主动程度', keywords: '频率 安静 平衡 热闹 闲聊' },
   { tab: 'general', card: '演出与主动行为', label: '久坐提醒', keywords: '休息 番茄 健康 分钟' },
   { tab: 'general', card: '演出与主动行为', label: '观众抉择点概率', keywords: 'choice 抉择 选择 互动 站队 概率 频率' },
-  { tab: 'general', card: '环境与桌面', label: '桌面环境感知', keywords: '电量 应用 感知 分类' },
+  { tab: 'general', card: '环境与桌面', label: '桌面环境感知', keywords: '电量 应用 感知 分类 前台' },
+  { tab: 'general', card: '环境与桌面', label: '感知注入冷却', keywords: '冷却 频率 分钟 注入 环境 重复' },
   { tab: 'general', card: '环境与桌面', label: '显示左上角水印', keywords: '水印 直播 录屏' },
   { tab: 'general', card: '环境与桌面', label: '开机自启动', keywords: '自启 开机 启动 登录 autostart' },
   // AI 模型

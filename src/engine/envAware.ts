@@ -62,17 +62,17 @@ export function stopEnvPolling(): void {
 
 // ---------- 生成注入:冷却账本 ----------
 
-const COOLDOWN_MS = 6 * 60 * 60 * 1000 // 每条感知 6 小时内不重复
 const cooldowns = new Map<string, number>()
 
-/** 生成注入用环境语境:每条在冷却窗口内只出现一次;无可用素材返回 undefined */
-export function envContext(): string | undefined {
+/** 生成注入用环境语境:每条在冷却窗口内只出现一次;无可用素材返回 undefined。
+ *  冷却时长由配置传入(设置里可调,默认 6 小时),账本本身仍在内存(重启即清零) */
+export function envContext(cooldownMs: number): string | undefined {
   const s = last
   if (!s) return undefined
   const parts: string[] = []
   const now = Date.now()
   const fire = (key: string, text: string): void => {
-    if (now - (cooldowns.get(key) ?? 0) < COOLDOWN_MS) return
+    if (now - (cooldowns.get(key) ?? 0) < cooldownMs) return
     cooldowns.set(key, now)
     parts.push(text)
   }

@@ -145,7 +145,8 @@ export function useSettingsSession(): SettingsSessionState {
       void applyScreenshotHotkey() // 快捷键按新配置换绑
       void applyAppHotkeys() // 演出动作快捷键同理换绑
       void invoke('set_capture_excluded', { enable: next.screenshot.hideSelf }).catch(() => {})
-      if (next.envSense) startEnvPolling()
+      // 环境感知或久坐提醒任一开启都需要轮询(久坐依赖键鼠空闲传感器,与环境感知解耦)
+      if (next.envSense || next.breakReminder.enabled) startEnvPolling()
       else stopEnvPolling()
       if (partial.persona) setPersonaOverride(partial.persona.a, partial.persona.b, partial.persona.c) // 新人设立即采纳
       if (partial.names) setCharacterNames(partial.names.a, partial.names.b, partial.names.c)

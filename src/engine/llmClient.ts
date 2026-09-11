@@ -147,7 +147,7 @@ export async function generateDialog(
   }
   // 本集临时关系:随机局势决定攻守姿态,场景卡据此构建(重试沿用同一关系,保持一致)
   const relationship = pickRelationship(mode)
-  const envNote = cfg.envSense ? envContext() : undefined
+  const envNote = cfg.envSense ? envContext(cfg.envNoteCooldownMin * 60_000) : undefined
   // 长期关系底色:随互动缓慢漂移,给当集台词定相互态度
   const bond = await getBond()
   const bondNote =

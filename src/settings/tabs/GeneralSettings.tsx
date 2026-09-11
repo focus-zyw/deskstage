@@ -171,6 +171,25 @@ export function GeneralSettings() {
             }}
           />
         </SetLine>
+        {form.envSense && (
+          <SetLine title="感知注入冷却" hint="同一条感知(如“正开着浏览器”)在此分钟数内不重复进入台词">
+            <input
+              type="number"
+              min={10}
+              max={1440}
+              step={10}
+              className="break-min-input"
+              title="每条感知的注入冷却分钟数(10~1440)"
+              value={form.envNoteCooldownMin}
+              onChange={(e) => {
+                const v = Math.min(1440, Math.max(10, Number(e.target.value) || 360))
+                setForm({ ...form, envNoteCooldownMin: v })
+                saveField({ envNoteCooldownMin: v })
+              }}
+            />
+            <span className="set-note">分钟</span>
+          </SetLine>
+        )}
         <SetLine title="显示左上角水印" hint="在录屏或直播画面里标识本应用">
           <SetSwitch
             checked={saved.showWatermark}

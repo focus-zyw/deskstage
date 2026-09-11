@@ -571,7 +571,8 @@ function App() {
       // 用户自定义人设:先应用,后续所有生成即采纳
       setPersonaOverride(c.persona.a, c.persona.b, c.persona.c)
       // 环境感知:按配置低频轮询本机状态(电量/前台应用分类等)
-      if (c.envSense) startEnvPolling()
+      // 环境感知或久坐提醒任一开启都需要轮询(久坐依赖键鼠空闲传感器,与环境感知解耦)
+      if (c.envSense || c.breakReminder.enabled) startEnvPolling()
       // 开机自启动:按配置对账系统注册状态(默认关;手改配置文件后重启同样生效)
       void applyLaunchOnBoot(c.launchOnBoot)
     })
