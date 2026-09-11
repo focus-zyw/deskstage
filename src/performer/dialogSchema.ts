@@ -332,6 +332,11 @@ export function validatePerformanceScript(script: PerformanceScript, minLines = 
       if (branch[branch.length - 1].speaker === 'C') {
         warnings.push(`分支「${opt.label}」以场外角色收底,剧情可能没收束`)
       }
+      // 播报腔观测(只记账不拦截):分支首句若是"观众选择了X"这类统计口吻,
+      // 说明模型没按口语接话——warning 攒数据供调 prompt
+      if (/(观众|大家).{0,4}(选择了|投了)|投票结果/.test(branch[0].text)) {
+        warnings.push(`分支「${opt.label}」首句是播报腔(观众选择了/投票),应以角色身份口语接话`)
+      }
       const branchStreak = speakerStreakWarning(branch)
       if (branchStreak) warnings.push(`分支「${opt.label}」${branchStreak}`)
     }

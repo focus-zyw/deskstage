@@ -193,8 +193,43 @@ test('使用者称呼纪律:注入用户名时明确禁止加"们"等后缀', ()
   })
     .map((message) => message.content)
     .join('\n')
-  assert.match(prompt, /称呼直接叫"小张"/)
-  assert.match(prompt, /不加"们"等后缀/)
+  assert.match(prompt, /称呼永远只用"小张"/)
+  assert.match(prompt, /禁止"小张们""小张你们"/)
+})
+
+test('抉择分支口语化:禁播报腔,lastChoice 指引口语回应', () => {
+  const withChoice = buildMessages(
+    'daily',
+    '点外卖还是自己做饭',
+    [],
+    false,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    true, // allowChoice
+  )
+    .map((message) => message.content)
+    .join('\n')
+  assert.match(withChoice, /两个分支的首句都必须直接以角色身份对被选方向做口语反应/)
+  assert.match(withChoice, /禁止出现"观众选择了""大家投了""投票结果"/)
+
+  const withLast = buildMessages(
+    'daily',
+    '点外卖还是自己做饭',
+    [],
+    false,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    '帮甲',
+  )
+    .map((message) => message.content)
+    .join('\n')
+  assert.match(withLast, /上集观众站队选了:"帮甲"/)
+  assert.match(withLast, /别说"上集观众选择了"这类播报腔/)
 })
 
 test('心情余波注入:位于长期关系之后,空缺时不出现占位文字', () => {

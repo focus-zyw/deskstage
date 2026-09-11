@@ -39,6 +39,34 @@ test('合格剧本(双分支完整、交替发言)零 fatal 零 warning', () => 
   assert.deepEqual(v.warnings, [])
 })
 
+test('分支首句播报腔(观众选择了/投票)记 warning,口语接话不记', () => {
+  const broadcast = {
+    ...goodScript,
+    after: {
+      a: [line('A', '观众选择了帮甲,那咱们继续'), line('B', '下不为例')],
+      b: [line('B', '行,听你的就完事了'), line('A', '我后悔了')],
+    },
+  }
+  const v = schema.validatePerformanceScript(broadcast)
+  assert.ok(
+    v.warnings.some((w) => w.includes('播报腔') && w.includes('帮甲')),
+    '统计口吻首句应记 warning',
+  )
+  assert.ok(
+    !v.warnings.some((w) => w.includes('帮乙') && w.includes('播报腔')),
+    '口语接话的分支不应误报',
+  )
+  // "投了"的误报防护:正常语义(投了简历)不算播报腔
+  const legit = {
+    ...goodScript,
+    after: {
+      a: [line('A', '我刚把简历投了,录用再说'), line('B', '下不为例')],
+      b: goodScript.after.b,
+    },
+  }
+  assert.ok(!schema.validatePerformanceScript(legit).warnings.some((w) => w.includes('播报腔')))
+})
+
 test('分支缺失或只有一句 = fatal(死抉择,选了没戏演)', () => {
   const missing = { ...goodScript, after: { a: goodScript.after.a } }
   assert.ok(schema.validatePerformanceScript(missing).fatal.length > 0)

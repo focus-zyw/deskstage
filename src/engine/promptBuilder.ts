@@ -28,7 +28,7 @@ export function renderAudienceContext(ctx: UserContext): string {
   const p = ctx.profile
   const parts: string[] = []
   const bits: string[] = []
-  if (p?.userName) bits.push(`称呼直接叫"${p.userName}"(哪怕泛指全体观众,也不加"们"等后缀)`)
+  if (p?.userName) bits.push(`称呼永远只用"${p.userName}"这个名字本身:禁止"${p.userName}们""${p.userName}你们""${p.userName}等人"这类后缀与拼接;要连旁人一起提就说"${p.userName}和大家",或者干脆只叫名字`)
   if (p?.occupation) bits.push(`身份是${p.occupation}`)
   if (p?.likes) bits.push(`喜欢:${p.likes}`)
   if (p?.dislikes) bits.push(`不喜欢:${p.dislikes}`)
@@ -140,11 +140,11 @@ ${nameOf('C')}的角色分工（必须遵守）:${nameOf('C')}(小管家)是${na
 
   // 观众抉择点:由调用方掷骰决定(约 30% 的集数),中段安排一次站队,两分支各 3~5 句,结尾汇合同一包袱
   const choiceRule = allowChoice
-    ? '\n\n观众互动(本段必须包含,恰好在剧情冲突最激烈的中段安排一次):在 dialog 数组中插入恰好一个抉择对象:{"choice":{"prompt":"向观众提出的站队问题,15字内","options":[{"id":"<英文短id>","label":"<中文选项>"},{"id":"<英文短id2>","label":"<中文选项2>"}]}},共两个选项;choice 之后的每句台词都必须额外带 "branch":"<所支持选项id>" 字段,两个分支各 3~5 句,两个分支结尾收同一个底包袱;两个选项可以都不是好选择,喜剧效果更好。其余集数不要输出 choice。'
+    ? '\n\n观众互动(本段必须包含,恰好在剧情冲突最激烈的中段安排一次):在 dialog 数组中插入恰好一个抉择对象:{"choice":{"prompt":"向观众提出的站队问题,15字内","options":[{"id":"<英文短id>","label":"<中文选项>"},{"id":"<英文短id2>","label":"<中文选项2>"}]}},共两个选项;choice 之后的每句台词都必须额外带 "branch":"<所支持选项id>" 字段,两个分支各 3~5 句,两个分支结尾收同一个底包袱;两个选项可以都不是好选择,喜剧效果更好。两个分支的首句都必须直接以角色身份对被选方向做口语反应(如"行,听你的就完事了！"/"好家伙,你们是真不嫌事大"),整段禁止出现"观众选择了""大家投了""投票结果"这类播报腔与统计口吻。其余集数不要输出 choice。'
     : ''
 
   const lastChoiceText = lastChoice?.trim()
-    ? `\n上集观众做出了选择:"${lastChoice.trim()}"(可在开场回应这个选择)。`
+    ? `\n上集观众站队选了:"${lastChoice.trim()}"(开场可以自然接这个话头,口语化地回应——别说"上集观众选择了"这类播报腔)。`
     : ''
 
   const protocol = `输出协议（严格遵守）：
