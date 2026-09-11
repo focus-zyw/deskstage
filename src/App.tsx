@@ -184,6 +184,10 @@ function App() {
   const config = useConfigSnapshot()
   const charNames = { A: config.names.a, B: config.names.b, C: config.names.c }
   const showWatermark = config.showWatermark
+  // 气泡主题落地到根节点(data-bubble):CSS 变量随它切换 comic/glass,设置保存后即时生效
+  useEffect(() => {
+    document.documentElement.dataset.bubble = config.bubbleStyle === 'glass' ? 'glass' : 'comic'
+  }, [config.bubbleStyle])
   // 聊天通道:输入框开合/草稿/应答中;用户气泡(区别于角色气泡)
   const chatOpen = rt.overlays.includes('chat')
   const [chatDraft, setChatDraft] = useState('')
@@ -1097,7 +1101,7 @@ function App() {
         onPointerUp={() => onCharPointerUp('A')}
         onWheel={(e) => onCharWheel(e)}
       >
-        {bubble.A && <Bubble text={bubble.A} below={charCfg.A.bottom + charCfg.height > window.innerHeight - 110} loud={loudBubble.A} />}
+        <Bubble text={bubble.A} speaker="A" below={charCfg.A.bottom + charCfg.height > window.innerHeight - 110} loud={loudBubble.A} />
         <CharacterSprite
           ref={charA}
           sprite={SPRITE_SETS.A}
@@ -1139,7 +1143,7 @@ function App() {
         onPointerUp={() => onCharPointerUp('B')}
         onWheel={(e) => onCharWheel(e)}
       >
-        {bubble.B && <Bubble text={bubble.B} below={charCfg.B.bottom + charCfg.height > window.innerHeight - 110} loud={loudBubble.B} />}
+        <Bubble text={bubble.B} speaker="B" below={charCfg.B.bottom + charCfg.height > window.innerHeight - 110} loud={loudBubble.B} />
         <CharacterSprite
           ref={charB}
           sprite={SPRITE_SETS.B}

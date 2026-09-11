@@ -60,6 +60,24 @@ export function GeneralSettings() {
             ))}
           </div>
         </SetLine>
+        <SetLine title="气泡风格" hint="舞台台词气泡的外观;漫画=白底描边高对比,玻璃=深色半透明">
+          <div className="seg-group">
+            {(
+              [
+                ['comic', '漫画'],
+                ['glass', '深色玻璃'],
+              ] as const
+            ).map(([v, label]) => (
+              <button
+                key={v}
+                className={`seg-btn${form.bubbleStyle === v ? ' on' : ''}`}
+                onClick={() => saveField({ bubbleStyle: v }, true)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </SetLine>
       </SettingsCard>
       <SettingsCard card="演出与主动行为" flash={flashCard} title="演出与主动行为">
         <SetField

@@ -138,6 +138,8 @@ export interface AppConfig {
   /** 开机自启动(Windows 写 HKCU Run 注册表键);默认关。
    *  配置是唯一事实来源:应用启动时按此值与系统注册状态对账 */
   launchOnBoot: boolean
+  /** 舞台气泡风格:comic=漫画白底描边(默认);glass=深色玻璃(与设置窗口同风) */
+  bubbleStyle: 'comic' | 'glass'
 }
 
 /** 翻译面板配置 */
@@ -235,6 +237,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   },
   live: { platform: 'bilibili', roomId: '', cookie: '', giftReactionsEnabled: true },
   launchOnBoot: false,
+  bubbleStyle: 'comic',
 }
 
 /** 清洗使用者画像:逐字段裁剪;likes 为空时回落旧 userInterests 字段(老配置平滑迁移) */
@@ -533,6 +536,7 @@ function sanitizeConfig(obj: unknown): AppConfig {
       }
     })(),
     launchOnBoot: o.launchOnBoot === true,
+    bubbleStyle: o.bubbleStyle === 'glass' ? 'glass' : 'comic',
   }
 }
 

@@ -8,6 +8,29 @@
   --radius-input: 8px;
   --radius-panel: 14px;
   --text-dim: rgba(255, 255, 255, 0.65);
+  /* 气泡主题:comic(默认,白底描边漫画风);glass 见 [data-bubble='glass'] 覆写 */
+  --bubble-bg: rgba(255, 255, 255, 0.97);
+  --bubble-tail-bg: rgba(255, 255, 255, 0.99);
+  --bubble-text: #1f2430;
+  --bubble-stroke: #2a3145;
+  --bubble-stroke-w: 2px;
+  --bubble-blur: none;
+  --bubble-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+  --bubble-acc-a: #f57c3b;
+  --bubble-acc-b: #4f8df7;
+  --bubble-acc-c: #8b7ff4;
+}
+:root[data-bubble='glass'] {
+  --bubble-bg: rgba(15, 21, 40, 0.78);
+  --bubble-tail-bg: rgba(15, 21, 40, 0.94);
+  --bubble-text: #f2f4ff;
+  --bubble-stroke: rgba(133, 119, 244, 0.45);
+  --bubble-stroke-w: 1px;
+  --bubble-blur: blur(10px);
+  --bubble-shadow: 0 4px 18px rgba(0, 0, 0, 0.35);
+  --bubble-acc-a: #ffb066;
+  --bubble-acc-b: #7db3ff;
+  --bubble-acc-c: #a89bff;
 }
 
 /* 舞台与角色样式（立绘精灵版） */
@@ -397,36 +420,73 @@
   opacity: 1;
 }
 
-/* 台词气泡 */
+/* 台词气泡:双主题(comic/glass,由 :root[data-bubble] 切换)+ 角色差异化
+   (顶部色条 + 行首名牌,speaker 经 data-speaker 注入) */
 .bubble {
   position: relative;
   margin-bottom: 14px;
-  padding: 10px 16px;
-  max-width: 280px;
-  background: rgba(255, 255, 255, 0.96);
-  color: #222;
-  border-radius: var(--radius-panel);
+  padding: 9px 14px 8px;
+  max-width: 300px;
+  background: var(--bubble-bg);
+  color: var(--bubble-text);
+  border: var(--bubble-stroke-w) solid var(--bubble-stroke);
+  border-radius: 12px;
   font-size: 15px;
-  line-height: 1.5;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  backdrop-filter: var(--bubble-blur);
+  -webkit-backdrop-filter: var(--bubble-blur);
+  box-shadow: var(--bubble-shadow);
   white-space: pre-wrap;
-  animation: bubble-in 0.18s ease;
+  animation: bubble-in 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
+.bubble[data-speaker='A'] { --sp: var(--bubble-acc-a); }
+.bubble[data-speaker='B'] { --sp: var(--bubble-acc-b); }
+.bubble[data-speaker='C'] { --sp: var(--bubble-acc-c); }
+.bubble::before {
+  /* 顶部角色色条:一眼区分谁在说 */
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 8px;
+  right: 8px;
+  height: 3px;
+  border-radius: 0 0 3px 3px;
+  background: var(--sp, transparent);
+}
+.bubble .b-name {
+  font-style: normal;
+  font-size: 11px;
+  font-weight: 700;
+  margin-right: 6px;
+  color: var(--sp, var(--bubble-text));
+  opacity: 0.9;
+}
+/* 尾巴:旋转方块画法,与气泡同底同描边,描边连续不断裂 */
 .bubble::after {
   content: '';
   position: absolute;
-  bottom: -8px;
   left: 50%;
-  margin-left: -8px;
-  border: 8px solid transparent;
-  border-top-color: rgba(255, 255, 255, 0.96);
-  border-bottom: none;
+  bottom: -6.5px;
+  width: 11px;
+  height: 11px;
+  transform: translateX(-50%) rotate(45deg);
+  background: var(--bubble-tail-bg);
+  border-right: var(--bubble-stroke-w) solid var(--bubble-stroke);
+  border-bottom: var(--bubble-stroke-w) solid var(--bubble-stroke);
 }
 .bubble.below::after {
   bottom: auto;
-  top: -8px;
-  border-top: none;
-  border-bottom-color: rgba(255, 255, 255, 0.96);
+  top: -6.5px;
+  border-right: none;
+  border-bottom: none;
+  border-left: var(--bubble-stroke-w) solid var(--bubble-stroke);
+  border-top: var(--bubble-stroke-w) solid var(--bubble-stroke);
+}
+.bubble.long { font-size: 13.5px; }
+.bubble.out {
+  animation: bubble-out 0.16s ease forwards;
+  pointer-events: none;
 }
 /* 场外角色(画外音)气泡:C 无立绘,以顶部居中的"来电"横幅呈现,区别于甲乙立绘旁气泡 */
 .guest-bubble {
@@ -551,9 +611,19 @@
     opacity: 0;
     transform: translateY(6px) scale(0.92);
   }
+  70% {
+    opacity: 1;
+    transform: translateY(-1px) scale(1.02);
+  }
   to {
     opacity: 1;
     transform: translateY(0) scale(1);
+  }
+}
+@keyframes bubble-out {
+  to {
+    opacity: 0;
+    transform: translateY(4px) scale(0.94);
   }
 }
 
