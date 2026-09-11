@@ -24,6 +24,7 @@ export function providerFor(platform: LivePlatform): LiveDanmakuProvider {
 }
 
 export type {
+  BiliHttpResponse,
   DanmakuEvent,
   DanmakuMessage,
   GiftEvent,

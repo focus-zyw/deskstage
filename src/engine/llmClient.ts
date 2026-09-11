@@ -531,7 +531,7 @@ export async function generateLiveReply(
   const messages: { role: string; content: string }[] = [
     {
       role: 'system',
-      content: `桌面双人情景剧正在"直播读弹幕"。两位角色:${duoShortPersona()}。${p.userName ? `主播(用户)叫"${p.userName}",角色偶尔可以提到TA。` : ''}下面是最新一批直播间弹幕。挑一条最值得回的(优先问角色的、有趣的、能接梗的;刷屏/无意义/人身攻击的直接不回),由甲或乙用各自口吻回一句。要求:15~40字,口语化像真说话,可以怼可以捧,延续搭档互怼感;不要复读弹幕原文。
+      content: `桌面双人情景剧正在"直播读弹幕"。两位角色:${duoShortPersona()}。${p.userName ? `主播(用户)叫"${p.userName}",角色偶尔可以提到TA。` : ''}下面是最新一批直播间弹幕。挑一条最值得回的(优先问角色的、有趣的、能接梗的;刷屏/无意义/人身攻击的直接不回),由甲或乙用各自口吻回一句。要求:15~40字,口语化像真说话;语气跟各自人设走,优先友好捧场和接梗,偶尔斗嘴点缀即可,别句句抬杠;不要复读弹幕原文。
 ${p.banTopics ? `雷区(绝对不聊):${p.banTopics}。` : ''}
 只输出一个 JSON 对象:{"pick":<弹幕序号>,"reply":"<回复,不回则空串>","speaker":"A"或"B","action":"<动作词>"}
 action 只能是这些词之一:${[...VALID_ACTIONS].join('|')}。${bits.length ? `\n关于观众:${bits.join(';')}。` : ''}${recentReplies.length ? `\n最近已说过(不要重复,保持话题推进):${recentReplies.join(' / ')}` : ''}`,

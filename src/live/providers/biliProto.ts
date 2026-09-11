@@ -87,17 +87,19 @@ export function parseDanmuMsg(info: unknown): BiliDanmu | null {
   }
 }
 
-/** 构造认证包正文(uid 取自 cookie 的 DedeUserID,匿名=0;protover 2 = zlib,免 brotli 依赖) */
-export function authBody(realRoomId: number, token: string, uid = 0): Uint8Array {
-  const json = JSON.stringify({
+/** 构造认证包正文(uid 取自 cookie 的 DedeUserID,匿名=0;buvid 取 cookie 的 buvid3;
+ *  protover 2 = zlib,免 brotli 依赖) */
+export function authBody(realRoomId: number, token: string, uid = 0, buvid = ''): Uint8Array {
+  const body: Record<string, unknown> = {
     uid,
     roomid: realRoomId,
     protover: 2,
     platform: 'web',
     type: 2,
     key: token,
-  })
-  return new TextEncoder().encode(json)
+  }
+  if (buvid) body.buvid = buvid
+  return new TextEncoder().encode(JSON.stringify(body))
 }
 
 export interface BiliGift {

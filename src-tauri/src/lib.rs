@@ -8,6 +8,7 @@ mod capture;
 mod env;
 mod ocr;
 mod webchat;
+mod bili_http;
 
 // 光标轮询线程：以约 80Hz 读取全局光标位置，位置变化时推送给前端。
 // 为什么轮询而不监听窗口鼠标事件：窗口开启鼠标穿透后收不到任何鼠标事件，
@@ -90,7 +91,8 @@ pub fn run() {
       webchat::webchat_edge_kill,
       webchat::webchat_main_visible,
       ocr::ocr_clipboard,
-      ocr::clipboard_image_base64
+      ocr::clipboard_image_base64,
+      bili_http::bili_http_request
     ])
     .setup(|app| {
       if cfg!(debug_assertions) {

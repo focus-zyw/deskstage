@@ -97,6 +97,9 @@ test('authBody 为匿名 protover2 认证 JSON,uid 可带登录态', () => {
   assert.equal(anon.key, 'tok123')
   const logged = JSON.parse(new TextDecoder().decode(proto.authBody(23058, 'tok123', 12345)))
   assert.equal(logged.uid, 12345)
+  const withBuvid = JSON.parse(new TextDecoder().decode(proto.authBody(23058, 'tok123', 12345, 'buvid-abc')))
+  assert.equal(withBuvid.buvid, 'buvid-abc')
+  assert.equal('buvid' in anon, false, '匿名认证包不带 buvid 字段')
 })
 
 // ---------- parseSendGift:礼物事件归一化 ----------

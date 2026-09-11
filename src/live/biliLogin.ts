@@ -4,8 +4,9 @@
 //   poll     → data.code: 86101 未扫码 | 86090 已扫未确认 | 86038 已失效 | 0 成功
 //   成功时 data.url 是 crossDomain 跳转链接,查询参数里带全套登录 cookie
 //   (DedeUserID/SESSDATA/bili_jct)——浏览器读不到 Set-Cookie,解析该链接是社区通行做法。
-import { fetch as rustFetch } from '@tauri-apps/plugin-http'
+import { invoke } from '@tauri-apps/api/core'
 import { inTauri } from '../storage/configStore'
+import type { BiliHttpResponse } from './types'
 
 const PASSPORT = 'https://passport.bilibili.com'
 const POLL_MS = 1500
@@ -61,17 +62,18 @@ let deviceCookieCache: string | null = null
 
 async function deviceCookie(): Promise<string> {
   if (deviceCookieCache !== null) return deviceCookieCache
+  if (!inTauri) return '' // 浏览器预览:无 Tauri 运行时,invoke 不可用
   try {
-    const f = inTauri ? (rustFetch as unknown as typeof fetch) : fetch
     const ts = Math.floor(Date.now() / 1000)
     const parts: string[] = []
-    const spi = await f('https://api.bilibili.com/x/frontend/finger/spi', {
-      headers: { 'User-Agent': UA },
-      signal: AbortSignal.timeout(8_000),
-    })
-      .then((r) => r.json())
-      .catch(() => null)
-    const b = (spi as { data?: { b_3?: string; b_4?: string } } | null)?.data
+    const spi = await invoke<BiliHttpResponse>('bili_http_request', {
+      url: 'https://api.bilibili.com/x/frontend/finger/spi',
+      method: 'GET',
+    }).catch(() => null)
+    const b =
+      spi && spi.status === 200
+        ? ((JSON.parse(spi.body) as { data?: { b_3?: string; b_4?: string } })?.data ?? {})
+        : {}
     if (b?.b_3 && b?.b_4) {
       parts.push(`buvid3=${b.b_3}`, `buvid4=${b.b_4}`, `b_nut=${ts}`)
       // buvid_fp:设备指纹摘要(32 位十六进制,格式与官方一致;取 UA 摘要,自洽即可)
@@ -89,16 +91,16 @@ async function deviceCookie(): Promise<string> {
     const hexsign = await crypto.subtle
       .sign('HMAC', hmacKey, new TextEncoder().encode(`ts${ts}`))
       .then((sig) => [...new Uint8Array(sig)].map((x) => x.toString(16).padStart(2, '0')).join(''))
-    const ticket = await f(
-      `https://api.bilibili.com/bapis/bilibili.api.ticket.v1.Ticket/GenWebTicket?key_id=ec02&hexsign=${hexsign}&context[ts]=${ts}&csrf=`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'User-Agent': UA, Referer: 'https://www.bilibili.com/' },
-        signal: AbortSignal.timeout(8_000),
-      },
-    )
-      .then((r) => r.json())
-      .then((j) => (j as { data?: { ticket?: string } })?.data?.ticket ?? '')
+    const ticket = await invoke<BiliHttpResponse>('bili_http_request', {
+      url: `https://api.bilibili.com/bapis/bilibili.api.ticket.v1.Ticket/GenWebTicket?key_id=ec02&hexsign=${hexsign}&context[ts]=${ts}&csrf=`,
+      method: 'POST',
+      referer: 'https://www.bilibili.com/',
+    })
+      .then((resp) =>
+        resp.status === 200
+          ? ((JSON.parse(resp.body) as { data?: { ticket?: string } })?.data?.ticket ?? '')
+          : '',
+      )
       .catch(() => '')
     if (ticket) parts.push(`bili_ticket=${ticket}`, `bili_ticket_expires=${ts + 259_200}`)
     deviceCookieCache = parts.join('; ')
@@ -108,70 +110,62 @@ async function deviceCookie(): Promise<string> {
   return deviceCookieCache ?? ''
 }
 
-async function getJsonFull(path: string): Promise<{
-  json: Record<string, unknown>
-  setCookie: string[]
-}> {
-  const url = `${PASSPORT}${path}`
-  const cookie = await deviceCookie()
-  const headers = {
-    'User-Agent': UA,
-    Referer: 'https://www.bilibili.com/',
-    // Origin 显式传空:插件会强加 webview 来源的 Origin,B站登录接口对非B站来源 403(需 unsafe-headers feature)
-    Origin: '',
-    // 对齐官方上下文:登录相关接口的跳转标记
-    'x-bili-redirect': '1',
-    ...(cookie ? { Cookie: cookie } : {}),
-  }
-  // 8s 超时:请求挂起比失败更糟(界面永远转圈);超时后换原生 fetch 再试一次,仍失败才报错
-  const attempt = async (f: typeof fetch, timeoutMs: number): Promise<Response> => {
-    const ctrl = new AbortController()
-    const timer = window.setTimeout(() => ctrl.abort(new DOMException('超时', 'TimeoutError')), timeoutMs)
-    try {
-      return await f(url, { headers, signal: ctrl.signal })
-    } finally {
-      window.clearTimeout(timer)
-    }
-  }
-  let res: Response
-  try {
-    const f = inTauri ? (rustFetch as unknown as typeof fetch) : fetch
-    res = await attempt(f, 8_000)
-  } catch (e) {
-    const msg = String((e as Error)?.message ?? e)
-    // scope 拒绝 = 运行中的 app 是加白名单前启动的旧实例
-    if (/not allowed on the configured scope/i.test(msg))
-      throw new Error('接口未授权,请完全退出应用后重新打开(旧实例缺少新白名单)')
-    if (/超时|TimeoutError/i.test(msg)) {
-      try {
-        res = await attempt(fetch, 8_000)
-      } catch {
-        throw new Error('请求超时:请检查网络或系统代理后重试')
-      }
-    } else {
-      if (!inTauri) throw new Error('浏览器预览不支持扫码,请在本应用窗口内使用')
-      throw new Error(msg)
-    }
-  }
-  if (!res.ok) throw new Error(`HTTP ${res.status}`)
-  // 轮询成功的登录态在 Set-Cookie 里;插件专门把它暴露在 response.headers 上(浏览器原生 fetch 读不到)。
-  // getSetCookie 可能为空而 set-cookie 是合并串——切分统一交给 cookieFromSetCookie 处理
-  const h = res.headers
-  let setCookie: string[] =
-    typeof (h as { getSetCookie?: () => string[] }).getSetCookie === 'function'
-      ? (h as { getSetCookie: () => string[] }).getSetCookie().filter(Boolean)
-      : []
-  if (setCookie.length === 0) {
-    const joined = h.get('set-cookie')
-    if (joined) setCookie = [joined]
-  }
-  const json = (await res.json()) as { code?: number; message?: string; data?: Record<string, unknown> }
-  if (json.code !== 0 || !json.data) throw new Error(json.message || `code ${json.code}`)
-  return { json, setCookie }
+interface BiliEnvelope<T> {
+  code: number
+  message?: string
+  data?: T
 }
 
-async function getJson(path: string): Promise<Record<string, unknown>> {
-  return (await getJsonFull(path)).json
+interface QrGenerateData {
+  url: string
+  qrcode_key: string
+}
+
+interface QrPollData {
+  code: number
+  message?: string
+  url?: string
+}
+
+async function getJsonFull<T>(path: string): Promise<{ data: T; setCookie: string[] }> {
+  const url = `${PASSPORT}${path}`
+  const cookie = await deviceCookie()
+  // Tauri 内走自有 Rust 命令:插件会剥离 Cookie/Referer 禁止头(设备凭证根本发不出去),
+  // Rust 侧全量透传请求头并回传响应 Set-Cookie;浏览器 dev 直连
+  let status: number
+  let body: string
+  let setCookie: string[]
+  if (inTauri) {
+    const parsed = await invoke<BiliHttpResponse>('bili_http_request', {
+      url,
+      method: 'GET',
+      cookie,
+      referer: 'https://www.bilibili.com/',
+    })
+    status = parsed.status
+    body = parsed.body
+    setCookie = parsed.set_cookie ?? []
+  } else {
+    const res = await fetch(url, {
+      headers: { 'User-Agent': UA, Referer: 'https://www.bilibili.com/' },
+      signal: AbortSignal.timeout(15_000),
+    })
+    status = res.status
+    body = await res.text()
+    const h = res.headers
+    setCookie =
+      typeof (h as { getSetCookie?: () => string[] }).getSetCookie === 'function'
+        ? (h as { getSetCookie: () => string[] }).getSetCookie().filter(Boolean)
+        : [h.get('set-cookie') ?? ''].filter(Boolean)
+  }
+  if (status !== 200) throw new Error(`HTTP ${status}`)
+  const envelope = JSON.parse(body) as BiliEnvelope<T>
+  if (envelope.code !== 0 || !envelope.data) throw new Error(envelope.message || `code ${envelope.code}`)
+  return { data: envelope.data, setCookie }
+}
+
+async function getJson<T>(path: string): Promise<T> {
+  return (await getJsonFull<T>(path)).data
 }
 
 /** 从 Set-Cookie 行提取登录三件套(DedeUserID/SESSDATA/bili_jct)。纯函数,node --test 直测。
@@ -210,10 +204,11 @@ export function startQrLogin(hooks: QrLoginHooks): QrLoginHandle {
     try {
       // from 值必须与请求的 source 一致,且手机B站App按 from 路由扫码流程:
       // main_web(登录页流程)的码手B扫码报"不支持该链接",main-fe-header(主站页头流程)可正常确认
-      const d = await getJson('/x/passport-login/web/qrcode/generate?source=main-fe-header&go_url=')
-      key = String(d.qrcode_key)
+      const d = await getJson<QrGenerateData>('/x/passport-login/web/qrcode/generate?source=main-fe-header&go_url=')
+      if (!d.url || !d.qrcode_key) throw new Error('B站二维码响应缺少 url 或 qrcode_key')
+      key = d.qrcode_key
       // 二维码内容 = 接口返回的 url 原样(官方登录页同样直接画 data.url,不做转换)
-      if (!cancelled) hooks.onQr(round, String(d.url))
+      if (!cancelled) hooks.onQr(round, d.url)
     } catch (e) {
       if (!cancelled) hooks.onPhase('error', `二维码生成失败:${(e as Error).message ?? e}`)
       return
@@ -233,11 +228,13 @@ export function startQrLogin(hooks: QrLoginHooks): QrLoginHandle {
       if (cancelled) return
       if (Date.now() > deadline && expired()) return
       try {
-        const { json: d, setCookie } = await getJsonFull(`/x/passport-login/web/qrcode/poll?qrcode_key=${key}&source=main-fe-header`)
+        const { data: d, setCookie } = await getJsonFull<QrPollData>(
+          `/x/passport-login/web/qrcode/poll?qrcode_key=${key}&source=main-fe-header`,
+        )
         const code = Number(d.code)
         if (code === 0) {
           // 双路解析:优先 Set-Cookie(权威),退化到 crossDomain 链接参数;都失败带原始数据便于定位
-          const r = cookieFromSetCookie(setCookie) ?? cookieFromCrossUrl(String(d.url ?? ''))
+          const r = cookieFromSetCookie(setCookie) ?? cookieFromCrossUrl(d.url ?? '')
           if (cancelled) return
           if (r) {
             hooks.onPhase('ok', `登录成功(UID ${r.uid}),Cookie 已回填`)

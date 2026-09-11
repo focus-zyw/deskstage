@@ -51,6 +51,14 @@ export interface LiveStatus {
   detail?: string
 }
 
+/** bili_http_request(Rust 命令)的返回:HTTP 状态 + 响应体文本 + Set-Cookie 列表。
+ *  Tauri IPC 会把 serde_json::Value 序列化成结构化对象,前端直接按对象接收,不可再 JSON.parse */
+export interface BiliHttpResponse {
+  status: number
+  body: string
+  set_cookie?: string[]
+}
+
 /** 弹幕源提供方。connect 后异步上报状态与事件;disconnect 后不得再回调。
  *  同一实例同一时间只服务一个房间(由 session 层保证,重复 connect 视为重新连接)。
  *  credential = 平台登录凭证(不透明字符串,由设置面板配置):

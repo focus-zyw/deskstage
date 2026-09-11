@@ -4,8 +4,9 @@
 // HTTP 走 tauri-plugin-http(Rust 转发免 CORS);WS 是 webview 原生,B站不校验来源。
 // 断线指数退避重连;generation 计数保证 disconnect 后旧连接的回调全部作废。
 
-import { fetch as rustFetch } from '@tauri-apps/plugin-http'
+import { invoke } from '@tauri-apps/api/core'
 import { inTauri } from '../../storage/configStore'
+import type { BiliHttpResponse } from '../types'
 import type { LiveDanmakuProvider, LiveEvent, LiveStatus } from '../types'
 import {
   authBody,
@@ -36,13 +37,24 @@ interface ApiResult<T> {
 }
 
 async function apiGet<T>(path: string, cookie?: string): Promise<T> {
-  // Tauri 内走 Rust 转发(免 CORS);浏览器 dev 直连(CORS 不通时冒烟改走注入,不阻塞开发)
-  const f = inTauri ? rustFetch : fetch
-  const res = await f(`${API}${path}`, {
+  // Tauri 内走自有 Rust 命令:插件会剥离 Cookie/Referer 禁止头,弹幕接口必须带全量上下文
+  if (inTauri) {
+    // Tauri IPC 返回结构化对象,不可 JSON.parse
+    const parsed = await invoke<BiliHttpResponse>('bili_http_request', {
+      url: `${API}${path}`,
+      cookie: cookie ?? '',
+      referer: 'https://live.bilibili.com/',
+    })
+    if (parsed.status !== 200) throw new Error(`B站接口 HTTP ${parsed.status}`)
+    const json = JSON.parse(parsed.body) as ApiResult<T>
+    if (json.code !== 0) throw new Error(`B站接口错误:${json.message || json.code}`)
+    return json.data as T
+  }
+  // 浏览器 dev 直连(CORS 不通时冒烟改走注入,不阻塞开发)
+  const res = await fetch(`${API}${path}`, {
     headers: {
       'User-Agent': UA,
       Referer: 'https://live.bilibili.com/',
-      // Origin 显式传空:插件强加 webview 来源 Origin 时B站接口会 403(需 unsafe-headers feature)
       Origin: '',
       ...(cookie ? { Cookie: cookie } : {}),
     },
@@ -73,11 +85,15 @@ async function prepareCredential(credential?: string): Promise<BiliCredential | 
   const dede = cookie.match(/DedeUserID=(\d+)/i)
   if (dede) return { cookie, uid: Number(dede[1]) }
   try {
-    const f = inTauri ? rustFetch : fetch
-    const res = await f('https://api.bilibili.com/x/web-interface/nav', {
-      headers: { 'User-Agent': UA, Referer: 'https://live.bilibili.com/', Cookie: cookie },
+    const parsed = await invoke<BiliHttpResponse>('bili_http_request', {
+      url: 'https://api.bilibili.com/x/web-interface/nav',
+      cookie,
+      referer: 'https://live.bilibili.com/',
     })
-    const mid = ((await res.json()) as { data?: { mid?: number } })?.data?.mid
+    const mid =
+      parsed.status === 200
+        ? ((JSON.parse(parsed.body) as { data?: { mid?: number } })?.data?.mid ?? 0)
+        : 0
     if (typeof mid === 'number' && mid > 0) return { cookie, uid: mid }
   } catch (e) {
     console.warn('[live] nav 取 uid 失败,回落匿名连接', e)
