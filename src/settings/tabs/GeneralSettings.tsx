@@ -42,6 +42,24 @@ export function GeneralSettings() {
             恢复C的位置
           </button>
         </SetLine>
+        <SetLine title="界面主题" hint="设置窗口与命令/话题/抉择面板的配色;角色舞台不受影响">
+          <div className="seg-group">
+            {(
+              [
+                ['dark', '深色'],
+                ['light', '浅色'],
+              ] as const
+            ).map(([v, label]) => (
+              <button
+                key={v}
+                className={`seg-btn${saved.theme === v ? ' on' : ''}`}
+                onClick={() => saveField({ theme: v }, true)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </SetLine>
       </SettingsCard>
       <SettingsCard card="演出与主动行为" flash={flashCard} title="演出与主动行为">
         <SetField

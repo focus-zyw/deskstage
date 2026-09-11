@@ -8,6 +8,7 @@ import {
   type SettingsSessionApi,
 } from './useSettingsSession'
 import { SETTINGS_NAV, SETTINGS_SEARCH_INDEX, TAB_GROUP, type SettingsTab } from './settingsCatalog'
+import { useConfigSnapshot } from '../storage/configStore'
 import { GeneralSettings } from './tabs/GeneralSettings'
 import { ModelSettings } from './tabs/ModelSettings'
 import { PersonaSettings } from './tabs/PersonaSettings'
@@ -47,6 +48,8 @@ const TAB_CONTENT: Record<SettingsTab, () => React.JSX.Element> = {
 
 export function SettingsWindow({ innerRef, bridge, initialTab = 'general', onExit }: SettingsWindowProps) {
   const session = useSettingsSession()
+  // 界面主题:读已落盘配置(基础设置里切换,保存即发布快照,窗口即时换肤)
+  const theme = useConfigSnapshot().theme
   // 分页与搜索:关键词非空时右侧改为搜索结果列表,点击结果跳转分页并高亮卡片
   const [settingsTab, setSettingsTab] = useState<SettingsTab>(initialTab)
   const [settingsQuery, setSettingsQuery] = useState('')
@@ -102,7 +105,7 @@ export function SettingsWindow({ innerRef, bridge, initialTab = 'general', onExi
 
   return (
     <SettingsContext.Provider value={value}>
-      <div ref={innerRef} className="settings-window">
+      <div ref={innerRef} className={`settings-window${theme === 'light' ? ' light' : ''}`}>
         <aside className="set-side">
           <div className="set-brand">
             <span className="set-brand-mark" aria-hidden="true">

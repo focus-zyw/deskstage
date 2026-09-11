@@ -176,6 +176,7 @@ export const TAB_GROUP: Record<SettingsTab, string> = {
 /** 搜索索引:每个可搜索的设置项 → 所在分页 + 卡片(点击结果跳转并高亮卡片) */
 export const SETTINGS_SEARCH_INDEX: { tab: SettingsTab; card: string; label: string; keywords?: string }[] = [
   // 基础设置
+  { tab: 'general', card: '显示与布局', label: '界面主题', keywords: '主题 深色 浅色 外观 配色 light dark' },
   { tab: 'general', card: '显示与布局', label: '显示角色', keywords: '隐藏 角色 立绘 桌面' },
   { tab: 'general', card: '显示与布局', label: '显示常驻角色C', keywords: '小管家 视频 webm 第三角色 常驻 隐藏' },
   { tab: 'general', card: '显示与布局', label: '恢复C的位置', keywords: '位置 重置 常驻 小管家' },

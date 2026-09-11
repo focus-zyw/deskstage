@@ -1,7 +1,7 @@
 // 命令面板(工具入口):搜索过滤 + 整句话回车路由(关键词优先,LLM 兜底)。
 // 提醒类路由会先给一行"待确认"表单——时间/事项都可改,确认才入库,绝不默默设错。
 import { useEffect, useRef, useState } from 'react'
-import type { CtrlBarPos } from '../storage/configStore'
+import { useConfigSnapshot, type CtrlBarPos } from '../storage/configStore'
 import { filterCommands, nlRoute, type Command, type NlRoute } from '../features/commands/commands'
 
 interface Props {
@@ -26,6 +26,8 @@ export function CommandPanel({ innerRef, pos, commands, onClose, onAddMemo, onPe
   const [hint, setHint] = useState('')
   const [memoDraft, setMemoDraft] = useState<{ text: string; due: string } | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  // 界面主题:读已落盘配置,与设置窗口同一开关
+  const theme = useConfigSnapshot().theme
 
   useEffect(() => {
     inputRef.current?.focus()
@@ -69,7 +71,7 @@ export function CommandPanel({ innerRef, pos, commands, onClose, onAddMemo, onPe
   return (
     <div
       ref={innerRef}
-      className="settings-panel topic-panel cmd-panel"
+      className={`settings-panel topic-panel cmd-panel${theme === 'light' ? ' light' : ''}`}
       style={{ left: `${pos.xPct}%`, top: pos.top + 46 }}
     >
       <div className="panel-head">

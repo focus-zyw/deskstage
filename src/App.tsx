@@ -994,7 +994,7 @@ function App() {
       {topicOpen && (
         <div
           ref={topicPanelRef}
-          className="settings-panel topic-panel"
+          className={`settings-panel topic-panel${config.theme === 'light' ? ' light' : ''}`}
           style={{ left: `${Math.min(88, Math.max(12, ctrlBar.xPct))}%`, top: ctrlBar.top + 46 }}
         >
           <div className="panel-head">

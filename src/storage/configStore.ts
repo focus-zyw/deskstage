@@ -92,6 +92,8 @@ export interface AppConfig {
   charactersHidden: boolean
   /** 手动锁定的聊天主题;null = 从话题池随机 */
   topicOverride: string | null
+  /** 界面主题:作用于设置窗口与命令/话题/抉择悬浮面板;角色舞台与工具栏不受影响 */
+  theme: 'dark' | 'light'
   /** 控制栏位置(可拖动) */
   ctrlBar: CtrlBarPos
   /** 左上角水印开关 */
@@ -199,6 +201,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   },
   charactersHidden: false,
   topicOverride: null,
+  theme: 'dark',
   ctrlBar: { xPct: 50, top: 10, collapsed: false },
   showWatermark: false,
   screenshot: { hotkey: 'Ctrl+Alt+A', enabled: true, hideSelf: true },
@@ -433,6 +436,7 @@ function sanitizeConfig(obj: unknown): AppConfig {
       typeof o.topicOverride === 'string' && o.topicOverride.trim()
         ? o.topicOverride.trim()
         : null,
+    theme: o.theme === 'light' ? 'light' : 'dark',
     ctrlBar: sanitizeCtrlBar(o.ctrlBar),
     showWatermark: o.showWatermark === true,
     screenshot: sanitizeScreenshot(o.screenshot),
@@ -592,5 +596,6 @@ export function subscribeConfig(l: () => void): () => void {
 }
 
 export function useConfigSnapshot(): AppConfig {
-  return useSyncExternalStore(subscribeConfig, getConfigSnapshot)
+  // 第三参 getServerSnapshot:快照是模块级缓存值,SSR(renderToStaticMarkup 测试)下同值可用
+  return useSyncExternalStore(subscribeConfig, getConfigSnapshot, getConfigSnapshot)
 }

@@ -521,7 +521,7 @@
 }
 .choice-prompt {
   font-size: 13px;
-  color: rgba(255, 255, 255, 0.9);
+  color: var(--panel-prompt, rgba(255, 255, 255, 0.9));
   line-height: 1.5;
 }
 .choice-opts {
@@ -697,7 +697,26 @@
 }
 
 /* 设置面板：控制栏正下方弹出（限高滚动,防止超出 420 高的悬浮条） */
+/* 配色走面板级 --panel-* 变量(命令/话题/抉择面板共用此底座),.light 覆盖即换浅色;
+   变量定义在底座类上,规则里全部带原值兜底——底座之外(翻译面板等)不受影响 */
 .settings-panel {
+  --panel-bg: rgba(20, 20, 31, 0.97);
+  --panel-border: rgba(255, 255, 255, 0.14);
+  --panel-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  --panel-text: rgba(255, 255, 255, 0.85);
+  --panel-text-faint: rgba(255, 255, 255, 0.4);
+  --panel-text-strong: #fff;
+  --panel-prompt: rgba(255, 255, 255, 0.9);
+  --panel-field-bg: rgba(255, 255, 255, 0.08);
+  --panel-field-border: rgba(255, 255, 255, 0.18);
+  --panel-item-bg: rgba(255, 255, 255, 0.05);
+  --panel-accent-focus: rgba(124, 108, 240, 0.9);
+  --panel-btn-border: rgba(255, 255, 255, 0.22);
+  --panel-btn-primary-bg: rgba(124, 108, 240, 0.92);
+  --panel-hint: rgba(255, 210, 130, 0.85);
+  --panel-memo-border: rgba(124, 108, 240, 0.5);
+  --panel-memo-bg: rgba(124, 108, 240, 0.12);
+  --panel-memo-title: rgba(255, 255, 255, 0.75);
   position: absolute;
   transform: translateX(-50%);
   width: 420px;
@@ -707,13 +726,33 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
+  border: 1px solid var(--panel-border);
   border-radius: var(--radius-panel);
   /* 不用毛玻璃(backdrop-filter):叠在视频上会破坏硬件合成,导致视频黑框/暂停 */
-  background: rgba(20, 20, 31, 0.97);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  background: var(--panel-bg);
+  box-shadow: var(--panel-shadow);
   z-index: 40;
   animation: panel-in 0.16s ease;
+}
+/* 浅色主题:纸感白底 + 深灰蓝文字;强调紫/选中紫底维持(白字选中态两主题通用) */
+.settings-panel.light {
+  --panel-bg: rgba(250, 251, 253, 0.98);
+  --panel-border: rgba(30, 41, 66, 0.16);
+  --panel-shadow: 0 12px 32px rgba(31, 45, 80, 0.18);
+  --panel-text: rgba(29, 37, 55, 0.92);
+  --panel-text-faint: rgba(29, 37, 55, 0.55);
+  --panel-text-strong: #1d2537;
+  --panel-prompt: rgba(29, 37, 55, 0.95);
+  --panel-field-bg: rgba(29, 37, 55, 0.06);
+  --panel-field-border: rgba(29, 37, 55, 0.2);
+  --panel-item-bg: rgba(29, 37, 55, 0.05);
+  --panel-accent-focus: rgba(124, 108, 240, 0.9);
+  --panel-btn-border: rgba(29, 37, 55, 0.24);
+  --panel-btn-primary-bg: rgba(124, 108, 240, 0.92);
+  --panel-hint: #8a6d1f;
+  --panel-memo-border: rgba(124, 108, 240, 0.45);
+  --panel-memo-bg: rgba(124, 108, 240, 0.1);
+  --panel-memo-title: rgba(29, 37, 55, 0.78);
 }
 @keyframes panel-in {
   from {
@@ -731,7 +770,7 @@
   align-items: center;
   justify-content: space-between;
   font-size: 13px;
-  color: rgba(255, 255, 255, 0.85);
+  color: var(--panel-text, rgba(255, 255, 255, 0.85));
 }
 
 /* ---------- 设置窗口:居中独立窗口(约 680px),左侧固定导航 + 右侧内容独立滚动 ---------- */
@@ -778,6 +817,56 @@
     opacity: 1;
     transform: translate(-50%, -50%) scale(1);
   }
+}
+/* 浅色主题:纸感白/浅灰蓝底 + 深灰蓝文字,紫主色加深保对比。
+   区段内的紫色 alpha(焦点环/阴影/渐变)与强调底上的白字(导航选中/开关/主按钮/二维码白框)
+   两主题通用,无需覆盖;窗口边框与投影单独加深,浅色下才收得住轮廓 */
+.settings-window.light {
+  --sw-bg: #eef1f8;
+  --sw-surface: #f7f9fc;
+  --sw-card: #ffffff;
+  --sw-input: #ffffff;
+  --sw-border: #d4dbe9;
+  --sw-border-soft: #e4e9f3;
+  --sw-hover: #edf1f8;
+  --sw-primary: #6a5be0;
+  --sw-text-1: #1d2537;
+  --sw-text-2: #465070;
+  --sw-text-3: #7e88a3;
+  --sw-ok: #0d9b85;
+  --sw-err: #d9455f;
+  border-color: rgba(30, 41, 66, 0.2);
+  box-shadow: 0 24px 70px rgba(31, 45, 80, 0.22), 0 4px 16px rgba(31, 45, 80, 0.12);
+}
+/* 浅色下需单独翻面的写死深色(深色主题维持原值,零回归):
+   悬浮底/搜索结果悬浮底原为近黑深蓝,浅色下深底配深字完全不可读 */
+.settings-window.light .set-nav-item:hover {
+  background: var(--sw-hover);
+}
+.settings-window.light .set-result:hover {
+  background: var(--sw-hover);
+}
+/* 选中项:浅紫渐变底上白字看不清,改深紫文字与图标 */
+.settings-window.light .set-nav-item.on {
+  color: var(--sw-primary);
+}
+.settings-window.light .set-nav-item.on svg {
+  color: var(--sw-primary);
+}
+/* 原生下拉的选项列表与滚动条滑块同步翻浅 */
+.settings-window.light select option {
+  background: #ffffff;
+  color: #1d2537;
+}
+.settings-window.light .set-body {
+  scrollbar-color: var(--sw-border) transparent;
+}
+.settings-window.light .set-body::-webkit-scrollbar-thumb {
+  background: var(--sw-border);
+}
+/* 记忆分类小章:深蓝底换浅灰底 */
+.settings-window.light .mem-cat {
+  background: var(--sw-hover);
 }
 
 /* 左侧固定导航 */
@@ -1225,22 +1314,22 @@
   box-shadow: 0 3px 10px rgba(133, 119, 244, 0.3);
 }
 
-/* 通用悬浮按钮(主题/命令/抉择面板与设置窗口共用) */
+/* 通用悬浮按钮(主题/命令/抉择面板与设置窗口共用);变量兜底保证底座外(翻译面板等)观感不变 */
 .panel-btn {
   padding: 6px 16px;
-  border: 1px solid rgba(255, 255, 255, 0.22);
+  border: 1px solid var(--panel-btn-border, rgba(255, 255, 255, 0.22));
   border-radius: var(--radius-panel);
   background: transparent;
-  color: rgba(255, 255, 255, 0.85);
+  color: var(--panel-text, rgba(255, 255, 255, 0.85));
   font-size: 13px;
   cursor: pointer;
   transition: background 0.15s ease;
 }
 .panel-btn:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--panel-field-bg, rgba(255, 255, 255, 0.08));
 }
 .panel-btn.primary {
-  background: rgba(124, 108, 240, 0.92);
+  background: var(--panel-btn-primary-bg, rgba(124, 108, 240, 0.92));
   border-color: transparent;
   color: #fff;
 }
@@ -1516,20 +1605,20 @@
 }
 .topic-search {
   padding: 7px 10px;
-  border: 1px solid rgba(255, 255, 255, 0.18);
+  border: 1px solid var(--panel-field-border, rgba(255, 255, 255, 0.18));
   border-radius: var(--radius-input);
-  background: rgba(255, 255, 255, 0.08);
-  color: #fff;
+  background: var(--panel-field-bg, rgba(255, 255, 255, 0.08));
+  color: var(--panel-text-strong, #fff);
   font-size: 13px;
   outline: none;
   transition: border-color 0.15s ease;
 }
 .topic-search:focus {
-  border-color: rgba(124, 108, 240, 0.9);
+  border-color: var(--panel-accent-focus, rgba(124, 108, 240, 0.9));
 }
 .topic-empty {
   font-size: 12px;
-  color: rgba(255, 255, 255, 0.4);
+  color: var(--panel-text-faint, rgba(255, 255, 255, 0.4));
   text-align: center;
   padding: 8px 0;
 }
@@ -1544,8 +1633,8 @@
   padding: 6px 10px;
   border: none;
   border-radius: var(--radius-input);
-  background: rgba(255, 255, 255, 0.05);
-  color: rgba(255, 255, 255, 0.85);
+  background: var(--panel-item-bg, rgba(255, 255, 255, 0.05));
+  color: var(--panel-text, rgba(255, 255, 255, 0.85));
   font-size: 13px;
   text-align: left;
   cursor: pointer;
@@ -1558,7 +1647,7 @@
 }
 .topic-item.on {
   background: var(--accent-strong);
-  color: #fff;
+  color: var(--panel-text-strong, #fff);
 }
 
 /* 音色克隆行:字段竖排在小面板里 */
@@ -1900,7 +1989,7 @@
 }
 .tr-privacy {
   font-size: 11px;
-  color: rgba(255, 255, 255, 0.4);
+  color: var(--panel-text-faint, rgba(255, 255, 255, 0.4));
 }
 
 /* ---------- 工具任务浮层卡(右下角,备忘提醒同款视觉语言) ---------- */
@@ -1964,25 +2053,25 @@
   flex-direction: column;
   gap: 8px;
   padding: 10px;
-  border: 1px solid rgba(124, 108, 240, 0.5);
+  border: 1px solid var(--panel-memo-border, rgba(124, 108, 240, 0.5));
   border-radius: var(--radius-input);
-  background: rgba(124, 108, 240, 0.12);
+  background: var(--panel-memo-bg, rgba(124, 108, 240, 0.12));
 }
 .cmd-memo-title {
   font-size: 12px;
-  color: rgba(255, 255, 255, 0.75);
+  color: var(--panel-memo-title, rgba(255, 255, 255, 0.75));
 }
 .cmd-memo input {
   padding: 7px 10px;
-  border: 1px solid rgba(255, 255, 255, 0.18);
+  border: 1px solid var(--panel-field-border, rgba(255, 255, 255, 0.18));
   border-radius: var(--radius-input);
-  background: rgba(255, 255, 255, 0.08);
-  color: #fff;
+  background: var(--panel-field-bg, rgba(255, 255, 255, 0.08));
+  color: var(--panel-text-strong, #fff);
   font-size: 13px;
   outline: none;
 }
 .cmd-memo input:focus {
-  border-color: rgba(124, 108, 240, 0.9);
+  border-color: var(--panel-accent-focus, rgba(124, 108, 240, 0.9));
 }
 .cmd-memo-actions {
   display: flex;
@@ -1990,7 +2079,7 @@
 }
 .cmd-hint {
   font-size: 12px;
-  color: rgba(255, 210, 130, 0.85);
+  color: var(--panel-hint, rgba(255, 210, 130, 0.85));
 }
 
 /* 舞台道具层:礼物道具/工具卡片,悬浮在角色头侧。挂在 .actor 内(left:50% 即角色中心),
