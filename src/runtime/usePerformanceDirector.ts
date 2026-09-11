@@ -26,6 +26,8 @@ import { dialogue, newEpisodeId } from '../dialogue/director'
 import { planInterjectionTakeover, keepChoiceOpts } from '../dialogue/interjection'
 import { pushTurn, chatWindow } from '../dialogue/turnWindow'
 import { nameOf } from '../engine/persona'
+import { recentMoodHint } from '../engine/moodState'
+import { noteEpisodeAbandoned } from '../storage/moodStore'
 import type { CurateReport } from '../engine/storyCurator'
 import { listEpisodes, loadRecentHistory, type Episode } from '../storage/historyStore'
 import { takePrefetch, listPrefetchedArcIds } from '../storage/prefetchStore'
@@ -309,6 +311,7 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
           target: msg.target ?? defaultTarget(),
           recentPlayed: p.playedAccum.slice(-3).map((l) => `${speakerOf(l)}:${l.text}`),
           bridgeTo: playingLines.current[index + 1]?.text ?? '',
+          moodHint: recentMoodHint(p.playedAccum) || undefined,
           window: chatWindow(),
         })
       } catch {
@@ -594,7 +597,12 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
     deps.teardown()
     // 中途按停止 = 负反馈(演过 80% 以上视为看完,不罚);正在生成时无账可记
     const np = nowPlaying.current
-    if (np && np.total > 0 && np.index / np.total < 0.8) bumpTopicSkipped(np.topic)
+    if (np && np.total > 0 && np.index / np.total < 0.8) {
+      bumpTopicSkipped(np.topic)
+      // 没看完就走:台上最后说话的角色心情小幅变差(确定性小步,失败静默)
+      const lastLine = np.lines?.[Math.min(np.index, np.lines.length - 1)]
+      if (lastLine) void noteEpisodeAbandoned(lastLine.speaker)
+    }
     // 主动行为(重放/自发/久坐提醒)开播 15s 内就被掐 → 记一次忽略;连续 3 次该类冷却翻倍
     const act = proactiveAct.current
     if (act && Date.now() - act.since < 15_000) void logDismiss(act.kind)

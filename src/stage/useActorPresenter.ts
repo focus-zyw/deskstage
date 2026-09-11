@@ -8,6 +8,8 @@
 import { useEffect, useRef, useState } from 'react'
 import type { DialogLine, Speaker } from '../performer/player'
 import { listenersOf, reactionsOf } from '../performer/dialogSchema'
+import { moodOf } from '../storage/moodStore'
+import { tintedRelaxPose } from '../engine/moodState'
 
 const NO_BUBBLE: Record<Speaker, string | null> = { A: null, B: null, C: null }
 const IDLE_POSE: Record<Speaker, string> = { A: 'idle', B: 'idle', C: 'idle' }
@@ -49,17 +51,30 @@ export function useActorPresenter() {
   // 姿势放松计时器:句间保持上一个表情姿势,停顿超过 RELAX_MS 才回 idle——
   // 之前句尾立即回 idle,快节奏对白里每 200~600ms 就 "talk→idle→talk" 弹跳一次,视觉不协调
   const relaxTimers = useRef<Record<Speaker, number>>({ A: 0, B: 0, C: 0 })
+  // 情绪染色姿势的回收计时器:染色一拍(2.4~4s)后仍要回 idle
+  const tintTimers = useRef<Record<Speaker, number>>({ A: 0, B: 0, C: 0 })
   const RELAX_MS = 1500
 
   function cancelRelax(who: Speaker): void {
     window.clearTimeout(relaxTimers.current[who])
+    window.clearTimeout(tintTimers.current[who])
   }
 
   function scheduleRelax(who: Speaker, ms = RELAX_MS): void {
     cancelRelax(who)
     relaxTimers.current[who] = window.setTimeout(() => {
-      setAction((a) => ({ ...a, [who]: 'idle' }))
       setDelivery((d) => ({ ...d, [who]: undefined }))
+      // 情绪余波:负向强情绪回 idle 前先落到染色姿势一拍,让"还在生气/蔫着"看得见
+      // (限一拍防画面常年苦脸;C 的动作归常驻行为机器管,不参与染色)
+      const tint = who === 'C' ? null : tintedRelaxPose(moodOf(who))
+      if (!tint) {
+        setAction((a) => ({ ...a, [who]: 'idle' }))
+        return
+      }
+      setAction((a) => ({ ...a, [who]: tint }))
+      tintTimers.current[who] = window.setTimeout(() => {
+        setAction((a) => ({ ...a, [who]: 'idle' }))
+      }, 2400 + Math.floor(Math.random() * 1600))
     }, ms)
   }
 
@@ -129,14 +144,14 @@ export function useActorPresenter() {
     pulseTimer.current = window.setTimeout(() => setPulseFor(null), 600)
   }
 
-  /** 收底拍:响底台词与表情定格片刻给观众笑的时间,然后全员放松回 idle */
+  /** 收底拍:响底台词与表情定格片刻给观众笑的时间,然后全员经情绪染色放松回 idle */
   function settle(ms = 2600) {
     setSpeaking(null)
     setDelivery(NO_DELIVERY)
     window.clearTimeout(finaleTimer.current)
     finaleTimer.current = window.setTimeout(() => {
-      setAction(IDLE_POSE)
       setBubble(NO_BUBBLE)
+      for (const w of ['A', 'B', 'C'] as const) scheduleRelax(w, 0)
     }, ms)
   }
 
@@ -150,6 +165,7 @@ export function useActorPresenter() {
     for (const w of ['A', 'B', 'C'] as const) {
       window.clearTimeout(timers.current[w])
       window.clearTimeout(relaxTimers.current[w])
+      window.clearTimeout(tintTimers.current[w])
     }
     window.clearTimeout(finaleTimer.current)
     setBubble(NO_BUBBLE)

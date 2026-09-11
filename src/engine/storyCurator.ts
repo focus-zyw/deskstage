@@ -6,6 +6,8 @@
 
 import type { DialogLine } from '../performer/dialogSchema'
 import { distillStory, transcriptOf } from './llmClient'
+import { applyMoodDeltas } from '../storage/moodStore'
+import type { MoodDelta } from './moodState'
 import {
   applyRelationshipEvent,
   getStory,
@@ -36,12 +38,16 @@ export interface CurateReport {
   newArc: string | null
   /** 本集记入账本的关系事件(每集最多 1 笔) */
   relationship?: { kind: string; actor: string; target: string; weight: number; summary: string }
+  /** 本集入库的情绪余波(已过台词证据关) */
+  mood?: MoodDelta[]
 }
 
 export interface CuratorDeps {
   distill?: (lines: DialogLine[], known: StoryInventory) => Promise<DistilledStory>
   /** 本集的稳定 id:关系事件记账用(来自导演层的单次提交体系) */
   eid?: string
+  /** 情绪余波入库(可注入供测试;缺省写 mood.json) */
+  applyMood?: (deltas: MoodDelta[]) => Promise<void>
 }
 
 /** 引文规范化后至少要剩这么多字才算有效台词证据 */
@@ -161,6 +167,20 @@ export async function curateEpisode(
     // 每集最多 1 笔关系事件:蒸馏协议已约束为单对象,这里直接记账并小步聚合
     await applyRelationshipEvent(d.relationshipEvent, deps.eid)
     report.relationship = { ...d.relationshipEvent }
+  }
+  // 情绪余波:与老梗同一条证据纪律——引文必须逐字出现在台词里,否则宁可不记
+  const validMood: MoodDelta[] = []
+  for (const m of d.mood ?? []) {
+    const quote = normalizeStoryText(m.evidence)
+    if (quote.length < MIN_EVIDENCE_CHARS || !normalizeStoryText(transcript).includes(quote)) {
+      report.rejected.push({ text: `${m.who}:${m.cause}`, reason: '情绪余波无台词证据' })
+      continue
+    }
+    validMood.push({ who: m.who, dValence: m.dValence, dEnergy: m.dEnergy, cause: m.cause })
+  }
+  if (validMood.length > 0) {
+    await (deps.applyMood ?? applyMoodDeltas)(validMood)
+    report.mood = validMood
   }
   if (touched || d.relationshipEvent) {
     const after = await getStory()

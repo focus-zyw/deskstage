@@ -20,6 +20,8 @@ import { peekRecap, takeRecap } from '../storage/interactionStore'
 import { pickRelationship } from '../performer/modes/relationships'
 import { currentTimeSlot } from './timeAware'
 import { duoShortPersona, nameOf, soloShortPersona } from './persona'
+import { moodHintLine, moodPromptBlock, type MoodEventCandidate } from './moodState'
+import { getMoods } from '../storage/moodStore'
 import type { TurnWho } from '../dialogue/turnWindow'
 import { envContext } from './envAware'
 import {
@@ -150,7 +152,10 @@ export async function generateDialog(
         : bond.rivalry >= 3
           ? '两人近期摩擦变多,互相较劲谁也不服谁'
           : undefined
-  const messages = buildMessages(mode, topic, recentLines, topicFixed, cfg.userInterests, userCtx, relationship, interactionRecap, allowChoice, lastChoice ?? undefined, arc, envNote, bondNote, continueFromPrevious)
+  // 心情余波:跨集情绪惯性(上集蒸馏入库的余波 + 观众互动小步),只影响开场姿态与前几句语气
+  const moods = await getMoods()
+  const moodNote = moodPromptBlock(moods) || undefined
+  const messages = buildMessages(mode, topic, recentLines, topicFixed, cfg.userInterests, userCtx, relationship, interactionRecap, allowChoice, lastChoice ?? undefined, arc, envNote, bondNote, moodNote, continueFromPrevious)
   // 网页版生成(设置里开启):主演出改经隐藏网页窗口由网页模型生成。
   // 网页端没有 json_mode/temperature,格式服从度靠协议本身(手动验证 6/6 通过,
   // 见 docs/webchat-prompt-test.md)。生成慢(几十秒级),点播与预生成都有耐心等;
@@ -264,6 +269,7 @@ export async function generateShortChat(
   const mem = await getMemory()
   const slot = currentTimeSlot()
   const persona = duoShortPersona()
+  const moodLine = moodHintLine(await getMoods(), ['A', 'B'])
   const userCtx: UserContext = {
     profile: cfg.userProfile,
     taste: (await tasteSummary(3)) || undefined,
@@ -287,7 +293,7 @@ export async function generateShortChat(
   const messages: { role: string; content: string }[] = [
     {
       role: 'system',
-      content: `桌面双人情景剧的短互动编剧。角色:${persona}。现实时间:现在是${slot.label},${slot.scene}。创作要口语化、有梗、像真说话。\n输出协议(严格遵守):只输出一个 JSON 对象,格式 {"dialog":[{"speaker":"A","text":"台词","action":"动作"},...]};speaker 只能是 A 或 B 且交替;action 只能是 idle|talk|happy|laugh|wave|shy|angry|sad|surprise;一共 2~4 句;每句不超过 18 个字。`,
+      content: `桌面双人情景剧的短互动编剧。角色:${persona}。${moodLine ? `${moodLine}。` : ''}现实时间:现在是${slot.label},${slot.scene}。创作要口语化、有梗、像真说话。\n输出协议(严格遵守):只输出一个 JSON 对象,格式 {"dialog":[{"speaker":"A","text":"台词","action":"动作"},...]};speaker 只能是 A 或 B 且交替;action 只能是 idle|talk|happy|laugh|wave|shy|angry|sad|surprise;一共 2~4 句;每句不超过 18 个字。`,
     },
     { role: 'user', content: task },
   ]
@@ -310,6 +316,7 @@ export async function improvPokeLine(
   recentLines: DialogLine[],
 ): Promise<string> {
   const persona = soloShortPersona(who)
+  const pokeMoodLine = moodHintLine(await getMoods(), [who])
   const ctx = recentLines
     .slice(-4)
     .map((l) => `${nameOf(l.speaker)}:${l.text}`)
@@ -317,7 +324,7 @@ export async function improvPokeLine(
   const messages: { role: string; content: string }[] = [
     {
       role: 'system',
-      content: `桌面情景剧互动。你是情景剧里的${persona}。观众朋友刚用鼠标戳了你一下。用你的口吻说一句对被戳的即兴反应,15 字以内,只输出这一句话,不要引号。`,
+      content: `桌面情景剧互动。你是情景剧里的${persona}。${pokeMoodLine ? `${pokeMoodLine}。` : ''}观众朋友刚用鼠标戳了你一下。用你的口吻说一句对被戳的即兴反应,15 字以内,只输出这一句话,不要引号。`,
     },
     {
       role: 'user',
@@ -355,6 +362,7 @@ export async function generateUserChatReply(who: Speaker, userText: string): Pro
   const mem = await getMemory()
   const p: UserProfile = cfg.userProfile
   const persona = soloShortPersona(who)
+  const chatMoodLine = moodHintLine(await getMoods(), [who])
   const bits: string[] = []
   if (p.userName) bits.push(`观众称呼"${p.userName}"`)
   if (p.occupation) bits.push(`身份:${p.occupation}`)
@@ -366,7 +374,7 @@ export async function generateUserChatReply(who: Speaker, userText: string): Pro
   const messages: { role: string; content: string }[] = [
     {
       role: 'system',
-      content: `桌面双人情景剧互动。你是${persona}。观众朋友直接对你说了一句话,用你的口吻回一句。要求:15~25 字,口语化,像真说话${p.userName ? `,称呼观众"${p.userName}"` : ''};不要引号,不要 JSON。${bits.length ? `\n关于观众:${bits.join(';')}。` : ''}`,
+      content: `桌面双人情景剧互动。你是${persona}。${chatMoodLine ? `${chatMoodLine}。` : ''}观众朋友直接对你说了一句话,用你的口吻回一句。要求:15~25 字,口语化,像真说话${p.userName ? `,称呼观众"${p.userName}"` : ''};不要引号,不要 JSON。${bits.length ? `\n关于观众:${bits.join(';')}。` : ''}`,
     },
     { role: 'user', content: userText },
   ]
@@ -413,6 +421,7 @@ export async function generateTurnBatch(input: {
   const cfg = await getConfig()
   const mem = await getMemory()
   const persona = `${duoShortPersona()};${soloShortPersona('C')}`
+  const chatMoodLine = moodHintLine(await getMoods(), ['A', 'B', 'C'])
   const p: UserProfile = cfg.userProfile
   const facts = topFacts(mem, 3)
   const windowText = input.window.length
@@ -428,7 +437,7 @@ export async function generateTurnBatch(input: {
   const messages: { role: string; content: string }[] = [
     {
       role: 'system',
-      content: `桌面情景剧的聊天编剧。角色:${persona}。${p.userName ? `观众称呼"${p.userName}"。` : ''}口语化、有梗、像真说话。
+      content: `桌面情景剧的聊天编剧。角色:${persona}。${chatMoodLine ? `${chatMoodLine}。` : ''}${p.userName ? `观众称呼"${p.userName}"。` : ''}口语化、有梗、像真说话。
 输出协议(严格遵守):只输出一个 JSON 对象,格式 {"dialog":[{"speaker":"A","text":"台词","target":"B"},...]}
 - 一共 1~3 句:观众这句话是对${targetName}说的,${targetName}(speaker "${input.target}")必须第一句先答;${others}只在确实有新信息或好包袱时才各补 1 句,没有就只回 1 句
 - 每句不超过 25 字,不要引号;speaker 只能是 A、B 或 C 且不连续同一人;"target" 填这句对谁说("A"/"B"/"C"/"audience" 对观众)${facts.length ? `\n- 记住的观众的事:${facts.join(';')}` : ''}`,
@@ -458,10 +467,14 @@ export async function generateInterjectionBatch(input: {
   recentPlayed: string[]
   /** 剧情剩余部分的第一句内容(接回点) */
   bridgeTo: string
+  /** 集内情绪提示(可选):导演层从已播台词的 action 轨迹现场推导——
+   *  插话发生在集内,本集蒸馏尚未提交,持久档里还没有这集的情绪 */
+  moodHint?: string
   window: { who: TurnWho; text: string }[]
 }): Promise<DialogLine[]> {
   const cfg = await getConfig()
   const persona = `${duoShortPersona()};${soloShortPersona('C')}`
+  const interjectMoodLine = moodHintLine(await getMoods(), ['A', 'B', 'C'])
   const p: UserProfile = cfg.userProfile
   const targetName = nameOf(input.target)
   const windowText = input.window.length
@@ -472,7 +485,7 @@ export async function generateInterjectionBatch(input: {
   const messages: { role: string; content: string }[] = [
     {
       role: 'system',
-      content: `桌面情景剧:演出进行到一半,观众插了一句话。角色:${persona}。${p.userName ? `观众称呼"${p.userName}"。` : ''}口语化、有梗、像真说话。
+      content: `桌面情景剧:演出进行到一半,观众插了一句话。角色:${persona}。${interjectMoodLine ? `${interjectMoodLine}。` : ''}${input.moodHint ? `${input.moodHint}。` : ''}${p.userName ? `观众称呼"${p.userName}"。` : ''}口语化、有梗、像真说话。
 输出协议(严格遵守):只输出一个 JSON 对象,格式 {"dialog":[{"speaker":"A","text":"台词","target":"B"},...]}
 - 一共 1~3 句:${targetName}(speaker "${input.target}")第一句先回应观众插的话;其他角色只在有新信息或好包袱时补 1 句;最后一句必须自然把话头带回刚才的剧情,贴着"剧情刚才演到"与"接下来要演",不要生硬
 - 每句不超过 25 字,不要引号;speaker 只能是 A、B 或 C 且不连续同一人`,
@@ -529,12 +542,13 @@ export async function generateLiveReply(
   if (p.banTopics) bits.push(`绝对不要聊:${p.banTopics}`)
   const facts = topFacts(mem, 3)
   if (facts.length) bits.push(`记住的观众的事:${facts.join(';')}`)
+  const liveMoodLine = moodHintLine(await getMoods(), ['A', 'B', 'C'])
 
   const danmakuList = batch.map((d, i) => `${i}. ${d.username}:${d.content}`).join('\n')
   const messages: { role: string; content: string }[] = [
     {
       role: 'system',
-      content: `桌面情景剧正在"直播读弹幕"。两位主角:${duoShortPersona()}。常驻第三角色:${soloShortPersona('C')}(speaker "C",话少,弹幕没点名她就不抢话)。${p.userName ? `主播(用户)叫"${p.userName}",角色偶尔可以提到TA。` : ''}下面是最新一批直播间弹幕。挑一条最值得回的(优先问角色的、有趣的、能接梗的;刷屏/无意义/人身攻击的直接不回),由甲/乙/丙中的一位用各自口吻回一句——弹幕点名了丙(@${nameOf('C')}/C)就由丙回答,否则优先甲乙,丙只在内容确实与她的小管家职责相关时才接。要求:15~40字,口语化像真说话;语气跟各自人设走,优先友好捧场和接梗,偶尔斗嘴点缀即可,别句句抬杠;不要复读弹幕原文。
+      content: `桌面情景剧正在"直播读弹幕"。两位主角:${duoShortPersona()}。常驻第三角色:${soloShortPersona('C')}(speaker "C",话少,弹幕没点名她就不抢话)。${liveMoodLine ? `${liveMoodLine}。` : ''}${p.userName ? `主播(用户)叫"${p.userName}",角色偶尔可以提到TA。` : ''}下面是最新一批直播间弹幕。挑一条最值得回的(优先问角色的、有趣的、能接梗的;刷屏/无意义/人身攻击的直接不回),由甲/乙/丙中的一位用各自口吻回一句——弹幕点名了丙(@${nameOf('C')}/C)就由丙回答,否则优先甲乙,丙只在内容确实与她的小管家职责相关时才接。要求:15~40字,口语化像真说话;语气跟各自人设走,优先友好捧场和接梗,偶尔斗嘴点缀即可,别句句抬杠;不要复读弹幕原文。
 ${p.banTopics ? `雷区(绝对不聊):${p.banTopics}。` : ''}
 只输出一个 JSON 对象:{"pick":<弹幕序号>,"reply":"<回复,不回则空串>","speaker":"A"或"B"或"C","action":"<动作词>"}
 action 只能是这些词之一:${[...VALID_ACTIONS].join('|')}。${bits.length ? `\n关于观众:${bits.join(';')}。` : ''}${recentReplies.length ? `\n最近已说过(不要重复,保持话题推进):${recentReplies.join(' / ')}` : ''}`,
@@ -710,14 +724,15 @@ export async function distillStory(
 已完结剧情(编号:标题[结局],仅作背景,不得推进、不得报成新事件线):${knownDone}
 
 对照刚播出的台词,只输出一个 JSON 对象:
-{"newGags":[{"text":"...","evidence":["..."],"assertion":"established","sameAsId":null}],"newThreads":[同结构],"resolvedThreadIds":[],"reusedGagIds":[],"relationshipEvent":null,"arcAdvance":null,"newArc":null}
+{"newGags":[{"text":"...","evidence":["..."],"assertion":"established","sameAsId":null}],"newThreads":[同结构],"resolvedThreadIds":[],"reusedGagIds":[],"relationshipEvent":null,"arcAdvance":null,"newArc":null,"mood":[]}
 - newGags 每集最多 1 条:只收"脱离台词也能反复回收"的固定笑点,自包含、以甲/乙/丙为主语(丙的呆萌名场面尤其值得收)、8~40字;一次性的普通包袱不要报。newThreads 最多 2 条(还没了结的具体事情)
 - evidence 必须逐字摘自台词(每段6~30字,最多2段);拿不出原句证据的候选不要报
 - assertion 只能是 established(台词确认的事实)/boast(甲吹牛)/excuse(甲找借口甩锅);text 要自带"自称/号称/甩锅/嘴硬"等语气,不得把吹牛、甩锅、反问写成事实;反问、疑问、猜测一律不要报
 - 同一个梗只是换了说法时报 sameAsId 为库存编号,并把 text 改写成更自包含的规范表述;本集确实回收了库存老梗则填 reusedGagIds
 - relationshipEvent 只在台词里出现明确的关系转折时给出:kind 是 repair(和解)/betrayal(背叛)/support(支持)/rivalry(较劲)/user-sided(观众站队)之一,actor 是谁发起(A/B/C/audience),target 对谁(A/B/C),summary 一句话点明谁对谁做了什么(≤40字),weight 0.5~1 表程度;拿不准就给 null,不要为了记账硬编
 - resolvedThreadIds/reusedGagIds/sameAsId 只能填上面列出的编号,没有就给空数组或 null
-- arcAdvance 只在本集确实演出了某条活跃剧情的"下一拍"时给出,并写出再下一拍的新进展或悬念(10~60字);newArc 只在本集冒出值得多集延续的新剧情线时给出(标题2~15字,第一拍悬念10~60字),并用 closeThreadIds 把被它吸收的已知事件线一并结案;各最多 1 条,不适用给 null`,
+- arcAdvance 只在本集确实演出了某条活跃剧情的"下一拍"时给出,并写出再下一拍的新进展或悬念(10~60字);newArc 只在本集冒出值得多集延续的新剧情线时给出(标题2~15字,第一拍悬念10~60字),并用 closeThreadIds 把被它吸收的已知事件线一并结案;各最多 1 条,不适用给 null
+- mood 只在本集结尾留有明显情绪余波时才报(每角色最多 1 条,合计最多 3 条):who 是 A/B/C;dValence/dEnergy 是这段剧情让该角色心情/精力变化的增量(-2~2 的数,如被当众拆台 -1.5、被夸上天 +1、连轴转救场 +1);cause 一句话点明谁怎么了(≤30字);evidence 逐字摘自该角色的台词(6~30字);平静收场的角色不报,拿不出原句证据也不要报`,
     },
     { role: 'user', content: text },
   ]
@@ -734,6 +749,7 @@ export async function distillStory(
       arcAdvance: null,
       newArc: null,
       relationshipEvent: null,
+      mood: [],
     }
     if (!m) return none
     const obj = JSON.parse(m[0]) as Record<string, unknown>
@@ -817,6 +833,24 @@ export async function distillStory(
         }
       }
     }
+    // 情绪余波:who/cause/evidence 任一不合法就丢弃,|Δ| 钳位 ±2(证据校验由策展器做,
+    // 这里只保证候选形状,宁可不记不可错记)
+    const mood: MoodEventCandidate[] = []
+    if (Array.isArray(obj.mood)) {
+      const clamp2 = (v: unknown): number => Math.max(-2, Math.min(2, Number(v) || 0))
+      for (const item of obj.mood) {
+        if (mood.length >= 3) break
+        const mo = (item ?? {}) as Record<string, unknown>
+        if (mo.who !== 'A' && mo.who !== 'B' && mo.who !== 'C') continue
+        const cause = typeof mo.cause === 'string' ? mo.cause.trim().slice(0, 30) : ''
+        const evidence = typeof mo.evidence === 'string' ? mo.evidence.trim().slice(0, 30) : ''
+        if (!cause || !evidence) continue
+        const dValence = clamp2(mo.dValence)
+        const dEnergy = clamp2(mo.dEnergy)
+        if (dValence === 0 && dEnergy === 0) continue
+        mood.push({ who: mo.who, dValence, dEnergy, cause, evidence })
+      }
+    }
     return {
       newGags: candidates(obj.newGags, 1),
       newThreads: candidates(obj.newThreads, 2),
@@ -825,6 +859,7 @@ export async function distillStory(
       arcAdvance: arcAdvance && knownArcIds.has(arcAdvance.id) ? arcAdvance : null,
       newArc,
       relationshipEvent,
+      mood,
     }
   } finally {
     clearTimeout(timer)

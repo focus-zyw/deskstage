@@ -9,6 +9,7 @@ import { appDataDir, join } from '@tauri-apps/api/path'
 import { withFileLock } from './writeLock'
 import { inTauri } from './configStore'
 import { migrateStoryData } from './storyMigration'
+import type { MoodEventCandidate } from '../engine/moodState'
 
 export interface StoryGag {
   id: string
@@ -260,6 +261,8 @@ export interface DistilledStory {
   newArc: (NewArc & { closeThreadIds: string[] }) | null
   /** 台词里明确发生的关系事件(每集最多 1 笔,拿不准为 null) */
   relationshipEvent: RelationshipEventCandidate | null
+  /** 本集结尾各角色的情绪余波候选(须过台词证据关,由策展器校验后入 mood.json) */
+  mood: MoodEventCandidate[]
 }
 
 /** curator 产出、mergeStory 消费的入库补丁:候选已过证据/断言/语义去重关,

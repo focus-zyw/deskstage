@@ -72,7 +72,9 @@ export function buildMessages(
   envNote?: string,
   /** 长期关系底色(可选):信任/摩擦的当前状态描述 */
   bondNote?: string,
-  /** 只有显式“续聊”才携带上一段原始台词；新主题默认 false，避免内容串味 */
+  /** 心情余波(可选):跨集带过来的情绪惯性,已由 moodState 翻译成自然语言块 */
+  moodNote?: string,
+  /** 只有显式”续聊”才携带上一段原始台词；新主题默认 false,避免内容串味 */
   continueFromPrevious = false,
 ): ChatMessage[] {
   const persona = fullPersona()
@@ -101,6 +103,10 @@ export function buildMessages(
 
 长期关系背景（影响相互态度与语气,不是本集主要矛盾）：${bondNote.trim()}。`
     : ''
+
+  const moodCtx = moodNote?.trim() ? `
+
+${moodNote.trim()}` : ''
 
   const recap = interactionRecap?.trim()
     ? `另外,上一集演出时观众没少捣乱:${interactionRecap.trim()}。开场先让两人自然地抱怨一下这个观众,再进入正题。
@@ -172,7 +178,7 @@ export function buildMessages(
   return [
     {
       role: 'system',
-      content: `你是一位擅长传统相声和网络脱口秀的资深喜剧编剧,给桌面三人情景剧写段子。${persona}${bondCtx}${relCtx}${arcCtx}${cRule}${profile}${storyCtx}${timeCtx}${choiceRule}\n\n${craft}\n\n${protocol}\n\n${modeOf(mode).prompt}`,
+      content: `你是一位擅长传统相声和网络脱口秀的资深喜剧编剧,给桌面三人情景剧写段子。${persona}${bondCtx}${moodCtx}${relCtx}${arcCtx}${cRule}${profile}${storyCtx}${timeCtx}${choiceRule}\n\n${craft}\n\n${protocol}\n\n${modeOf(mode).prompt}`,
     },
     {
       role: 'user',

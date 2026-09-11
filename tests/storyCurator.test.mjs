@@ -326,3 +326,37 @@ test('回放收敛:同一批梗换说法反复出现,库存不膨胀', async () 
   assert.equal(gag.text, '甲自称手机被房东借走发emo语音')
   assert.ok(gag.hits >= target.hits + 2) // 两次都计入使用
 })
+
+test('策展:情绪余波须过台词证据关才入库,丙同样记账', async () => {
+  const lines = [
+    { speaker: 'A', text: '我不管，这个月奶茶钱都搭进去了', action: 'sad' },
+    { speaker: 'B', text: '所以说你记账能记出花来', action: 'talk' },
+    { speaker: 'C', text: '好的，马上把奶茶钱从预算里删掉', action: 'talk' },
+  ]
+  const applied = []
+  const report = await curator.curateEpisode(lines, {
+    distill: async () =>
+      distilled({
+        mood: [
+          {
+            who: 'A',
+            dValence: -1.5,
+            dEnergy: -0.5,
+            cause: '甲为奶茶钱破防',
+            evidence: '这个月奶茶钱都搭进去了',
+          },
+          { who: 'B', dValence: 0.8, dEnergy: 0.3, cause: '乙拆台得逞', evidence: '台词里根本没有这句' },
+        ],
+      }),
+    applyMood: async (d) => applied.push(...d),
+  })
+  assert.equal(applied.length, 1) // 乙的假证据被拒,甲入库
+  assert.equal(applied[0].who, 'A')
+  assert.equal(applied[0].dValence, -1.5)
+  assert.equal(applied[0].cause, '甲为奶茶钱破防')
+  assert.equal(report.mood?.length, 1)
+  assert.deepEqual(
+    report.rejected.map((r) => r.reason),
+    ['情绪余波无台词证据'],
+  )
+})

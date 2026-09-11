@@ -19,6 +19,7 @@ import { generateShortChat, generateTurnBatch, improvPokeLine, generateUserChatR
 import { pushTurn, chatWindow } from './dialogue/turnWindow'
 import { react } from './engine/interactionRules'
 import { logInteraction, logInterrupt, resetDismissals } from './storage/interactionStore'
+import { ensureMoodLoaded, notePoked } from './storage/moodStore'
 import { noteActivity } from './runtime/proactiveScheduler'
 import { speak } from './engine/tts'
 import { TOPIC_SEEDS } from './engine/topicSeeds'
@@ -524,6 +525,7 @@ function App() {
     preloadSprites(Object.values(SPRITE_SETS)) // 预热立绘,演出中切换动作零延迟
     preloadResident() // 预热 C 的 WebM 片段,首次切换零等待
     preloadProps() // 预热道具 SVG,首次礼物/工具流程不闪
+    void ensureMoodLoaded() // 情绪档预载:presenter 待机染色要同步读
     void getConfig().then((c) => {
       applyChars(c.characters)
       setRuntimeCharHidden(c.charactersHidden)
@@ -862,9 +864,11 @@ function App() {
     if (phase === 'performing' && speaking === who) {
       showPoke(who, react(who, 'interrupt'), 'surprise', 2200)
       void logInterrupt(who)
+      void notePoked(who)
       return
     }
     void logInteraction(who === 'A' ? 'pokeA' : who === 'B' ? 'pokeB' : 'pokeC')
+    void notePoked(who)
 
     // 连戳分级:滑动窗口计数,生气期内不再响应
     const now = Date.now()

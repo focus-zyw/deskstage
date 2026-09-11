@@ -29,7 +29,7 @@ const story = (gags, threads = []) => ({
   bond: { trust: 1, rivalry: 0, updatedAt: 0 },
 })
 
-function finalPrompt({ recentLines = [], storyContext, continueFromPrevious = false } = {}) {
+function finalPrompt({ recentLines = [], storyContext, continueFromPrevious = false, moodNote } = {}) {
   return buildMessages(
     'crosstalk',
     '周报到底写给谁看',
@@ -44,6 +44,7 @@ function finalPrompt({ recentLines = [], storyContext, continueFromPrevious = fa
     undefined,
     undefined,
     undefined,
+    moodNote,
     continueFromPrevious,
   )
     .map((message) => message.content)
@@ -184,4 +185,12 @@ test('相声模式丙只占 0~2 句,保留逗哏-捧哏主轴', () => {
   assert.match(prompt, /本场只占 0~2 句/)
   assert.match(prompt, /甲乙拿丙垫梗/)
   assert.match(prompt, /甲乙仍是逗哏-捧哏主轴/)
+})
+
+test('心情余波注入:位于长期关系之后,空缺时不出现占位文字', () => {
+  const withMood = finalPrompt({ moodNote: '当前心情余波:\n- 乙还在气头上(余怒未消)' })
+  assert.match(withMood, /当前心情余波/)
+  assert.match(withMood, /乙还在气头上/)
+  const withoutMood = finalPrompt()
+  assert.doesNotMatch(withoutMood, /心情余波/)
 })
