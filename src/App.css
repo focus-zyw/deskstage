@@ -1615,7 +1615,8 @@
   margin-top: 1px;
 }
 .settings-window .hist-fav,
-.settings-window .hist-del {
+.settings-window .hist-del,
+.settings-window .hist-rate {
   flex: none;
   width: 24px;
   height: 24px;
@@ -1630,11 +1631,18 @@
     color 0.12s ease,
     background 0.12s ease;
 }
-.settings-window .hist-fav:hover {
+.settings-window .hist-fav:hover,
+.settings-window .hist-rate:hover {
   background: var(--sw-hover);
 }
 .settings-window .hist-fav.on {
   color: #f5c542;
+}
+.settings-window .hist-rate.on {
+  background: rgba(122, 199, 148, 0.18);
+}
+.settings-window .hist-rate.down.on {
+  background: rgba(255, 113, 133, 0.18);
 }
 .settings-window .hist-del:hover:not(:disabled) {
   background: rgba(255, 113, 133, 0.2);
@@ -1930,6 +1938,68 @@
 }
 .memo-alert .memo-ok:hover {
   background: rgba(255, 255, 255, 0.16);
+}
+
+/* 完播评价条:工具栏正上方的一键反馈(👍/👎/★),10 秒不评自动收起 */
+.rate-chip {
+  position: fixed;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: rgba(24, 24, 32, 0.92);
+  color: #fff;
+  border: 1px solid rgba(157, 180, 216, 0.5);
+  border-radius: 999px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+  z-index: 70;
+  animation: rate-chip-in 0.2s ease-out;
+}
+@keyframes rate-chip-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(6px);
+  }
+}
+.rate-chip-q {
+  font-size: 13px;
+  color: #cdd7ea;
+  white-space: nowrap;
+}
+.rate-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  font-size: 14px;
+  line-height: 1;
+  color: #cdd7ea;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 50%;
+  cursor: pointer;
+  transition:
+    color 0.12s ease,
+    background 0.12s ease;
+}
+.rate-btn.hot {
+  background: rgba(255, 255, 255, 0.18);
+  color: #fff;
+}
+.rate-btn.star {
+  font-size: 15px;
+}
+.rate-chip.thanks {
+  padding: 8px 16px;
+}
+.rate-chip-note {
+  font-size: 13px;
+  color: #9fd8a8;
+  white-space: nowrap;
 }
 
 /* ---------- 翻译面板:控制栏正下方弹出,与设置面板同风格 ---------- */

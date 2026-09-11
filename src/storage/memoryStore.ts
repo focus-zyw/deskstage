@@ -29,6 +29,10 @@ export interface TopicStat {
   watched: number
   /** 演出中途按停止的负信号(播过 80% 以上不算) */
   skipped: number
+  /** 观众显式点赞(弱于收藏:看完都不点的那一下比收藏轻) */
+  liked: number
+  /** 观众显式点踩(改评/撤销可逆,±记账) */
+  disliked: number
 }
 
 export interface MemoryData {
@@ -90,6 +94,8 @@ function sanitize(data: unknown): MemoryData {
         replays: Math.max(0, Number(s.replays) || 0),
         watched: Math.max(0, Number(s.watched) || 0),
         skipped: Math.max(0, Number(s.skipped) || 0),
+        liked: Math.max(0, Number(s.liked) || 0),
+        disliked: Math.max(0, Number(s.disliked) || 0),
       }
     }
   }
@@ -231,13 +237,26 @@ export function stripAngle(topic: string | undefined): string {
   return topic.replace(/（[^）]*）\s*$/, '').trim()
 }
 
-async function bumpTopic(topic: string | undefined, key: keyof Omit<TopicStat, never>): Promise<void> {
+async function bumpTopic(
+  topic: string | undefined,
+  key: keyof Omit<TopicStat, never>,
+  delta = 1,
+): Promise<void> {
   const seed = stripAngle(topic)
-  if (!seed) return
+  if (!seed || !Number.isFinite(delta) || delta === 0) return
   await withFileLock('memory', async () => {
     const mem = await getMemory()
-    const stat = mem.topicStats[seed] ?? { seen: 0, favored: 0, replays: 0 }
-    stat[key] += 1
+    // 七个键必须齐:漏键会让 stat[key] += 1 从 undefined 起步算出 NaN,污染权重
+    const stat = mem.topicStats[seed] ?? {
+      seen: 0,
+      favored: 0,
+      replays: 0,
+      watched: 0,
+      skipped: 0,
+      liked: 0,
+      disliked: 0,
+    }
+    stat[key] = Math.max(0, stat[key] + delta)
     mem.topicStats[seed] = stat
     await persist(mem)
   })
@@ -259,6 +278,16 @@ export function bumpTopicSkipped(topic: string | undefined): void {
   void bumpTopic(topic, 'skipped').catch(() => {})
 }
 
+/** 观众显式评价记账(feedbackStore 调):delta=-1 回退改评/撤销前的旧信号。
+ *  返回 promise 供调用方等待(fire-and-forget 的调用方忽略即可) */
+export function bumpTopicRated(
+  topic: string | undefined,
+  rating: 'up' | 'down',
+  delta: 1 | -1,
+): Promise<void> {
+  return bumpTopic(topic, rating === 'up' ? 'liked' : 'disliked', delta).catch(() => {})
+}
+
 export function bumpPoke(): void {
   void withFileLock('memory', async () => {
     const mem = await getMemory()
@@ -275,13 +304,14 @@ export function bumpMode(mode: string): void {
   }).catch(() => {})
 }
 
-/** 话题权重表:正信号(收藏×2/手动重放/看完×0.3)与负信号(跳过×1.5)合成,
- *  ≤0 表示该主题已被"跳过"打穿,由 pickTopic 剔除出随机池 */
+/** 话题权重表:正信号(收藏×2/手动重放/看完×0.3/显式赞×1)与负信号(跳过×1.5/显式踩×1.5)
+ *  合成,≤0 表示该主题已被负信号打穿,由 pickTopic 剔除出随机池 */
 export async function getTopicWeights(): Promise<Record<string, number>> {
   const mem = await getMemory()
   const out: Record<string, number> = {}
   for (const [seed, s] of Object.entries(mem.topicStats)) {
-    out[seed] = 1 + s.favored * 2 + s.replays + s.watched * 0.3 - s.skipped * 1.5
+    out[seed] =
+      1 + s.favored * 2 + s.replays + s.watched * 0.3 + (s.liked ?? 0) - (s.disliked ?? 0) * 1.5 - s.skipped * 1.5
   }
   return out
 }

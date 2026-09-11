@@ -12,6 +12,9 @@ const ACTIONS: { id: keyof HotkeysConfig; title: string; hint: string }[] = [
   { id: 'stop', title: '停止', hint: '结束当前演出或下播' },
   { id: 'replayRandom', title: '随机播放历史', hint: '从历史里加权随机回放一段(收藏更常被抽到)' },
   { id: 'toggleChars', title: '隐藏/显示角色', hint: '一键隐藏或恢复桌面上的角色' },
+  { id: 'rateUp', title: '赞上一集', hint: '给最近自然演完的一集点个赞(以后多挑这类话题)' },
+  { id: 'rateDown', title: '踩上一集', hint: '给最近自然演完的一集点个踩(以后少挑这类话题)' },
+  { id: 'rateFav', title: '收藏上一集', hint: '收藏最近自然演完的一集(不会被清理,重放权重更高)' },
 ]
 
 export function HotkeysSettings() {

@@ -27,6 +27,9 @@ const HK = (partial) => ({
   stop: '',
   replayRandom: '',
   toggleChars: '',
+  rateUp: '',
+  rateDown: '',
+  rateFav: '',
   ...partial,
 })
 
@@ -67,4 +70,16 @@ test('组合键规范化只做去空白与大写,大小写差异视为同一组�
     '',
   )
   assert.deepEqual(out, [{ shortcut: 'CTRL+ALT+G', action: 'generate' }])
+})
+
+test('评价动作可绑定:rateUp/rateDown/rateFav 走同一解析与冲突规则', () => {
+  const out = resolveHotkeyBindings(
+    HK({ rateUp: 'Ctrl+Alt+U', rateFav: 'ctrl+alt+u', rateDown: 'Ctrl+Alt+J' }),
+    '',
+  )
+  // 同组合键先到先得:rateUp 在配置键序中先于 rateFav
+  assert.deepEqual(out, [
+    { shortcut: 'CTRL+ALT+U', action: 'rateUp' },
+    { shortcut: 'CTRL+ALT+J', action: 'rateDown' },
+  ])
 })

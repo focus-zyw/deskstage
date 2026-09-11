@@ -138,7 +138,7 @@ export interface AppConfig {
   /** 开机自启动(Windows 写 HKCU Run 注册表键);默认关。
    *  配置是唯一事实来源:应用启动时按此值与系统注册状态对账 */
   launchOnBoot: boolean
-  /** 舞台气泡风格:comic=漫画白底描边(默认);glass=深色玻璃(与设置窗口同风) */
+  /** 舞台气泡风格:comic=柔彩角色主题(默认,历史 key 保持兼容);glass=夜色半透明 */
   bubbleStyle: 'comic' | 'glass'
 }
 
@@ -215,7 +215,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   ctrlBar: { xPct: 50, top: 10, collapsed: false },
   showWatermark: false,
   screenshot: { hotkey: 'Ctrl+Alt+A', enabled: true, hideSelf: true },
-  hotkeys: { generate: '', stop: '', replayRandom: '', toggleChars: '' },
+  hotkeys: { generate: '', stop: '', replayRandom: '', toggleChars: '', rateUp: '', rateDown: '', rateFav: '' },
   userInterests: '',
   userProfile: { userName: '', occupation: '', likes: '', dislikes: '', banTopics: '' },
   webchatEnabled: false,
@@ -384,6 +384,12 @@ export interface HotkeysConfig {
   replayRandom: string
   /** 隐藏/显示角色 */
   toggleChars: string
+  /** 赞最近一集(自然演完的那集;影响话题挑选) */
+  rateUp: string
+  /** 踩最近一集(影响话题挑选) */
+  rateDown: string
+  /** 收藏最近一集(不会被清理,重放权重更高) */
+  rateFav: string
 }
 
 /** 清洗应用动作快捷键:逐字段截断,非法值回空串(= 未设置,不生效) */
@@ -395,6 +401,9 @@ function sanitizeHotkeys(v: unknown): HotkeysConfig {
     stop: key(o.stop),
     replayRandom: key(o.replayRandom),
     toggleChars: key(o.toggleChars),
+    rateUp: key(o.rateUp),
+    rateDown: key(o.rateDown),
+    rateFav: key(o.rateFav),
   }
 }
 

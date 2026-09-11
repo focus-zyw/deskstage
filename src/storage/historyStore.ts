@@ -302,6 +302,20 @@ export async function listEpisodes(limit = 50): Promise<Episode[]> {
 }
 
 /**
+ * 按 eid 找回一集(完播评价条的收藏走这里);旧数据无 eid 的集找不到返回 null。
+ * 一次读最近 200 集——点击触发的一次性动作,不值得为它建索引。
+ */
+export async function findEpisodeByEid(eid: string): Promise<Episode | null> {
+  try {
+    const eps = await listEpisodes(200)
+    return eps.find((e) => e.eid === eid) ?? null
+  } catch (e) {
+    console.warn('按 eid 找集失败', e)
+    return null
+  }
+}
+
+/**
  * 删除指定 ts 的历史集（重写受影响日文件，删空则移除整个文件）。
  * 收藏库不受影响——UI 层负责不让删除收藏集。
  */

@@ -1,7 +1,8 @@
-// 演出历史:回放(经 bridge 交回应用)、收藏、删除。列表挂载时拉取
+// 演出历史:回放(经 bridge 交回应用)、收藏、删除、赞/踩补评。列表挂载时拉取
 import { useEffect, useState } from 'react'
 import { listEpisodes, deleteEpisodes, toggleFavorite, type Episode } from '../../storage/historyStore'
 import { bumpTopicFavored } from '../../storage/memoryStore'
+import { rateEpisode, removeRatings, getRatings, type Rating, type FeedbackTable } from '../../storage/feedbackStore'
 import { modeOf } from '../../performer/modes'
 import { useSettings } from '../useSettingsSession'
 import { SettingsCard } from '../SettingsPrimitives'
@@ -10,10 +11,21 @@ import { fmtTime } from '../format'
 export function HistorySettings() {
   const { bridge, flashCard } = useSettings()
   const [episodes, setEpisodes] = useState<Episode[]>([])
+  const [ratings, setRatings] = useState<FeedbackTable>({})
   const [clearHistArmed, setClearHistArmed] = useState(false)
 
+  // 挂载拉取:内联 .then + 卸载守卫,避免组件函数在 effect 里自引用触发级联渲染
   useEffect(() => {
-    void refreshEpisodes()
+    let alive = true
+    void listEpisodes().then((eps) => {
+      if (alive) setEpisodes(eps)
+    })
+    void getRatings().then((r) => {
+      if (alive) setRatings(r)
+    })
+    return () => {
+      alive = false
+    }
   }, [])
 
   async function refreshEpisodes() {
@@ -26,14 +38,27 @@ export function HistorySettings() {
     await refreshEpisodes()
   }
 
+  /** 赞/踩补评(再点同键撤销);权重 ± 记账在 rateEpisode 内,改评自动回退旧信号 */
+  async function onRate(ep: Episode, rating: Rating) {
+    if (!ep.eid) return
+    const next = ratings[ep.eid]?.rating === rating ? null : rating
+    await rateEpisode(ep.eid, { ts: ep.ts, mode: ep.mode, topic: ep.topic }, next)
+    setRatings(await getRatings())
+  }
+
   async function onDeleteEpisode(ep: Episode) {
     await deleteEpisodes(new Set([ep.ts]))
+    await removeRatings([ep.eid]) // 台词没了,评价挂着也无意义
     setEpisodes(await listEpisodes())
+    setRatings(await getRatings())
   }
 
   async function onClearUnfavorited() {
-    await deleteEpisodes(new Set(episodes.filter((e) => !e.fav).map((e) => e.ts)))
-    await refreshEpisodes()
+    const doomed = episodes.filter((e) => !e.fav)
+    await deleteEpisodes(new Set(doomed.map((e) => e.ts)))
+    await removeRatings(doomed.map((e) => e.eid))
+    setEpisodes(await listEpisodes())
+    setRatings(await getRatings())
   }
 
   return (
@@ -83,6 +108,30 @@ export function HistorySettings() {
                   {ep.topic ? ` · ${ep.topic}` : ''}
                 </div>
               </div>
+              {ep.eid && (
+                <>
+                  <button
+                    className={`hist-rate${ratings[ep.eid]?.rating === 'up' ? ' on' : ''}`}
+                    title={ratings[ep.eid]?.rating === 'up' ? '撤销赞' : '赞这一集（以后多演这类）'}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      void onRate(ep, 'up')
+                    }}
+                  >
+                    👍
+                  </button>
+                  <button
+                    className={`hist-rate down${ratings[ep.eid]?.rating === 'down' ? ' on' : ''}`}
+                    title={ratings[ep.eid]?.rating === 'down' ? '撤销踩' : '踩这一集（以后少来这套）'}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      void onRate(ep, 'down')
+                    }}
+                  >
+                    👎
+                  </button>
+                </>
+              )}
               <button
                 className={`hist-fav${ep.fav ? ' on' : ''}`}
                 title={ep.fav ? '取消收藏' : '收藏（不会被删除，重放权重更高）'}

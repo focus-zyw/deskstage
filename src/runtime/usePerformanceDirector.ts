@@ -80,6 +80,9 @@ export interface PerformanceDirectorDeps {
   teardown(): void
   /** 新生成的集自然播完并由 DialogueDirector 提交(历史+蒸馏)后的 UI 刷新(可选) */
   onEpisodeCommitted?(report: CurateReport): void
+  /** 新生成的集自然播完(完播信号,不等蒸馏完成):供 App 弹"这集怎么样"评价条。
+   *  回放/中止不触发——中途退场还问好不好很讨嫌 */
+  onEpisodeEnd?(info: { eid: string; mode: Mode; topic: string }): void
   /** 到点备忘扫描(调度器每 tick 调,幂等) */
   sweepMemos(): Promise<void>
 }
@@ -173,6 +176,7 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
         }
         if (p && fullPath && fullPath.length > 0) {
           lastLines.current = fullPath // 续播衔接上下文升级为完整路径(选边集原先是前半段)
+          deps.onEpisodeEnd?.({ eid: p.eid, mode: p.mode, topic: p.topic })
           void dialogue
             .commitEpisode({ eid: p.eid, mode: p.mode, topic: p.topic, card: p.card, played: fullPath, natural: true })
             .then((report) => {

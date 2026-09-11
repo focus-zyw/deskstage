@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { listen } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
@@ -23,9 +23,10 @@ import { ensureMoodLoaded, notePoked } from './storage/moodStore'
 import { noteActivity } from './runtime/proactiveScheduler'
 import { speak } from './engine/tts'
 import { TOPIC_SEEDS } from './engine/topicSeeds'
-import { bumpPoke, getMemory, topFacts, mergeFacts } from './storage/memoryStore'
+import { bumpPoke, getMemory, topFacts, mergeFacts, bumpTopicFavored } from './storage/memoryStore'
 import { getDueMemos, addMemo, updateMemo } from './storage/memoStore'
-import { type Episode } from './storage/historyStore'
+import { findEpisodeByEid, toggleFavorite, type Episode } from './storage/historyStore'
+import { rateEpisode } from './storage/feedbackStore'
 import { TranslationPanel, type TranslationInject } from './translation/TranslationPanel'
 import { extractTextFromClipboard } from './translation/ocr'
 import { startLiveSession, stopLiveSession, type LiveReply } from './runtime/liveDanmaku'
@@ -60,6 +61,7 @@ import { useCharacterLayout } from './stage/useCharacterLayout'
 import { usePerformanceDirector } from './runtime/usePerformanceDirector'
 import { useActorPresenter } from './stage/useActorPresenter'
 import { ControlBar } from './ui/ControlBar'
+import { RatingChip, type RatingAsk } from './ui/RatingChip'
 import { UtilityCards } from './ui/UtilityCard'
 import {
   DEFAULT_CONFIG,
@@ -237,6 +239,11 @@ function App() {
   // 备忘提醒卡容器:热区 getter 用;声明在使用(useMemo 依赖)之前,避免 TDZ
   const memoAlertsRef = useRef<HTMLDivElement>(null)
   const memoAlertsCountRef = useRef(0)
+  // 完播评价:最近自然演完的一集(eid 主键)。ask 驱动评价条浮现;ref 供全局快捷键
+  // 随时引用——勿扰/超时收起只压"弹条",不丢"可评的集"
+  const [ratingAsk, setRatingAsk] = useState<RatingAsk | null>(null)
+  const ratingAskRef = useRef<RatingAsk | null>(null)
+  const dismissRating = useCallback(() => setRatingAsk(null), [])
   const topicPanelRef = useRef<HTMLDivElement>(null)
   const chatBoxRef = useRef<HTMLDivElement>(null)
   const cmdPanelRef = useRef<HTMLDivElement>(null)
@@ -285,8 +292,28 @@ function App() {
       setUserBubble(null)
     },
     sweepMemos: () => sweepMemos(),
+    onEpisodeEnd: (info) => {
+      ratingAskRef.current = info // 快捷键随时可评最近一集;勿扰只压弹条,不丢可评的集
+      if (!getRuntime().dnd) setRatingAsk(info)
+    },
   })
   const { choice } = director
+
+  /** 显式评价提交(评价条/快捷键共用):落盘 feedback.json + 口味权重 ± 记账 */
+  function submitRating(info: RatingAsk, rating: 'up' | 'down') {
+    if (ratingAskRef.current?.eid === info.eid) setRatingAsk(null)
+    void rateEpisode(info.eid, { ts: Date.now(), mode: info.mode, topic: info.topic }, rating).catch(() => {})
+  }
+
+  /** 收藏刚完播的这集:按 eid 找回整集,走与历史页 ★ 同一条收藏通道 */
+  function favoriteCurrentEpisode(info: RatingAsk) {
+    void (async () => {
+      const ep = await findEpisodeByEid(info.eid)
+      if (!ep) return
+      const nowFav = await toggleFavorite(ep)
+      if (nowFav) bumpTopicFavored(ep.topic)
+    })().catch(() => {})
+  }
 
   /** 插话呈现(气泡+动作+到期回收):戳一戳/引导语/报错的统一入口 */
   function showPoke(who: Speaker, line: string, action: string, ms = 1600, loud = false) {
@@ -302,6 +329,11 @@ function App() {
   // phase 的 ref 镜像:异步回调(LLM 返回)里判断此刻是否仍空闲
   useEffect(() => {
     phaseRef.current = phase
+  }, [phase])
+
+  // 新演出开始(生成/播放/选边):撤下未作答的评价条——演出优先,错过可在历史页补评
+  useEffect(() => {
+    if (phase !== 'idle') setRatingAsk(null)
   }, [phase])
 
   // C 围观工具任务:任务运行期间进工作姿势,结束(成败都)还原
@@ -339,6 +371,19 @@ function App() {
     })
     setHotkeyHandler('toggleChars', () => {
       setCharsHidden(!getRuntime().charHidden)
+    })
+    // 完播评价三动作:对"最近自然演完的一集"生效;还没有可评的集时静默(与 generate 同口径)
+    setHotkeyHandler('rateUp', () => {
+      const info = ratingAskRef.current
+      if (info) submitRating(info, 'up')
+    })
+    setHotkeyHandler('rateDown', () => {
+      const info = ratingAskRef.current
+      if (info) submitRating(info, 'down')
+    })
+    setHotkeyHandler('rateFav', () => {
+      const info = ratingAskRef.current
+      if (info) favoriteCurrentEpisode(info)
     })
   })
 
@@ -1313,6 +1358,22 @@ function App() {
             ))}
           </div>
         )}
+
+        {/* 完播评价条:锚在工具栏正上方,一键 👍/👎/★。面板开着时不现身——
+            全屏 outside 热区(点外部收面板)会抢走点击,等面板关掉再弹出并从头计时 */}
+        <RatingChip
+          ask={overlaysOpen ? null : ratingAsk}
+          style={{ left: `${ctrlBar.xPct}%`, top: Math.max(12, ctrlBar.top - 52) }}
+          onRate={(r) => {
+            const info = ratingAskRef.current
+            if (info) submitRating(info, r)
+          }}
+          onFav={() => {
+            const info = ratingAskRef.current
+            if (info) favoriteCurrentEpisode(info)
+          }}
+          onDismiss={dismissRating}
+        />
 
         <UtilityCards />
 
