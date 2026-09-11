@@ -1641,6 +1641,12 @@
   gap: 8px;
 }
 
+/* 快捷键录入的无效按键提示(字母/数字单键不收,告知规则) */
+.hotkey-hint {
+  font-size: 11px;
+  color: var(--sw-err);
+}
+
 /* 久坐提醒行:开关 + 分钟数输入 */
 .break-min-input {
   width: 64px;

@@ -58,6 +58,7 @@ export function HotkeysSettings() {
         )}
         <div className="set-note">
           以上为系统级全局快捷键:无论前台是什么应用都会触发。留空 = 未设置,不会占用任何按键。
+          单键绑定仅支持 F1~F12——字母/数字单键会被全局吞掉,任何应用里都打不出那个字符,故不收录。
         </div>
       </SettingsCard>
       <SettingsCard card="截屏" flash={flashCard} title="截屏">

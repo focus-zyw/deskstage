@@ -306,9 +306,15 @@ export function CloneVoiceRow({
 }
 
 /** 全局快捷键录入器:点击进入录入态,按下带修饰键的组合键即完成,Esc 取消。
- *  输出为 global-shortcut 接受的格式(Ctrl+Alt+A 这类);必须带修饰键,防止单键误占 */
+ *  输出为 global-shortcut 接受的格式(Ctrl+Alt+A 这类)。无修饰键只收 F1~F12 单键:
+ *  全局热键会吞键,字母/数字单键会让任何应用里打不出这个字符,常用功能键(Esc/Tab/F5)同理;
+ *  F 键不用于文字输入,是单键绑定的唯一安全区(截图/录屏工具惯例) */
 export function HotkeyRecorder({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   const [listening, setListening] = useState(false)
+  // 无效按键的规则提示:无声退出会让人以为没反应,2.5s 后自动消失
+  const [hint, setHint] = useState('')
+  const hintTimer = useRef(0)
+  useEffect(() => () => window.clearTimeout(hintTimer.current), [])
   useEffect(() => {
     if (!listening) return
     const onKey = (e: KeyboardEvent) => {
@@ -324,12 +330,15 @@ export function HotkeyRecorder({ value, onChange }: { value: string; onChange: (
       if (e.altKey) mods.push('Alt')
       if (e.shiftKey) mods.push('Shift')
       if (e.metaKey) mods.push('Super')
-      if (mods.length === 0) {
-        setListening(false) // 无修饰键的组合不收,防误占普通按键
+      if (mods.length === 0 && !/^F([1-9]|1[0-2])$/.test(e.key)) {
+        setListening(false)
+        setHint('需搭配 Ctrl/Alt/Shift;单键仅支持 F1~F12')
+        window.clearTimeout(hintTimer.current)
+        hintTimer.current = window.setTimeout(() => setHint(''), 2500)
         return
       }
       const main = e.key.length === 1 ? e.key.toUpperCase() : e.key
-      onChange(`${mods.join('+')}+${main}`)
+      onChange(mods.length === 0 ? main : `${mods.join('+')}+${main}`)
       setListening(false)
     }
     // 捕获阶段拦下,避免 Escape 冒泡把设置面板关掉
@@ -337,8 +346,11 @@ export function HotkeyRecorder({ value, onChange }: { value: string; onChange: (
     return () => window.removeEventListener('keydown', onKey, true)
   }, [listening, onChange])
   return (
-    <button className="panel-btn" onClick={() => setListening(true)}>
-      {listening ? '按下组合键…(Esc 取消)' : value || '未设置'}
-    </button>
+    <>
+      <button className="panel-btn" onClick={() => { setHint(''); setListening(true) }}>
+        {listening ? '按下组合键…(Esc 取消)' : value || '未设置'}
+      </button>
+      {hint && <span className="hotkey-hint">{hint}</span>}
+    </>
   )
 }
