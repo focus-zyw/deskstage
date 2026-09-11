@@ -98,6 +98,8 @@ export interface AppConfig {
   showWatermark: boolean
   /** 截屏配置 */
   screenshot: ScreenshotConfig
+  /** 应用动作的全局快捷键 */
+  hotkeys: HotkeysConfig
   /** 使用者的兴趣爱好(逗号/顿号/换行分隔);空 = 不介入对话 */
   userInterests: string
   /** 网页版生成:开启后主演出(相声/日常段子)改经隐藏网页窗口由网页模型生成,
@@ -200,6 +202,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   ctrlBar: { xPct: 50, top: 10, collapsed: false },
   showWatermark: false,
   screenshot: { hotkey: 'Ctrl+Alt+A', enabled: true, hideSelf: true },
+  hotkeys: { generate: '', stop: '', replayRandom: '', toggleChars: '' },
   userInterests: '',
   userProfile: { userName: '', occupation: '', likes: '', dislikes: '', banTopics: '' },
   webchatEnabled: false,
@@ -355,6 +358,31 @@ function sanitizeScreenshot(v: unknown): ScreenshotConfig {
   }
 }
 
+/** 应用动作的全局快捷键(global-shortcut 格式,如 Ctrl+Alt+G);空串 = 未设置。
+ *  默认全空,不抢占任何系统按键;与截屏快捷键(screenshot.hotkey)独立演进 */
+export interface HotkeysConfig {
+  /** 生成:按分段选择器当前模式点播一段演出(live 模式不响应,防误开播) */
+  generate: string
+  /** 停止:结束当前演出或下播 */
+  stop: string
+  /** 随机回放一段历史(收藏加权) */
+  replayRandom: string
+  /** 隐藏/显示角色 */
+  toggleChars: string
+}
+
+/** 清洗应用动作快捷键:逐字段截断,非法值回空串(= 未设置,不生效) */
+function sanitizeHotkeys(v: unknown): HotkeysConfig {
+  const o = (v ?? {}) as Record<string, unknown>
+  const key = (x: unknown): string => (typeof x === 'string' ? x.trim().slice(0, 60) : '')
+  return {
+    generate: key(o.generate),
+    stop: key(o.stop),
+    replayRandom: key(o.replayRandom),
+    toggleChars: key(o.toggleChars),
+  }
+}
+
 function clampNum(v: unknown, lo: number, hi: number, fallback: number): number {
   const n = Number(v)
   return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : fallback
@@ -408,6 +436,7 @@ function sanitizeConfig(obj: unknown): AppConfig {
     ctrlBar: sanitizeCtrlBar(o.ctrlBar),
     showWatermark: o.showWatermark === true,
     screenshot: sanitizeScreenshot(o.screenshot),
+    hotkeys: sanitizeHotkeys(o.hotkeys),
     userInterests: typeof o.userInterests === 'string' ? o.userInterests.trim() : '',
     userProfile: sanitizeUserProfile(o.userProfile, typeof o.userInterests === 'string' ? o.userInterests : ''),
     webchatEnabled: o.webchatEnabled === true,

@@ -5,6 +5,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { CharacterSprite } from './stage/CharacterSprite'
 import { Bubble } from './stage/Bubble'
 import { startScreenshot, applyScreenshotHotkey } from './capture'
+import { applyAppHotkeys, setHotkeyHandler } from './hotkeys'
 import { setCharacterNames, setPersonaOverride } from './engine/persona'
 import { startEnvPolling } from './engine/envAware'
 import { setCaptureMode, initPointerManager, registerHitRegion, onHoverChange } from './input/pointerManager'
@@ -33,6 +34,7 @@ import type { Command } from './features/commands/commands'
 import {
   useRuntime,
   getCaps,
+  getRuntime,
   beginStreaming,
   beginCapture,
   endCapture,
@@ -180,6 +182,8 @@ function App() {
 
   // phase 的 ref 镜像:异步回调(LLM 返回)里判断此刻是否仍空闲
   const phaseRef = useRef(phase)
+  // mode 的 ref 镜像:全局快捷键(生成)读按键瞬间选中的分段,不依赖重渲染时机
+  const modeRef = useRef(mode)
 
   // 角色舞台布局:拖动/缩放/落盘/距离演出(呈现与戳一戳回调注入)
   const {
@@ -236,6 +240,35 @@ function App() {
     phaseRef.current = phase
   }, [phase])
 
+  // mode 的 ref 镜像同步
+  useEffect(() => {
+    modeRef.current = mode
+  }, [mode])
+
+  // 全局快捷键动作:向 hotkeys 模块登记处理器。每次渲染重登记(Map.set 幂等),
+  // 让处理器永远持有最新闭包(director.play 会读当轮 deps,如手动锁定的主题);
+  // 守卫本身读 getCaps()/getRuntime() 的按键瞬间状态,不依赖渲染时机
+  useEffect(() => {
+    setHotkeyHandler('generate', () => {
+      const m = modeRef.current
+      // live 模式不响应生成键:全局快捷键无差别触发,误开播比不响应更糟
+      if (m === 'live') return
+      if (!getCaps().canStartPerformance) return
+      performNow(m)
+    })
+    setHotkeyHandler('stop', () => {
+      if (!getCaps().idle) director.stop()
+    })
+    setHotkeyHandler('replayRandom', () => {
+      const caps = getCaps()
+      if (!caps.canStartPerformance || !caps.proactiveAllowed) return
+      void director.autoReplay()
+    })
+    setHotkeyHandler('toggleChars', () => {
+      setCharsHidden(!getRuntime().charHidden)
+    })
+  })
+
   // 截屏流程:capture-start 进入框选模式(主窗恢复交互,CaptureOverlay 铺满冻结图),
   // 失败反馈(capture.ts 内部 catch 后 emit 过来)走气泡
   const [captureShot, setCaptureShot] = useState<string | null>(null)
@@ -251,9 +284,14 @@ function App() {
       endCapture() // 冻结屏没拿到也恢复底下状态
       presenterSay('A', `截图失败:${String(payload).slice(0, 50)}`, { ms: 5000 })
     })
+    // 应用动作快捷键注册失败(组合键被其他程序占用等):气泡告知,不然用户按了没反应无从排查
+    const hotkeyErr = listen<{ action: string; shortcut: string }>('hotkey-error', ({ payload }) => {
+      presenterSay('A', `快捷键 ${payload.shortcut} 没绑上,可能被其他程序占用了`, { ms: 5000 })
+    })
     return () => {
       void start.then((f) => f())
       void fail.then((f) => f())
+      void hotkeyErr.then((f) => f())
     }
     // 挂载一次的全局监听;回调里只依赖模块函数与呈现器稳定闭包
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -447,6 +485,8 @@ function App() {
       // 截屏:应用全局快捷键 + 按配置把本窗口从系统级屏幕捕获中排除
       void applyScreenshotHotkey()
       void invoke('set_capture_excluded', { enable: c.screenshot.hideSelf }).catch(() => {})
+      // 应用动作快捷键(生成/停止/随机回放/隐藏角色):配置驱动的全局注册
+      void applyAppHotkeys()
       // 用户自定义角色名:先应用(名牌与台词称呼)
       setCharacterNames(c.names.a, c.names.b, c.names.c)
       // 用户自定义人设:先应用,后续所有生成即采纳

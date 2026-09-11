@@ -1,10 +1,11 @@
-// 工具与隐私:截屏快捷键/录屏排除、网页版生成实验、隐私说明。
+// 工具与隐私:录屏排除、网页版生成实验、隐私说明。
+// 截屏快捷键的设置已挪到「快捷键」分页统一管理;本页只留捕获排除开关。
 // 网页版生成的窗口/状态轮询是本页私有的临时会话,挂载期间存活、切走即止。
 import { useEffect, useRef, useState } from 'react'
 import { WEBCHAT_SITES, webchatLogin, webchatProbe, webchatRestoreMain } from '../../engine/webchat'
 import type { AppConfig } from '../../storage/configStore'
 import { useSettings } from '../useSettingsSession'
-import { HotkeyRecorder, SettingsCard, SetField, SetLine, SetSwitch } from '../SettingsPrimitives'
+import { SettingsCard, SetField, SetLine, SetSwitch } from '../SettingsPrimitives'
 
 export function PrivacySettings() {
   const { form, setForm, saveField, flashCard } = useSettings()
@@ -72,27 +73,6 @@ export function PrivacySettings() {
   return (
     <>
       <SettingsCard card="截屏" flash={flashCard} title="截屏">
-        <SetLine title="全局截屏快捷键" hint="框选一块区域,截图复制到剪贴板">
-          <div className="shot-key-row">
-            <SetSwitch
-              checked={form.screenshot.enabled}
-              label="启用全局截屏快捷键"
-              onChange={(v) => {
-                const next = { ...form.screenshot, enabled: v }
-                setForm({ ...form, screenshot: next })
-                saveField({ screenshot: next }, true)
-              }}
-            />
-            <HotkeyRecorder
-              value={form.screenshot.hotkey}
-              onChange={(hotkey) => {
-                const next = { ...form.screenshot, hotkey }
-                setForm({ ...form, screenshot: next })
-                saveField({ screenshot: next }, true)
-              }}
-            />
-          </div>
-        </SetLine>
         <SetLine title="截屏/录屏时排除角色" hint="角色不进任何截图与录屏(Win10 2004+)">
           <SetSwitch
             checked={form.screenshot.hideSelf}

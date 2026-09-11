@@ -8,6 +8,7 @@ export type SettingsTab =
   | 'persona'
   | 'voice'
   | 'live'
+  | 'hotkeys'
   | 'privacy'
   | 'memory'
   | 'memo'
@@ -85,6 +86,20 @@ export const SETTINGS_NAV: { group: string; items: { id: SettingsTab; label: str
         ),
       },
       {
+        id: 'hotkeys',
+        label: '快捷键',
+        icon: (
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="2" y="5" width="20" height="14" rx="2" />
+            <line x1="6" y1="9" x2="6" y2="9" />
+            <line x1="10" y1="9" x2="10" y2="9" />
+            <line x1="14" y1="9" x2="14" y2="9" />
+            <line x1="18" y1="9" x2="18" y2="9" />
+            <line x1="7" y1="15" x2="17" y2="15" />
+          </svg>
+        ),
+      },
+      {
         id: 'privacy',
         label: '工具与隐私',
         icon: (
@@ -138,6 +153,7 @@ export const TAB_GROUP: Record<SettingsTab, string> = {
   persona: '偏好设置',
   voice: '偏好设置',
   live: '偏好设置',
+  hotkeys: '偏好设置',
   privacy: '偏好设置',
   memory: '数据管理',
   memo: '数据管理',
@@ -192,8 +208,13 @@ export const SETTINGS_SEARCH_INDEX: { tab: SettingsTab; card: string; label: str
   { tab: 'live', card: '直播间', label: '直播间号', keywords: '房间号 开播 弹幕' },
   { tab: 'live', card: 'B站登录', label: 'B站 Cookie', keywords: 'sessdata 登录 凭证 舰长 打码' },
   { tab: 'live', card: 'B站登录', label: '扫码登录B站', keywords: '二维码 扫码 登录' },
+  // 快捷键
+  { tab: 'hotkeys', card: '演出控制', label: '生成快捷键', keywords: '快捷键 热键 生成 点播 播放 演出' },
+  { tab: 'hotkeys', card: '演出控制', label: '停止快捷键', keywords: '快捷键 热键 停止 停下 打断' },
+  { tab: 'hotkeys', card: '演出控制', label: '随机播放历史快捷键', keywords: '快捷键 热键 随机 回放 历史 重播' },
+  { tab: 'hotkeys', card: '演出控制', label: '隐藏角色快捷键', keywords: '快捷键 热键 隐藏 显示 角色 立绘' },
+  { tab: 'hotkeys', card: '截屏', label: '全局截屏快捷键', keywords: '截图 快捷键 热键 框选' },
   // 工具与隐私
-  { tab: 'privacy', card: '截屏', label: '全局截屏快捷键', keywords: '截图 快捷键 热键 框选' },
   { tab: 'privacy', card: '截屏', label: '截屏/录屏时排除角色', keywords: '隐私 排除 录屏 隐藏' },
   { tab: 'privacy', card: '网页版生成', label: '主演出改用网页模型生成', keywords: '实验 网页 deepseek 豆包' },
   { tab: 'privacy', card: '网页版生成', label: '网页模型站点', keywords: 'deepseek 豆包 站点' },

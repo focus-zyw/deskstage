@@ -13,6 +13,7 @@ import {
 import { defaultPersonaText, setCharacterNames, setPersonaOverride } from '../engine/persona'
 import { startEnvPolling, stopEnvPolling } from '../engine/envAware'
 import { applyScreenshotHotkey } from '../capture'
+import { applyAppHotkeys } from '../hotkeys'
 import { invoke } from '@tauri-apps/api/core'
 import { listCustomVoices, type ClonedVoice } from '../engine/tts'
 import type { VoiceConfig } from '../storage/configStore'
@@ -142,6 +143,7 @@ export function useSettingsSession(): SettingsSessionState {
     try {
       const next = await saveConfig(partial)
       void applyScreenshotHotkey() // 快捷键按新配置换绑
+      void applyAppHotkeys() // 演出动作快捷键同理换绑
       void invoke('set_capture_excluded', { enable: next.screenshot.hideSelf }).catch(() => {})
       if (next.envSense) startEnvPolling()
       else stopEnvPolling()

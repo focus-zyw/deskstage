@@ -1077,6 +1077,10 @@
   line-height: 1.6;
   color: var(--sw-text-3);
 }
+/* 快捷键组合冲突提示:沿用设置窗告警色 */
+.set-note.hotkey-conflict {
+  color: var(--sw-err);
+}
 .set-control {
   display: flex;
   align-items: center;

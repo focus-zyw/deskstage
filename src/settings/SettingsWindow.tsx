@@ -13,6 +13,7 @@ import { ModelSettings } from './tabs/ModelSettings'
 import { PersonaSettings } from './tabs/PersonaSettings'
 import { VoiceSettings } from './tabs/VoiceSettings'
 import { LiveSettings } from './tabs/LiveSettings'
+import { HotkeysSettings } from './tabs/HotkeysSettings'
 import { PrivacySettings } from './tabs/PrivacySettings'
 import { MemorySettings } from './tabs/MemorySettings'
 import { MemoSettings } from './tabs/MemoSettings'
@@ -35,6 +36,7 @@ const TAB_CONTENT: Record<SettingsTab, () => React.JSX.Element> = {
   persona: PersonaSettings,
   voice: VoiceSettings,
   live: LiveSettings,
+  hotkeys: HotkeysSettings,
   privacy: PrivacySettings,
   memory: MemorySettings,
   memo: MemoSettings,
