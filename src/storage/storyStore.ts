@@ -9,6 +9,7 @@ import { appDataDir, join } from '@tauri-apps/api/path'
 import { withFileLock } from './writeLock'
 import { inTauri } from './configStore'
 import { migrateStoryData } from './storyMigration'
+import { nameOf } from '../engine/persona'
 import type { MoodEventCandidate } from '../engine/moodState'
 
 export interface StoryGag {
@@ -294,7 +295,11 @@ export function validateStoryText(kind: StoryTextKind, text: string): string | n
   const t = text.trim()
   if (t.length < min) return `太短(至少${min}字)`
   if (t.length > max) return `太长(至多${max}字)`
-  if ((kind === 'gag' || kind === 'thread') && !/甲|乙|丙/.test(t)) return '缺少甲/乙/丙主体'
+  if (kind === 'gag' || kind === 'thread') {
+    // 主体:甲/乙/丙或当前配置名(旧库条目是甲乙丙,新条目按配置名入库)
+    const subjects = ['甲', '乙', '丙', nameOf('A'), nameOf('B'), nameOf('C')]
+    if (!subjects.some((s) => t.includes(s))) return '缺少角色主体(甲/乙/丙或其配置名)'
+  }
   return null
 }
 

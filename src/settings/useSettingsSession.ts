@@ -10,7 +10,7 @@ import {
   saveConfig,
   type AppConfig,
 } from '../storage/configStore'
-import { defaultPersonaText, setCharacterNames, setPersonaOverride } from '../engine/persona'
+import { defaultPersonaText, setCharacterGenders, setCharacterNames, setPersonaOverride } from '../engine/persona'
 import { startEnvPolling, stopEnvPolling } from '../engine/envAware'
 import { applyScreenshotHotkey } from '../capture'
 import { applyAppHotkeys } from '../hotkeys'
@@ -149,6 +149,7 @@ export function useSettingsSession(): SettingsSessionState {
       else stopEnvPolling()
       if (partial.persona) setPersonaOverride(partial.persona.a, partial.persona.b, partial.persona.c) // 新人设立即采纳
       if (partial.names) setCharacterNames(partial.names.a, partial.names.b, partial.names.c)
+      if (partial.genders) setCharacterGenders(partial.genders.a, partial.genders.b, partial.genders.c) // 性别纪律立即采纳
       setSavedTick(Date.now())
       window.setTimeout(() => setSavedTick(0), 2500)
     } catch (e) {

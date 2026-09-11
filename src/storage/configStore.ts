@@ -96,6 +96,8 @@ export interface AppConfig {
   theme: 'dark' | 'light'
   /** 观众抉择点出现概率:每集演出掷骰 0~1;0 = 不出抉择点(默认 0.3) */
   choiceChance: number
+  /** 角色性别:代词/称呼纪律的事实源(默认对齐出厂音色 A=女 B=男 C=女);建议与音色性别一致 */
+  genders: { a: '女' | '男'; b: '女' | '男'; c: '女' | '男' }
   /** 控制栏位置(可拖动) */
   ctrlBar: CtrlBarPos
   /** 左上角水印开关 */
@@ -186,9 +188,9 @@ export const DEFAULT_CONFIG: AppConfig = {
     apiKey: '',
     minimax: { apiKey: '', groupId: '', model: 'speech-2.8-turbo' },
     assignments: {
-      // 女声·轻快 → 便利店店员 / 男声·沉稳 → 程序员 / 场外客串(房东/快递员等画外音)
-      siliconflow: { A: 'bella', B: 'alex', C: 'david' },
-      minimax: { A: 'female-shaonv', B: 'male-qn-qingse', C: 'male-qn-jingying' },
+      // 女声·轻快 → 便利店店员 / 男声·沉稳 → 程序员 / 女声 → 桌面小管家团宠(C 人设为女,音色性别对齐)
+      siliconflow: { A: 'bella', B: 'alex', C: 'anna' },
+      minimax: { A: 'female-shaonv', B: 'male-qn-qingse', C: 'female-tianmei' },
       local: { A: '', B: '', C: '' },
     },
     emotionHints: true,
@@ -205,6 +207,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   topicOverride: null,
   theme: 'dark',
   choiceChance: 0.3,
+  genders: { a: '女', b: '男', c: '女' },
   ctrlBar: { xPct: 50, top: 10, collapsed: false },
   showWatermark: false,
   screenshot: { hotkey: 'Ctrl+Alt+A', enabled: true, hideSelf: true },
@@ -443,6 +446,11 @@ function sanitizeConfig(obj: unknown): AppConfig {
     ctrlBar: sanitizeCtrlBar(o.ctrlBar),
     showWatermark: o.showWatermark === true,
     choiceChance: clampNum(o.choiceChance, 0, 1, DEFAULT_CONFIG.choiceChance),
+    genders: ((): { a: '女' | '男'; b: '女' | '男'; c: '女' | '男' } => {
+      const g = (v: unknown, dft: '女' | '男'): '女' | '男' => (v === '男' || v === '女' ? v : dft)
+      const gd = (o.genders ?? {}) as Record<string, unknown>
+      return { a: g(gd.a, '女'), b: g(gd.b, '男'), c: g(gd.c, '女') }
+    })(),
     screenshot: sanitizeScreenshot(o.screenshot),
     hotkeys: sanitizeHotkeys(o.hotkeys),
     userInterests: typeof o.userInterests === 'string' ? o.userInterests.trim() : '',

@@ -1,5 +1,6 @@
 // 互动反应文案库:戳/拖拽的本地即时反应(不经 LLM,保手感)。
 // 文案按角色人设区分:甲=夸张甩锅+好家伙口头禅;乙=面瘫短句+反问。
+import { nameOf } from './persona'
 
 export const POKE_INTERRUPT = {
   A: [
@@ -170,6 +171,6 @@ export function distanceBands(height: number) {
 
 /** 注入下一集的账本文案(次数由调用方填);丙被戳才提丙 */
 export function recapText(pokeA: number, pokeB: number, drags: number, pokeC = 0): string {
-  const cPart = pokeC > 0 ? `,连小管家都被戳了 ${pokeC} 回` : ''
-  return `上集演出时,观众没少捣乱——戳了甲 ${pokeA} 次、戳了乙 ${pokeB} 次${cPart},还把你们拖近又拽远 ${drags} 次。开场先让两人抱怨一下"观众今天特别欠",再自然进入正题。`
+  const cPart = pokeC > 0 ? `,连${nameOf('C')}都被戳了 ${pokeC} 回` : ''
+  return `上集演出时,观众没少捣乱——戳了${nameOf('A')} ${pokeA} 次、戳了${nameOf('B')} ${pokeB} 次${cPart},还把你们拖近又拽远 ${drags} 次。开场先让两人抱怨一下"观众今天特别欠",再自然进入正题。`
 }

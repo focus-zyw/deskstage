@@ -19,7 +19,7 @@ import {
 import { peekRecap, takeRecap } from '../storage/interactionStore'
 import { pickRelationship } from '../performer/modes/relationships'
 import { currentTimeSlot } from './timeAware'
-import { duoShortPersona, nameOf, soloShortPersona } from './persona'
+import { duoShortPersona, nameOf, namingDiscipline, pronounOf, soloShortPersona } from './persona'
 import { moodHintLine, moodPromptBlock, type MoodEventCandidate } from './moodState'
 import { getMoods } from '../storage/moodStore'
 import { evaluateChoiceAsk } from '../dialogue/choiceGate'
@@ -257,7 +257,7 @@ export async function repairPerformanceScript(
   const messages = [
     {
       role: 'system',
-      content: `修复桌面双人情景剧剧本的结构缺陷。只修复"结构缺陷"清单里列出的问题,不改其他台词的措辞、人设口吻与剧情走向;保持原有 speaker 交替与场景卡。只输出一个 JSON 对象,协议与生成一致:{"card":{...},"dialog":[{"speaker":"A","text":"...","action":"...","target":"B","beatId":"节拍"},...]}(choice 行与 branch 字段规则同生成;分支每句都要带 branch)。`,
+      content: `修复桌面双人情景剧剧本的结构缺陷。只修复"结构缺陷"清单里列出的问题,不改其他台词的措辞、人设口吻与剧情走向;保持原有 speaker 交替与场景卡。只输出一个 JSON 对象,协议与生成一致:{"card":{...},"dialog":[{"speaker":"A","text":"...","action":"...","target":"B","beatId":"节拍"},...]}(choice 行与 branch 字段规则同生成;分支每句都要带 branch)。\n${namingDiscipline()}`,
     },
     {
       role: 'user',
@@ -564,7 +564,7 @@ export async function generateLiveReply(
   const messages: { role: string; content: string }[] = [
     {
       role: 'system',
-      content: `桌面情景剧正在"直播读弹幕"。两位主角:${duoShortPersona()}。常驻第三角色:${soloShortPersona('C')}(speaker "C",话少,弹幕没点名她就不抢话)。${liveMoodLine ? `${liveMoodLine}。` : ''}${p.userName ? `主播(用户)叫"${p.userName}",角色偶尔可以提到TA。` : ''}下面是最新一批直播间弹幕。挑一条最值得回的(优先问角色的、有趣的、能接梗的;刷屏/无意义/人身攻击的直接不回),由甲/乙/丙中的一位用各自口吻回一句——弹幕点名了丙(@${nameOf('C')}/C)就由丙回答,否则优先甲乙,丙只在内容确实与她的小管家职责相关时才接。要求:15~40字,口语化像真说话;语气跟各自人设走,优先友好捧场和接梗,偶尔斗嘴点缀即可,别句句抬杠;不要复读弹幕原文。
+      content: `桌面情景剧正在"直播读弹幕"。两位主角:${duoShortPersona()}。常驻第三角色:${soloShortPersona('C')}(speaker "C",话少,弹幕没点名${pronounOf('C')}就不抢话)。${liveMoodLine ? `${liveMoodLine}。` : ''}${p.userName ? `主播(用户)叫"${p.userName}",角色偶尔可以提到TA。` : ''}下面是最新一批直播间弹幕。挑一条最值得回的(优先问角色的、有趣的、能接梗的;刷屏/无意义/人身攻击的直接不回),由三人中的一位用各自口吻回一句——弹幕点名了${nameOf('C')}(@${nameOf('C')}/C)就由${nameOf('C')}回答,否则优先${nameOf('A')}和${nameOf('B')},${nameOf('C')}只在内容确实与${pronounOf('C')}的小管家职责相关时才接。要求:15~40字,口语化像真说话,称呼遵守上面的称呼与性别纪律;语气跟各自人设走,优先友好捧场和接梗,偶尔斗嘴点缀即可,别句句抬杠;不要复读弹幕原文。
 ${p.banTopics ? `雷区(绝对不聊):${p.banTopics}。` : ''}
 只输出一个 JSON 对象:{"pick":<弹幕序号>,"reply":"<回复,不回则空串>","speaker":"A"或"B"或"C","action":"<动作词>"}
 action 只能是这些词之一:${[...VALID_ACTIONS].join('|')}。${bits.length ? `\n关于观众:${bits.join(';')}。` : ''}${recentReplies.length ? `\n最近已说过(不要重复,保持话题推进):${recentReplies.join(' / ')}` : ''}`,
@@ -741,7 +741,7 @@ export async function distillStory(
 
 对照刚播出的台词,只输出一个 JSON 对象:
 {"newGags":[{"text":"...","evidence":["..."],"assertion":"established","sameAsId":null}],"newThreads":[同结构],"resolvedThreadIds":[],"reusedGagIds":[],"relationshipEvent":null,"arcAdvance":null,"newArc":null,"mood":[]}
-- newGags 每集最多 1 条:只收"脱离台词也能反复回收"的固定笑点,自包含、以甲/乙/丙为主语(丙的呆萌名场面尤其值得收)、8~40字;一次性的普通包袱不要报。newThreads 最多 2 条(还没了结的具体事情)
+- newGags 每集最多 1 条:只收"脱离台词也能反复回收"的固定笑点,自包含、以${nameOf('A')}/${nameOf('B')}/${nameOf('C')}为主语(${nameOf('C')}的呆萌名场面尤其值得收)、8~40字;一次性的普通包袱不要报。newThreads 最多 2 条(还没了结的具体事情)
 - evidence 必须逐字摘自台词(每段6~30字,最多2段);拿不出原句证据的候选不要报
 - assertion 只能是 established(台词确认的事实)/boast(甲吹牛)/excuse(甲找借口甩锅);text 要自带"自称/号称/甩锅/嘴硬"等语气,不得把吹牛、甩锅、反问写成事实;反问、疑问、猜测一律不要报
 - 同一个梗只是换了说法时报 sameAsId 为库存编号,并把 text 改写成更自包含的规范表述;本集确实回收了库存老梗则填 reusedGagIds

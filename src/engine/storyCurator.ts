@@ -5,6 +5,7 @@
 // 再出现"同场景重复入库/反问变成事实/临时甩锅成设定"这类问题,只需要修这一个模块。
 
 import type { DialogLine } from '../performer/dialogSchema'
+import { nameOf } from './persona'
 import { distillStory, transcriptOf } from './llmClient'
 import { applyMoodDeltas } from '../storage/moodStore'
 import type { MoodDelta } from './moodState'
@@ -56,9 +57,13 @@ const MIN_EVIDENCE_CHARS = 4
 const MODAL_MARKER = /自称|号称|甩锅|辩称|嘴硬|硬说|吹牛|瞎说|谎称/
 
 const withModality = (text: string): string => {
+  // 主语按当前配置名识别(蒸馏 prompt 已要求用配置名);旧素材的甲/乙开头兼容
+  if (text.startsWith(nameOf('A'))) return `${nameOf('A')}自称${text.slice(nameOf('A').length)}`
+  if (text.startsWith(nameOf('B'))) return `${nameOf('B')}自称${text.slice(nameOf('B').length)}`
+  if (text.startsWith(nameOf('C'))) return `${nameOf('C')}自称${text.slice(nameOf('C').length)}`
   if (text.startsWith('甲')) return `甲自称${text.slice(1)}`
   if (text.startsWith('乙')) return `乙自称${text.slice(1)}`
-  return `甲自称${text}`
+  return `${nameOf('A')}自称${text}`
 }
 
 /** 整理一集台词:只接受有台词证据、断言成立、可脱离台词复用的素材入库 */

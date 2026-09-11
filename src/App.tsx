@@ -6,7 +6,7 @@ import { CharacterSprite } from './stage/CharacterSprite'
 import { Bubble } from './stage/Bubble'
 import { startScreenshot, applyScreenshotHotkey } from './capture'
 import { applyAppHotkeys, setHotkeyHandler } from './hotkeys'
-import { setCharacterNames, setPersonaOverride } from './engine/persona'
+import { setCharacterGenders, setCharacterNames, setPersonaOverride, nameOf, pronounOf } from './engine/persona'
 import { startEnvPolling } from './engine/envAware'
 import { setCaptureMode, initPointerManager, registerHitRegion, onHoverChange } from './input/pointerManager'
 import { CaptureOverlay } from './CaptureOverlay'
@@ -95,32 +95,36 @@ const ANGRY_LINES = [
   '（拍开你的手）烦不烦！',
   '再戳一下试试？信不信我下线！',
 ]
-/** C(团宠)专属戳反应池:小管家的字面认真语气,与甲乙的互怼语气区分开 */
-const C_POKE_LINES = [
-  '（掏出小本本）此人今日戳丙一次',
-  '哼，丙可生气了（并没有）',
+/** C(团宠)专属戳反应池:小管家的字面认真语气,与甲乙的互怼语气区分开。
+ *  函数化:取用时填当前配置名(模块加载早于 setCharacterNames) */
+const cPokeLines = () => [
+  `（掏出小本本）此人今日戳${nameOf('C')}一次`,
+  `哼，${nameOf('C')}可生气了（并没有）`,
   '（歪头）你的手…是在打招呼吗？',
-  '（认真脸）再戳丙就要预约了',
+  `（认真脸）再戳${nameOf('C')}就要预约了`,
   '（被戳得晃了晃）哇啊——',
 ]
-const C_SHY_LINES = [
-  '（鼓脸）再、再戳丙就把家务全做完了！',
+const cShyLines = () => [
+  `（鼓脸）再、再戳${nameOf('C')}就把家务全做完了！`,
   '（往后缩）你们两个都笑话我…',
   '呜…（小声）其实也没有不开心…',
 ]
-const C_ANGRY_LINES = [
-  '（傲娇鼓脸）哼！丙真的生气了！这次是真的！',
-  '（叉腰）再戳就把甲乙的零食全部收缴！',
+const cAngryLines = () => [
+  `（傲娇鼓脸）哼！${nameOf('C')}真的生气了！这次是真的！`,
+  `（叉腰）再戳就把${nameOf('A')}${nameOf('B')}的零食全部收缴！`,
   '（转身背对，肩膀微微在抖）不理你们了！',
 ]
 /** 戳团宠时另一角色起哄的概率:三人舞台感(甲乙是"同伙") */
 const TEASE_HYPE_CHANCE = 0.3
-const TEASE_HYPE_LINES = [
-  '哈哈，她又把小本本掏出来了',
-  '别逗了，她连生气都是圆的',
-  '（憋笑）你继续，我就看看',
-  '哎哎，团宠被你戳蔫了，赔！',
-]
+const teaseHypeLines = () => {
+  const t = pronounOf('C')
+  return [
+    `哈哈，${t}又把小本本掏出来了`,
+    `别逗了，${t}连生气都是圆的`,
+    '（憋笑）你继续，我就看看',
+    '哎哎，团宠被你戳蔫了，赔！',
+  ]
+}
 /** 连戳计数窗口与阈值 */
 const POKE_WINDOW_MS = 60_000
 const SHY_AT = 2 // 窗口内第 2~4 次戳 → 害羞
@@ -562,6 +566,8 @@ function App() {
       void applyAppHotkeys()
       // 用户自定义角色名:先应用(名牌与台词称呼)
       setCharacterNames(c.names.a, c.names.b, c.names.c)
+      // 用户自定义角色性别:代词/称呼纪律的事实源
+      setCharacterGenders(c.genders.a, c.genders.b, c.genders.c)
       // 用户自定义人设:先应用,后续所有生成即采纳
       setPersonaOverride(c.persona.a, c.persona.b, c.persona.c)
       // 环境感知:按配置低频轮询本机状态(电量/前台应用分类等)
@@ -914,7 +920,7 @@ function App() {
     const count = arr.length + 1
     // 丙走团宠专属池,甲乙保持互怼语气池
     const pools = who === 'C'
-      ? { poke: C_POKE_LINES, shy: C_SHY_LINES, angry: C_ANGRY_LINES }
+      ? { poke: cPokeLines(), shy: cShyLines(), angry: cAngryLines() }
       : { poke: POKE_LINES, shy: SHY_LINES, angry: ANGRY_LINES }
     if (count >= ANGRY_AT) {
       arr.push(now)
@@ -964,7 +970,7 @@ function App() {
     const other: Speaker = Math.random() < 0.5 ? 'A' : 'B'
     window.setTimeout(() => {
       if (phaseRef.current !== 'idle' || director.isPlaying()) return
-      showPoke(other, TEASE_HYPE_LINES[Math.floor(Math.random() * TEASE_HYPE_LINES.length)], 'laugh', 2000)
+      showPoke(other, teaseHypeLines()[Math.floor(Math.random() * teaseHypeLines().length)], 'laugh', 2000)
     }, 1100)
   }
 

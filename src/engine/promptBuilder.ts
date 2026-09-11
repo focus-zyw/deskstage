@@ -2,7 +2,7 @@ import type { DialogLine } from '../performer/player'
 import { modeOf, type Mode } from '../performer/modes'
 import type { Relationship } from '../performer/modes/relationships'
 import { currentTimeSlot } from './timeAware'
-import { fullPersona, nameOf } from './persona'
+import { fullPersona, nameOf, pronounOf } from './persona'
 import type { UserProfile } from '../storage/configStore'
 
 const ACTIONS = 'idle, talk, happy, laugh, shy, sleepy, wave, thinking, angry, sad, surprise, shake, jump'
@@ -115,7 +115,7 @@ ${moodNote.trim()}` : ''
     : ''
 
   const relCtx = relationship
-    ? `\n\n本集关系状态（必须遵守,写进场景卡的 relationship 字段）：${relationship.label}——${relationship.desc}。关系只改变本集攻守,甲乙的基础性格与说话风格不变。`
+    ? `\n\n本集关系状态（必须遵守,写进场景卡的 relationship 字段）：${relationship.label}——${relationship.desc}。关系只改变本集攻守,${nameOf('A')}和${nameOf('B')}的基础性格与说话风格不变。`
     : ''
 
   // 连续剧情节拍:本集是多集剧情线的一拍,话题让位,结尾留下一拍的钩子
@@ -124,18 +124,19 @@ ${moodNote.trim()}` : ''
     : ''
 
   // 丙的角色分工:C 是两人都宠着都爱逗的团宠,喜剧引擎是"甲乙逗她→她认真接招→偶尔字面反击"。
-  // 相声模式限制 0~2 句保住逗哏-捧哏结构;其余模式 1~4 句正式参与
+  // 相声模式限制 0~2 句保住逗哏-捧哏结构;其余模式 1~4 句正式参与。
+  // 措辞用配置名;句中"甲/乙/丙"等结构性称呼由称呼纪律块统一映射
   const cRule =
     mode === 'crosstalk'
       ? `
 
-丙的角色分工（必须遵守）:丙(小管家)是甲乙都宠着都爱逗的桌面团宠,但本场只占 0~2 句;甲乙拿丙垫梗(甲离谱地使唤她、乙一本正经地点评她的呆),丙用字面执行制造实体包袱;逗而不恶意,像逗自家小妹。甲乙仍是逗哏-捧哏主轴,丙不进入正活的结构编排。`
+丙的角色分工（必须遵守）:${nameOf('C')}(小管家)是${nameOf('A')}${nameOf('B')}都宠着都爱逗的桌面团宠,但本场只占 0~2 句;${nameOf('A')}${nameOf('B')}拿${nameOf('C')}垫梗(${nameOf('A')}离谱地使唤${pronounOf('C')}、${nameOf('B')}一本正经地点评${pronounOf('C')}的呆),${nameOf('C')}用字面执行制造实体包袱;逗而不恶意,像逗自家小孩。${nameOf('A')}${nameOf('B')}仍是逗哏-捧哏主轴,${nameOf('C')}不进入正活的结构编排。`
       : `
 
-丙的角色分工（必须遵守）:丙(小管家)是甲乙都宠着都爱逗的桌面团宠,不是电话或画外音。每段她只说 1~4 句,可以大量用 reactions 做无声反应;不得机械地 A→B→C 轮流说话。
-- 逗她有分工:甲爱用夸张的吹牛和离谱的请求逗她("丙,把我咖啡变成冰的"然后看着她往咖啡机里加冰),乙爱用毒舌反问和一本正经的胡说八道逗她——逗而不恶意,像逗自家小妹,不许刻薄嘲笑
-- 丙的应对分两路:大多数时候认真接招,字面理解直接执行,反差即萌点;中后段安排一次"字面反击"——把甲乙某句随口的话当真执行到底,让他们下不来台,这次反击可以就是本集的底包袱
-- 丙只在被逗能出梗、行动能改变局面或带来新信息时开口;最后一句优先由甲或乙收底,除非丙的反击本身就是底`
+丙的角色分工（必须遵守）:${nameOf('C')}(小管家)是${nameOf('A')}${nameOf('B')}都宠着都爱逗的桌面团宠,不是电话或画外音。每段${pronounOf('C')}只说 1~4 句,可以大量用 reactions 做无声反应;不得机械地 A→B→C 轮流说话。
+- 逗${pronounOf('C')}有分工:${nameOf('A')}爱用夸张的吹牛和离谱的请求逗${pronounOf('C')}("${nameOf('C')},把我咖啡变成冰的"然后看着${pronounOf('C')}往咖啡机里加冰),${nameOf('B')}爱用毒舌反问和一本正经的胡说八道逗${pronounOf('C')}——逗而不恶意,像逗自家小孩,不许刻薄嘲笑
+- ${nameOf('C')}的应对分两路:大多数时候认真接招,字面理解直接执行,反差即萌点;中后段安排一次"字面反击"——把${nameOf('A')}${nameOf('B')}某句随口的话当真执行到底,让他们下不来台,这次反击可以就是本集的底包袱
+- ${nameOf('C')}只在被逗能出梗、行动能改变局面或带来新信息时开口;最后一句优先由${nameOf('A')}或${nameOf('B')}收底,除非${nameOf('C')}的反击本身就是底`
 
   // 观众抉择点:由调用方掷骰决定(约 30% 的集数),中段安排一次站队,两分支各 3~5 句,结尾汇合同一包袱
   const choiceRule = allowChoice
@@ -148,10 +149,10 @@ ${moodNote.trim()}` : ''
 
   const protocol = `输出协议（严格遵守）：
 - 只输出一个 JSON 对象，不要输出任何其他文字
-- 先写场景卡再写台词，格式：{"card":{"relationship":"关系标签","scene":"具体场景一句话","goalA":"甲想要什么","goalB":"乙想要什么","roleC":"丙本集的行动职责(可选,不写丙就省略)","secret":"被隐瞒的关键信息(一方或双方知道)","escalation":["节拍1","节拍2","节拍3"],"callback":"结尾回收的本集铺垫"},"dialog":[{"speaker":"A","text":"台词","action":"动作","target":"B","beatId":"节拍1"},...]}
+- 先写场景卡再写台词，格式：{"card":{"relationship":"关系标签","scene":"具体场景一句话","goalA":"${nameOf('A')}想要什么","goalB":"${nameOf('B')}想要什么","roleC":"${nameOf('C')}本集的行动职责(可选,不写${nameOf('C')}就省略)","secret":"被隐瞒的关键信息(一方或双方知道)","escalation":["节拍1","节拍2","节拍3"],"callback":"结尾回收的本集铺垫"},"dialog":[{"speaker":"A","text":"台词","action":"动作","target":"B","beatId":"节拍1"},...]}
 - dialog 必须逐拍实现 card.escalation；secret 在结尾反转揭晓；callback 必须回收本集前面埋的线
 - 每句必填 "target"（这句对谁说："A"/"B"/"C"=指定听者；"audience"=对观众直说；"room"=对全场）和 "beatId"（这句话实现 card.escalation 的哪一拍,逐字引用该项；收底回收 callback 的句子标最后一拍）
-- speaker 只能是 "A"、"B" 或 "C"；甲乙承担主要语言冲突，丙按上面的角色分工参与
+- speaker 只能是 "A"、"B" 或 "C"；${nameOf('A')}和${nameOf('B')}承担主要语言冲突，${nameOf('C')}按上面的角色分工参与;台词文本里一律用角色真名,禁止出现"甲""乙""丙"(称呼与性别纪律见上)
 - action 只能是这些词之一（禁止用 card 的字段名或其他词）：${ACTIONS}
 - 一段共 14~22 句；三人同场但禁止机械轮流（尤其不许固定 A→B→C 循环）
 - 每句口语化，不超过 25 个字
