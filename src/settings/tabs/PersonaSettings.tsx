@@ -1,8 +1,56 @@
 // 角色人设:角色名字(名牌与台词称呼)、性别(代词事实源)与人设全文编辑
+import { useEffect, useState } from 'react'
 import { defaultPersonaText } from '../../engine/persona'
+import { quantizeMood, type MoodTable } from '../../engine/moodState'
+import { getMoods, resetMoods } from '../../storage/moodStore'
+import type { Speaker } from '../../performer/dialogSchema'
 import { useConfigSnapshot } from '../../storage/configStore'
 import { useSettings } from '../useSettingsSession'
 import { SettingsCard, SetField, SetLine } from '../SettingsPrimitives'
+
+/** 当前心情卡:展示三位角色的情绪余波(剧情蒸馏/被戳/掐断演出驱动),支持一键复位 */
+function MoodCard() {
+  const names = useConfigSnapshot().names
+  const [moods, setMoods] = useState<MoodTable | null>(null)
+  const [resetting, setResetting] = useState(false)
+  useEffect(() => {
+    void getMoods().then(setMoods)
+  }, [])
+
+  const moodText = (who: Speaker): string => {
+    const m = moods?.[who]
+    if (!m) return '读取中…'
+    const face = quantizeMood(m)
+    return face.id === 'calm' ? '情绪平稳' : `${face.label}${m.cause ? `——${m.cause}` : ''}`
+  }
+
+  async function reset() {
+    setResetting(true)
+    try {
+      await resetMoods()
+      setMoods(await getMoods())
+    } finally {
+      setResetting(false)
+    }
+  }
+
+  const slotName = (who: Speaker): string => names[who.toLowerCase() as 'a' | 'b' | 'c']
+  return (
+    <SettingsCard card="当前心情" title="当前心情" desc="角色现在的心情余波(只读)">
+      {(['A', 'B', 'C'] as const).map((who) => (
+        <SetLine key={who} title={slotName(who)} hint={who === 'C' ? '她的心情还会影响待机小动作' : undefined}>
+          <span className="set-note">{moodText(who)}</span>
+        </SetLine>
+      ))}
+      <div className="set-actions">
+        <span className="set-note">来源:剧情蒸馏/被戳/掐断演出;每隔几小时自动回落,隔夜归平静</span>
+        <button className="panel-btn" disabled={resetting} onClick={() => void reset()}>
+          复位心情
+        </button>
+      </div>
+    </SettingsCard>
+  )
+}
 
 export function PersonaSettings() {
   const { form, setForm, saveField, flashCard } = useSettings()
@@ -139,6 +187,7 @@ export function PersonaSettings() {
           </button>
         </div>
       </SettingsCard>
+      <MoodCard />
     </>
   )
 }

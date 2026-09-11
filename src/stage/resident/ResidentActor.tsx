@@ -10,17 +10,19 @@ import type { Ref } from 'react'
 import { Bubble } from '../Bubble'
 import { residentSrc } from './residentManifest'
 import {
-  AMBIENT_CLIPS,
   AMBIENT_HOLD_MS,
   AMBIENT_MAX_MS,
   AMBIENT_MIN_MS,
-  POKE_CLIPS,
   POKE_HOLD_MS,
   ROAM_PAUSE_MAX_MS,
   ROAM_PAUSE_MIN_MS,
+  ambientClipsForMood,
+  ambientIntervalScale,
+  pokeClipsForMood,
   resolveResidentClip,
   shouldFlip,
 } from './residentMachine'
+import { moodOf } from '../../storage/moodStore'
 import { nextRoamTarget, ROAM_SPEED_PCT_PER_SEC } from './residentMotion'
 import type { ResidentClipId } from './residentTypes'
 
@@ -216,16 +218,19 @@ export function ResidentActor({
 
   const canFrolic = active && !calm && !hidden
 
-  // 随机待机链:真空闲时每隔一段时间做一个小动作;任何打断(说话/拖拽/剧情)即停
+  // 随机待机链:真空闲时每隔一段时间做一个小动作;任何打断(说话/拖拽/剧情)即停。
+  // 情绪余波在每次调度时现读(C 的心情不好时不哼歌改敲桌面,蔫了间隔拉长);
+  // 情绪变化不重置节奏,下一拍自然采用新池
   useEffect(() => {
     if (!canFrolic || !idleLike) return
     let hold = 0
+    const scale = ambientIntervalScale(moodOf('C'))
     const timer = window.setTimeout(
       () => {
-        setAmbient(pickOf(AMBIENT_CLIPS))
+        setAmbient(pickOf(ambientClipsForMood(moodOf('C'))))
         hold = window.setTimeout(() => setAmbient(null), AMBIENT_HOLD_MS)
       },
-      AMBIENT_MIN_MS + Math.random() * (AMBIENT_MAX_MS - AMBIENT_MIN_MS),
+      (AMBIENT_MIN_MS + Math.random() * (AMBIENT_MAX_MS - AMBIENT_MIN_MS)) * scale,
     )
     return () => {
       window.clearTimeout(timer)
@@ -297,9 +302,9 @@ export function ResidentActor({
 
   useEffect(() => () => window.clearTimeout(pokeTimer.current), [])
 
-  /** 点击身体:反应动画(短持有,到期回待机)+ 外部戳一戳链路 */
+  /** 点击身体:反应动画(短持有,到期回待机)+ 外部戳一戳链路;反应池随 C 的心情走 */
   const handlePoke = () => {
-    setPokeClip(pickOf(POKE_CLIPS))
+    setPokeClip(pickOf(pokeClipsForMood(moodOf('C'))))
     window.clearTimeout(pokeTimer.current)
     pokeTimer.current = window.setTimeout(() => setPokeClip(null), POKE_HOLD_MS)
     onPoke?.()

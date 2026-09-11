@@ -3,6 +3,7 @@
 // "随机动画绝不能覆盖说话或剧情动作"由这里单一出口保证;
 // 说话中拖拽=显示拖拽动画,松手后 speaking 未变则自然落回说话——恢复不需要专门逻辑。
 import { isLoopingClip, nativeFacing, pickClip } from './residentManifest'
+import { quantizeMood, type Mood } from '../../engine/moodState'
 import type { ResidentClipId, ResidentPlayback } from './residentTypes'
 
 export interface ResidentIntents {
@@ -51,6 +52,33 @@ export const AMBIENT_HOLD_MS = 3200
 export const POKE_CLIPS: readonly ResidentClipId[] = ['happy', 'wave', 'startled', 'caught', 'tap']
 /** 点击回应持续时长(到期回待机) */
 export const POKE_HOLD_MS = 2800
+
+// ---------- 情绪余波偏置(纯函数,测试直接喂 Mood)----------
+// C 的心情(moodStore)不是只给文案:她的随机行为池也跟着变——
+// 闹情绪不哼歌改敲桌面、蔫了安静发呆、精神足多干点专注小事。平静时走默认池,零成本。
+
+/** 随机待机候选池:情绪不好时 hum(哼歌)收起来,换 tap(敲桌面闹情绪)/更安静的发呆 */
+export function ambientClipsForMood(mood: Mood): readonly ResidentClipId[] {
+  const face = quantizeMood(mood).id
+  if (face === 'angry') return ['turn', 'caught', 'tap']
+  if (face === 'sad' || face === 'sleepy') return ['turn', 'caught']
+  if (face === 'excited' || face === 'restless') return ['turn', 'caught', 'hum', 'focus']
+  return AMBIENT_CLIPS
+}
+
+/** 随机待机节奏倍率:蔫了/犯困懒得动,小动作间隔拉长 */
+export function ambientIntervalScale(mood: Mood): number {
+  const face = quantizeMood(mood).id
+  return face === 'sad' || face === 'sleepy' ? 1.5 : 1
+}
+
+/** 点击回应候选池:情绪不好时热情的 happy/wave 收起来,startled/caught/tap 占比自然升高 */
+export function pokeClipsForMood(mood: Mood): readonly ResidentClipId[] {
+  const face = quantizeMood(mood).id
+  if (face === 'angry' || face === 'sad') return ['startled', 'caught', 'tap']
+  if (face === 'sleepy') return ['wave', 'startled', 'tap']
+  return POKE_CLIPS
+}
 
 /** 漫游节奏:每隔一段空闲时间走一小趟 */
 export const ROAM_PAUSE_MIN_MS = 20_000
