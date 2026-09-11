@@ -323,7 +323,7 @@ export function ResidentActor({
       className={`resident${hot ? ' hot' : ''}${below ? ' below' : ''}`}
       style={width ? { width } : undefined}
     >
-      <Bubble text={bubble} speaker="C" below={below} loud={loud} />
+      <Bubble text={bubble} speaker="C" below={below} loud={loud} action={action} />
       <div className={`resident-stage${flip ? ' face-left' : ''}`}>
         {/* 初始透明度由 CSS 承担(0),前台切换经 DOM 直接改 style——
             若用 React style prop,重渲染会把 JS 设置的值重置回 0 造成黑帧 */}

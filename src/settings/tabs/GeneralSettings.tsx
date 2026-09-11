@@ -60,12 +60,12 @@ export function GeneralSettings() {
             ))}
           </div>
         </SetLine>
-        <SetLine title="气泡风格" hint="舞台台词气泡的外观;漫画=白底描边高对比,玻璃=深色半透明">
+        <SetLine title="气泡风格" hint="柔彩=角色主题浅色与同色描边;夜色玻璃=暗色桌面上的半透明版本">
           <div className="seg-group">
             {(
               [
-                ['comic', '漫画'],
-                ['glass', '深色玻璃'],
+                ['comic', '柔彩'],
+                ['glass', '夜色玻璃'],
               ] as const
             ).map(([v, label]) => (
               <button

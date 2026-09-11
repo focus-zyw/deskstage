@@ -8,29 +8,37 @@
   --radius-input: 8px;
   --radius-panel: 14px;
   --text-dim: rgba(255, 255, 255, 0.65);
-  /* 气泡主题:comic(默认,白底描边漫画风);glass 见 [data-bubble='glass'] 覆写 */
-  --bubble-bg: rgba(255, 255, 255, 0.97);
-  --bubble-tail-bg: rgba(255, 255, 255, 0.99);
-  --bubble-text: #1f2430;
-  --bubble-stroke: #2a3145;
-  --bubble-stroke-w: 2px;
+  /* 气泡主题:默认柔彩。每个角色用衣着邻近色区分,描边/阴影同色系而非黑色。 */
+  --bubble-bg: rgba(250, 247, 242, 0.93);
+  --bubble-text: #26232f;
+  --bubble-stroke: rgba(146, 136, 126, 0.42);
+  --bubble-stroke-w: 1px;
   --bubble-blur: none;
-  --bubble-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
-  --bubble-acc-a: #f57c3b;
-  --bubble-acc-b: #4f8df7;
-  --bubble-acc-c: #8b7ff4;
+  --bubble-acc-a: #e98050;
+  --bubble-acc-b: #5f86da;
+  --bubble-acc-c: #8572d8;
+  --bubble-bg-a: rgba(255, 244, 235, 0.93);
+  --bubble-bg-b: rgba(237, 245, 255, 0.93);
+  --bubble-bg-c: rgba(245, 240, 255, 0.93);
+  --bubble-stroke-a: rgba(221, 139, 98, 0.5);
+  --bubble-stroke-b: rgba(104, 143, 213, 0.5);
+  --bubble-stroke-c: rgba(137, 116, 210, 0.48);
 }
 :root[data-bubble='glass'] {
-  --bubble-bg: rgba(15, 21, 40, 0.78);
-  --bubble-tail-bg: rgba(15, 21, 40, 0.94);
+  --bubble-bg: rgba(27, 30, 47, 0.86);
   --bubble-text: #f2f4ff;
-  --bubble-stroke: rgba(133, 119, 244, 0.45);
+  --bubble-stroke: rgba(163, 153, 213, 0.42);
   --bubble-stroke-w: 1px;
-  --bubble-blur: blur(10px);
-  --bubble-shadow: 0 4px 18px rgba(0, 0, 0, 0.35);
+  --bubble-blur: blur(14px) saturate(1.18);
   --bubble-acc-a: #ffb066;
   --bubble-acc-b: #7db3ff;
   --bubble-acc-c: #a89bff;
+  --bubble-bg-a: rgba(48, 35, 40, 0.88);
+  --bubble-bg-b: rgba(27, 39, 64, 0.88);
+  --bubble-bg-c: rgba(43, 35, 67, 0.88);
+  --bubble-stroke-a: rgba(255, 176, 102, 0.42);
+  --bubble-stroke-b: rgba(125, 179, 255, 0.42);
+  --bubble-stroke-c: rgba(168, 155, 255, 0.42);
 }
 
 /* 舞台与角色样式（立绘精灵版） */
@@ -420,70 +428,128 @@
   opacity: 1;
 }
 
-/* 台词气泡:双主题(comic/glass,由 :root[data-bubble] 切换)+ 角色差异化
-   (顶部色条 + 行首名牌,speaker 经 data-speaker 注入) */
+/* 台词气泡:柔彩材质 + 独立角色名签。尾巴偏移与立绘朝向同源,不再固定居中。 */
 .bubble {
+  --bubble-surface: var(--bubble-bg);
+  --bubble-edge: var(--bubble-stroke);
+  --bubble-shadow-color: rgba(118, 109, 142, 0.2);
+  --bubble-tail-x: 50%;
+  --bubble-tail-rotation: 45deg;
   position: relative;
+  isolation: isolate;
   margin-bottom: 14px;
-  padding: 9px 14px 8px;
-  max-width: 300px;
-  background: var(--bubble-bg);
+  padding: 17px 17px 14px;
+  min-width: 148px;
+  max-width: min(320px, 72vw);
+  background-color: var(--bubble-surface);
+  background-image:
+    radial-gradient(circle at 18% -20%, rgba(255, 255, 255, 0.2), transparent 44%),
+    linear-gradient(145deg, rgba(255, 255, 255, 0.05), rgba(107, 94, 137, 0.035));
   color: var(--bubble-text);
-  border: var(--bubble-stroke-w) solid var(--bubble-stroke);
-  border-radius: 12px;
-  font-size: 15px;
-  line-height: 1.55;
+  border: var(--bubble-stroke-w) solid var(--bubble-edge);
+  border-radius: 18px 18px 18px 9px;
+  font-family: 'MiSans', 'HarmonyOS Sans SC', 'Microsoft YaHei UI', 'PingFang SC', sans-serif;
+  font-size: 16px;
+  font-weight: 650;
+  line-height: 1.58;
   overflow-wrap: anywhere;
+  text-wrap: pretty;
   backdrop-filter: var(--bubble-blur);
   -webkit-backdrop-filter: var(--bubble-blur);
-  box-shadow: var(--bubble-shadow);
+  box-shadow: 0 10px 28px var(--bubble-shadow-color);
   white-space: pre-wrap;
-  animation: bubble-in 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+  transform-origin: var(--bubble-tail-x) calc(100% + 7px);
+  animation: bubble-in 0.24s cubic-bezier(0.2, 1.45, 0.42, 1);
 }
-.bubble[data-speaker='A'] { --sp: var(--bubble-acc-a); }
-.bubble[data-speaker='B'] { --sp: var(--bubble-acc-b); }
-.bubble[data-speaker='C'] { --sp: var(--bubble-acc-c); }
+.bubble[data-speaker='A'] {
+  --sp: var(--bubble-acc-a);
+  --bubble-surface: var(--bubble-bg-a);
+  --bubble-edge: var(--bubble-stroke-a);
+  --bubble-shadow-color: rgba(224, 123, 76, 0.2);
+}
+.bubble[data-speaker='B'] {
+  --sp: var(--bubble-acc-b);
+  --bubble-surface: var(--bubble-bg-b);
+  --bubble-edge: var(--bubble-stroke-b);
+  --bubble-shadow-color: rgba(79, 126, 213, 0.2);
+}
+.bubble[data-speaker='C'] {
+  --sp: var(--bubble-acc-c);
+  --bubble-surface: var(--bubble-bg-c);
+  --bubble-edge: var(--bubble-stroke-c);
+  --bubble-shadow-color: rgba(126, 105, 207, 0.2);
+}
 .bubble::before {
-  /* 顶部角色色条:一眼区分谁在说 */
-  content: '';
+  /* 情绪只改这一枚轻装饰,基础轮廓始终一致。 */
+  content: var(--bubble-mood-mark, '');
   position: absolute;
-  top: 0;
-  left: 8px;
-  right: 8px;
-  height: 3px;
-  border-radius: 0 0 3px 3px;
-  background: var(--sp, transparent);
+  top: 5px;
+  right: 10px;
+  color: var(--sp);
+  font-size: 15px;
+  font-weight: 900;
+  opacity: 0.7;
 }
 .bubble .b-name {
-  font-style: normal;
+  position: absolute;
+  top: -10px;
+  left: 16px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px 3px 7px;
+  border: 1px solid rgba(255, 255, 255, 0.58);
+  border-radius: 8px;
+  background: var(--sp, #776d8d);
+  color: #fff;
   font-size: 11px;
   font-weight: 700;
-  margin-right: 6px;
-  color: var(--sp, var(--bubble-text));
-  opacity: 0.9;
+  line-height: 1.35;
+  letter-spacing: 0.06em;
+  box-shadow: 0 5px 14px var(--bubble-shadow-color);
 }
-/* 尾巴:旋转方块画法,与气泡同底同描边,描边连续不断裂 */
+.bubble .b-name i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.88);
+}
+.bubble .b-text {
+  display: block;
+  animation: bubble-copy-in 0.1s ease-out;
+}
+/* 水滴尾巴:圆角菱形比尖锐三角柔和;横向位置/角度由角色朝向驱动。 */
 .bubble::after {
   content: '';
   position: absolute;
-  left: 50%;
-  bottom: -6.5px;
-  width: 11px;
-  height: 11px;
-  transform: translateX(-50%) rotate(45deg);
-  background: var(--bubble-tail-bg);
-  border-right: var(--bubble-stroke-w) solid var(--bubble-stroke);
-  border-bottom: var(--bubble-stroke-w) solid var(--bubble-stroke);
+  z-index: -1;
+  left: var(--bubble-tail-x);
+  bottom: -8px;
+  width: 16px;
+  height: 16px;
+  transform: translateX(-50%) rotate(var(--bubble-tail-rotation));
+  border: var(--bubble-stroke-w) solid var(--bubble-edge);
+  border-radius: 4px 3px 12px 3px;
+  background: var(--bubble-surface);
+}
+.bubble[data-tail='left'] {
+  --bubble-tail-x: 42%;
+  --bubble-tail-rotation: 55deg;
+}
+.bubble[data-tail='right'] {
+  --bubble-tail-x: 58%;
+  --bubble-tail-rotation: 35deg;
 }
 .bubble.below::after {
   bottom: auto;
-  top: -6.5px;
-  border-right: none;
-  border-bottom: none;
-  border-left: var(--bubble-stroke-w) solid var(--bubble-stroke);
-  border-top: var(--bubble-stroke-w) solid var(--bubble-stroke);
+  top: -8px;
+  transform: translateX(-50%) rotate(calc(var(--bubble-tail-rotation) + 180deg));
 }
-.bubble.long { font-size: 13.5px; }
+.bubble.below { transform-origin: var(--bubble-tail-x) -7px; }
+.bubble[data-mood='angry'] { --bubble-mood-mark: '♯'; }
+.bubble[data-mood='shy'] { --bubble-mood-mark: '♡'; }
+.bubble[data-mood='excited'] { --bubble-mood-mark: '✦'; }
+.bubble.long { font-size: 14px; line-height: 1.52; }
 .bubble.out {
   animation: bubble-out 0.16s ease forwards;
   pointer-events: none;
@@ -608,12 +674,13 @@
 
 @keyframes bubble-in {
   from {
-    opacity: 0;
-    transform: translateY(6px) scale(0.92);
+    /* 只靠缩放制造弹出感;文字从首帧就清晰,不跟气泡一起由透明渐入。 */
+    opacity: 0.92;
+    transform: translateY(7px) scale(0.78);
   }
-  70% {
+  72% {
     opacity: 1;
-    transform: translateY(-1px) scale(1.02);
+    transform: translateY(-1px) scale(1.035);
   }
   to {
     opacity: 1;
@@ -623,8 +690,12 @@
 @keyframes bubble-out {
   to {
     opacity: 0;
-    transform: translateY(4px) scale(0.94);
+    transform: translateY(-8px) scale(0.9);
   }
+}
+@keyframes bubble-copy-in {
+  from { opacity: 0.35; transform: translateY(1px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 /* 控制栏:位置由配置驱动(left/top 内联),可拖动;collapsed = 收起只剩把手。

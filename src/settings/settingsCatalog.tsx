@@ -210,7 +210,7 @@ export const SETTINGS_SEARCH_INDEX: { tab: SettingsTab; card: string; label: str
   { tab: 'model', card: '提取文字', label: 'OCR 视觉模型', keywords: 'glm 视觉 识别' },
   { tab: 'model', card: '提取文字', label: '识别引擎', keywords: '本地 ai 自动 熔断 回退 引擎' },
   // 基础设置
-  { tab: 'general', card: '显示与布局', label: '气泡风格', keywords: '气泡 漫画 玻璃 主题 外观 配色' },
+  { tab: 'general', card: '显示与布局', label: '气泡风格', keywords: '气泡 柔彩 夜色 玻璃 主题 外观 配色' },
   // 角色人设
   { tab: 'persona', card: '角色名字', label: '角色A的名字', keywords: '名字 称呼 名牌' },
   { tab: 'persona', card: '角色名字', label: '角色B的名字', keywords: '名字 称呼 名牌' },

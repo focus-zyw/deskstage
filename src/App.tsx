@@ -1038,6 +1038,9 @@ function App() {
   // 显示用动作:打瞌睡仅覆盖 idle 态,任何明确动作优先
   const displayAction = (who: Speaker) =>
     sleepyOn && action[who] === 'idle' ? 'sleepy' : action[who]
+  // 立绘镜像与气泡尾巴必须读取同一方向事实,角色交换左右后两者同帧一起翻。
+  const aFacesLeft = charCfg.B.xPct < charCfg.A.xPct
+  const bFacesLeft = charCfg.B.xPct >= charCfg.A.xPct
 
   return (
     <div
@@ -1146,13 +1149,21 @@ function App() {
         onPointerUp={() => onCharPointerUp('A')}
         onWheel={(e) => onCharWheel(e)}
       >
-        <Bubble text={bubble.A} speaker="A" below={charCfg.A.bottom + charCfg.height > window.innerHeight - 110} loud={loudBubble.A} />
+        <Bubble
+          text={bubble.A}
+          speaker="A"
+          below={charCfg.A.bottom + charCfg.height > window.innerHeight - 110}
+          loud={loudBubble.A}
+          tailSide={aFacesLeft ? 'left' : 'right'}
+          action={displayAction('A')}
+          delivery={delivery.A}
+        />
         <CharacterSprite
           ref={charA}
           sprite={SPRITE_SETS.A}
           nameOverride={charNames.A}
           heightOverride={charCfg.height}
-          flipped={charCfg.B.xPct < charCfg.A.xPct}
+          flipped={aFacesLeft}
           action={displayAction('A')}
           delivery={delivery.A}
           talkDuration={
@@ -1188,13 +1199,21 @@ function App() {
         onPointerUp={() => onCharPointerUp('B')}
         onWheel={(e) => onCharWheel(e)}
       >
-        <Bubble text={bubble.B} speaker="B" below={charCfg.B.bottom + charCfg.height > window.innerHeight - 110} loud={loudBubble.B} />
+        <Bubble
+          text={bubble.B}
+          speaker="B"
+          below={charCfg.B.bottom + charCfg.height > window.innerHeight - 110}
+          loud={loudBubble.B}
+          tailSide={bFacesLeft ? 'left' : 'right'}
+          action={displayAction('B')}
+          delivery={delivery.B}
+        />
         <CharacterSprite
           ref={charB}
           sprite={SPRITE_SETS.B}
           nameOverride={charNames.B}
           heightOverride={charCfg.height}
-          flipped={charCfg.B.xPct >= charCfg.A.xPct}
+          flipped={bFacesLeft}
           action={displayAction('B')}
           delivery={delivery.B}
           talkDuration={
