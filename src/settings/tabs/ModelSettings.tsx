@@ -1,7 +1,7 @@
 // AI 模型:主模型(厂商/Key/端点/模型名)与提取文字(OCR 视觉模型)
 import { VENDORS, CUSTOM_VENDOR_ID } from '../../engine/vendors'
 import { useSettings, vendorKeyOf } from '../useSettingsSession'
-import { SettingsCard, SetField } from '../SettingsPrimitives'
+import { SettingsCard, SetField, SetLine } from '../SettingsPrimitives'
 
 export function ModelSettings() {
   const { form, setForm, saveField, vendorId, setVendorId, keyDrafts, setKeyDrafts, flashCard } = useSettings()
@@ -114,8 +114,31 @@ export function ModelSettings() {
         card="提取文字"
         flash={flashCard}
         title="提取文字"
-        desc="AI 视觉模型优先,失败自动本地兜底;智谱 glm-4.6v-flash 免费,与主模型相互独立"
+        desc="AI 视觉模型优先,失败自动本地兜底;AI 连续失效会熔断 10 分钟直接走本地;智谱 glm-4.6v-flash 免费"
       >
+        <SetLine title="识别引擎" hint="自动=AI 优先本地兜底(连败自动熔断);仅本地=不再请求 AI">
+          <div className="seg-group">
+            {(
+              [
+                ['auto', '自动'],
+                ['local', '仅本地'],
+                ['ai', '仅 AI'],
+              ] as const
+            ).map(([v, label]) => (
+              <button
+                key={v}
+                className={`seg-btn${form.ocr.engine === v ? ' on' : ''}`}
+                onClick={() => {
+                  const ocr = { ...form.ocr, engine: v }
+                  setForm({ ...form, ocr })
+                  saveField({ ocr }, true)
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </SetLine>
         <SetField
           label="OCR API Key(留空 = 只用本地识别)"
           htmlFor="cfg-ocr-key"

@@ -141,6 +141,8 @@ export interface OcrConfig {
   baseUrl: string
   /** 视觉模型名 */
   model: string
+  /** 引擎选择:auto=AI 优先本地兜底(默认,含连败熔断);local=仅本地;ai=仅 AI(失败即报错不兜底) */
+  engine: 'auto' | 'local' | 'ai'
 }
 
 /** 主播模式(直播弹幕互动):平台 + 直播间号 + 登录凭证。
@@ -202,6 +204,7 @@ export const DEFAULT_CONFIG: AppConfig = {
     apiKey: '',
     baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
     model: 'glm-4.6v-flash',
+    engine: 'auto',
   },
   live: { platform: 'bilibili', roomId: '', cookie: '', giftReactionsEnabled: true },
   launchOnBoot: false,
@@ -442,6 +445,7 @@ function sanitizeConfig(obj: unknown): AppConfig {
         apiKey: str(c.apiKey, 200),
         baseUrl: str(c.baseUrl, 200) || d.baseUrl,
         model: str(c.model, 100) || d.model,
+        engine: c.engine === 'local' || c.engine === 'ai' ? c.engine : 'auto',
       }
     })(),
     live: ((): LiveConfig => {

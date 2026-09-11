@@ -163,6 +163,7 @@ export const SETTINGS_SEARCH_INDEX: { tab: SettingsTab; card: string; label: str
   { tab: 'model', card: '提取文字', label: 'OCR API Key', keywords: '视觉 识别 截图 文字 免费' },
   { tab: 'model', card: '提取文字', label: 'OCR 接口地址', keywords: '视觉 识别 地址' },
   { tab: 'model', card: '提取文字', label: 'OCR 视觉模型', keywords: 'glm 视觉 识别' },
+  { tab: 'model', card: '提取文字', label: '识别引擎', keywords: '本地 ai 自动 熔断 回退 引擎' },
   // 角色人设
   { tab: 'persona', card: '角色名字', label: '角色A的名字', keywords: '名字 称呼 名牌' },
   { tab: 'persona', card: '角色名字', label: '角色B的名字', keywords: '名字 称呼 名牌' },
