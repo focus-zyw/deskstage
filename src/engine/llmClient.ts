@@ -380,7 +380,7 @@ export async function generateUserChatReply(who: Speaker, userText: string): Pro
   const persona = soloShortPersona(who)
   const chatMoodLine = moodHintLine(await getMoods(), [who])
   const bits: string[] = []
-  if (p.userName) bits.push(`观众称呼"${p.userName}"`)
+  if (p.userName) bits.push(`观众称呼直接叫"${p.userName}",不加"们"`)
   if (p.occupation) bits.push(`身份:${p.occupation}`)
   if (p.likes) bits.push(`喜欢:${p.likes}`)
   if (p.dislikes) bits.push(`不喜欢:${p.dislikes}`)
@@ -390,7 +390,7 @@ export async function generateUserChatReply(who: Speaker, userText: string): Pro
   const messages: { role: string; content: string }[] = [
     {
       role: 'system',
-      content: `桌面双人情景剧互动。你是${persona}。${chatMoodLine ? `${chatMoodLine}。` : ''}观众朋友直接对你说了一句话,用你的口吻回一句。要求:15~25 字,口语化,像真说话${p.userName ? `,称呼观众"${p.userName}"` : ''};不要引号,不要 JSON。${bits.length ? `\n关于观众:${bits.join(';')}。` : ''}`,
+      content: `桌面双人情景剧互动。你是${persona}。${chatMoodLine ? `${chatMoodLine}。` : ''}观众朋友直接对你说了一句话,用你的口吻回一句。要求:15~25 字,口语化,像真说话${p.userName ? `,称呼观众直接叫"${p.userName}",不加"们"` : ''};不要引号,不要 JSON。${bits.length ? `\n关于观众:${bits.join(';')}。` : ''}`,
     },
     { role: 'user', content: userText },
   ]
@@ -453,7 +453,7 @@ export async function generateTurnBatch(input: {
   const messages: { role: string; content: string }[] = [
     {
       role: 'system',
-      content: `桌面情景剧的聊天编剧。角色:${persona}。${chatMoodLine ? `${chatMoodLine}。` : ''}${p.userName ? `观众称呼"${p.userName}"。` : ''}口语化、有梗、像真说话。
+      content: `桌面情景剧的聊天编剧。角色:${persona}。${chatMoodLine ? `${chatMoodLine}。` : ''}${p.userName ? `观众称呼直接叫"${p.userName}",不加"们"。` : ''}口语化、有梗、像真说话。
 输出协议(严格遵守):只输出一个 JSON 对象,格式 {"dialog":[{"speaker":"A","text":"台词","target":"B"},...]}
 - 一共 1~3 句:观众这句话是对${targetName}说的,${targetName}(speaker "${input.target}")必须第一句先答;${others}只在确实有新信息或好包袱时才各补 1 句,没有就只回 1 句
 - 每句不超过 25 字,不要引号;speaker 只能是 A、B 或 C 且不连续同一人;"target" 填这句对谁说("A"/"B"/"C"/"audience" 对观众)${facts.length ? `\n- 记住的观众的事:${facts.join(';')}` : ''}`,
@@ -501,7 +501,7 @@ export async function generateInterjectionBatch(input: {
   const messages: { role: string; content: string }[] = [
     {
       role: 'system',
-      content: `桌面情景剧:演出进行到一半,观众插了一句话。角色:${persona}。${interjectMoodLine ? `${interjectMoodLine}。` : ''}${input.moodHint ? `${input.moodHint}。` : ''}${p.userName ? `观众称呼"${p.userName}"。` : ''}口语化、有梗、像真说话。
+      content: `桌面情景剧:演出进行到一半,观众插了一句话。角色:${persona}。${interjectMoodLine ? `${interjectMoodLine}。` : ''}${input.moodHint ? `${input.moodHint}。` : ''}${p.userName ? `观众称呼直接叫"${p.userName}",不加"们"。` : ''}口语化、有梗、像真说话。
 输出协议(严格遵守):只输出一个 JSON 对象,格式 {"dialog":[{"speaker":"A","text":"台词","target":"B"},...]}
 - 一共 1~3 句:${targetName}(speaker "${input.target}")第一句先回应观众插的话;其他角色只在有新信息或好包袱时补 1 句;最后一句必须自然把话头带回刚才的剧情,贴着"剧情刚才演到"与"接下来要演",不要生硬
 - 每句不超过 25 字,不要引号;speaker 只能是 A、B 或 C 且不连续同一人`,
@@ -551,7 +551,7 @@ export async function generateLiveReply(
   const mem = await getMemory()
   const p: UserProfile = cfg.userProfile
   const bits: string[] = []
-  if (p.userName) bits.push(`主播称呼"${p.userName}"`)
+  if (p.userName) bits.push(`主播称呼直接叫"${p.userName}",提到时不加"们"`)
   if (p.occupation) bits.push(`身份:${p.occupation}`)
   if (p.likes) bits.push(`喜欢:${p.likes}`)
   if (p.dislikes) bits.push(`不喜欢:${p.dislikes}`)
@@ -564,7 +564,7 @@ export async function generateLiveReply(
   const messages: { role: string; content: string }[] = [
     {
       role: 'system',
-      content: `桌面情景剧正在"直播读弹幕"。两位主角:${duoShortPersona()}。常驻第三角色:${soloShortPersona('C')}(speaker "C",话少,弹幕没点名${pronounOf('C')}就不抢话)。${liveMoodLine ? `${liveMoodLine}。` : ''}${p.userName ? `主播(用户)叫"${p.userName}",角色偶尔可以提到TA。` : ''}下面是最新一批直播间弹幕。挑一条最值得回的(优先问角色的、有趣的、能接梗的;刷屏/无意义/人身攻击的直接不回),由三人中的一位用各自口吻回一句——弹幕点名了${nameOf('C')}(@${nameOf('C')}/C)就由${nameOf('C')}回答,否则优先${nameOf('A')}和${nameOf('B')},${nameOf('C')}只在内容确实与${pronounOf('C')}的小管家职责相关时才接。要求:15~40字,口语化像真说话,称呼遵守上面的称呼与性别纪律;语气跟各自人设走,优先友好捧场和接梗,偶尔斗嘴点缀即可,别句句抬杠;不要复读弹幕原文。
+      content: `桌面情景剧正在"直播读弹幕"。两位主角:${duoShortPersona()}。常驻第三角色:${soloShortPersona('C')}(speaker "C",话少,弹幕没点名${pronounOf('C')}就不抢话)。${liveMoodLine ? `${liveMoodLine}。` : ''}${p.userName ? `主播(用户)叫"${p.userName}",提到时直接叫名字,不加"们"。` : ''}下面是最新一批直播间弹幕。挑一条最值得回的(优先问角色的、有趣的、能接梗的;刷屏/无意义/人身攻击的直接不回),由三人中的一位用各自口吻回一句——弹幕点名了${nameOf('C')}(@${nameOf('C')}/C)就由${nameOf('C')}回答,否则优先${nameOf('A')}和${nameOf('B')},${nameOf('C')}只在内容确实与${pronounOf('C')}的小管家职责相关时才接。要求:15~40字,口语化像真说话,称呼遵守上面的称呼与性别纪律;语气跟各自人设走,优先友好捧场和接梗,偶尔斗嘴点缀即可,别句句抬杠;不要复读弹幕原文。
 ${p.banTopics ? `雷区(绝对不聊):${p.banTopics}。` : ''}
 只输出一个 JSON 对象:{"pick":<弹幕序号>,"reply":"<回复,不回则空串>","speaker":"A"或"B"或"C","action":"<动作词>"}
 action 只能是这些词之一:${[...VALID_ACTIONS].join('|')}。${bits.length ? `\n关于观众:${bits.join(';')}。` : ''}${recentReplies.length ? `\n最近已说过(不要重复,保持话题推进):${recentReplies.join(' / ')}` : ''}`,

@@ -187,6 +187,16 @@ test('相声模式丙只占 0~2 句,保留逗哏-捧哏主轴', () => {
   assert.match(prompt, /甲乙仍是逗哏-捧哏主轴/)
 })
 
+test('使用者称呼纪律:注入用户名时明确禁止加"们"等后缀', () => {
+  const prompt = buildMessages('daily', '点外卖还是自己做饭', [], false, undefined, {
+    profile: { userName: '小张', occupation: '', likes: '', dislikes: '', banTopics: '' },
+  })
+    .map((message) => message.content)
+    .join('\n')
+  assert.match(prompt, /称呼直接叫"小张"/)
+  assert.match(prompt, /不加"们"等后缀/)
+})
+
 test('心情余波注入:位于长期关系之后,空缺时不出现占位文字', () => {
   const withMood = finalPrompt({ moodNote: '当前心情余波:\n- 乙还在气头上(余怒未消)' })
   assert.match(withMood, /当前心情余波/)

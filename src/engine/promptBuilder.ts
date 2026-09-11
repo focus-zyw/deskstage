@@ -28,7 +28,7 @@ export function renderAudienceContext(ctx: UserContext): string {
   const p = ctx.profile
   const parts: string[] = []
   const bits: string[] = []
-  if (p?.userName) bits.push(`称呼为"${p.userName}"`)
+  if (p?.userName) bits.push(`称呼直接叫"${p.userName}"(哪怕泛指全体观众,也不加"们"等后缀)`)
   if (p?.occupation) bits.push(`身份是${p.occupation}`)
   if (p?.likes) bits.push(`喜欢:${p.likes}`)
   if (p?.dislikes) bits.push(`不喜欢:${p.dislikes}`)
