@@ -46,7 +46,7 @@ export function renderStoryContext(story?: UserContext['story']): string {
   if (story?.threads.length) parts.push(`与本段话题相关的未了结事件(适合时再了结):${story.threads.join(';')}。`)
   if (!parts.length) return ''
   parts.push('笑点素材只能来自本集场景卡和角色世界;观众的私人信息不是包袱。')
-  return `\n\n角色世界（两人的共同经历）：${parts.join(' ')}`
+  return `\n\n角色世界（三人共同的梗与经历）：${parts.join(' ')}`
 }
 
 /** 组装 prompt：人设 + 使用者画像 + 输出协议 + 模式指令 + 可选续聊上下文 + 话题。
@@ -130,10 +130,10 @@ ${moodNote.trim()}` : ''
     mode === 'crosstalk'
       ? `
 
-丙的角色分工（必须遵守）:${nameOf('C')}(小管家)是${nameOf('A')}${nameOf('B')}都宠着都爱逗的桌面团宠,但本场只占 0~2 句;${nameOf('A')}${nameOf('B')}拿${nameOf('C')}垫梗(${nameOf('A')}离谱地使唤${pronounOf('C')}、${nameOf('B')}一本正经地点评${pronounOf('C')}的呆),${nameOf('C')}用字面执行制造实体包袱;逗而不恶意,像逗自家小孩。${nameOf('A')}${nameOf('B')}仍是逗哏-捧哏主轴,${nameOf('C')}不进入正活的结构编排。`
+${nameOf('C')}的角色分工（必须遵守）:${nameOf('C')}(小管家)是${nameOf('A')}${nameOf('B')}都宠着都爱逗的桌面团宠,但本场只占 0~2 句;${nameOf('A')}${nameOf('B')}拿${nameOf('C')}垫梗(${nameOf('A')}离谱地使唤${pronounOf('C')}、${nameOf('B')}一本正经地点评${pronounOf('C')}的呆),${nameOf('C')}用字面执行制造实体包袱;逗而不恶意,像逗自家小孩。${nameOf('A')}${nameOf('B')}仍是逗哏-捧哏主轴,${nameOf('C')}不进入正活的结构编排。`
       : `
 
-丙的角色分工（必须遵守）:${nameOf('C')}(小管家)是${nameOf('A')}${nameOf('B')}都宠着都爱逗的桌面团宠,不是电话或画外音。每段${pronounOf('C')}只说 1~4 句,可以大量用 reactions 做无声反应;不得机械地 A→B→C 轮流说话。
+${nameOf('C')}的角色分工（必须遵守）:${nameOf('C')}(小管家)是${nameOf('A')}${nameOf('B')}都宠着都爱逗的桌面团宠,不是电话或画外音。每段${pronounOf('C')}只说 1~4 句,可以大量用 reactions 做无声反应;不得机械地 A→B→C 轮流说话。
 - 逗${pronounOf('C')}有分工:${nameOf('A')}爱用夸张的吹牛和离谱的请求逗${pronounOf('C')}("${nameOf('C')},把我咖啡变成冰的"然后看着${pronounOf('C')}往咖啡机里加冰),${nameOf('B')}爱用毒舌反问和一本正经的胡说八道逗${pronounOf('C')}——逗而不恶意,像逗自家小孩,不许刻薄嘲笑
 - ${nameOf('C')}的应对分两路:大多数时候认真接招,字面理解直接执行,反差即萌点;中后段安排一次"字面反击"——把${nameOf('A')}${nameOf('B')}某句随口的话当真执行到底,让他们下不来台,这次反击可以就是本集的底包袱
 - ${nameOf('C')}只在被逗能出梗、行动能改变局面或带来新信息时开口;最后一句优先由${nameOf('A')}或${nameOf('B')}收底,除非${nameOf('C')}的反击本身就是底`
