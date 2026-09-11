@@ -86,11 +86,17 @@ export async function logInteraction(kind: 'pokeA' | 'pokeB' | 'pokeC' | 'interr
   await writeAll(next)
 }
 
-/** 若攒够素材,返回注入下一集 prompt 的抱怨文案(调用方注入后应调 markInjected) */
+/** 若攒够素材,返回注入下一集 prompt 的抱怨文案(调用方注入后应调 markInjected)。
+ *  消费时把戳/拖计数一并清零——账本是"这一期攒的量",不无限累计,
+ *  否则开场抱怨会报出"拖了上百次"这种吓人的终身累计数 */
 export async function takeRecap(): Promise<string | null> {
   const stats = await readAll()
   if (stats.sinceInject < INJECT_THRESHOLD) return null
-  const next = sanitize({ ...stats, sinceInject: 0 })
+  const next = sanitize({
+    ...stats,
+    pokeA: 0, pokeB: 0, pokeC: 0, drags: 0,
+    sinceInject: 0,
+  })
   await writeAll(next)
   return recapText(stats.pokeA, stats.pokeB, stats.drags, stats.pokeC)
 }

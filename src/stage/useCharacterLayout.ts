@@ -16,6 +16,11 @@ import { logDrag } from '../storage/interactionStore'
 import { bondTierOf, reactBonded, distanceBands } from '../engine/interactionRules'
 import type { Speaker } from '../performer/player'
 
+/** 距离演出的降频参数:冷却 + 概率闸双管齐下——拖拽是桌面玩具的核心乐趣,
+ *  每次拖完都被抱怨会变成唠叨,降频成"偶尔彩蛋"(数值可按手感微调) */
+const DIST_COOLDOWN_MS = 45_000
+const DIST_SAY_CHANCE = 0.35
+
 export interface CharacterLayoutDeps {
   /** 距离演出仅在空闲时触发 */
   isIdle(): boolean
@@ -153,13 +158,17 @@ export function useCharacterLayout(deps: CharacterLayoutDeps) {
     const dx = Math.abs(ax - bx)
     const bands = distanceBands(charCfg.height)
     const now = Date.now()
-    const cooled = (kind: string) => now - (distLastAt.current[kind] ?? 0) > 12_000
+    // 拖拽是桌面玩具的核心乐趣,每次拖完都被抱怨会变成唠叨:
+    // 冷却 45s + 35% 概率闸双管齐下,把抱怨降频成"偶尔彩蛋"。
+    // 概率闸先掷——没掷中不说话也不占冷却,下一次拖拽仍有触发机会
+    const cooled = (kind: string) => now - (distLastAt.current[kind] ?? 0) > DIST_COOLDOWN_MS
+    const says = (kind: string) => Math.random() < DIST_SAY_CHANCE && cooled(kind)
     const mark = (kind: string) => { distLastAt.current[kind] = now }
 
     const bond = await getBond()
     const tier = bondTierOf(bond.trust, bond.rivalry)
 
-    if (dx < bands.overlap && cooled('overlap')) {
+    if (dx < bands.overlap && says('overlap')) {
       mark('overlap')
       deps.present(other, reactBonded(other, 'overlap', tier), tier === 'strained' ? 'angry' : 'surprise', 2000)
       // 推开:被拖者向远离方向挪 6%(关系好时推开幅度减半,挤挤更热闹)
@@ -170,7 +179,7 @@ export function useCharacterLayout(deps: CharacterLayoutDeps) {
       void logDrag()
       return
     }
-    if (dx < bands.close && cooled('close')) {
+    if (dx < bands.close && says('close')) {
       mark('close')
       const act = tier === 'warm' ? 'happy' : tier === 'strained' ? 'angry' : 'surprise'
       deps.present(other, reactBonded(other, 'close', tier), act, 2200)
@@ -178,7 +187,7 @@ export function useCharacterLayout(deps: CharacterLayoutDeps) {
       void logDrag()
       return
     }
-    if (dx > window.innerWidth * 0.6 && cooled('far')) {
+    if (dx > window.innerWidth * 0.6 && says('far')) {
       mark('far')
       const act = tier === 'strained' ? 'angry' : tier === 'warm' ? 'sad' : 'talk'
       deps.present('A', reactBonded('A', 'far', tier), act, 2400, true)
