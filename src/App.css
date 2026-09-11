@@ -488,6 +488,11 @@
   pointer-events: none;
   user-select: none;
 }
+/* 方向性片段(走路)与移动方向相反时水平镜像,避免"倒着走";
+   只翻 video 层——名牌/hitbox 与它是兄弟节点,不受影响 */
+.resident-stage.face-left .resident-video {
+  transform: scaleX(-1);
+}
 /* 精确身体命中框:只覆盖画面中央的身体,大片透明区域不拦截桌面点击 */
 .resident-hitbox {
   position: absolute;

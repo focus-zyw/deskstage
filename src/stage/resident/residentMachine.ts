@@ -2,7 +2,7 @@
 // 优先级(高→低):隐藏 > 用户拖拽 > 说话 > 剧情指定反应 > 点击回应 > 漫游 > 随机待机 > 普通待机。
 // "随机动画绝不能覆盖说话或剧情动作"由这里单一出口保证;
 // 说话中拖拽=显示拖拽动画,松手后 speaking 未变则自然落回说话——恢复不需要专门逻辑。
-import { isLoopingClip, pickClip } from './residentManifest'
+import { isLoopingClip, nativeFacing, pickClip } from './residentManifest'
 import type { ResidentClipId, ResidentPlayback } from './residentTypes'
 
 export interface ResidentIntents {
@@ -55,3 +55,11 @@ export const POKE_HOLD_MS = 2800
 /** 漫游节奏:每隔一段空闲时间走一小趟 */
 export const ROAM_PAUSE_MIN_MS = 20_000
 export const ROAM_PAUSE_MAX_MS = 45_000
+
+/** 方向性片段是否需要水平镜像:素材原生朝向与实际移动方向相反时翻,
+ *  否则就是"倒着走"。无方向性片段(待机/反应/原地类)或静止(移动量为 0)恒不翻 */
+export function shouldFlip(clip: ResidentClipId, moveDir: number): boolean {
+  const facing = nativeFacing(clip)
+  if (facing === 0 || moveDir === 0) return false
+  return facing !== Math.sign(moveDir)
+}

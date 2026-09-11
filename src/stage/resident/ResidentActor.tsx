@@ -19,6 +19,7 @@ import {
   ROAM_PAUSE_MAX_MS,
   ROAM_PAUSE_MIN_MS,
   resolveResidentClip,
+  shouldFlip,
 } from './residentMachine'
 import { nextRoamTarget, ROAM_SPEED_PCT_PER_SEC } from './residentMotion'
 import type { ResidentClipId } from './residentTypes'
@@ -90,6 +91,7 @@ export function ResidentActor({
   const [ambient, setAmbient] = useState<ResidentClipId | null>(null)
   const [pokeClip, setPokeClip] = useState<ResidentClipId | null>(null)
   const [roaming, setRoaming] = useState(false)
+  const [roamDir, setRoamDir] = useState(0)
   const videoA = useRef<HTMLVideoElement | null>(null)
   const videoB = useRef<HTMLVideoElement | null>(null)
   const frontIdx = useRef(0)
@@ -259,11 +261,13 @@ export function ResidentActor({
       const perStep = dist / steps
       const dir = Math.sign(to - from)
       setRoaming(true)
+      setRoamDir(dir) // 行进方向参与镜像判定:与素材原生朝向相反时水平翻转视频
       let i = 0
       const step = () => {
         // 行进中被打断(说话/拖拽/演出动作):就地停,位置保留
         if (!idleRef.current) {
           setRoaming(false)
+          setRoamDir(0)
           scheduleNext()
           return
         }
@@ -271,6 +275,7 @@ export function ResidentActor({
         if (i >= steps) {
           onMove(Number(to.toFixed(2)))
           setRoaming(false)
+          setRoamDir(0)
           scheduleNext()
           return
         }
@@ -284,6 +289,7 @@ export function ResidentActor({
       cancelled = true
       for (const t of timers) window.clearTimeout(t)
       setRoaming(false)
+      setRoamDir(0)
     }
     // xPct/onMove 经 ref 读最新值,不进依赖:重渲染不重置漫游节奏
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -301,6 +307,10 @@ export function ResidentActor({
 
   if (broken) return null
 
+  // 方向性片段(走路)与实际移动方向相反时水平镜像视频,否则看起来在"倒着走";
+  // 只翻 video 层,名牌与气泡在 stage 内但不受 video 选择器影响
+  const flip = shouldFlip(target?.clip ?? 'idle', roamDir)
+
   return (
     // 舞台宽度必须显式给出:父容器(.actor)是 shrink-wrap 的 flex 列,
     // .resident-stage 的 width:100% 没有参照会塌成 0
@@ -309,7 +319,7 @@ export function ResidentActor({
       style={width ? { width } : undefined}
     >
       {bubble && <Bubble text={bubble} below={below} loud={loud} />}
-      <div className="resident-stage">
+      <div className={`resident-stage${flip ? ' face-left' : ''}`}>
         {/* 初始透明度由 CSS 承担(0),前台切换经 DOM 直接改 style——
             若用 React style prop,重渲染会把 JS 设置的值重置回 0 造成黑帧 */}
         <video ref={videoA} className="resident-video" muted playsInline preload="auto" disablePictureInPicture />

@@ -64,6 +64,17 @@ export function residentSrc(clip: ResidentClipId): string {
   return `${import.meta.env.BASE_URL}animations/c/${clip}.webm`
 }
 
+/** 方向性片段的原生行进朝向(帧分析:walk.webm 的螃蟹步向画面左侧行进,帧间重心左摆)。
+ *  只登记水平位移类片段;原地类(待机/反应/拖拽/float)不在此表=无方向性,参与镜像判定时恒不翻转 */
+export const CLIP_NATIVE_FACING: Partial<Record<ResidentClipId, 1 | -1>> = {
+  walk: -1,
+}
+
+/** 片段的原生朝向:1=朝右,-1=朝左,0=无方向性 */
+export function nativeFacing(clip: ResidentClipId): 1 | -1 | 0 {
+  return CLIP_NATIVE_FACING[clip] ?? 0
+}
+
 /** 启动预热全部片段,演出中首次切换零等待(与 preloadSprites 同一思路) */
 export function preloadResident(): void {
   const clips = new Set<ResidentClipId>([

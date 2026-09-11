@@ -10,7 +10,9 @@ let clipsForAction
 let pickClip
 let isLoopingClip
 let residentSrc
+let nativeFacing
 let resolveResidentClip
+let shouldFlip
 
 before(async () => {
   server = await createServer({
@@ -18,10 +20,10 @@ before(async () => {
     appType: 'custom',
     logLevel: 'silent',
   })
-  ;({ clipsForAction, pickClip, isLoopingClip, residentSrc } = await server.ssrLoadModule(
+  ;({ clipsForAction, pickClip, isLoopingClip, residentSrc, nativeFacing } = await server.ssrLoadModule(
     '/src/stage/resident/residentManifest.ts',
   ))
-  ;({ resolveResidentClip } = await server.ssrLoadModule('/src/stage/resident/residentMachine.ts'))
+  ;({ resolveResidentClip, shouldFlip } = await server.ssrLoadModule('/src/stage/resident/residentMachine.ts'))
 })
 
 after(async () => {
@@ -94,6 +96,16 @@ test('优先级仲裁:隐藏 > 拖拽 > 说话 > 剧情 > 点击 > 漫游 > 待�
 test('剧情指定 idle 视为未指定,不阻断点击回应', () => {
   const base = { hidden: false, dragging: false, speaking: false, scripted: 'idle', poke: 'happy', roaming: false, ambient: null }
   assert.equal(resolveResidentClip(base).clip, 'happy')
+})
+
+test('方向性片段朝向与镜像判定:走路素材原生朝左,反向移动才翻', () => {
+  // 帧分析结论:walk.webm 的螃蟹步向画面左侧行进(原生朝向 -1)
+  assert.equal(nativeFacing('walk'), -1)
+  assert.equal(nativeFacing('idle'), 0, '原地类片段无方向性')
+  assert.equal(shouldFlip('walk', 1), true, '素材朝左却向右移动 → 必须镜像')
+  assert.equal(shouldFlip('walk', -1), false, '同向不翻')
+  assert.equal(shouldFlip('walk', 0), false, '静止不翻')
+  assert.equal(shouldFlip('idle', 1), false, '无方向性片段不翻')
 })
 
 test('说话状态固定用循环片段;剧情反应按词表决定循环与否', () => {
