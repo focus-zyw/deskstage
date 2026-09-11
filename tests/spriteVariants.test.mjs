@@ -127,7 +127,7 @@ test('待机姿势统一使用延迟、停留时长和 dip 切图', () => {
     for (const variant of specials) {
       assert.equal(variant.activationDelayMs, 8_000, `${variant.file} 的首次延迟不一致`)
       assert.ok(
-        variant.holdMs >= 3_000 && variant.holdMs <= 5_000,
+        variant.holdMs >= 6_000 && variant.holdMs <= 10_000,
         `${variant.file} 的停留时长超出范围`,
       )
       assert.equal(variant.transitionMode, 'dip', `${variant.file} 应使用 dip 切图`)

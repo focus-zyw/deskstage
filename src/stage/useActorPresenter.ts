@@ -45,11 +45,28 @@ export function useActorPresenter() {
   const timers = useRef<Record<Speaker, number>>({ A: 0, B: 0, C: 0 })
   const pulseTimer = useRef(0)
   const finaleTimer = useRef(0)
+  // 姿势放松计时器:句间保持上一个表情姿势,停顿超过 RELAX_MS 才回 idle——
+  // 之前句尾立即回 idle,快节奏对白里每 200~600ms 就 "talk→idle→talk" 弹跳一次,视觉不协调
+  const relaxTimers = useRef<Record<Speaker, number>>({ A: 0, B: 0, C: 0 })
+  const RELAX_MS = 1500
+
+  function cancelRelax(who: Speaker): void {
+    window.clearTimeout(relaxTimers.current[who])
+  }
+
+  function scheduleRelax(who: Speaker, ms = RELAX_MS): void {
+    cancelRelax(who)
+    relaxTimers.current[who] = window.setTimeout(() => {
+      setAction((a) => ({ ...a, [who]: 'idle' }))
+      setDelivery((d) => ({ ...d, [who]: undefined }))
+    }, ms)
+  }
 
   /** 插话/短句呈现;到期只回收这一句(气泡已被别的话顶掉时不再动动作与说话灯) */
   function say(who: Speaker, text: string, opts: SayOptions = {}) {
     const { action: act, ms = 1600, loud = false, reacting: react = false, speaking: talk = false } = opts
     window.clearTimeout(timers.current[who])
+    cancelRelax(who)
     setBubble((b) => ({ ...b, [who]: text }))
     if (act !== undefined) setAction((a) => ({ ...a, [who]: act }))
     setLoudBubble((l) => ({ ...l, [who]: loud }))
@@ -70,28 +87,32 @@ export function useActorPresenter() {
   function showTalk(line: DialogLine) {
     const laughing = /哈哈+|嘿嘿|嘻嘻|笑死|233/.test(line.text)
     const act = laughing ? 'laugh' : line.action || 'talk'
+    cancelRelax(line.speaker)
     setBubble((b) => ({ ...b, [line.speaker]: line.text }))
     setAction((a) => ({ ...a, [line.speaker]: act }))
     setSpeaking(line.speaker)
     setDelivery((d) => ({ ...d, [line.speaker]: line.delivery }))
     // 听者同步反应:LLM 指定听者动作(害羞/大笑/欲言又止…),与台词同拍
     const listener: Speaker = line.speaker === 'A' ? 'B' : 'A'
-    if (line.listenerAction) setAction((a) => ({ ...a, [listener]: line.listenerAction }))
+    if (line.listenerAction) {
+      cancelRelax(listener)
+      setAction((a) => ({ ...a, [listener]: line.listenerAction }))
+    }
     // 台词带感叹/问号 → 听者惊讶脉冲
     if (/[!?！？]/.test(line.text)) pulse(listener)
   }
 
-  /** 声音结束:立即闭嘴(气泡与听者反应留进句尾留白) */
+  /** 声音结束:立即闭嘴;姿势保持到放松计时(句间不再弹回 idle) */
   function hush(speaker: Speaker) {
     setSpeaking(null)
-    setAction((a) => ({ ...a, [speaker]: 'idle' }))
+    scheduleRelax(speaker)
   }
 
-  /** 句尾留白结束:清气泡;听者的反应动作不滞留到下一拍 */
+  /** 句尾留白结束:清气泡;听者反应动作同样延迟放松,句间保持画面张力 */
   function endLine(speaker: Speaker) {
     const listener: Speaker = speaker === 'A' ? 'B' : 'A'
     setBubble((b) => ({ ...b, [speaker]: null }))
-    setAction((a) => ({ ...a, [listener]: 'idle' }))
+    scheduleRelax(listener)
     setDelivery((d) => ({ ...d, [speaker]: undefined }))
   }
 
@@ -120,7 +141,10 @@ export function useActorPresenter() {
 
   /** 立即清场(停止/开播前):气泡与动作全复位 */
   function reset() {
-    for (const w of ['A', 'B', 'C'] as const) window.clearTimeout(timers.current[w])
+    for (const w of ['A', 'B', 'C'] as const) {
+      window.clearTimeout(timers.current[w])
+      window.clearTimeout(relaxTimers.current[w])
+    }
     window.clearTimeout(finaleTimer.current)
     setBubble(NO_BUBBLE)
     setAction(IDLE_POSE)

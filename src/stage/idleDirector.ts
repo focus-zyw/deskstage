@@ -2,7 +2,7 @@ import { SpriteVariantPicker, type SpriteVariant } from './spriteVariants'
 
 const REST_MIN_MS = 12_000
 const REST_MAX_MS = 25_000
-const DEFAULT_HOLD_MS = 3_500
+const DEFAULT_HOLD_MS = 7_000
 
 type TimerHandle = ReturnType<typeof globalThis.setTimeout>
 

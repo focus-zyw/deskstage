@@ -163,6 +163,9 @@ function App() {
   }
   const charHidden = rt.charHidden
   const panelRef = useRef<HTMLDivElement>(null)
+  // 备忘提醒卡容器:热区 getter 用;声明在使用(useMemo 依赖)之前,避免 TDZ
+  const memoAlertsRef = useRef<HTMLDivElement>(null)
+  const memoAlertsCountRef = useRef(0)
   const topicPanelRef = useRef<HTMLDivElement>(null)
   const chatBoxRef = useRef<HTMLDivElement>(null)
   const cmdPanelRef = useRef<HTMLDivElement>(null)
@@ -325,21 +328,25 @@ function App() {
    *  API Key 不再拦截:礼物互动完全免 AI,无 Key 照常收礼物;只有弹幕 AI 回复不可用 */
   function startStreaming() {
     void (async () => {
-      const cfg = await getConfig()
-      const hasApiKey = Boolean(cfg.apiKey.trim())
-      if (!cfg.live.roomId.trim()) {
-        presenterSay('A', '先到 设置 → 直播设置 里填直播间号~', { action: 'surprise', ms: 3200 })
-        return
-      }
-      if (cfg.live.platform === 'douyin') {
-        presenterSay('A', '抖音弹幕还在路上,先用B站吧~', { ms: 3000 })
-        return
-      }
+      try {
+        const cfg = await getConfig()
+        const hasApiKey = Boolean(cfg.apiKey.trim())
+        if (!cfg.live.roomId.trim()) {
+          presenterSay('A', '先到 设置 → 直播设置 里填直播间号~', { action: 'surprise', ms: 3200 })
+          return
+        }
+        if (cfg.live.platform === 'douyin') {
+          presenterSay('A', '抖音弹幕还在路上,先用B站吧~', { ms: 3000 })
+          return
+        }
 
-      // 清场(与点播同段):中止生成/演出/语音
-      director.abortPending()
+        // 进入即提示:开播流程已启动(此前失败全程静默,无法定位卡点)
+        presenterSay('A', '正在连接直播间…', { ms: 2500 })
 
-      beginStreaming()
+        // 清场(与点播同段):中止生成/演出/语音
+        director.abortPending()
+
+        beginStreaming()
       // 无 Key 提示一句:礼物互动照常,弹幕 AI 回复不可用(管线侧同步静默禁用)
       if (!hasApiKey) {
         showPoke('A', '还没填 API Key,读弹幕回复先关掉,礼物互动照常~', 'talk', 3200)
@@ -367,6 +374,10 @@ function App() {
           })
         })
       })
+      } catch (e) {
+        // 开播任何一步失败都在气泡里可见,不再静默
+        presenterSay('A', `开播失败:${String((e as Error)?.message ?? e).slice(0, 60)}`, { action: 'surprise', ms: 5000 })
+      }
     })()
   }
 
@@ -497,6 +508,16 @@ function App() {
             cmdPanelRef.current?.getBoundingClientRect() ?? new DOMRect(0, 0, 0, 0),
         },
         {
+          // 备忘提醒卡:右下角弹窗,不注册则点击穿透桌面,"知道了"永远点不到。
+          // active 经 ref 读(声明在使用之后,直接进依赖数组会 TDZ 崩溃整个 App)
+          id: 'memo-alert',
+          active: true,
+          getRect: () =>
+            memoAlertsCountRef.current > 0
+              ? (memoAlertsRef.current?.getBoundingClientRect() ?? new DOMRect(0, 0, 0, 0))
+              : new DOMRect(0, 0, 0, 0),
+        },
+        {
           id: 'outside',
           active: overlaysOpen,
           getRect: () => new DOMRect(0, 0, window.innerWidth, window.innerHeight),
@@ -620,6 +641,9 @@ function App() {
 
   // ---------- 备忘录:调度与常驻提醒 ----------
   const [memoAlerts, setMemoAlerts] = useState<{ id: string; text: string }[]>([])
+  useEffect(() => {
+    memoAlertsCountRef.current = memoAlerts.length
+  }, [memoAlerts])
   const memoSweepBusy = useRef(false)
   const privacyTipIdx = useRef(0)
   const PRIVACY_TIPS = [
@@ -993,7 +1017,7 @@ function App() {
         )}
 
         {memoAlerts.length > 0 && (
-          <div className="memo-alerts">
+          <div className="memo-alerts" ref={memoAlertsRef}>
             {memoAlerts.map((a) => (
               <div key={a.id} className="memo-alert">
                 <span className="memo-tag">⏰ 备忘提醒</span>

@@ -46,7 +46,7 @@ export const SPRITE_SETS: Record<'A' | 'B', SpriteSet> = {
           weight: 2,
           cooldownMs: 60_000,
           activationDelayMs: IDLE_VARIANT_DELAY_MS,
-          holdMs: 3_500,
+          holdMs: 7_000,
           transitionMode: 'dip',
         },
         {
@@ -54,7 +54,7 @@ export const SPRITE_SETS: Record<'A' | 'B', SpriteSet> = {
           weight: 2,
           cooldownMs: 75_000,
           activationDelayMs: IDLE_VARIANT_DELAY_MS,
-          holdMs: 4_000,
+          holdMs: 8_000,
           transitionMode: 'dip',
         },
         {
@@ -62,7 +62,7 @@ export const SPRITE_SETS: Record<'A' | 'B', SpriteSet> = {
           weight: 1.5,
           cooldownMs: 60_000,
           activationDelayMs: IDLE_VARIANT_DELAY_MS,
-          holdMs: 3_200,
+          holdMs: 6_400,
           transitionMode: 'dip',
         },
         {
@@ -70,7 +70,7 @@ export const SPRITE_SETS: Record<'A' | 'B', SpriteSet> = {
           weight: 0.35,
           cooldownMs: RARE_IDLE_COOLDOWN_MS,
           activationDelayMs: IDLE_VARIANT_DELAY_MS,
-          holdMs: 3_000,
+          holdMs: 6_000,
           transitionMode: 'dip',
         },
         {
@@ -78,7 +78,7 @@ export const SPRITE_SETS: Record<'A' | 'B', SpriteSet> = {
           weight: 0.45,
           cooldownMs: RARE_IDLE_COOLDOWN_MS,
           activationDelayMs: IDLE_VARIANT_DELAY_MS,
-          holdMs: 3_500,
+          holdMs: 7_000,
           transitionMode: 'dip',
         },
       ],
@@ -122,7 +122,7 @@ export const SPRITE_SETS: Record<'A' | 'B', SpriteSet> = {
           weight: 2,
           cooldownMs: 90_000,
           activationDelayMs: IDLE_VARIANT_DELAY_MS,
-          holdMs: 4_500,
+          holdMs: 9_000,
           transitionMode: 'dip',
         },
         {
@@ -130,7 +130,7 @@ export const SPRITE_SETS: Record<'A' | 'B', SpriteSet> = {
           weight: 2,
           cooldownMs: 60_000,
           activationDelayMs: IDLE_VARIANT_DELAY_MS,
-          holdMs: 3_000,
+          holdMs: 6_000,
           transitionMode: 'dip',
         },
         {
@@ -138,7 +138,7 @@ export const SPRITE_SETS: Record<'A' | 'B', SpriteSet> = {
           weight: 1.5,
           cooldownMs: 75_000,
           activationDelayMs: IDLE_VARIANT_DELAY_MS,
-          holdMs: 3_500,
+          holdMs: 7_000,
           transitionMode: 'dip',
         },
         {
@@ -146,7 +146,7 @@ export const SPRITE_SETS: Record<'A' | 'B', SpriteSet> = {
           weight: 1.5,
           cooldownMs: 75_000,
           activationDelayMs: IDLE_VARIANT_DELAY_MS,
-          holdMs: 4_000,
+          holdMs: 8_000,
           transitionMode: 'dip',
         },
         {
@@ -154,7 +154,7 @@ export const SPRITE_SETS: Record<'A' | 'B', SpriteSet> = {
           weight: 0.45,
           cooldownMs: RARE_IDLE_COOLDOWN_MS,
           activationDelayMs: IDLE_VARIANT_DELAY_MS,
-          holdMs: 3_200,
+          holdMs: 6_400,
           transitionMode: 'dip',
         },
       ],

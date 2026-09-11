@@ -52,7 +52,7 @@ function useIdleFidget(active: boolean): string {
         clearTimer = window.setTimeout(() => {
           setFidget('')
           schedule()
-        }, 2200)
+        }, 4400)
       }, 8000 + Math.random() * 7000)
     }
     schedule()

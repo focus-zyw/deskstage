@@ -460,6 +460,37 @@
   border-top: none;
   border-bottom-color: rgba(255, 255, 255, 0.96);
 }
+/* 场外角色(画外音)气泡:C 无立绘,以顶部居中的"来电"横幅呈现,区别于甲乙立绘旁气泡 */
+.guest-bubble {
+  position: fixed;
+  top: 72px; /* 工具栏下方,不遮挡控制按钮 */
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: min(520px, 80vw);
+  padding: 12px 18px;
+  background: rgba(16, 24, 42, 0.92);
+  color: #f5f7ff;
+  border: 1px solid rgba(133, 119, 244, 0.45);
+  border-radius: var(--radius-panel);
+  font-size: 15px;
+  line-height: 1.5;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.35);
+  white-space: pre-wrap;
+  text-align: center;
+  animation: bubble-in 0.18s ease;
+  z-index: 40;
+}
+.guest-tag {
+  display: inline-block;
+  margin-right: 8px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: rgba(133, 119, 244, 0.28);
+  color: #cfc8ff;
+  font-size: 12px;
+  vertical-align: middle;
+}
+
 /* 选边面板:抉择问题 + 两个站队按钮 */
 .choice-panel {
   width: 320px;
