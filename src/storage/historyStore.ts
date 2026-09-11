@@ -243,6 +243,18 @@ export async function toggleFavorite(ep: FavRecord): Promise<boolean> {
 
 // ---------- 分集 / 删除 ----------
 
+/** 收藏库整集列表(收藏页专用,独立于历史窗口——老收藏不会被 limit 挤掉);按对话时间倒序 */
+export async function listFavorites(): Promise<Episode[]> {
+  try {
+    return (await readFavorites())
+      .map((f) => ({ ts: f.ts, mode: f.mode, lines: f.lines, fav: true, topic: f.topic, card: f.card }))
+      .sort((a, b) => b.ts - a.ts)
+  } catch (e) {
+    console.warn('收藏列表读取失败', e)
+    return []
+  }
+}
+
 /**
  * 台词条目按集聚合成分集(纯函数,导出供测试)。
  * 新数据按稳定 eid 聚合(同一集跨 ts 也归并);旧文件无 eid 退回按 ts,零迁移兼容。

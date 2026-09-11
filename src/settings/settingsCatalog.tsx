@@ -13,6 +13,7 @@ export type SettingsTab =
   | 'privacy'
   | 'memory'
   | 'memo'
+  | 'favorites'
   | 'history'
 
 /** 左侧导航:偏好设置 / 数据管理 两组 */
@@ -145,6 +146,15 @@ export const SETTINGS_NAV: { group: string; items: { id: SettingsTab; label: str
         ),
       },
       {
+        id: 'favorites',
+        label: '收藏',
+        icon: (
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+            <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+          </svg>
+        ),
+      },
+      {
         id: 'history',
         label: '历史',
         icon: (
@@ -170,6 +180,7 @@ export const TAB_GROUP: Record<SettingsTab, string> = {
   privacy: '偏好设置',
   memory: '数据管理',
   memo: '数据管理',
+  favorites: '数据管理',
   history: '数据管理',
 }
 
@@ -254,6 +265,8 @@ export const SETTINGS_SEARCH_INDEX: { tab: SettingsTab; card: string; label: str
   // 备忘
   { tab: 'memo', card: '添加备忘', label: '添加备忘', keywords: '待办 提醒 截止时间' },
   { tab: 'memo', card: '备忘列表', label: '备忘列表', keywords: '已完成 清除 待办' },
+  // 收藏
+  { tab: 'favorites', card: '收藏的对话', label: '收藏的对话', keywords: '收藏 星标 精选 管理 重放 取消' },
   // 历史
   { tab: 'history', card: '演出历史', label: '演出历史', keywords: '回放 收藏 删除 历史' },
 ]

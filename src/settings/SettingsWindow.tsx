@@ -19,6 +19,7 @@ import { HotkeysSettings } from './tabs/HotkeysSettings'
 import { PrivacySettings } from './tabs/PrivacySettings'
 import { MemorySettings } from './tabs/MemorySettings'
 import { MemoSettings } from './tabs/MemoSettings'
+import { FavoritesSettings } from './tabs/FavoritesSettings'
 import { HistorySettings } from './tabs/HistorySettings'
 
 export interface SettingsWindowProps {
@@ -43,6 +44,7 @@ const TAB_CONTENT: Record<SettingsTab, () => React.JSX.Element> = {
   privacy: PrivacySettings,
   memory: MemorySettings,
   memo: MemoSettings,
+  favorites: FavoritesSettings,
   history: HistorySettings,
 }
 

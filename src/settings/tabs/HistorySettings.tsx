@@ -41,7 +41,7 @@ export function HistorySettings() {
       card="演出历史"
       flash={flashCard}
       title={`演出历史(${episodes.length})`}
-      desc="点击一行即可回放;收藏不会被清理且重放权重更高"
+      desc="点击一行即可回放;收藏不会被清理且重放权重更高,收藏的对话可在「收藏」页管理"
       action={
         <button
           className={`hist-clear${clearHistArmed ? ' danger' : ''}`}
