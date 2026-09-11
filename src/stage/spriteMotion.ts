@@ -33,3 +33,15 @@ const MOTION_BY_ACTION: Record<string, SpriteMotion> = {
 export function motionForAction(action: string): SpriteMotion {
   return MOTION_BY_ACTION[action] ?? DEFAULT_MOTION
 }
+
+/**
+ * 双槽切换时长(ms)。切换引擎(CharacterSprite)在新图 decode 就绪后才发起过渡:
+ * - crossfade/dip:新旧两槽同步互补淡化,任一时刻合成可见度 = 1,不存在空窗帧
+ * - impact:0ms 硬切——同帧对调零中间帧,冲击感由 motion-* 起势动画承担
+ * 导出供 spriteTransition 回归做合成可见度模拟(单一事实源)。
+ */
+export const SWITCH_MS: Record<TransitionMode, number> = {
+  crossfade: 140,
+  dip: 120,
+  impact: 0,
+}

@@ -50,10 +50,10 @@
 }
 /* 次级动画载体:点头/惊讶/落地/小动作同一时刻只播一个 */
 /* 面向对方:镜像立绘,名牌不镜像 */
-.char.flipped .char-img.main {
+.char.flipped .char-img.lead {
   transform: scaleX(-1);
 }
-.char.flipped .char-img.under {
+.char.flipped .char-img.hold {
   transform: translateX(-50%) scaleX(-1);
 }
 .char-body {
@@ -69,62 +69,25 @@
   display: block;
   height: var(--char-h, 320px);
   width: auto;
-}
-/* 上层：动作切换时淡入盖住旧图 */
-.char-img.main {
+  /* 双槽常驻(元素永不重建):show 标记可见槽,透明度经 --switch-dur 过渡互补淡化。
+     切换由 CharacterSprite 的 decode 门控发起——新图可渲染后才翻转 show,
+     过渡期旧槽始终兜底显示,任何时刻不存在接近全透明的空窗帧 */
   opacity: 0;
+  transition: opacity var(--switch-dur, 140ms) ease;
 }
-.transition-crossfade .char-img.main.ready {
-  animation: sprite-in 0.14s ease forwards;
+.char-img.show {
+  opacity: 1;
 }
-.transition-dip .char-img.under {
-  animation: sprite-dip-out 0.12s ease forwards;
+/* 主槽:在流,撑起容器尺寸 */
+.char-img.lead {
+  position: relative;
 }
-.transition-dip .char-img.main.ready {
-  /* 与淡出同时长、零延迟:全程交叉淡化,任一时刻两图合成可见度不低于 1(见 spriteTransition 回归) */
-  animation: sprite-dip-in 0.12s ease both;
-}
-.transition-impact .char-img.under {
-  opacity: 0;
-}
-.transition-impact .char-img.main.ready {
-  animation: sprite-impact-in 0.08s ease-out forwards;
-}
-/* 下层：旧立绘，新图淡入完成前兜底显示 */
-.char-img.under {
+/* 副槽:绝对居中覆盖,与主槽同形 */
+.char-img.hold {
   position: absolute;
   top: 0;
   left: 50%;
   transform: translateX(-50%);
-}
-@keyframes sprite-in {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
-}
-@keyframes sprite-dip-out {
-  to {
-    opacity: 0;
-  }
-}
-@keyframes sprite-dip-in {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
-}
-@keyframes sprite-impact-in {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
 }
 
 /* 动作起势放在独立外壳上，不与说话、倾听、脉冲等 char/char-body 动画抢 transform。 */
@@ -142,6 +105,11 @@
 }
 .char-transition-shell.motion-recoil {
   animation: motion-recoil 0.3s ease-out;
+}
+/* 起势动画重启位:外壳常驻后没有"重建即重播",切换引擎交替挂/摘本类
+   (animation-name 置空再还原),让同名起势动画每次切换都从头播一遍 */
+.char-transition-shell.motion-off {
+  animation-name: none;
 }
 @keyframes motion-soft {
   from { opacity: 0.88; scale: 0.99; }
