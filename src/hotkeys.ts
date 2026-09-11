@@ -3,7 +3,7 @@
 // 平时不持有键盘焦点,窗口内 keydown 收不到按键(详见 input/pointerManager)。
 // 与截屏快捷键(capture.ts)同模式但独立演进;本模块导入期无副作用,可被单测加载。
 
-import { register, unregister } from '@tauri-apps/plugin-global-shortcut'
+import { register, unregister, isRegistered } from '@tauri-apps/plugin-global-shortcut'
 import { emit } from '@tauri-apps/api/event'
 import { getConfig, type HotkeysConfig } from './storage/configStore'
 
@@ -62,8 +62,14 @@ export async function applyAppHotkeys(): Promise<void> {
         })
         registered.push(b)
       } catch (e) {
-        console.warn(`[hotkeys] ${b.action} 的 ${b.shortcut} 注册失败(可能被其他程序占用)`, e)
-        void emit('hotkey-error', { action: b.action, shortcut: b.shortcut }).catch(() => {})
+        // register 抛错未必真失败:dev 热重载会清空 JS 账本但 OS 注册还在,两次换绑
+        // 并发也会撞车——此时 isRegistered 为真说明本应用已持有,实际在生效,不报错
+        if (await isRegistered(b.shortcut).catch(() => false)) {
+          registered.push(b)
+        } else {
+          console.warn(`[hotkeys] ${b.action} 的 ${b.shortcut} 注册失败(可能被其他程序占用)`, e)
+          void emit('hotkey-error', { action: b.action, shortcut: b.shortcut }).catch(() => {})
+        }
       }
     }
   } catch (e) {

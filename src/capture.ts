@@ -11,7 +11,7 @@
 import { emit } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import { register, unregister } from '@tauri-apps/plugin-global-shortcut'
+import { register, unregister, isRegistered } from '@tauri-apps/plugin-global-shortcut'
 import { getConfig } from './storage/configStore'
 import { setCaptureMode } from './input/pointerManager'
 
@@ -69,9 +69,14 @@ export async function applyScreenshotHotkey(): Promise<void> {
     if (registeredHotkey) await unregister(registeredHotkey).catch(() => {})
     registeredHotkey = ''
     if (hk) {
-      await register(hk, (event) => {
-        if (event.state === 'Pressed') void startScreenshot().catch((e) => reportError(e))
-      })
+      try {
+        await register(hk, (event) => {
+          if (event.state === 'Pressed') void startScreenshot().catch((e) => reportError(e))
+        })
+      } catch (e) {
+        // dev 热重载清空 JS 账本后 OS 注册仍在:isRegistered 为真说明本应用已持有,视作成功
+        if (!(await isRegistered(hk).catch(() => false))) throw e
+      }
       registeredHotkey = hk
     }
   } catch (e) {
