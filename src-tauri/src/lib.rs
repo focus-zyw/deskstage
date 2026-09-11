@@ -7,6 +7,7 @@ mod audio_capture;
 mod capture;
 mod env;
 mod ocr;
+mod pointer_hook;
 mod webchat;
 mod bili_http;
 
@@ -78,6 +79,7 @@ pub fn run() {
     .manage(audio_capture::CaptureState::default())
     .invoke_handler(tauri::generate_handler![
       set_noactivate,
+      pointer_hook::set_native_pointer_regions,
       audio_capture::list_audio_sessions,
       audio_capture::start_capture,
       audio_capture::stop_capture,
@@ -103,6 +105,7 @@ pub fn run() {
         )?;
       }
       spawn_cursor_poll(app.handle().clone());
+      pointer_hook::spawn(app.handle().clone());
       Ok(())
     })
     .run(tauri::generate_context!())

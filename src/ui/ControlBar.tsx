@@ -1,5 +1,6 @@
 // 控制栏:演出簇常驻(模式+生成/停止) + 工具/聊天/勿扰/设置四入口。
-// 自带命中区注册与悬停高亮(穿透窗口里按钮可点的前提),拖动移动经 onPosChange 回 App 落盘。
+// 自带原生命中区注册与悬停高亮；WebView 保持穿透，点击由指针管理器合成，
+// 拖动移动经 onPosChange 回 App 落盘。
 // 新功能不再往栏上加按钮——注册进命令面板(features/commands)。
 import { useEffect, useRef, useState } from 'react'
 import { PlayIcon, StopIcon, GearIcon, PokeballIcon, ChatIcon, GridIcon, BellOffIcon } from '../stage/icons'
@@ -72,14 +73,38 @@ export function ControlBar({
   // 命中区注册:穿透架构下未注册区域收不到任何鼠标事件
   useEffect(() => {
     const unsubs = [
-      registerHitRegion('grip', { getRect: () => gripRef.current!.getBoundingClientRect() }),
-      registerHitRegion('modes', { getRect: () => segCtl.current!.getBoundingClientRect() }),
-      registerHitRegion('gen', { getRect: () => btnGen.current!.getBoundingClientRect() }),
-      registerHitRegion('stop', { getRect: () => btnStop.current!.getBoundingClientRect() }),
-      registerHitRegion('tools', { getRect: () => btnTools.current!.getBoundingClientRect() }),
-      registerHitRegion('chat', { getRect: () => btnChat.current!.getBoundingClientRect() }),
-      registerHitRegion('dnd', { getRect: () => btnDnd.current!.getBoundingClientRect() }),
-      registerHitRegion('settings', { getRect: () => btnGear.current!.getBoundingClientRect() }),
+      registerHitRegion('grip', {
+        getRect: () => gripRef.current!.getBoundingClientRect(),
+        nativePointerTarget: () => gripRef.current,
+      }),
+      registerHitRegion('modes', {
+        getRect: () => segCtl.current!.getBoundingClientRect(),
+        nativePointerTarget: () => segCtl.current,
+      }),
+      registerHitRegion('gen', {
+        getRect: () => btnGen.current!.getBoundingClientRect(),
+        nativePointerTarget: () => btnGen.current,
+      }),
+      registerHitRegion('stop', {
+        getRect: () => btnStop.current!.getBoundingClientRect(),
+        nativePointerTarget: () => btnStop.current,
+      }),
+      registerHitRegion('tools', {
+        getRect: () => btnTools.current!.getBoundingClientRect(),
+        nativePointerTarget: () => btnTools.current,
+      }),
+      registerHitRegion('chat', {
+        getRect: () => btnChat.current!.getBoundingClientRect(),
+        nativePointerTarget: () => btnChat.current,
+      }),
+      registerHitRegion('dnd', {
+        getRect: () => btnDnd.current!.getBoundingClientRect(),
+        nativePointerTarget: () => btnDnd.current,
+      }),
+      registerHitRegion('settings', {
+        getRect: () => btnGear.current!.getBoundingClientRect(),
+        nativePointerTarget: () => btnGear.current,
+      }),
     ]
     return () => unsubs.forEach((u) => u())
   }, [])

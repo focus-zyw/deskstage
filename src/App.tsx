@@ -403,14 +403,6 @@ function App() {
       showPoke('B', q.b, 'talk', 2400)
     }, 2500)
   }
-
-
-  // 看视频不被打扰:默认点击不抢焦点(WS_EX_NOACTIVATE);
-  // 仅面板/框选期间临时恢复激活(输入框与框选需要鼠标键盘),关闭即恢复
-  useEffect(() => {
-    void invoke('set_noactivate', { enable: !(overlaysOpen || !!captureShot) }).catch(() => {})
-  }, [overlaysOpen, captureShot])
-
   useEffect(() => {
     void initPointerManager()
     preloadSprites(Object.values(SPRITE_SETS)) // 预热立绘,演出中切换动作零延迟
@@ -442,12 +434,14 @@ function App() {
           draggingWho.current === 'A'
             ? new DOMRect(0, 0, window.innerWidth, window.innerHeight)
             : charA.current!.getBoundingClientRect(),
+        nativePointerTarget: () => charA.current,
       }),
       registerHitRegion('charB', {
         getRect: () =>
           draggingWho.current === 'B'
             ? new DOMRect(0, 0, window.innerWidth, window.innerHeight)
             : charB.current!.getBoundingClientRect(),
+        nativePointerTarget: () => charB.current,
       }),
       // 工具栏按钮的热区由 ui/ControlBar 自行注册
     ]
@@ -470,30 +464,35 @@ function App() {
         {
           id: 'panel',
           active: settingsOpen,
+          activatesWindow: true,
           getRect: () =>
             panelRef.current?.getBoundingClientRect() ?? new DOMRect(0, 0, 0, 0),
         },
         {
           id: 'topic-panel',
           active: topicOpen,
+          activatesWindow: true,
           getRect: () =>
             topicPanelRef.current?.getBoundingClientRect() ?? new DOMRect(0, 0, 0, 0),
         },
         {
           id: 'chat-box',
           active: chatOpen,
+          activatesWindow: true,
           getRect: () =>
             chatBoxRef.current?.getBoundingClientRect() ?? new DOMRect(0, 0, 0, 0),
         },
         {
           id: 'tr-panel',
           active: translationOpen,
+          activatesWindow: true,
           getRect: () =>
             trPanelRef.current?.getBoundingClientRect() ?? new DOMRect(0, 0, 0, 0),
         },
         {
           id: 'cmd-panel',
           active: toolsOpen,
+          activatesWindow: true,
           getRect: () =>
             cmdPanelRef.current?.getBoundingClientRect() ?? new DOMRect(0, 0, 0, 0),
         },

@@ -11,6 +11,8 @@ export interface OverlayRegionSpec {
   /** true 时注册,false 时注销 */
   active: boolean
   getRect: () => DOMRect
+  /** 输入面板需要激活窗口以接收键盘；普通点击区保持底层应用为前台。 */
+  activatesWindow?: boolean
 }
 
 export function useOverlayHitRegions(specs: OverlayRegionSpec[]): void {
@@ -18,7 +20,12 @@ export function useOverlayHitRegions(specs: OverlayRegionSpec[]): void {
   useEffect(() => {
     const unsubs = specs
       .filter((s) => s.active)
-      .map((s) => registerHitRegion(s.id, { getRect: s.getRect }))
+      .map((s) =>
+        registerHitRegion(s.id, {
+          getRect: s.getRect,
+          activatesWindow: s.activatesWindow,
+        }),
+      )
     return () => unsubs.forEach((u) => u())
     // specs 每次面板开合都换新引用;其余渲染复用 useMemo 缓存,不需要逐项比较
     // eslint-disable-next-line react-hooks/exhaustive-deps
