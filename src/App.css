@@ -1342,6 +1342,33 @@
   justify-content: space-between;
   gap: 10px;
 }
+/* GPT-SoVITS 参考音色条目:卡片内嵌小分组(名称行 + 路径/参考文本/语言) */
+.gpt-voice {
+  display: grid;
+  gap: 9px;
+  padding: 11px 12px;
+  border: 1px solid var(--sw-border-soft);
+  border-radius: 11px;
+}
+.gpt-voice-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.gpt-voice-head input {
+  flex: 1;
+  min-width: 0;
+}
+.gpt-voice-title {
+  flex: none;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--sw-text-3);
+}
+.gpt-voice-del:hover {
+  border-color: var(--sw-err);
+  color: var(--sw-err);
+}
 
 /* 输入控件(仅设置窗口内) */
 .settings-window input,

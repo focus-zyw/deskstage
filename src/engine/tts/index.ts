@@ -14,6 +14,7 @@ import {
 } from '../../storage/configStore'
 import { isLateNight } from '../timeAware'
 import { CACHE_VERSION, diskGet, diskPut, hashOf, inflight, memGet, memPut } from './cache'
+import { gptsovitsProvider } from './gptsovits'
 import { localProvider } from './local'
 import { minimaxProvider, MINIMAX_VOICES } from './minimax'
 import { streamPlayer, type StreamSession } from './player'
@@ -32,16 +33,19 @@ export type { ClonedVoice } from './siliconflow'
 export const PROVIDER_OPTIONS: { id: TtsProviderId; label: string }[] = [
   { id: siliconflowProvider.id, label: siliconflowProvider.label },
   { id: minimaxProvider.id, label: minimaxProvider.label },
+  { id: gptsovitsProvider.id, label: gptsovitsProvider.label },
 ]
 
 export function providerById(id: TtsProviderId): TtsProvider {
   if (id === 'minimax') return minimaxProvider
+  if (id === 'gptsovits') return gptsovitsProvider
   if (id === 'local') return localProvider
   return siliconflowProvider
 }
 
 // 启动即注册各供应商音色名单,configStore 清洗配置时据此校正非法音色名。
-// 克隆音色(speech: 开头)是账号侧资源,清洗时单独放行,不进名单。
+// 克隆音色(speech: 开头)是账号侧资源,清洗时单独放行,不进名单;
+// gptsovits 不注册——它的音色表是用户配置的,清洗时按当次配置的表校正。
 registerVoiceIds('siliconflow', [...SILICONFLOW_VOICES.map((v) => v.id), '__custom__'])
 registerVoiceIds('minimax', MINIMAX_VOICES.map((v) => v.id))
 
@@ -165,9 +169,19 @@ async function resolveLine(
     groupId: v.minimax.groupId,
     model: v.minimax.model,
     emotionHints: v.emotionHints,
+    ...(provider.id === 'gptsovits'
+      ? {
+          gptsovits: {
+            url: v.gptsovits.url,
+            textLang: v.gptsovits.textLang,
+            streamMode: v.gptsovits.streamMode,
+            voices: v.gptsovits.voices,
+          },
+        }
+      : {}),
   }
   const asg = v.assignments[provider.id]
-  const voiceId = asg[speaker] || provider.voices[0]?.id || ''
+  const voiceId = asg[speaker] || provider.defaultVoiceId?.(cfg) || provider.voices[0]?.id || ''
   const speed = deliverySpeed(delivery)
   // 朗读归一化在进哈希前做:缓存键与实际发给供应商的文本保持一致
   const speechText = normalizeForSpeech(text)

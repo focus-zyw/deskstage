@@ -1,6 +1,6 @@
 // TTS 供应商契约:每家实现 synthesizeStream 返回「音频字节流 + 元信息」,
 // 服务层(index.ts)统一负责缓存、通道仲裁与播放;新增供应商只动这一层。
-import type { AppConfig, TtsProviderId } from '../../storage/configStore'
+import type { AppConfig, GptsovitsVoice, TtsProviderId } from '../../storage/configStore'
 
 export interface VoiceOption {
   id: string
@@ -41,6 +41,8 @@ export interface TtsCredentials {
   groupId?: string
   /** MiniMax 模型 id */
   model?: string
+  /** GPT-SoVITS:服务地址 + 参考音色表(id → 服务器本地参考音频定义) */
+  gptsovits?: { url: string; textLang: string; streamMode: number; voices: GptsovitsVoice[] }
   /** 是否启用自然语言情感/语气表达 */
   emotionHints: boolean
 }
@@ -51,6 +53,8 @@ export interface TtsProvider {
   label: string
   /** 设置页音色下拉的内置选项 */
   voices: VoiceOption[]
+  /** 无分配时的兜底音色 id(音色来自用户配置表、无法静态列出的供应商用);可缺省 */
+  defaultVoiceId?(cfg: AppConfig): string
   /** 参与缓存键的模型 id(模型换了,缓存自然失效) */
   modelId(cfg: AppConfig): string
   /** 凭据齐备返回 null,否则返回面向用户的缺失提示(服务层 warn-once) */

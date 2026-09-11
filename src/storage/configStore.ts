@@ -36,12 +36,37 @@ export interface CharactersConfig {
   C: ResidentPos
 }
 
-/** 语音供应商:硅基流动 CosyVoice2(默认)/ MiniMax Speech 2.8 / 本地 CosyVoice(预留) */
-export const TTS_PROVIDERS = ['siliconflow', 'minimax', 'local'] as const
+/** 语音供应商:硅基流动 CosyVoice2(默认)/ MiniMax Speech 2.8 / GPT-SoVITS 本地自建 / 本地 CosyVoice(预留) */
+export const TTS_PROVIDERS = ['siliconflow', 'minimax', 'gptsovits', 'local'] as const
 export type TtsProviderId = (typeof TTS_PROVIDERS)[number]
 
 /** 语音合成用的模型档位(MiniMax):turbo 便宜流式 / hd 质量优先 */
 export type MiniMaxModel = 'speech-2.8-turbo' | 'speech-2.8-hd'
+
+/** GPT-SoVITS 参考音色:一个"音色" = 服务器本机的一段参考音频 + 它说的话。
+ *  GPT-SoVITS 没有内置音色名,音色完全由参考音频决定,所以由用户在设置里维护这张表 */
+export interface GptsovitsVoice {
+  /** 稳定 id:进角色音色分配与缓存键;编辑路径/参考文本不改 id */
+  id: string
+  name: string
+  /** 服务器本机的参考音频绝对路径(如 D:\gptsovits\refs\ana.wav) */
+  refAudioPath: string
+  /** 参考音频里说的话,语言须与 promptLang 一致(音色相似度的关键) */
+  promptText: string
+  /** 参考文本语言:zh/en/ja/ko/yue/auto */
+  promptLang: string
+}
+
+/** GPT-SoVITS 本地自建服务(api_v2.py)配置 */
+export interface GptsovitsConfig {
+  /** 服务地址,默认本机 9880(api_v2.py 默认端口);填局域网地址可用别的机器跑推理 */
+  url: string
+  /** 台词语言,发给 api_v2 的 text_lang;auto = 按台词内容自动检测 */
+  textLang: string
+  /** 流式档位(api_v2 streaming_mode):1 质量优先首包最慢 / 2 平衡(默认)/ 3 首包最快音质略降 */
+  streamMode: 1 | 2 | 3
+  voices: GptsovitsVoice[]
+}
 
 /** 角色语音:开关 + 当前供应商 + 每供应商各自的角色音色分配(切换供应商互不影响) */
 export interface VoiceConfig {
@@ -52,6 +77,8 @@ export interface VoiceConfig {
   apiKey: string
   /** MiniMax 独立凭据(key 与 GroupId 都必填) */
   minimax: { apiKey: string; groupId: string; model: MiniMaxModel }
+  /** GPT-SoVITS 本地服务配置(api_v2) */
+  gptsovits: GptsovitsConfig
   /** 每供应商的角色音色分配(A/B 主角,C = 场外客串);
    *  旧配置的顶层 A/B/C 是硅基流动音色,清洗时迁移进 assignments.siliconflow */
   assignments: Record<TtsProviderId, { A: string; B: string; C: string }>
@@ -191,10 +218,12 @@ export const DEFAULT_CONFIG: AppConfig = {
     provider: 'siliconflow',
     apiKey: '',
     minimax: { apiKey: '', groupId: '', model: 'speech-2.8-turbo' },
+    gptsovits: { url: 'http://127.0.0.1:9880', textLang: 'auto', streamMode: 2, voices: [] },
     assignments: {
       // 女声·轻快 → 便利店店员 / 男声·沉稳 → 程序员 / 女声 → 桌面小管家团宠(C 人设为女,音色性别对齐)
       siliconflow: { A: 'bella', B: 'alex', C: 'anna' },
       minimax: { A: 'female-shaonv', B: 'male-qn-qingse', C: 'female-tianmei' },
+      gptsovits: { A: '', B: '', C: '' },
       local: { A: '', B: '', C: '' },
     },
     emotionHints: true,
@@ -269,6 +298,8 @@ function sanitizeReplayMin(v: unknown): number {
 const TTS_VOICE_IDS: Record<TtsProviderId, Set<string>> = {
   siliconflow: new Set(),
   minimax: new Set(),
+  // GPT-SoVITS 不在启动时注册:音色表是用户配置的,清洗时按当次配置的表校正
+  gptsovits: new Set(),
   local: new Set(),
 }
 
@@ -283,7 +314,8 @@ function sanitizeVoice(v: unknown): VoiceConfig {
     const s = typeof x === 'string' ? x.trim().slice(0, 200) : ''
     // 克隆音色(speech: 开头,账号侧资源)直接放行;内置音色须在注册名单内
     if (provider === 'siliconflow' && s.startsWith('speech:')) return s
-    const allowed = TTS_VOICE_IDS[provider]
+    // GPT-SoVITS 的合法音色 = 当次配置的参考音色表,注册名单不适用
+    const allowed = provider === 'gptsovits' ? new Set(gptVoices.map((x) => x.id)) : TTS_VOICE_IDS[provider]
     return allowed.size === 0 || allowed.has(s) ? s || fb : fb
   }
   // 旧配置迁移:顶层 A/B/C 就是硅基流动音色;新配置 assignments 优先
@@ -300,6 +332,32 @@ function sanitizeVoice(v: unknown): VoiceConfig {
   const mm = (o.minimax ?? {}) as Record<string, unknown>
   const str = (x: unknown, cap: number): string =>
     typeof x === 'string' ? x.trim().slice(0, cap) : ''
+  const gp = (o.gptsovits ?? {}) as Record<string, unknown>
+  // 参考音色表:逐条裁剪,无 id/无路径的丢弃,id 去重,上限 20 条防配置膨胀
+  const gptLangs = new Set(['zh', 'en', 'ja', 'ko', 'yue', 'auto'])
+  const gptVoices: GptsovitsVoice[] = (() => {
+    if (!Array.isArray(gp.voices)) return []
+    const out: GptsovitsVoice[] = []
+    const seen = new Set<string>()
+    for (const raw of gp.voices) {
+      const r = (raw ?? {}) as Record<string, unknown>
+      const id = str(r.id, 64)
+      const path = str(r.refAudioPath, 500)
+      if (!id || !path || seen.has(id)) continue
+      seen.add(id)
+      const lang = str(r.promptLang, 8)
+      out.push({
+        id,
+        name: str(r.name, 50) || id,
+        refAudioPath: path,
+        promptText: str(r.promptText, 300),
+        promptLang: gptLangs.has(lang) ? lang : 'zh',
+      })
+      if (out.length >= 20) break
+    }
+    return out
+  })()
+  const gptTextLang = str(gp.textLang, 8)
   return {
     enabled: o.enabled !== false,
     provider: (TTS_PROVIDERS as readonly string[]).includes(String(o.provider))
@@ -311,9 +369,16 @@ function sanitizeVoice(v: unknown): VoiceConfig {
       groupId: str(mm.groupId, 64),
       model: mm.model === 'speech-2.8-hd' ? 'speech-2.8-hd' : 'speech-2.8-turbo',
     },
+    gptsovits: {
+      url: str(gp.url, 200) || d.gptsovits.url,
+      textLang: gptLangs.has(gptTextLang) ? gptTextLang : d.gptsovits.textLang,
+      streamMode: gp.streamMode === 1 || gp.streamMode === 3 ? gp.streamMode : 2,
+      voices: gptVoices,
+    },
     assignments: {
       siliconflow: slot3('siliconflow', rawAssign.siliconflow ?? ('A' in o ? o : undefined)),
       minimax: slot3('minimax', rawAssign.minimax),
+      gptsovits: slot3('gptsovits', rawAssign.gptsovits),
       local: slot3('local', rawAssign.local),
     },
     emotionHints: o.emotionHints !== false,
