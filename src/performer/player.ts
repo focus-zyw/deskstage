@@ -68,6 +68,10 @@ const sleep = (ms: number, signal: AbortSignal) =>
 
 export class PerformancePlayer {
   private ctrl: AbortController | null = null
+  /** 抉择暂停期的控制器:暂停时 this.ctrl 让位为 null(守卫按空闲处理),
+   *  但 stop() 仍须真正 abort 它——否则停止后恢复逻辑会把僵尸控制器赋回
+   *  this.ctrl,onDone 误触发且 playing 永久为真(直到下一次 play) */
+  private pausedCtrl: AbortController | null = null
   private cbs: PlayerCallbacks
   /** 本次播放中真实开播过的台词(开播即计入,中止时按前缀上报) */
   private played: DialogLine[] = []
@@ -119,11 +123,15 @@ export class PerformancePlayer {
       }
       // 观众抉择点:暂停推进,窗体侧弹按钮;resume(branchId) 后播对应分支
       if (!ctrl.signal.aborted && opts.choice && opts.after) {
+        this.pausedCtrl = ctrl
         this.ctrl = null // 暂停期间视作非播放态(守卫按空闲处理)
         this.cbs.onChoice?.(opts.choice)
         const branchId = await new Promise<string>((resolve) => {
           this.choiceWaiter = resolve
         })
+        this.pausedCtrl = null
+        // 停止于抉择点(waiter 收到 __aborted__):播放权不再恢复,守卫保持空闲、onDone 不触发
+        if (ctrl.signal.aborted) return
         this.ctrl = ctrl
         const afterLines = branchId === '__aborted__' ? [] : opts.after[branchId] ?? []
         if (afterLines.length > 0) this.cbs.onStart?.(afterLines[0])
@@ -170,6 +178,8 @@ export class PerformancePlayer {
     this.played = []
     this.choiceWaiter?.('__aborted__')
     this.choiceWaiter = null
+    this.pausedCtrl?.abort() // 抉择暂停期 this.ctrl 为 null,真正的控制器在这里 abort
+    this.pausedCtrl = null
     this.ctrl?.abort()
     this.ctrl = null
   }

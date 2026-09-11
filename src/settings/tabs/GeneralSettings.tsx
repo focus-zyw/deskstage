@@ -106,6 +106,29 @@ export function GeneralSettings() {
             ))}
           </div>
         </SetLine>
+        <SetLine title="观众抉择点" hint="演出中段弹出站队选择的概率;选择后角色演对应分支">
+          <div className="seg-group">
+            {(
+              [
+                [0, '关闭'],
+                [0.15, '偶尔(15%)'],
+                [0.3, '标准(30%)'],
+                [0.5, '频繁(50%)'],
+              ] as const
+            ).map(([v, label]) => (
+              <button
+                key={v}
+                className={`seg-btn${Math.abs((form.choiceChance ?? 0.3) - v) < 0.01 ? ' on' : ''}`}
+                onClick={() => {
+                  setForm({ ...form, choiceChance: v })
+                  saveField({ choiceChance: v }, true)
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </SetLine>
         <SetLine title="久坐提醒" hint="连续活跃一段时间后,角色会提醒你休息">
           <SetSwitch
             checked={form.breakReminder.enabled}

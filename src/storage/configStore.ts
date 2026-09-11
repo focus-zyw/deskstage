@@ -94,6 +94,8 @@ export interface AppConfig {
   topicOverride: string | null
   /** 界面主题:作用于设置窗口与命令/话题/抉择悬浮面板;角色舞台与工具栏不受影响 */
   theme: 'dark' | 'light'
+  /** 观众抉择点出现概率:每集演出掷骰 0~1;0 = 不出抉择点(默认 0.3) */
+  choiceChance: number
   /** 控制栏位置(可拖动) */
   ctrlBar: CtrlBarPos
   /** 左上角水印开关 */
@@ -202,6 +204,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   charactersHidden: false,
   topicOverride: null,
   theme: 'dark',
+  choiceChance: 0.3,
   ctrlBar: { xPct: 50, top: 10, collapsed: false },
   showWatermark: false,
   screenshot: { hotkey: 'Ctrl+Alt+A', enabled: true, hideSelf: true },
@@ -439,6 +442,7 @@ function sanitizeConfig(obj: unknown): AppConfig {
     theme: o.theme === 'light' ? 'light' : 'dark',
     ctrlBar: sanitizeCtrlBar(o.ctrlBar),
     showWatermark: o.showWatermark === true,
+    choiceChance: clampNum(o.choiceChance, 0, 1, DEFAULT_CONFIG.choiceChance),
     screenshot: sanitizeScreenshot(o.screenshot),
     hotkeys: sanitizeHotkeys(o.hotkeys),
     userInterests: typeof o.userInterests === 'string' ? o.userInterests.trim() : '',

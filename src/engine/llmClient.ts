@@ -22,6 +22,7 @@ import { currentTimeSlot } from './timeAware'
 import { duoShortPersona, nameOf, soloShortPersona } from './persona'
 import { moodHintLine, moodPromptBlock, type MoodEventCandidate } from './moodState'
 import { getMoods } from '../storage/moodStore'
+import { evaluateChoiceAsk } from '../dialogue/choiceGate'
 import type { TurnWho } from '../dialogue/turnWindow'
 import { envContext } from './envAware'
 import {
@@ -87,9 +88,14 @@ async function chatRaw(
 }
 
 /** 解析并规范化 LLM 输出:交给 dialogSchema 统一处理(容忍围栏/混杂文本,
- *  保留可选演出字段,非法 action 归一为 talk,丢弃坏行;choice 行单独提出) */
-function parseDialog(raw: string, minLines = 4): PerformanceScript {
-  return parseGeneratedDialog(raw, minLines)
+ *  保留可选演出字段,非法 action 归一为 talk,丢弃坏行;choice 行单独提出,
+ *  写坏的 choice 经 onChoiceRejected 上交原文供软修复) */
+function parseDialog(
+  raw: string,
+  minLines = 4,
+  hooks?: { onChoiceRejected?: (v: unknown) => void },
+): PerformanceScript {
+  return parseGeneratedDialog(raw, minLines, hooks)
 }
 
 /**
@@ -112,8 +118,8 @@ export async function generateDialog(
 ): Promise<PerformanceScript> {
   const cfg = await getConfig()
   const mem = await getMemory()
-  // 约 30% 的集数包含观众抉择点(由应用侧掷骰,重试保持一致)
-  const allowChoice = Math.random() < 0.3
+  // 每集掷骰是否包含观众抉择点(概率用户可配,默认 30%;重试保持一致)
+  const allowChoice = Math.random() < (cfg.choiceChance ?? 0.3)
   // 丙(C)是常驻正式角色,随 prompt 永久参与,不再走随机客串掷骰
   // 上一集的观众选择:注入一次即清除
   let lastChoice: string | null = null
@@ -176,7 +182,9 @@ export async function generateDialog(
     try {
       const raw = await webchatAsk(mergeMessages(messages), signal, 180_000)
       const script = parseDialog(raw)
-      // 结构不合格 → 抛错回落 API 通道重新生成,不让死抉择/残缺剧本上台
+      // 结构不合格 → 抛错回落 API 通道重新生成,不让死抉择/残缺剧本上台;
+      // 掷中抉择点但模型没给 → 同样回落 API 通道(那边有定点修复闸门兜着)
+      if (allowChoice && !script.choice) throw new Error('网页生成缺观众抉择点')
       return finish(script)
     } catch (e) {
       if (signal?.aborted || (e as Error)?.name === 'AbortError') throw e
@@ -190,15 +198,23 @@ export async function generateDialog(
     if (signal?.aborted) throw new DOMException('已中止', 'AbortError')
     try {
       const raw = await chatRaw(messages, signal, !noJsonMode)
-      let script = parseDialog(raw)
+      let choiceRejected: unknown
+      let script = parseDialog(raw, 4, { onChoiceRejected: (v) => { choiceRejected = v } })
       // 结构不合格先做一次定点修复(最小改动,不整体重写);拿不回可播放结构才吃掉重试/走兜底
       let v = validatePerformanceScript(script)
-      if (v.fatal.length > 0 && !repairedOnce) {
+      // 抉择点闸门:掷中但没写/写坏 choice 也算议题,并入同一次定点修复;
+      // 软性约束——救不回就按无抉择播出(warn 留痕),不因此抛错把好剧本推去兜底
+      const choiceIssues = evaluateChoiceAsk({ allowChoice, script, rejectedRaw: choiceRejected })
+      const repairIssues = [...v.fatal, ...choiceIssues]
+      if (repairIssues.length > 0 && !repairedOnce) {
         repairedOnce = true
         try {
-          console.warn('[剧本校验] 定点修复:', v.fatal)
-          script = await repairPerformanceScript(script, v.fatal, signal)
+          console.warn('[剧本校验] 定点修复:', repairIssues)
+          script = await repairPerformanceScript(script, repairIssues, signal)
           v = validatePerformanceScript(script)
+          if (allowChoice && !script.choice) {
+            console.warn('[抉择点] 修复后仍无 choice,本集按无抉择播出')
+          }
         } catch (e) {
           if (signal?.aborted || (e as Error)?.name === 'AbortError') throw e
           console.warn('[剧本修复] 失败,按原剧本继续判定', e)

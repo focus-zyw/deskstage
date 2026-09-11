@@ -366,10 +366,13 @@ export function validatePerformanceScript(script: PerformanceScript, minLines = 
 
 /** 解析 LLM 生成的原始输出:容忍代码围栏/混杂文本;不合规抛错由调用方兜底。
  *  card 可缺(模型没写卡照常播),台词经 sanitizeDialogLine 保留演出字段。
- *  choice 行(若模型生成了观众抉择点)单独提出,其后带 branch 标记的台词按分支分组 */
+ *  choice 行(若模型生成了观众抉择点)单独提出,其后带 branch 标记的台词按分支分组;
+ *  choice 键存在但不合格(选项≠2/缺prompt)时同样丢弃,但经 onChoiceRejected 上交原文,
+ *  供生成侧的软修复链路救回(否则"写了但写坏"与"没写"一样无声消失) */
 export function parseGeneratedDialog(
   raw: string,
   minLines = 4,
+  opts?: { onChoiceRejected?: (raw: unknown) => void },
 ): { card?: SceneCard; before: DialogLine[]; choice?: ChoicePoint; after: Record<string, DialogLine[]> } {
   let obj: unknown
   try {
@@ -394,6 +397,7 @@ export function parseGeneratedDialog(
         choice = c
         continue
       }
+      opts?.onChoiceRejected?.(co.choice)
     }
     const line = sanitizeDialogLine(item)
     if (!line) continue
