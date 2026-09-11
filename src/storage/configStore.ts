@@ -478,7 +478,8 @@ function sanitizeConfig(obj: unknown): AppConfig {
     })(),
     persona: ((): { a: string; b: string; c: string } => {
       const pr = (o.persona ?? {}) as Record<string, unknown>
-      const cap = (x: unknown): string => (typeof x === 'string' ? x.trim().slice(0, 600) : '')
+      // 与设置页 textarea 的 maxLength 一致:写超长会被这里截断,别让 UI 放行存不下的文本
+      const cap = (x: unknown): string => (typeof x === 'string' ? x.trim().slice(0, 2000) : '')
       return { a: cap(pr.a), b: cap(pr.b), c: cap(pr.c) }
     })(),
     names: ((): { a: string; b: string; c: string } => {

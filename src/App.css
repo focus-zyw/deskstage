@@ -1297,6 +1297,11 @@
   padding: 8px 10px;
   line-height: 1.55;
   resize: vertical;
+  /* 长文本随内容增高(field-sizing 需 Chromium 123+,旧内核回退 rows 定高,无回归);
+     上限封顶后内部滚动,避免一篇长人设把整个设置页撑爆 */
+  field-sizing: content;
+  min-height: 88px;
+  max-height: 280px;
 }
 .settings-window input::placeholder,
 .settings-window textarea::placeholder {

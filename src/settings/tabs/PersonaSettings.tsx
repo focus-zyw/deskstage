@@ -136,6 +136,7 @@ export function PersonaSettings() {
           <textarea
             id="cfg-persona-a"
             rows={4}
+            maxLength={2000}
             value={form.persona.a || defaultPersonaText('A')}
             onChange={(e) => {
               setForm({ ...form, persona: { ...form.persona, a: e.target.value } })
@@ -147,6 +148,7 @@ export function PersonaSettings() {
           <textarea
             id="cfg-persona-b"
             rows={4}
+            maxLength={2000}
             value={form.persona.b || defaultPersonaText('B')}
             onChange={(e) => {
               setForm({ ...form, persona: { ...form.persona, b: e.target.value } })
@@ -162,6 +164,7 @@ export function PersonaSettings() {
           <textarea
             id="cfg-persona-c"
             rows={4}
+            maxLength={2000}
             value={form.persona.c || defaultPersonaText('C')}
             onChange={(e) => {
               setForm({ ...form, persona: { ...form.persona, c: e.target.value } })
