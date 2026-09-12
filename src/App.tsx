@@ -298,6 +298,10 @@ function App() {
     void resetDismissals()
   }
   const charHidden = rt.charHidden
+  // 设置打开期间宿主窗口已缩至面板尺寸(pointerManager.setSettingsWindowCompact):
+  // 舞台按窗口宽度百分比定位,会整体挤进设置区还叠在面板上层。面板物理上盖不住
+  // 角色原本的桌面位置,无处安放——隐藏整个舞台,关闭设置后原地恢复
+  const stageHidden = charHidden || settingsOpen
   // C 的启用开关独立于全局隐藏:enabled=false 时 C 完全退场(台词回落画外音横幅)
   const cEnabled = config.characters.C.enabled
   const panelRef = useRef<HTMLDivElement>(null)
@@ -1316,7 +1320,7 @@ function App() {
           left: `${charCfg.A.xPct}%`,
           bottom: charCfg.A.bottom,
           zIndex: topActor === 'A' ? 2 : 1,
-          display: charHidden ? 'none' : undefined,
+          display: stageHidden ? 'none' : undefined,
         }}
         onPointerDown={(e) => onCharPointerDown(e, 'A')}
         onPointerMove={(e) => onCharPointerMove(e, 'A')}
@@ -1366,7 +1370,7 @@ function App() {
           left: `${charCfg.B.xPct}%`,
           bottom: charCfg.B.bottom,
           zIndex: topActor === 'B' ? 2 : 1,
-          display: charHidden ? 'none' : undefined,
+          display: stageHidden ? 'none' : undefined,
         }}
         onPointerDown={(e) => onCharPointerDown(e, 'B')}
         onPointerMove={(e) => onCharPointerMove(e, 'B')}
@@ -1417,7 +1421,7 @@ function App() {
           left: `${charCfg.C.xPct}%`,
           bottom: charCfg.C.bottom,
           zIndex: topActor === 'C' ? 2 : 1,
-          display: charHidden || !cEnabled ? 'none' : undefined,
+          display: stageHidden || !cEnabled ? 'none' : undefined,
         }}
         onPointerDown={(e) => onCharPointerDown(e, 'C')}
         onPointerMove={(e) => onCharPointerMove(e, 'C')}
@@ -1431,9 +1435,9 @@ function App() {
           loud={loudBubble.C}
           speaking={speaking === 'C'}
           dragging={dragUi === 'C'}
-          active={cEnabled && !charHidden}
+          active={cEnabled && !stageHidden}
           calm={rt.dnd}
-          hidden={charHidden || !cEnabled}
+          hidden={stageHidden || !cEnabled}
           width={charCfg.C.width}
           below={charCfg.C.bottom + charCfg.C.width * 0.5625 > window.innerHeight - 110}
           xPct={charCfg.C.xPct}
