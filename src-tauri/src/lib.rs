@@ -150,6 +150,42 @@ pub fn run() {
       spawn_cursor_poll(app.handle().clone());
       pointer_hook::spawn(app.handle().clone());
       spawn_topmost_watchdog(app.handle().clone());
+      // [尖刺|分支 feat/window-split] 验证 WebView2 能否创建第二个窗口:
+      // capture.ts 记载历史实测三种参数组合均报 0x8007139F ERROR_INVALID_STATE。
+      // 这里用最普通的参数(不透明/可聚焦/无置顶)在 dev 构建启动 3 秒后自动建一个
+      // "设置窗",成败都写日志——这是舞台/设置拆窗口方案的可行性门槛
+      #[cfg(debug_assertions)]
+      {
+        let handle = app.handle().clone();
+        thread::spawn(move || {
+          thread::sleep(Duration::from_secs(3));
+          use tauri::{WebviewUrl, WebviewWindowBuilder, Manager};
+          if let Some(_) = handle.get_webview_window("settings") {
+            return;
+          }
+          let builder = WebviewWindowBuilder::new(
+            &handle,
+            "settings",
+            WebviewUrl::App("settings.html".into()),
+          )
+          .title("设置(窗口拆分尖刺)")
+          .inner_size(680.0, 700.0)
+          .decorations(false)
+          .resizable(true)
+          .position(100.0, 150.0);
+          match builder.build() {
+            Ok(win) => {
+              let pos = win.outer_position().map(|p| format!("{}x{}", p.x, p.y)).unwrap_or_default();
+              let visible = win.is_visible().unwrap_or(false);
+              log::info!("尖刺:第二窗口创建成功 label={} pos={pos} visible={visible}", win.label());
+              let _ = win.set_focus();
+              let visible2 = win.is_visible().unwrap_or(false);
+              log::info!("尖刺:set_focus 后 visible={visible2}");
+            }
+            Err(e) => log::error!("尖刺:第二窗口创建失败:{e}"),
+          }
+        });
+      }
       Ok(())
     })
     .run(tauri::generate_context!())
