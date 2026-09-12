@@ -17,6 +17,7 @@ let composer
 let store
 let configStore
 let videoTab
+let favoritesTab
 let session
 
 before(async () => {
@@ -33,6 +34,7 @@ before(async () => {
   store = await server.ssrLoadModule('/src/storage/videoStore.ts')
   configStore = await server.ssrLoadModule('/src/storage/configStore.ts')
   videoTab = await server.ssrLoadModule('/src/settings/tabs/VideoSettings.tsx')
+  favoritesTab = await server.ssrLoadModule('/src/settings/tabs/FavoritesSettings.tsx')
   session = await server.ssrLoadModule('/src/settings/useSettingsSession.ts')
 })
 
@@ -238,23 +240,62 @@ test('scriptDigest:说话者/动作/反应/语气/台词摘录都进要点', () 
   assert.match(digest[1], /从容、有意停顿/)
 })
 
-test('fallbackPrompt:场景卡与用户补充都落在模板里', () => {
+test('fallbackPrompt:场景卡/用户补充/对白原文都落在模板里', () => {
   const p = composer.fallbackPrompt({
-    episode: { card: { scene: '深夜便利店', relationship: '', goalA: '', goalB: '', secret: 'x', escalation: ['a'], callback: '' } },
+    episode: {
+      lines: [
+        { speaker: 'A', text: '今天天气真不错,咱们出去走走吧。', action: 'happy' },
+        { speaker: 'B', text: '行啊,正好我也想透透气。', action: 'talk' },
+      ],
+      card: { scene: '深夜便利店', relationship: '', goalA: '', goalB: '', secret: 'x', escalation: ['a'], callback: '' },
+    },
     brief: '霓虹灯下雨中对话',
   })
   assert.match(p, /深夜便利店/)
   assert.match(p, /甲\(女\)/)
   assert.match(p, /霓虹灯下雨中对话/)
+  assert.match(p, /角色对白:甲:「今天天气真不错」/)
+  assert.match(p, /乙:「行啊」/)
 })
 
-test('composeVideoPrompt:LLM 成功时用转译结果并剥引号', async () => {
+test('pickSpokenLines:取首句+下一不同说话者,截到第一个句读,限句数', () => {
+  const lines = [
+    { speaker: 'A', text: '今天天气真不错,窗外阳光正好。', action: 'happy' },
+    { speaker: 'A', text: '第二句还是甲。', action: 'talk' },
+    { speaker: 'B', text: '是啊,这种天最适合摸鱼了。', action: 'talk' },
+  ]
+  const two = composer.pickSpokenLines(lines, 2)
+  assert.deepEqual(two, ['甲:「今天天气真不错」', '乙:「是啊」'])
+  assert.deepEqual(composer.pickSpokenLines(lines, 1), ['甲:「今天天气真不错」'])
+  assert.deepEqual(composer.pickSpokenLines(lines, 0), [])
+  // 没有句读的短句整句保留;全部同说话者时只出一句
+  const solo = composer.pickSpokenLines(
+    [
+      { speaker: 'A', text: '一句话到底没有停顿', action: 'talk' },
+      { speaker: 'A', text: '还是甲', action: 'talk' },
+    ],
+    2,
+  )
+  assert.deepEqual(solo, ['甲:「一句话到底没有停顿」'])
+})
+
+test('composeVideoPrompt:LLM 只写画面,对白原文由代码拼接', async () => {
   const r = await composer.composeVideoPrompt(
-    { episode: { lines: [{ speaker: 'A', text: '你好', action: 'talk' }] }, brief: '' },
+    {
+      episode: {
+        lines: [
+          { speaker: 'A', text: '你好呀。', action: 'talk' },
+          { speaker: 'B', text: '嗨。', action: 'happy' },
+        ],
+      },
+      brief: '',
+      maxSpokenLines: 2,
+    },
     { complete: async () => '「中景镜头,便利店灯光下两人交谈。」' },
   )
   assert.equal(r.usedFallback, false)
-  assert.equal(r.prompt, '中景镜头,便利店灯光下两人交谈。')
+  assert.match(r.prompt, /中景镜头,便利店灯光下两人交谈。/)
+  assert.match(r.prompt, /角色对白:甲:「你好呀」 乙:「嗨」/)
 })
 
 test('composeVideoPrompt:LLM 失败回退模板,不空手而归', async () => {
@@ -314,25 +355,66 @@ test('sanitizeVideoTasks:去重/限量/按时间倒序,字段截断', () => {
 
 // ---------- 视频工坊 UI 冒烟 ----------
 
-test('视频工坊:SSR 渲染出全部卡片,未配 Key 不抛错', () => {
-  const value = {
+/** 会话桩:各 tab 从 useSettings 解构的字段齐备即可渲染 */
+function sessionStub(extra = {}) {
+  return {
     form: configStore.DEFAULT_CONFIG,
     setForm: () => {},
     saveField: () => {},
     flashCard: null,
+    gotoTab: () => {},
+    videoSource: null,
+    setVideoSource: () => {},
+    bridge: {
+      onReplay: () => {},
+      onResetLayout: () => {},
+      onResetC: () => {},
+      onPrivacyTip: () => {},
+      onSupportThanks: () => {},
+      onGroupSend: async () => 'accepted',
+    },
+    ...extra,
   }
-  const html = renderToStaticMarkup(
-    React.createElement(
-      session.SettingsContext.Provider,
-      { value },
-      React.createElement(videoTab.VideoSettings),
-    ),
+}
+
+function renderTab(mod, component, extra = {}) {
+  return renderToStaticMarkup(
+    React.createElement(session.SettingsContext.Provider, { value: sessionStub(extra) }, React.createElement(mod[component])),
   )
+}
+
+test('视频工坊:SSR 渲染出全部卡片,未配 Key 不抛错', () => {
+  const html = renderTab(videoTab, 'VideoSettings')
   assert.match(html, /视频服务/)
   assert.match(html, /画面参数/)
   assert.match(html, /生成视频/)
   assert.match(html, /任务列表/)
   assert.match(html, /从最近演出生成画面描述/)
+})
+
+test('视频工坊:带收藏来源时显示来源条与对应文案', () => {
+  const ep = {
+    ts: 1726000000000,
+    mode: 'daily',
+    fav: true,
+    lines: [
+      { speaker: 'A', text: '你好', action: 'talk' },
+      { speaker: 'B', text: '嗨', action: 'happy' },
+    ],
+  }
+  const html = renderTab(videoTab, 'VideoSettings', { videoSource: ep })
+  assert.match(html, /素材来源/)
+  assert.match(html, /收藏 · 日常 ·/)
+  assert.match(html, /从选中收藏生成画面描述/)
+  assert.match(html, /改用最近一集/)
+})
+
+test('收藏页:SSR 冒烟渲染不抛错(导入图标在数据行内,SSR 不跑 effect 见不到行)', () => {
+  // renderToStaticMarkup 不执行 useEffect → listFavorites 不会被调,favs 恒为空态;
+  // 这里只验证模块图(新 import 的 format/modes 等)与渲染图无崩,图标本身由 tsc+运行时覆盖
+  const html = renderTab(favoritesTab, 'FavoritesSettings')
+  assert.match(html, /收藏的对话/)
+  assert.match(html, /hist-empty/)
 })
 
 // ---------- configStore.videoGen 清洗 ----------

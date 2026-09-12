@@ -18,6 +18,8 @@ export interface ComposeInput {
   brief?: string
   /** 视频主角;缺省 = 第一句说话者 */
   lead?: Speaker
+  /** 进 prompt 的对白句数(按时长定:5 秒 1 句,10 秒 2 句);缺省 2 */
+  maxSpokenLines?: number
 }
 
 /** 动作词表 → 画面动词(给视频模型看得懂的演出描述) */
@@ -55,7 +57,7 @@ export function scriptDigest(lines: DialogLine[]): string[] {
   })
 }
 
-/** 无 LLM 时的模板拼装(纯函数,可测):场景卡 + 开场动作 + 用户补充 */
+/** 无 LLM 时的模板拼装(纯函数,可测):场景卡 + 开场动作 + 用户补充 + 对白 */
 export function fallbackPrompt(input: ComposeInput): string {
   const lines = input.episode?.lines ?? []
   const card = input.episode?.card
@@ -68,23 +70,53 @@ export function fallbackPrompt(input: ComposeInput): string {
       ? `${nameOf(lead)}(${genderOf(lead)})${actionHint(first.action)}`
       : `${nameOf(lead)}(${genderOf(lead)})与${nameOf(other)}面对面站着互动`
   const brief = input.brief?.trim()
-  return [
+  const visual = [
     `${scene}。${opening}`,
     first ? `两人像真人一样自然交流,节奏轻快` : '人物神态自然',
     brief || '中景镜头,柔和自然光,动作连贯自然',
   ]
     .filter(Boolean)
     .join('。')
+  return assemblePrompt(visual, pickSpokenLines(lines, input.maxSpokenLines ?? 2))
 }
 
 const SYSTEM_PROMPT = [
   '你是短视频分镜师。把一段桌面虚拟角色的对话演出压缩成一个 5~15 秒短视频的画面描述,',
   '这段文字将直接作为文生视频/图生视频模型的 prompt。',
   '要求:',
-  '- 只写画面:场景环境、人物外形与情绪、关键动作、镜头运用;不逐句复述台词',
+  '- 只写画面:场景环境、人物外形与情绪、关键动作、镜头运用',
+  '  (角色对白由系统单独附加,你不用写台词)',
   '- 情绪与动作必须贴合台词的动作标注,人物关系与性格保持原剧设定,不新增情节',
   '- 输出一段话,120 字以内,直接给出描述文本,不要任何解释、引号或前缀',
 ].join('')
+
+/** 单句对白长度上限:5 秒视频约念得完 20 字上下 */
+const SPOKEN_MAX_CHARS = 24
+
+/** 抽出可念的对白(纯函数,可测):首选首句,再取下一个不同说话者的句子,
+ *  各截到第一个句读处。对白原文直接拼进 prompt——带音频生成的模型
+ *  (Seedance 2.0 / CogVideoX-3 等)会据此让角色开口说这句话 */
+export function pickSpokenLines(lines: DialogLine[], max = 2): string[] {
+  if (max <= 0 || lines.length === 0) return []
+  const toSpeech = (l: DialogLine): string => {
+    const clause = l.text.split(/[。!!??,;，,;;…]/).find((s) => s.trim()) ?? l.text
+    const s = clause.trim().slice(0, SPOKEN_MAX_CHARS)
+    return `${nameOf(l.speaker)}:「${s}」`
+  }
+  const first = lines[0]
+  const out = [toSpeech(first)]
+  if (max > 1) {
+    const reply = lines.find((l) => l.speaker !== first.speaker)
+    if (reply) out.push(toSpeech(reply))
+  }
+  return out
+}
+
+/** 画面描述 + 对白原文的最终组装(LLM 转译与模板回退共用,对白不依赖 LLM 转述) */
+function assemblePrompt(visual: string, spoken: string[]): string {
+  const base = visual.trim().replace(/^["「]|["」]$/g, '').slice(0, 400)
+  return spoken.length > 0 ? `${base}\n角色对白:${spoken.join(' ')}` : base
+}
 
 export interface ComposeResult {
   prompt: string
@@ -124,10 +156,13 @@ export async function composeVideoPrompt(
       jsonMode: false,
       timeoutMs: 30_000,
     })
-    // 去掉模型偶尔自行包裹的引号,限长防用户端展示失控
-    const prompt = raw.trim().replace(/^["「]|["」]$/g, '').slice(0, 400)
-    if (!prompt) throw new Error('空响应')
-    return { prompt, usedFallback: false }
+    // 画面归画面;对白原文由这里确定性拼上,不依赖 LLM 转述
+    const visual = raw.trim()
+    if (!visual) throw new Error('空响应')
+    return {
+      prompt: assemblePrompt(visual, pickSpokenLines(lines, input.maxSpokenLines ?? 2)),
+      usedFallback: false,
+    }
   } catch (e) {
     return {
       prompt: fallbackPrompt(input),

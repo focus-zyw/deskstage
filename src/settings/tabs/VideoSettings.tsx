@@ -12,6 +12,8 @@ import { SettingsCard, SetField, SetLine } from '../SettingsPrimitives'
 import { getConfigSnapshot, type VideoGenConfig } from '../../storage/configStore'
 import { nameOf } from '../../engine/persona'
 import { listEpisodes } from '../../storage/historyStore'
+import { modeOf } from '../../performer/modes'
+import { fmtTime } from '../format'
 import { SPRITE_SETS, spriteSrc } from '../../stage/spriteSets'
 import {
   addVideoTask,
@@ -70,7 +72,7 @@ async function loadSpriteDataUrl(slot: 'A' | 'B', action: string): Promise<strin
 }
 
 export function VideoSettings() {
-  const { form, setForm, saveField, flashCard } = useSettings()
+  const { form, setForm, saveField, flashCard, videoSource, setVideoSource } = useSettings()
   const vg = form.videoGen
   const tasks = useVideoTasks()
 
@@ -140,19 +142,24 @@ export function VideoSettings() {
     return () => window.clearInterval(timer)
   }, [tasks])
 
-  /** 剧本轻适配:把最近一集的台词+场景卡转译成画面描述(可编辑) */
+  /** 剧本轻适配:把素材来源(收藏页导入的一集,否则最近一集)的台词+场景卡转译成画面描述 */
   async function onCompose() {
     setBusy('compose')
     setError(null)
     setNote(null)
     try {
-      const eps = await listEpisodes(1)
-      const r = await composeVideoPrompt({ episode: eps[0] ?? null, brief })
+      const ep = videoSource ?? ((await listEpisodes(1))[0] ?? null)
+      // 5 秒视频只容 1 句口播,10 秒容 2 句
+      const r = await composeVideoPrompt({
+        episode: ep,
+        brief,
+        maxSpokenLines: vg.durationSeconds >= 8 ? 2 : 1,
+      })
       setPrompt(r.prompt)
       setNote(
         r.usedFallback
           ? `AI 转译失败(${r.error ?? '未知'}),已用本地模板拼装,可手动改`
-          : `已按${eps[0] ? '最近一段演出' : '你的补充'}生成画面描述,可再手动修改`,
+          : `已按${ep ? (videoSource ? '选中收藏' : '最近一段演出') : '你的补充'}生成画面描述,可再手动修改`,
       )
     } catch (e) {
       setError(String((e as Error)?.message ?? e))
@@ -280,8 +287,9 @@ export function VideoSettings() {
   return (
     <>
       <SettingsCard card="视频服务" flash={flashCard} title="视频服务" desc="AI 短视频:费用由你填的 API Key 账户承担">
-        <SetLine title="服务商" hint={provider?.setupHint}>
-          <div className="seg-group">
+        {/* 服务商按钮组名字长,横排 SetLine 会把左侧文案挤成竖排——用竖排字段独占整行 */}
+        <SetField label="服务商" htmlFor="cfg-video-provider" hint={provider?.setupHint}>
+          <div className="seg-group" id="cfg-video-provider">
             {VIDEO_PROVIDERS.map((p) => (
               <button
                 key={p.id}
@@ -292,7 +300,7 @@ export function VideoSettings() {
               </button>
             ))}
           </div>
-        </SetLine>
+        </SetField>
         <SetField label="API Key" htmlFor="cfg-video-key" hint="仅保存在本机;各服务 Key 相互独立">
           <input
             id="cfg-video-key"
@@ -361,6 +369,18 @@ export function VideoSettings() {
       </SettingsCard>
 
       <SettingsCard card="生成视频" flash={flashCard} title="生成视频" desc="剧本不动:由 AI 把台词+场景卡转译成画面描述">
+        {videoSource && (
+          <SetLine title="素材来源" hint="由收藏页导入;清除后转译改用最近一集">
+            <div className="shot-key-row">
+              <span className="video-task-meta">
+                收藏 · {modeOf(videoSource.mode).label} · {fmtTime(videoSource.ts)} · {videoSource.lines.length} 句
+              </span>
+              <button className="panel-btn" onClick={() => setVideoSource(null)}>
+                改用最近一集
+              </button>
+            </div>
+          </SetLine>
+        )}
         <SetField label="创意补充(可空)" htmlFor="cfg-video-brief" hint="想加的方向,如:夜晚便利店门口,雨中对话">
           <textarea
             id="cfg-video-brief"
@@ -372,10 +392,14 @@ export function VideoSettings() {
         </SetField>
         <div className="shot-key-row">
           <button className="panel-btn" disabled={busy !== null} onClick={() => void onCompose()}>
-            {busy === 'compose' ? '转译中…' : `从最近演出生成画面描述`}
+            {busy === 'compose' ? '转译中…' : videoSource ? '从选中收藏生成画面描述' : '从最近演出生成画面描述'}
           </button>
         </div>
-        <SetField label="画面描述(提交给视频模型)" htmlFor="cfg-video-prompt" hint="描述场景/人物/动作/镜头">
+        <SetField
+          label="画面描述(提交给视频模型)"
+          htmlFor="cfg-video-prompt"
+          hint="描述场景/人物/动作/镜头;结尾自动附对白原文,支持配音的模型(Seedance 2.0/CogVideoX-3)会让角色开口说"
+        >
           <textarea
             id="cfg-video-prompt"
             rows={4}

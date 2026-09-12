@@ -22,6 +22,7 @@ import { startQrLogin, type QrLoginHandle, type QrPhase } from '../live/biliLogi
 import QRCode from 'qrcode'
 import type { Episode } from '../storage/historyStore'
 import type { Rarity } from '../features/support/pool'
+import type { SettingsTab } from './settingsCatalog'
 
 /** apiKeys 的存储键:预设厂商用 id,自定义端点按 baseUrl 区分(与 configStore 注释约定一致) */
 export function vendorKeyOf(id: string, baseUrl: string): string {
@@ -76,6 +77,11 @@ export interface SettingsSessionApi {
   bridge: SettingsBridge
   /** 搜索跳转的目标卡片(2.2s 高亮);由窗口注入,卡片用它做 flash 定位 */
   flashCard: string | null
+  /** 切到指定分页(跨页动作用,如收藏页"导入视频工坊");清空搜索词。本体在 SettingsWindow */
+  gotoTab(tab: SettingsTab): void
+  /** 视频工坊的素材来源:null = 用最近一集;由收藏页"导入视频工坊"设置,窗口关闭即复位 */
+  videoSource: Episode | null
+  setVideoSource(ep: Episode | null): void
 }
 
 export const SettingsContext = createContext<SettingsSessionApi | null>(null)
@@ -86,8 +92,8 @@ export function useSettings(): SettingsSessionApi {
   return v
 }
 
-/** 会话本体(不含 bridge/flashCard,由窗口组装进 context) */
-export type SettingsSessionState = Omit<SettingsSessionApi, 'bridge' | 'flashCard'>
+/** 会话本体(不含 bridge/flashCard/gotoTab,由窗口组装进 context) */
+export type SettingsSessionState = Omit<SettingsSessionApi, 'bridge' | 'flashCard' | 'gotoTab'>
 
 export function useSettingsSession(): SettingsSessionState {
   const [form, setForm] = useState<AppConfig>(DEFAULT_CONFIG)
@@ -104,6 +110,8 @@ export function useSettingsSession(): SettingsSessionState {
   const [qrLogin, setQrLogin] = useState<QrLoginState | null>(null)
   // 二维码轮次号:丢弃旧轮迟到的渲染结果,防止新一轮被旧图覆盖
   const qrRoundRef = useRef(0)
+  // 视频工坊的素材来源:收藏页"导入视频工坊"带过来的整集(跨 tab 载荷,窗口关闭即销毁)
+  const [videoSource, setVideoSource] = useState<Episode | null>(null)
 
   // 即存管线:字段变更 → saveField(队列合并) → commitSettings(落盘+副作用)
   const saveQueue = useMemo(
@@ -239,5 +247,7 @@ export function useSettingsSession(): SettingsSessionState {
     qrLogin,
     beginQrLogin,
     cancelQrLogin,
+    videoSource,
+    setVideoSource,
   }
 }

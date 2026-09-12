@@ -102,7 +102,13 @@ export function SettingsWindow({ innerRef, bridge, initialTab = 'general', onClo
     return () => window.clearTimeout(t)
   }, [flashCard])
 
-  const value: SettingsSessionApi = { ...session, bridge, flashCard }
+  // 跨页跳转(无高亮):清关键词 → 切分页;经 context 下发给各 tab(如收藏页"导入视频工坊")
+  function gotoTab(tab: SettingsTab) {
+    setSettingsQuery('')
+    setSettingsTab(tab)
+  }
+
+  const value: SettingsSessionApi = { ...session, bridge, flashCard, gotoTab }
 
   // 设置搜索:标签/卡片/关键词任一包含即命中(不区分大小写)
   const settingsQueryNorm = settingsQuery.trim().toLowerCase()
