@@ -48,6 +48,8 @@ export interface SettingsBridge {
   onPrivacyTip(): void
   /** 支持页抽奖:本轮最高稀有度的感谢语交给舞台角色当场答谢(rarity 决定演出规格) */
   onSupportThanks(content: { rarity: Rarity; text: string }): void
+  /** 群聊页发送消息:走主聊天通道(应答/插话/落盘同源),返回受理结果供 UI 提示 */
+  onGroupSend(text: string): Promise<'accepted' | 'busy' | 'empty'>
 }
 
 export interface SettingsSessionApi {

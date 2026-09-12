@@ -173,6 +173,8 @@ export interface AppConfig {
   names: { a: string; b: string; c: string }
   /** 备忘默认提前提醒分钟数 */
   memo: { advanceMin: number }
+  /** 群聊(聊天记录页):群名与是否启用自定义背景图(图本体在 data/group-bg.txt) */
+  groupChat: { name: string; bg: boolean }
   /** 勿扰:一键全静(TTS 静音 + 主动行为暂停;备忘卡片仍弹) */
   dnd: boolean
   /** 主动程度:角色自发说话的频率档位(安静/平衡/热闹) */
@@ -287,6 +289,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   persona: { a: '', b: '', c: '' },
   names: { a: '甲', b: '乙', c: '丙' },
   memo: { advanceMin: 30 },
+  groupChat: { name: '我们的群', bg: false },
   dnd: false,
   proactivity: 'balanced',
   translation: { sourceLanguage: 'auto', targetLanguage: 'zh-CN', style: 'natural', autoSpeak: false },
@@ -545,6 +548,13 @@ function clampNum(v: unknown, lo: number, hi: number, fallback: number): number 
   return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : fallback
 }
 
+/** 清洗群聊设置(导出供配置迁移测试):群名截断回默认,bg 只认布尔(图本体存 group-bg.txt) */
+export function sanitizeGroupChat(v: unknown): { name: string; bg: boolean } {
+  const o = (v ?? {}) as Record<string, unknown>
+  const name = typeof o.name === 'string' ? o.name.trim().slice(0, 20) : ''
+  return { name: name || DEFAULT_CONFIG.groupChat.name, bg: o.bg === true }
+}
+
 /** 清洗角色布局:非法/缺字段逐项回退默认并钳位(导出供配置迁移测试)。
  *  老配置缺少 C 时补默认值,A/B 原值完全不动 */
 export function sanitizeCharacters(v: unknown): CharactersConfig {
@@ -635,6 +645,7 @@ function sanitizeConfig(obj: unknown): AppConfig {
       const v = Number(mm.advanceMin)
       return { advanceMin: Number.isFinite(v) && v >= 1 ? Math.min(1440, Math.round(v)) : 30 }
     })(),
+    groupChat: sanitizeGroupChat(o.groupChat),
     dnd: o.dnd === true,
     proactivity:
       o.proactivity === 'quiet' || o.proactivity === 'lively' ? o.proactivity : 'balanced',

@@ -3056,3 +3056,209 @@
   border-color: var(--accent-strong);
   border-radius: 12px 4px 12px 12px;
 }
+
+/* ---------- 群聊(聊天记录页) ---------- */
+.settings-window .group-chat {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: min(64vh, 640px);
+  border: 1px solid var(--sw-border-soft);
+  border-radius: 10px;
+  background: var(--sw-card);
+  overflow: hidden;
+}
+/* 背景图层:盖满整窗,消息层压在其上 */
+.settings-window .group-bg {
+  position: absolute;
+  inset: 0;
+  background-size: cover;
+  background-position: center;
+}
+/* 背景图上的暗化遮罩:任何图都保住消息可读(light 主题换白纱) */
+.settings-window .group-bg::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgba(10, 14, 26, 0.62);
+}
+.settings-window.light .group-bg::after {
+  background: rgba(255, 255, 255, 0.72);
+}
+/* 群聊头:群名居中,齿轮挂右 */
+.settings-window .group-head {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 8px 10px 6px;
+}
+.settings-window .group-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--sw-text-1);
+  max-width: 70%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.settings-window .group-gear {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--sw-text-3);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+.settings-window .group-gear:hover,
+.settings-window .group-gear.on {
+  background: var(--sw-hover);
+  color: var(--sw-text-1);
+}
+/* 群设置折叠区:群名 + 背景 */
+.settings-window .group-settings {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px 22px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--sw-border-soft);
+  border-bottom: 1px solid var(--sw-border-soft);
+  background: var(--sw-input);
+}
+.settings-window .group-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--sw-text-2);
+}
+.settings-window .group-field input[type='text'] {
+  width: 180px;
+}
+.settings-window .group-bg-btn {
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--sw-border-soft);
+  background: var(--sw-hover);
+  color: var(--sw-text-2);
+  cursor: pointer;
+}
+.settings-window .group-bg-btn:hover {
+  color: var(--sw-text-1);
+}
+/* 消息流:群聊窗体内弹性撑满(覆盖独立滚动节的 max-height) */
+.settings-window .group-chat .chatlog-feed {
+  flex: 1;
+  min-height: 0;
+  max-height: none;
+  height: auto;
+}
+/* 带背景图时:卡片与气泡换半透明底,日期分隔同步 */
+.settings-window .group-chat.has-bg .chatlog-ep {
+  background: rgba(16, 24, 42, 0.78);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+.settings-window .group-chat.has-bg .chatlog-bubble {
+  background: rgba(16, 24, 42, 0.78);
+}
+.settings-window .group-chat.has-bg .chatlog-row.me .chatlog-bubble {
+  background: rgba(124, 108, 240, 0.5);
+}
+.settings-window .group-chat.has-bg .chatlog-day {
+  background: rgba(16, 24, 42, 0.7);
+}
+.settings-window.light .group-chat.has-bg .chatlog-ep,
+.settings-window.light .group-chat.has-bg .chatlog-bubble,
+.settings-window.light .group-chat.has-bg .chatlog-day {
+  background: rgba(255, 255, 255, 0.82);
+}
+.settings-window.light .group-chat.has-bg .chatlog-row.me .chatlog-bubble {
+  background: rgba(124, 108, 240, 0.28);
+}
+/* 输入区:@ + 输入框 + 发送 */
+.settings-window .group-input {
+  position: relative;
+  padding: 8px 10px;
+  border-top: 1px solid var(--sw-border-soft);
+  background: var(--sw-input);
+}
+.settings-window .group-chat.has-bg .group-input {
+  background: rgba(16, 24, 42, 0.8);
+}
+.settings-window .group-input-row {
+  display: flex;
+  gap: 6px;
+}
+.settings-window .group-at {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  border: 1px solid var(--sw-border-soft);
+  background: var(--sw-hover);
+  color: var(--sw-text-2);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+.settings-window .group-at:hover {
+  color: var(--sw-text-1);
+}
+.settings-window .group-hint {
+  position: absolute;
+  top: -28px;
+  left: 10px;
+  font-size: 11px;
+  color: var(--sw-err);
+  background: var(--sw-card);
+  border: 1px solid var(--sw-border-soft);
+  border-radius: 8px;
+  padding: 3px 10px;
+}
+/* 群聊版 @ 补全:悬浮在输入区上方 */
+.settings-window .group-mention {
+  position: absolute;
+  left: 10px;
+  bottom: 100%;
+  margin-bottom: 4px;
+  display: flex;
+  flex-direction: column;
+  min-width: 160px;
+  padding: 4px;
+  background: var(--sw-card);
+  border: 1px solid var(--sw-border);
+  border-radius: 10px;
+  z-index: 5;
+}
+.settings-window .group-mention .mention-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--sw-text-2);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.settings-window .group-mention .mention-item:hover,
+.settings-window .group-mention .mention-item.on {
+  background: var(--sw-hover);
+  color: var(--sw-text-1);
+}
+.settings-window .group-mention .mention-key {
+  font-size: 10px;
+  color: var(--sw-text-3);
+}

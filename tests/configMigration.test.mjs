@@ -65,3 +65,21 @@ test('完全空的配置对象整体落默认', () => {
   const next = configStore.sanitizeCharacters(undefined)
   assert.deepEqual(next, configStore.DEFAULT_CONFIG.characters)
 })
+
+// 群聊设置(聊天记录页):老配置缺字段回默认,群名截断,bg 只认布尔
+test('群聊设置:老配置缺字段整体落默认', () => {
+  const next = configStore.sanitizeGroupChat(undefined)
+  assert.deepEqual(next, { name: '我们的群', bg: false })
+})
+
+test('群聊设置:已有群名保留,非法回落;bg 只认布尔', () => {
+  assert.deepEqual(configStore.sanitizeGroupChat({ name: '快乐老家', bg: true }), {
+    name: '快乐老家',
+    bg: true,
+  })
+  assert.equal(configStore.sanitizeGroupChat({ name: '   ' }).name, '我们的群')
+  assert.equal(configStore.sanitizeGroupChat({ name: 42 }).bg, false)
+  const long = configStore.sanitizeGroupChat({ name: '群'.repeat(50), bg: 'yes' })
+  assert.equal(long.name.length, 20)
+  assert.equal(long.bg, false)
+})

@@ -2,8 +2,10 @@
 // 记录用户在聊天框里说的话与角色的聊天应答(演出集台词在 historyStore,互不重复)。
 // 单文件独立于 history/ 目录——避免 listHistoryFiles 把它当历史日文件解析。
 // 所有操作静默容错——存储失败不影响聊天主流程。
+// 订阅三件套(version 计数):群聊页据此实时刷新——角色逐句应答落盘即冒出。
 import { readTextFile, writeTextFile, exists, mkdir, remove } from '@tauri-apps/plugin-fs'
 import { appDataDir, join } from '@tauri-apps/api/path'
+import { useSyncExternalStore } from 'react'
 import type { Episode } from './historyStore'
 import { withFileLock } from './writeLock'
 
@@ -19,6 +21,32 @@ export interface ChatLogEntry {
 const WHO_SET = new Set<ChatWho>(['user', 'A', 'B', 'C'])
 const MAX_TEXT = 500
 const MAX_TURNS = 5000
+
+// ---------- 订阅三件套(useSyncExternalStore):version 只增不回退,读侧拿它当 effect 依赖 ----------
+let version = 0
+const listeners = new Set<() => void>()
+
+/** 落盘成功后 bump(append/清空各一处);渲染层订阅 version 变化重拉列表 */
+function bumpVersion(): void {
+  version += 1
+  for (const l of listeners) l()
+}
+
+/** 订阅聊天日志变更;返回退订函数 */
+export function subscribeChatLog(fn: () => void): () => void {
+  listeners.add(fn)
+  return () => listeners.delete(fn)
+}
+
+/** useSyncExternalStore 的 getSnapshot 侧:当前版本号 */
+export function getChatLogVersion(): number {
+  return version
+}
+
+/** React 侧订阅:版本号变化 → 群聊页重拉消息列表(角色应答实时冒出) */
+export function useChatLogVersion(): number {
+  return useSyncExternalStore(subscribeChatLog, getChatLogVersion)
+}
 
 /** 单条清洗:who/text/ts 任一非法整条拒收 */
 export function sanitizeChatEntry(o: unknown): ChatLogEntry | null {
@@ -60,6 +88,7 @@ export async function appendChatTurns(turns: Array<{ who: ChatWho; text: string 
       const chunk = valid.map((t) => JSON.stringify(t)).join('\n') + '\n'
       await writeTextFile(file, chunk, { append: true })
     })
+    bumpVersion()
   } catch (e) {
     console.warn('聊天消息落盘失败(不影响聊天)', e)
   }
@@ -94,6 +123,7 @@ export async function clearChatLog(): Promise<void> {
       const file = await getLogFile()
       if (await exists(file)) await remove(file)
     })
+    bumpVersion()
   } catch (e) {
     console.warn('聊天消息清空失败', e)
   }

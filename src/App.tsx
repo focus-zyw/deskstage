@@ -782,12 +782,15 @@ function App() {
     void appendChatTurns([{ who, text }])
   }
 
-  /** 聊天通道:解析 @角色 → TurnBatch(被@角色先答,其他人有料才补,共 1~3 句) → 顺序播报。
+  /** 聊天通道核心(主聊天框与群聊页共用,显式文本入列)。返回受理结果供 UI 提示:
+   *  'empty' 空文本 / 'busy' 忙碌(应答在飞,或演出生成/抉择等待;演出进行中不算)/ 'accepted' 已受理。
+   *  解析 @角色 → TurnBatch(被@角色先答,其他人有料才补,共 1~3 句) → 顺序播报;
    *  短期会话窗口入列(下轮聊天/演出插话共用);无 @ 时在甲乙间轮换(丙需显式点名);
-   *  演出进行中改为入队插话(句尾安全缝反应后接回剧情);抉择等待仍禁发 */
-  async function sendUserChat() {
-    const text = chatDraft.trim()
-    if (!text || chatBusy) return
+   *  演出进行中改为入队插话(句尾安全缝反应后接回剧情) */
+  async function sendUserChatText(raw: string): Promise<'accepted' | 'busy' | 'empty'> {
+    const text = raw.trim()
+    if (!text) return 'empty'
+    if (chatBusy) return 'busy'
     const esc = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
     const targetOf: Record<string, Speaker> = {
       [charNames.A]: 'A',
@@ -811,60 +814,68 @@ function App() {
       // P4 演出中插话:入队,当前句结束的安全缝处反应并接回剧情
       director.queueInterjection(text, who)
       setUserBubble(text)
-      setChatDraft('')
       noteUserActive()
       recordTurn('user', text)
       window.setTimeout(() => {
         setUserBubble((u) => (u === text ? null : u))
       }, 6000)
-      return
+      return 'accepted'
     }
-    if (phase !== 'idle') return
+    if (phase !== 'idle') return 'busy'
     setUserBubble(text)
-    setChatDraft('')
     setChatBusy(true)
     setTopActor(who)
     noteUserActive()
     recordTurn('user', text)
-    try {
-      // TurnBatch:被@角色先答,另一位有料才补;生成失败回落单句应答(原行为)
-      let batch: DialogLine[] | null = null
-      try {
-        batch = await generateTurnBatch({ userText: text, target: who, window: chatWindow() })
-      } catch {
-        batch = null // 静默回落
-      }
-      if (!batch || batch.length === 0) {
-        const reply = await generateUserChatReply(who, text)
-        batch = [{ speaker: who, text: reply, action: 'talk' }]
-      }
-      for (const l of batch) {
-        presenterSay(l.speaker, l.text, { action: 'talk', ms: 2200 + l.text.length * 160, speaking: true })
-        pulseOther(l.speaker)
-        speak(l.speaker, l.text, undefined, 'chat')
-        recordTurn(l.speaker, l.text)
-        await new Promise((r) => window.setTimeout(r, 2200 + l.text.length * 160))
-      }
-      window.setTimeout(() => {
-        setUserBubble((u) => (u === text ? null : u)) // 应答结束,你说的这句一并收走
-      }, 400)
-    } catch {
-      setUserBubble(null)
-      presenterSay(who, '（信号不好，没听清…再说一遍？）', { ms: 2200 })
-    } finally {
-      setChatBusy(false)
-    }
-    // 后台记忆提取:不阻塞、失败静默
+    // 应答全程不阻塞受理返回:调用方发完即清输入,应答靠消息落盘订阅实时冒出
     void (async () => {
       try {
-        const mem = await getMemory()
-        const known = topFacts(mem, 8)
-        const candidates = await extractFacts(text, known)
-        if (candidates.length > 0) await mergeFacts(candidates)
+        // TurnBatch:被@角色先答,另一位有料才补;生成失败回落单句应答(原行为)
+        let batch: DialogLine[] | null = null
+        try {
+          batch = await generateTurnBatch({ userText: text, target: who, window: chatWindow() })
+        } catch {
+          batch = null // 静默回落
+        }
+        if (!batch || batch.length === 0) {
+          const reply = await generateUserChatReply(who, text)
+          batch = [{ speaker: who, text: reply, action: 'talk' }]
+        }
+        for (const l of batch) {
+          presenterSay(l.speaker, l.text, { action: 'talk', ms: 2200 + l.text.length * 160, speaking: true })
+          pulseOther(l.speaker)
+          speak(l.speaker, l.text, undefined, 'chat')
+          recordTurn(l.speaker, l.text)
+          await new Promise((r) => window.setTimeout(r, 2200 + l.text.length * 160))
+        }
+        window.setTimeout(() => {
+          setUserBubble((u) => (u === text ? null : u)) // 应答结束,你说的这句一并收走
+        }, 400)
       } catch {
-        // 静默
+        setUserBubble(null)
+        presenterSay(who, '（信号不好，没听清…再说一遍？）', { ms: 2200 })
+      } finally {
+        setChatBusy(false)
       }
+      // 后台记忆提取:不阻塞、失败静默
+      void (async () => {
+        try {
+          const mem = await getMemory()
+          const known = topFacts(mem, 8)
+          const candidates = await extractFacts(text, known)
+          if (candidates.length > 0) await mergeFacts(candidates)
+        } catch {
+          // 静默
+        }
+      })()
     })()
+    return 'accepted'
+  }
+
+  /** 主聊天框入口:草稿走核心通道,受理后清空草稿 */
+  async function sendUserChat() {
+    const res = await sendUserChatText(chatDraft)
+    if (res === 'accepted') setChatDraft('')
   }
 
   // 命令直达的分页请求(窗口挂载时读取一次;关闭后复位)
@@ -891,6 +902,7 @@ function App() {
     onResetC: resetResidentLayout,
     onPrivacyTip: showPrivacyTip,
     onSupportThanks: showSupportThanks,
+    onGroupSend: (text) => sendUserChatText(text),
   }
 
   // ---------- 备忘录:调度与常驻提醒 ----------
