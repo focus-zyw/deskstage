@@ -16,6 +16,7 @@ export type SettingsTab =
   | 'memo'
   | 'favorites'
   | 'history'
+  | 'chatlog'
   | 'support'
 
 /** 左侧导航:偏好设置 / 数据管理 两组 */
@@ -175,6 +176,17 @@ export const SETTINGS_NAV: { group: string; items: { id: SettingsTab; label: str
           </svg>
         ),
       },
+      {
+        id: 'chatlog',
+        label: '聊天记录',
+        icon: (
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+            <line x1="8" y1="9" x2="16" y2="9" />
+            <line x1="8" y1="13" x2="13" y2="13" />
+          </svg>
+        ),
+      },
     ],
   },
   {
@@ -208,6 +220,7 @@ export const TAB_GROUP: Record<SettingsTab, string> = {
   memo: '数据管理',
   favorites: '数据管理',
   history: '数据管理',
+  chatlog: '数据管理',
   support: '支持',
 }
 
@@ -305,6 +318,8 @@ export const SETTINGS_SEARCH_INDEX: { tab: SettingsTab; card: string; label: str
   { tab: 'favorites', card: '收藏的对话', label: '收藏的对话', keywords: '收藏 星标 精选 管理 重放 取消' },
   // 历史
   { tab: 'history', card: '演出历史', label: '演出历史', keywords: '回放 收藏 删除 历史' },
+  // 聊天记录
+  { tab: 'chatlog', card: '聊天记录', label: '聊天记录', keywords: '聊天 记录 对话 消息 回放 翻看 历史 微信 气泡' },
   // 支持作者
   { tab: 'support', card: '请作者喝杯奶茶', label: '支持作者', keywords: '支持 捐赠 打赏 赞助 收款码 微信 支付宝 抽奖' },
   { tab: 'support', card: '心意扭蛋机', label: '心意扭蛋机', keywords: '抽奖 扭蛋 单抽 十连 次数 保底 稀有' },

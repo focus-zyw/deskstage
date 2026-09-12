@@ -22,6 +22,7 @@ import { MemorySettings } from './tabs/MemorySettings'
 import { MemoSettings } from './tabs/MemoSettings'
 import { FavoritesSettings } from './tabs/FavoritesSettings'
 import { HistorySettings } from './tabs/HistorySettings'
+import { ChatLogSettings } from './tabs/ChatLogSettings'
 import { SupportSettings } from './tabs/SupportSettings'
 
 export interface SettingsWindowProps {
@@ -49,6 +50,7 @@ const TAB_CONTENT: Record<SettingsTab, () => React.JSX.Element> = {
   memo: MemoSettings,
   favorites: FavoritesSettings,
   history: HistorySettings,
+  chatlog: ChatLogSettings,
   support: SupportSettings,
 }
 

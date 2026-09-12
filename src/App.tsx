@@ -16,7 +16,8 @@ import { preloadResident } from './stage/resident/residentManifest'
 import type { DialogLine, Speaker } from './performer/player'
 import { useAllModes, type Mode } from './performer/modes'
 import { generateShortChat, generateTurnBatch, improvPokeLine, generateUserChatReply, extractFacts, memoReminderLine } from './engine/llmClient'
-import { pushTurn, chatWindow } from './dialogue/turnWindow'
+import { pushTurn, chatWindow, type TurnWho } from './dialogue/turnWindow'
+import { appendChatTurns } from './storage/chatLogStore'
 import { react } from './engine/interactionRules'
 import { logInteraction, logInterrupt, resetDismissals } from './storage/interactionStore'
 import { ensureMoodLoaded, notePoked } from './storage/moodStore'
@@ -586,6 +587,7 @@ function App() {
     { id: 'ocr', label: '提取文字(剪贴板图片,AI 识别+本地兜底)', keywords: ['提取', '识别', 'ocr'], run: () => startOcrIntoTranslation(false) },
     { id: 'screenshot', label: '截屏(框选→保存/识字/翻译)', keywords: ['截屏', '截图', '截图翻译', '截屏翻译'], run: startScreenshotFlow },
     { id: 'memo', label: '添加提醒(打开备忘页)', keywords: ['备忘页'], run: openMemoSettings },
+    { id: 'chatlog', label: '翻聊天记录(打开设置页)', keywords: ['聊天记录', '聊天', '对话回放', '记录'], run: () => openSettings('chatlog') },
     { id: 'topic', label: '设置聊天主题', keywords: ['话题', '主题'], run: () => openOverlayExclusive('topic') },
     { id: 'toggle-chars', label: charHidden ? '显示角色' : '隐藏角色', keywords: ['隐藏角色', '显示角色'], run: () => setCharsHidden(!charHidden) },
     // 点播命令从模式注册表生成:内置+自定义(模式工坊)自动进命令面板与 LLM 兜底路由
@@ -774,6 +776,12 @@ function App() {
     })
   }
 
+  /** 聊天记录双轨:短期窗口入列(内存,喂 LLM)与永久落盘(chatlog.jsonl,供「聊天记录」页回看)同源走这一处;落盘失败静默 */
+  function recordTurn(who: TurnWho, text: string) {
+    pushTurn({ who, text })
+    void appendChatTurns([{ who, text }])
+  }
+
   /** 聊天通道:解析 @角色 → TurnBatch(被@角色先答,其他人有料才补,共 1~3 句) → 顺序播报。
    *  短期会话窗口入列(下轮聊天/演出插话共用);无 @ 时在甲乙间轮换(丙需显式点名);
    *  演出进行中改为入队插话(句尾安全缝反应后接回剧情);抉择等待仍禁发 */
@@ -805,7 +813,7 @@ function App() {
       setUserBubble(text)
       setChatDraft('')
       noteUserActive()
-      pushTurn({ who: 'user', text })
+      recordTurn('user', text)
       window.setTimeout(() => {
         setUserBubble((u) => (u === text ? null : u))
       }, 6000)
@@ -817,7 +825,7 @@ function App() {
     setChatBusy(true)
     setTopActor(who)
     noteUserActive()
-    pushTurn({ who: 'user', text })
+    recordTurn('user', text)
     try {
       // TurnBatch:被@角色先答,另一位有料才补;生成失败回落单句应答(原行为)
       let batch: DialogLine[] | null = null
@@ -834,7 +842,7 @@ function App() {
         presenterSay(l.speaker, l.text, { action: 'talk', ms: 2200 + l.text.length * 160, speaking: true })
         pulseOther(l.speaker)
         speak(l.speaker, l.text, undefined, 'chat')
-        pushTurn({ who: l.speaker, text: l.text })
+        recordTurn(l.speaker, l.text)
         await new Promise((r) => window.setTimeout(r, 2200 + l.text.length * 160))
       }
       window.setTimeout(() => {
