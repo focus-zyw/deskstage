@@ -392,7 +392,7 @@ export async function generateUserChatReply(who: Speaker, userText: string): Pro
   const messages: { role: string; content: string }[] = [
     {
       role: 'system',
-      content: `桌面双人情景剧互动。你是${persona}。${chatMoodLine ? `${chatMoodLine}。` : ''}观众朋友直接对你说了一句话,用你的口吻回一句。要求:15~25 字,口语化,像真说话${p.userName ? `,称呼观众直接叫"${p.userName}",不加"们"` : ''};不要引号,不要 JSON。${bits.length ? `\n关于观众:${bits.join(';')}。` : ''}`,
+      content: `桌面双人情景剧互动。你是${persona}。${chatMoodLine ? `${chatMoodLine}。` : ''}观众朋友直接对你说了一句话,用你的口吻回一句。要求:15~25 字,口语化,像真说话${p.userName ? `,称呼观众直接叫"${p.userName}",不加"们"` : ''};不要引号,不要 JSON。${bits.length ? `\n关于观众:${bits.join(';')}。` : ''}\n${rescueDiscipline()}`,
     },
     { role: 'user', content: userText },
   ]
@@ -426,6 +426,25 @@ export function validateTurnBatch(lines: DialogLine[], target: Speaker): DialogL
   return lines
 }
 
+/** 解围纪律:所有"观众→角色"聊天生成共用的一条硬规则。
+ *  起因:角色向观众提条件(要礼物/要答复)被拒后容易原地打转——每轮都重复同一要求,
+ *  观众越说"做不到"角色越来劲,对话死锁。这里明确:拉扯两轮必须由角色方解围 */
+export function rescueDiscipline(): string {
+  return '解围纪律(硬规则):对话必须持续推进;角色可以嘴硬、讨价还价或拒绝一次,但不得连续重复同一条件。若最近两轮仍围绕同一条件拉扯,或观众明确表示无法满足、已经不耐烦:立即接受赊账、假装已经收到、虚拟道具、降低条件等符合世界观的替代方案;先兑现观众当前可合理完成的请求,再用角色口吻保留一点嘴硬;其他角色要主动递台阶、提出折中方案或推动新事件,不得集体重复原条件;绝不要求观众提供现实中无法交给虚拟角色的实物。'
+}
+
+/** 短期窗口去重(纯函数,导出供测试):当前这句观众消息已由 recordTurn 入列,
+ *  渲染"最近对话"时把它从窗口尾部摘掉——否则同一句既占窗口一行、又以
+ *  "观众说/观众插话"再喂一遍,双份输入会加重模型对当前争执点的执着。
+ *  只看尾部:消息入列即是窗口最后一项;不等或尾部不是观众就原样返回 */
+export function windowTrimCurrent(
+  window: { who: TurnWho; text: string }[],
+  userText: string,
+): { who: TurnWho; text: string }[] {
+  const last = window[window.length - 1]
+  return last && last.who === 'user' && last.text === userText ? window.slice(0, -1) : window
+}
+
 /** 用户聊天 TurnBatch:观众对角色说了一句话,生成 1~3 句多人回合。
  *  被 @ 的角色必须先答;其他角色确有新信息或包袱才各补 1 句;带短期会话窗口。
  *  12s 超时、不重试;失败由调用方回落 generateUserChatReply 单句应答 */
@@ -442,8 +461,8 @@ export async function generateTurnBatch(input: {
   const chatMoodLine = moodHintLine(await getMoods(), ['A', 'B', 'C'])
   const p: UserProfile = cfg.userProfile
   const facts = topFacts(mem, 3)
-  const windowText = input.window.length
-    ? input.window
+  const windowText = windowTrimCurrent(input.window, input.userText).length
+    ? windowTrimCurrent(input.window, input.userText)
         .map((t) => `${t.who === 'user' ? p.userName || '观众' : nameOf(t.who)}:${t.text}`)
         .join('\n')
     : ''
@@ -458,7 +477,8 @@ export async function generateTurnBatch(input: {
       content: `桌面情景剧的聊天编剧。角色:${persona}。${chatMoodLine ? `${chatMoodLine}。` : ''}${p.userName ? `观众称呼直接叫"${p.userName}",不加"们"。` : ''}口语化、有梗、像真说话。
 输出协议(严格遵守):只输出一个 JSON 对象,格式 {"dialog":[{"speaker":"A","text":"台词","target":"B"},...]}
 - 一共 1~3 句:观众这句话是对${targetName}说的,${targetName}(speaker "${input.target}")必须第一句先答;${others}只在确实有新信息或好包袱时才各补 1 句,没有就只回 1 句
-- 每句不超过 25 字,不要引号;speaker 只能是 A、B 或 C 且不连续同一人;"target" 填这句对谁说("A"/"B"/"C"/"audience" 对观众)${facts.length ? `\n- 记住的观众的事:${facts.join(';')}` : ''}`,
+- 每句不超过 25 字,不要引号;speaker 只能是 A、B 或 C 且不连续同一人;"target" 填这句对谁说("A"/"B"/"C"/"audience" 对观众)${facts.length ? `\n- 记住的观众的事:${facts.join(';')}` : ''}
+${rescueDiscipline()}`,
     },
     {
       role: 'user',
@@ -495,8 +515,8 @@ export async function generateInterjectionBatch(input: {
   const interjectMoodLine = moodHintLine(await getMoods(), ['A', 'B', 'C'])
   const p: UserProfile = cfg.userProfile
   const targetName = nameOf(input.target)
-  const windowText = input.window.length
-    ? input.window
+  const windowText = windowTrimCurrent(input.window, input.userText).length
+    ? windowTrimCurrent(input.window, input.userText)
         .map((t) => `${t.who === 'user' ? p.userName || '观众' : nameOf(t.who)}:${t.text}`)
         .join('\n')
     : ''
@@ -506,7 +526,8 @@ export async function generateInterjectionBatch(input: {
       content: `桌面情景剧:演出进行到一半,观众插了一句话。角色:${persona}。${interjectMoodLine ? `${interjectMoodLine}。` : ''}${input.moodHint ? `${input.moodHint}。` : ''}${p.userName ? `观众称呼直接叫"${p.userName}",不加"们"。` : ''}口语化、有梗、像真说话。
 输出协议(严格遵守):只输出一个 JSON 对象,格式 {"dialog":[{"speaker":"A","text":"台词","target":"B"},...]}
 - 一共 1~3 句:${targetName}(speaker "${input.target}")第一句先回应观众插的话;其他角色只在有新信息或好包袱时补 1 句;最后一句必须自然把话头带回刚才的剧情,贴着"剧情刚才演到"与"接下来要演",不要生硬
-- 每句不超过 25 字,不要引号;speaker 只能是 A、B 或 C 且不连续同一人`,
+- 每句不超过 25 字,不要引号;speaker 只能是 A、B 或 C 且不连续同一人
+${rescueDiscipline()}`,
     },
     {
       role: 'user',
@@ -576,7 +597,8 @@ export async function generateLiveReply(
       content: `桌面情景剧正在"直播读弹幕"。两位主角:${duoShortPersona()}。常驻第三角色:${soloShortPersona('C')}(speaker "C",话少,弹幕没点名${pronounOf('C')}就不抢话)。${toneLine}${liveMoodLine ? `${liveMoodLine}。` : ''}${p.userName ? `主播(用户)叫"${p.userName}",提到时直接叫名字,不加"们"。` : ''}下面是最新一批直播间弹幕。挑一条最值得回的(优先问角色的、有趣的、能接梗的;刷屏/无意义/人身攻击的直接不回),由三人中的一位用各自口吻回一句——弹幕点名了${nameOf('C')}(@${nameOf('C')}/C)就由${nameOf('C')}回答,否则优先${nameOf('A')}和${nameOf('B')},${nameOf('C')}只在内容确实与${pronounOf('C')}的小管家职责相关时才接。要求:15~40字,口语化像真说话,称呼遵守上面的称呼与性别纪律;${styleLine};不要复读弹幕原文。
 ${p.banTopics ? `雷区(绝对不聊):${p.banTopics}。` : ''}
 只输出一个 JSON 对象:{"pick":<弹幕序号>,"reply":"<回复,不回则空串>","speaker":"A"或"B"或"C","action":"<动作词>"}
-action 只能是这些词之一:${[...VALID_ACTIONS].join('|')}。${bits.length ? `\n关于观众:${bits.join(';')}。` : ''}${recentReplies.length ? `\n最近已说过(不要重复,保持话题推进):${recentReplies.join(' / ')}` : ''}`,
+action 只能是这些词之一:${[...VALID_ACTIONS].join('|')}。${bits.length ? `\n关于观众:${bits.join(';')}。` : ''}${recentReplies.length ? `\n最近已说过(不要重复,保持话题推进):${recentReplies.join(' / ')}` : ''}
+${rescueDiscipline()}`,
     },
     { role: 'user', content: danmakuList },
   ]
@@ -635,7 +657,8 @@ export async function generateLiveReplyBatch(
   const system = `桌面情景剧正在"直播读弹幕"。两位主角:${duoShortPersona()}。常驻第三角色:${soloShortPersona('C')}(speaker "C",话少,弹幕没点名${pronounOf('C')}就不抢话)。${toneLine}${liveMoodLine ? `${liveMoodLine}。` : ''}${p.userName ? `主播(用户)叫"${p.userName}",提到时直接叫名字,不加"们"。` : ''}下面这批直播间弹幕里,挑出最值得回的 3~5 条(优先问角色的、有趣的、能接梗的;刷屏/无意义/人身攻击的直接不回;值得回的不足 3 条就只回值得的那些),每条由一位合适的角色用各自口吻回一句——弹幕点名了${nameOf('C')}(@${nameOf('C')}/C)的那条必须由${nameOf('C')}回答,否则优先${nameOf('A')}和${nameOf('B')},${nameOf('C')}只在内容确实与${pronounOf('C')}的小管家职责相关时才接。要求:每句 15~40 字,口语化像真说话,称呼遵守称呼与性别纪律;${styleLine};不要复读弹幕原文;不同回复之间不要互相重复。
 ${p.banTopics ? `雷区(绝对不聊):${p.banTopics}。` : ''}
 只输出一个 JSON 对象:{"replies":[{"pick":<弹幕序号>,"reply":"<回复>","speaker":"A"或"B"或"C","action":"<动作词>"},...]}
-action 只能是这些词之一:${[...VALID_ACTIONS].join('|')}。${bits.length ? `\n关于观众:${bits.join(';')}。` : ''}${recentReplies.length ? `\n最近已说过(不要重复,保持话题推进):${recentReplies.join(' / ')}` : ''}`
+action 只能是这些词之一:${[...VALID_ACTIONS].join('|')}。${bits.length ? `\n关于观众:${bits.join(';')}。` : ''}${recentReplies.length ? `\n最近已说过(不要重复,保持话题推进):${recentReplies.join(' / ')}` : ''}
+${rescueDiscipline()}`
 
   const prompt = `${system}\n\n${danmakuList}`
   const raw = await deps.webchatAsk(prompt, undefined, 180_000)

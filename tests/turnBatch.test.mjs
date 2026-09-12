@@ -54,3 +54,35 @@ test('TurnBatch 校验:@C 时 C 首答,三人合法(常驻第三人接入聊天)
   assert.ok(llm.validateTurnBatch([line('C', '先答'), line('A', '补刀')], 'C'))
   assert.equal(llm.validateTurnBatch([line('C', '先答'), line('D', '非法角色')], 'C'), null) // D 不在词表
 })
+
+test('窗口去重:当前这句观众消息从窗口尾部摘掉,不再双份进 prompt', () => {
+  const win = [
+    { who: 'user', text: '给我买个礼物' },
+    { who: 'A', text: '那你倒是买啊' },
+    { who: 'user', text: '我买不起' },
+  ]
+  const trimmed = llm.windowTrimCurrent(win, '我买不起')
+  assert.equal(trimmed.length, 2)
+  assert.equal(trimmed.some((t) => t.text === '我买不起'), false)
+  // 同一句在中间出现(历史里观众曾说过同样的话)不受影响:只看尾部
+  const mid = [
+    { who: 'user', text: '我买不起' },
+    { who: 'B', text: '那没办法了' },
+  ]
+  assert.equal(llm.windowTrimCurrent(mid, '我买不起').length, 2)
+  // 尾部不是观众、或文本不等:原样返回
+  const tailChar = [{ who: 'user', text: '早' }, { who: 'A', text: '早啊' }]
+  assert.equal(llm.windowTrimCurrent(tailChar, '早').length, 2)
+  assert.equal(llm.windowTrimCurrent(win, '另一句话').length, 3)
+  assert.equal(llm.windowTrimCurrent([], '任意').length, 0)
+})
+
+test('解围纪律:存在且覆盖关键约束(拉扯两轮必须解围)', () => {
+  const d = llm.rescueDiscipline()
+  assert.match(d, /解围纪律/)
+  assert.match(d, /不得连续重复同一条件/)
+  assert.match(d, /最近两轮/)
+  assert.match(d, /赊账|虚拟道具|降低条件/)
+  assert.match(d, /递台阶/)
+  assert.match(d, /绝不要求观众提供现实中无法交给虚拟角色的实物/)
+})
