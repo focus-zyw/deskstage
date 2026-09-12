@@ -156,8 +156,9 @@ export interface AppConfig {
   hotkeys: HotkeysConfig
   /** 使用者的兴趣爱好(逗号/顿号/换行分隔);空 = 不介入对话 */
   userInterests: string
-  /** 网页版生成:开启后主演出(相声/日常段子)改经隐藏网页窗口由网页模型生成,
-   *  失败自动回退 API;其余小调用(记忆提取/演出标注/短聊)仍走 API */
+  /** 网页版生成:开启后主演出点播(全部模式,含模式工坊自定义)与直播弹幕回复(攒批慢速)
+   *  改经隐藏网页窗口由网页模型生成,失败自动回退 API/内置剧本;
+   *  其余小调用(记忆提取/演出标注/短聊)仍走 API */
   webchatEnabled: boolean
   /** 网页模型站点 */
   webchatSite: 'deepseek' | 'doubao'

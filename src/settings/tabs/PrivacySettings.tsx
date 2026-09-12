@@ -88,7 +88,7 @@ export function PrivacySettings() {
       <SettingsCard card="网页版生成" flash={flashCard} title="网页版生成" desc="实验">
         <SetLine
           title="主演出改用网页模型生成"
-          hint="仅相声/日常段子走网页模型,记忆提取等小调用仍走 API;失败自动回退"
+          hint="主演出点播(全部模式,含自定义)与直播弹幕回复(攒批慢速)走网页模型;记忆提取等小调用仍走 API;失败自动回退"
         >
           <SetSwitch
             checked={form.webchatEnabled}

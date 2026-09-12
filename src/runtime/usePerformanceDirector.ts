@@ -468,10 +468,11 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
       deps.onLive()
       return
     }
-    // 未配置 API Key:不进生成流程,气泡引导去设置
+    // API Key 与网页模型至少配一个:都没有才不进生成流程,气泡引导去设置
+    // (只开网页模型不填 Key 是合法形态:主演出走网页,失败回落内置剧本)
     const cfg = await getConfig()
-    if (!cfg.apiKey.trim()) {
-      deps.presenter.say('A', '还没填 API Key,点 ⚙ 去设置里填一下~', { action: 'surprise', ms: 2600 })
+    if (!cfg.apiKey.trim() && !cfg.webchatEnabled) {
+      deps.presenter.say('A', '还没填 API Key,或到设置里开启网页模型生成~', { action: 'surprise', ms: 2600 })
       return
     }
 

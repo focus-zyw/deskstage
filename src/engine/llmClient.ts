@@ -601,6 +601,73 @@ action 只能是这些词之一:${[...VALID_ACTIONS].join('|')}。${bits.length 
   return { pick: validPick, reply, speaker, action }
 }
 
+/** 攒批回复的单条形状(与 LivePetAction 同形) */
+export type LiveBatchReply = LivePetAction
+
+/** 网页模型攒批回复:一次慢调用回多条弹幕(网页模型单次几十秒,攒批摊薄延迟)。
+ *  挑批内最值得回的 3~5 条各回一句;网页端无 jsonMode,格式服从靠协议文字+容错解析;
+ *  任何失败/全部无效抛错,由调用方回退 API 单条版。deps.webchatAsk 可注入供测试 */
+export async function generateLiveReplyBatch(
+  batch: LiveDanmakuBrief[],
+  recentReplies: string[],
+  deps: { webchatAsk: typeof webchatAsk } = { webchatAsk },
+): Promise<LiveBatchReply[]> {
+  const cfg = await getConfig()
+  const mem = await getMemory()
+  const p: UserProfile = cfg.userProfile
+  const bits: string[] = []
+  if (p.userName) bits.push(`主播称呼直接叫"${p.userName}",提到时不加"们"`)
+  if (p.occupation) bits.push(`身份:${p.occupation}`)
+  if (p.likes) bits.push(`喜欢:${p.likes}`)
+  if (p.dislikes) bits.push(`不喜欢:${p.dislikes}`)
+  if (p.banTopics) bits.push(`绝对不要聊:${p.banTopics}`)
+  const facts = topFacts(mem, 3)
+  if (facts.length) bits.push(`记住的观众的事:${facts.join(';')}`)
+  const liveMoodLine = moodHintLine(await getMoods(), ['A', 'B', 'C'])
+
+  const danmakuList = batch.map((d, i) => `${i}. ${d.username}:${d.content}`).join('\n')
+  const liveTone = liveMode.tone?.trim()
+  const liveIsComedy = !liveTone || liveTone === 'comedy'
+  const toneLine = liveIsComedy ? '' : `本直播间整体基调:${liveTone},回复的语气、用词与收尾方式都按这个基调走。`
+  const styleLine = liveIsComedy
+    ? '语气跟各自人设走,优先友好捧场和接梗,偶尔斗嘴点缀即可,别句句抬杠'
+    : `语气跟各自人设走,并服从直播间基调(${liveTone});不要套用互怼/抬杠的默认写法`
+  const system = `桌面情景剧正在"直播读弹幕"。两位主角:${duoShortPersona()}。常驻第三角色:${soloShortPersona('C')}(speaker "C",话少,弹幕没点名${pronounOf('C')}就不抢话)。${toneLine}${liveMoodLine ? `${liveMoodLine}。` : ''}${p.userName ? `主播(用户)叫"${p.userName}",提到时直接叫名字,不加"们"。` : ''}下面这批直播间弹幕里,挑出最值得回的 3~5 条(优先问角色的、有趣的、能接梗的;刷屏/无意义/人身攻击的直接不回;值得回的不足 3 条就只回值得的那些),每条由一位合适的角色用各自口吻回一句——弹幕点名了${nameOf('C')}(@${nameOf('C')}/C)的那条必须由${nameOf('C')}回答,否则优先${nameOf('A')}和${nameOf('B')},${nameOf('C')}只在内容确实与${pronounOf('C')}的小管家职责相关时才接。要求:每句 15~40 字,口语化像真说话,称呼遵守称呼与性别纪律;${styleLine};不要复读弹幕原文;不同回复之间不要互相重复。
+${p.banTopics ? `雷区(绝对不聊):${p.banTopics}。` : ''}
+只输出一个 JSON 对象:{"replies":[{"pick":<弹幕序号>,"reply":"<回复>","speaker":"A"或"B"或"C","action":"<动作词>"},...]}
+action 只能是这些词之一:${[...VALID_ACTIONS].join('|')}。${bits.length ? `\n关于观众:${bits.join(';')}。` : ''}${recentReplies.length ? `\n最近已说过(不要重复,保持话题推进):${recentReplies.join(' / ')}` : ''}`
+
+  const prompt = `${system}\n\n${danmakuList}`
+  const raw = await deps.webchatAsk(prompt, undefined, 180_000)
+  const replies = sanitizeLiveReplyBatch(raw, batch.length)
+  if (replies.length === 0) throw new Error('网页攒批回复全部无效')
+  return replies
+}
+
+/** 容错解析攒批回复:逐项校验(pick 越界/speaker 非法/action 非法/空 reply 丢弃该条,
+ *  pick 去重保首个,上限 5),解析不出 JSON 或一条不剩时抛错由调用方回退 API */
+export function sanitizeLiveReplyBatch(raw: string, batchLength: number): LiveBatchReply[] {
+  const m = raw.match(/\{[\s\S]*\}/)
+  if (!m) throw new Error('网页攒批回复未返回 JSON')
+  const arr = (JSON.parse(m[0]) as { replies?: unknown }).replies
+  if (!Array.isArray(arr)) throw new Error('网页攒批回复缺 replies 数组')
+  const out: LiveBatchReply[] = []
+  const seen = new Set<number>()
+  for (const item of arr) {
+    if (out.length >= 5) break
+    const o = (item ?? {}) as Record<string, unknown>
+    const reply = typeof o.reply === 'string' ? o.reply.trim().slice(0, 60) : ''
+    if (!reply) continue
+    const pick = Number(o.pick)
+    if (!Number.isInteger(pick) || pick < 0 || pick >= batchLength || seen.has(pick)) continue
+    const speaker: Speaker = o.speaker === 'B' || o.speaker === 'C' ? o.speaker : 'A'
+    const action = typeof o.action === 'string' && VALID_ACTIONS.has(o.action) ? o.action : 'talk'
+    seen.add(pick)
+    out.push({ pick, reply, speaker, action })
+  }
+  return out
+}
+
 /**
  * 记忆提取:从观众的一句话里挖"关于观众本人的长期事实",与已知事实去重后由调用方入库。
  * 6s 超时、不重试;失败抛错由调用方静默。
