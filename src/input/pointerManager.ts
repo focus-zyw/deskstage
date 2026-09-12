@@ -287,7 +287,14 @@ export async function initPointerManager() {
   await listen<[number, number]>('cursor-pos', (e) => {
     if (captureMode) return // 框选期间整窗可交互,不做穿透切换
     const [px, py] = e.payload
-    if (nativeCapture) dispatchNativePointer(nativeCapture.target, 'pointermove', px, py)
+    if (nativeCapture) {
+      // 原生拖拽期间(工具栏把手/角色):冻结穿透态与热区推送——
+      // 拖拽中矩形高频变化会让 hitTest 在把手内/外翻转,setInteractive 每次翻转
+      // 都重写窗口扩展样式(整窗重合成)→ video 合成层掉帧(角色C闪烁);
+      // 热区数组也会被 80Hz 的 IPC 风暴刷屏。拖拽结束(up)后统一重同步。
+      dispatchNativePointer(nativeCapture.target, 'pointermove', px, py)
+      return
+    }
     syncNativePointerRegions()
     const id = hitTest(px, py)
     if (id !== hovered) {
