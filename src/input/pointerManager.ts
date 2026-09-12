@@ -42,6 +42,11 @@ let scale = 1
 let initialized = false
 // 截屏框选模式:整窗恢复交互并暂停穿透切换(画布铺满全屏,热区判定无意义)
 let captureMode = false
+// 面板打开模式:设置窗等 overlay 显示期间,原生热区(角色/按钮)整体让位——
+// 钩子数组清空(不再吞点击/滚轮合成到角色),hitTest 跳过原生热区,整窗走真实 DOM,
+// CSS 层叠天然正确(面板 z-index 高于角色)。否则"先注册者优先"会让角色热区
+// 压过设置窗:点击穿透成戳一戳、滚轮穿透成缩放。
+let panelsOpen = false
 // Tauri 在 Windows 上切换 WS_EX_TRANSPARENT 时会重写扩展窗口样式，连带清掉
 // Rust 侧设置的 WS_EX_NOACTIVATE；记住期望值，并在每次穿透切换后重新应用。
 let noActivate = true
@@ -71,6 +76,15 @@ export function setCaptureMode(on: boolean): void {
   captureMode = on
   setWindowNoActivate(!on)
   void setInteractive(on).catch(() => {})
+}
+
+/** 面板打开开关(任一 overlay 面板可见期间为 true):原生热区让位,整窗按 DOM 交互。
+ *  开关变化即同步钩子数组;拖拽残留(nativeCapture)一并清除,避免钩子清空后收不到 up */
+export function setPanelsOpen(on: boolean): void {
+  if (panelsOpen === on) return
+  panelsOpen = on
+  nativeCapture = null
+  syncNativePointerRegions()
 }
 
 /** 注册一个可命中区域（角色、按钮等），返回注销函数 */
@@ -104,6 +118,9 @@ function hitTest(px: number, py: number): string | null {
   const lx = (px - winOrigin.x) / scale
   const ly = (py - winOrigin.y) / scale
   for (const [id, region] of regions) {
+    // 面板打开期间原生热区(角色/按钮)让位:点击/滚轮全走真实 DOM,避免钩子
+    // 按"先注册者优先"抢走本该落在面板上的事件
+    if (panelsOpen && region.nativePointerTarget) continue
     const r = region.getRect()
     if (lx >= r.left && lx <= r.right && ly >= r.top && ly <= r.bottom) return id
   }
@@ -119,6 +136,8 @@ function toClientPoint(px: number, py: number) {
 
 function nativeRegions(): NativePointerRegion[] {
   if (!nativePointerEnabled) return []
+  // 面板打开期间钩子数组清空:Rust 不再吞任何点击/滚轮,webview(已恢复交互)直接收
+  if (panelsOpen) return []
   const result: NativePointerRegion[] = []
   for (const [id, region] of regions) {
     if (!region.nativePointerTarget) continue
@@ -171,6 +190,8 @@ function nativeTargetAt(root: HTMLElement, px: number, py: number): Element {
 }
 
 function onNativePointer(payload: NativePointerPayload): void {
+  // 面板打开期间钩子数组已清空,正常不会再收到原生事件;竞态残留下也不合成,防误触
+  if (panelsOpen) return
   if (payload.kind === 'down') {
     const root = regions.get(payload.id)?.nativePointerTarget?.()
     if (!root) return

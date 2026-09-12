@@ -8,7 +8,7 @@ import { startScreenshot, applyScreenshotHotkey } from './capture'
 import { applyAppHotkeys, setHotkeyHandler } from './hotkeys'
 import { setCharacterGenders, setCharacterNames, setPersonaOverride, nameOf, pronounOf } from './engine/persona'
 import { startEnvPolling } from './engine/envAware'
-import { setCaptureMode, initPointerManager, registerHitRegion, onHoverChange } from './input/pointerManager'
+import { setCaptureMode, initPointerManager, registerHitRegion, onHoverChange, setPanelsOpen } from './input/pointerManager'
 import { CaptureOverlay } from './CaptureOverlay'
 import { SPRITE_SETS, preloadSprites } from './stage/spriteSets'
 import { ResidentActor } from './stage/resident/ResidentActor'
@@ -235,6 +235,11 @@ function App() {
   const translationOpen = rt.overlays.includes('translation')
   const toolsOpen = rt.overlays.includes('tools')
   const overlaysOpen = rt.overlays.length > 0
+  // 面板打开期间原生热区(角色/按钮)整体让位:点击/滚轮走真实 DOM,
+  // 修"点设置窗穿透成戳角色/滚轮穿透成缩放"
+  useEffect(() => {
+    setPanelsOpen(overlaysOpen)
+  }, [overlaysOpen])
   const [trInject, setTrInject] = useState<TranslationInject | null>(null)
   const trPanelRef = useRef<HTMLDivElement>(null)
   const trQuipAt = useRef(0)
