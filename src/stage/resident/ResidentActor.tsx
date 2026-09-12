@@ -10,10 +10,9 @@ import type { Ref } from 'react'
 import { Bubble } from '../Bubble'
 import { residentSrc } from './residentManifest'
 import {
-  AMBIENT_HOLD_MS,
   AMBIENT_MAX_MS,
   AMBIENT_MIN_MS,
-  POKE_HOLD_MS,
+  ACTION_FALLBACK_MS,
   ROAM_PAUSE_MAX_MS,
   ROAM_PAUSE_MIN_MS,
   ambientIntervalScale,
@@ -101,6 +100,10 @@ export function ResidentActor({
   const currentClip = useRef<ResidentClipId | null>(null)
   const genRef = useRef(0)
   const pokeTimer = useRef(0)
+  // 单次片段(待机链/点击回应)播完的回收回调:双槽切换的 onended 转发到这里,
+  // 由 ambient/poke 持有者注册——动作完整播完才回待机,不再被固定计时器掐断
+  const endedHandlerRef = useRef<(() => void) | null>(null)
+  const ambientRef = useRef<ResidentClipId | null>(null)
 
   // "真空闲":没有说话/拖拽/点击回应/剧情动作——随机链与漫游只在这种时候起步
   const idleLike =
@@ -110,6 +113,7 @@ export function ResidentActor({
   useEffect(() => {
     idleRef.current = idleLike
     xRef.current = xPct
+    ambientRef.current = ambient
   })
 
   const resolved = resolveResidentClip({
@@ -156,7 +160,9 @@ export function ResidentActor({
       }, FADE_MS)
       frontIdx.current = 1 - frontIdx.current
       currentClip.current = clip
-      backEl.onended = null // 单次片段播完停帧即可,状态变化会触发下一次切换
+      // 单次片段(待机链/点击回应)播完 → 通知持有者回收回待机;
+      // 循环片段不触发 ended,回调为 null 时亦安全
+      backEl.onended = () => endedHandlerRef.current?.()
       try {
         backEl.currentTime = 0
       } catch {
@@ -221,10 +227,11 @@ export function ResidentActor({
 
   // 随机待机链:真空闲时每隔一段时间做一个小动作;任何打断(说话/拖拽/剧情)即停。
   // 每拍调度时现读情境(节日满屏节日感/饭点吃饭/季节特色/情绪偏置/2% 稀有彩蛋),
-  // 心情与时间变化不重置节奏,下一拍自然采用新池
+  // 心情与时间变化不重置节奏,下一拍自然采用新池。
+  // 回收由"片段播完(ended)"驱动——动作完整做完才回待机;兜底超时仅防播放异常卡死
   useEffect(() => {
     if (!canFrolic || !idleLike) return
-    let hold = 0
+    let fallback = 0
     const scale = ambientIntervalScale(moodOf('C'))
     const timer = window.setTimeout(
       () => {
@@ -238,13 +245,15 @@ export function ResidentActor({
             year: now.getFullYear(),
           }),
         )
-        hold = window.setTimeout(() => setAmbient(null), AMBIENT_HOLD_MS)
+        endedHandlerRef.current = () => setAmbient(null)
+        fallback = window.setTimeout(() => setAmbient(null), ACTION_FALLBACK_MS)
       },
       (AMBIENT_MIN_MS + Math.random() * (AMBIENT_MAX_MS - AMBIENT_MIN_MS)) * scale,
     )
     return () => {
       window.clearTimeout(timer)
-      window.clearTimeout(hold)
+      window.clearTimeout(fallback)
+      endedHandlerRef.current = null
       setAmbient(null)
     }
   }, [canFrolic, idleLike])
@@ -264,6 +273,11 @@ export function ResidentActor({
       later(startRoam, ROAM_PAUSE_MIN_MS + Math.random() * (ROAM_PAUSE_MAX_MS - ROAM_PAUSE_MIN_MS))
     }
     const startRoam = () => {
+      // 待机小动作在播时不起步:让动作做完再溜达(漫游优先级高于 ambient,会顶掉它)
+      if (ambientRef.current) {
+        scheduleNext()
+        return
+      }
       if (!idleRef.current) {
         scheduleNext() // 起步瞬间被打断:重新排队,不强行走
         return
@@ -312,11 +326,13 @@ export function ResidentActor({
 
   useEffect(() => () => window.clearTimeout(pokeTimer.current), [])
 
-  /** 点击身体:反应动画(短持有,到期回待机)+ 外部戳一戳链路;反应池随 C 的心情走 */
+  /** 点击身体:反应动画完整播完(ended 驱动回收,兜底超时防卡死)后回待机 + 外部戳一戳链路;
+   *  反应池随 C 的心情走 */
   const handlePoke = () => {
     setPokeClip(pickOf(pokeClipsForMood(moodOf('C'))))
+    endedHandlerRef.current = () => setPokeClip(null)
     window.clearTimeout(pokeTimer.current)
-    pokeTimer.current = window.setTimeout(() => setPokeClip(null), POKE_HOLD_MS)
+    pokeTimer.current = window.setTimeout(() => setPokeClip(null), ACTION_FALLBACK_MS)
     onPoke?.()
   }
 

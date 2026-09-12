@@ -55,11 +55,10 @@ export function resolveResidentClip(intents: ResidentIntents): ResidentPlayback 
 export { AMBIENT_CLIPS, POKE_CLIPS } from './residentManifest'
 export const AMBIENT_MIN_MS = 12_000
 export const AMBIENT_MAX_MS = 25_000
-/** 随机片段播完后的停帧停留 */
-export const AMBIENT_HOLD_MS = 3200
 
-/** 点击回应持续时长(到期回待机) */
-export const POKE_HOLD_MS = 2800
+/** 单次动作(待机链/点击回应)的兜底时长:正常由视频 ended 播完驱动回收,
+ *  此上限仅在加载失败/播放卡死等异常下生效,防止持有态永久卡住 */
+export const ACTION_FALLBACK_MS = 12_000
 
 // ---------- 情绪余波偏置(纯函数,测试直接喂 Mood)----------
 // C 的心情(moodStore)不是只给文案:她的随机行为池也跟着变——

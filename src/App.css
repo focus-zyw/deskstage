@@ -613,6 +613,10 @@
   transition: opacity 0.2s ease;
   pointer-events: none;
   user-select: none;
+  /* 强制独立合成层:窗口交互态切换(hover/点击引发 ignoreCursorEvents 切换)时,
+     视频层被系统直接重合成会瞬时变淡——提升为独立层规避 */
+  will-change: opacity;
+  transform: translateZ(0);
 }
 /* 方向性片段(走路)与移动方向相反时水平镜像,避免"倒着走";
    只翻 video 层——名牌/hitbox 与它是兄弟节点,不受影响 */
