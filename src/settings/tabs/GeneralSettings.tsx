@@ -1,5 +1,6 @@
 // 基础设置:显示与布局 / 演出与主动行为 / 环境与桌面
 import { saveConfig, useConfigSnapshot } from '../../storage/configStore'
+import { useBubbleThemes } from '../../storage/bubbleThemesStore'
 import { useRuntime, setCharHidden as setRuntimeCharHidden } from '../../runtime/runtimeMode'
 import { applyLaunchOnBoot } from '../../runtime/launchOnBoot'
 import { useSettings } from '../useSettingsSession'
@@ -16,6 +17,8 @@ export function GeneralSettings() {
   const charHidden = useRuntime().charHidden
   // 水印开关的已保存值(草稿回填之外的直接落盘项)
   const saved = useConfigSnapshot()
+  // 气泡工坊自建主题:风格行动态列出,与「气泡工坊」页共用同一配置
+  const bubbleThemes = useBubbleThemes()
 
   return (
     <>
@@ -60,7 +63,7 @@ export function GeneralSettings() {
             ))}
           </div>
         </SetLine>
-        <SetLine title="气泡风格" hint="柔彩=角色主题浅色与同色描边;夜色玻璃=暗色桌面上的半透明版本">
+        <SetLine title="气泡风格" hint="柔彩=角色主题浅色与同色描边;夜色玻璃=暗色桌面上的半透明版本;自建主题在「气泡工坊」维护">
           <div className="seg-group">
             {(
               [
@@ -74,6 +77,15 @@ export function GeneralSettings() {
                 onClick={() => saveField({ bubbleStyle: v }, true)}
               >
                 {label}
+              </button>
+            ))}
+            {bubbleThemes.map((t) => (
+              <button
+                key={t.id}
+                className={`seg-btn${saved.bubbleStyle === t.id ? ' on' : ''}`}
+                onClick={() => saveField({ bubbleStyle: t.id }, true)}
+              >
+                {t.label}
               </button>
             ))}
           </div>

@@ -7,6 +7,7 @@ export type SettingsTab =
   | 'model'
   | 'persona'
   | 'modes'
+  | 'bubble'
   | 'voice'
   | 'live'
   | 'hotkeys'
@@ -75,6 +76,15 @@ export const SETTINGS_NAV: { group: string; items: { id: SettingsTab; label: str
             <path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z" />
             <line x1="19" y1="17" x2="19" y2="21" />
             <line x1="17" y1="19" x2="21" y2="19" />
+          </svg>
+        ),
+      },
+      {
+        id: 'bubble',
+        label: '气泡工坊',
+        icon: (
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
           </svg>
         ),
       },
@@ -189,6 +199,7 @@ export const TAB_GROUP: Record<SettingsTab, string> = {
   model: '偏好设置',
   persona: '偏好设置',
   modes: '偏好设置',
+  bubble: '偏好设置',
   voice: '偏好设置',
   live: '偏好设置',
   hotkeys: '偏好设置',
@@ -227,6 +238,11 @@ export const SETTINGS_SEARCH_INDEX: { tab: SettingsTab; card: string; label: str
   { tab: 'model', card: '提取文字', label: '识别引擎', keywords: '本地 ai 自动 熔断 回退 引擎' },
   // 基础设置
   { tab: 'general', card: '显示与布局', label: '气泡风格', keywords: '气泡 柔彩 夜色 玻璃 主题 外观 配色' },
+  // 气泡工坊
+  { tab: 'bubble', card: '选择主题', label: '气泡风格切换', keywords: '气泡 主题 柔彩 夜色 玻璃 切换 外观' },
+  { tab: 'bubble', card: 'AI 生成主题', label: 'AI 生成气泡主题', keywords: '气泡 自定义 生成 配色 字号 圆角 工坊' },
+  { tab: 'bubble', card: '编辑主题', label: '气泡主题编辑', keywords: '气泡 颜色 透明度 模糊 字号 宽度 圆角 编辑' },
+  { tab: 'bubble', card: '自定义主题', label: '自定义气泡主题列表', keywords: '气泡 自定义 删除 列表' },
   // 角色人设
   { tab: 'persona', card: '角色名字', label: '角色A的名字', keywords: '名字 称呼 名牌' },
   { tab: 'persona', card: '角色名字', label: '角色B的名字', keywords: '名字 称呼 名牌' },

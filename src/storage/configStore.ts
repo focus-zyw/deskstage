@@ -165,8 +165,9 @@ export interface AppConfig {
   /** 开机自启动(Windows 写 HKCU Run 注册表键);默认关。
    *  配置是唯一事实来源:应用启动时按此值与系统注册状态对账 */
   launchOnBoot: boolean
-  /** 舞台气泡风格:comic=柔彩角色主题(默认,历史 key 保持兼容);glass=夜色半透明 */
-  bubbleStyle: 'comic' | 'glass'
+  /** 舞台气泡风格:comic=柔彩角色主题(默认,历史 key 保持兼容);glass=夜色半透明;
+   *  custom_ 开头 = 气泡工坊自建主题 id(选中的主题被删除时运行时回退 comic) */
+  bubbleStyle: 'comic' | 'glass' | (string & {})
 }
 
 /** 翻译面板配置 */
@@ -611,7 +612,13 @@ function sanitizeConfig(obj: unknown): AppConfig {
       }
     })(),
     launchOnBoot: o.launchOnBoot === true,
-    bubbleStyle: o.bubbleStyle === 'glass' ? 'glass' : 'comic',
+    // 内置白名单 ∪ 气泡工坊自建主题 id;其他值(手改配置写错)回 comic
+    bubbleStyle:
+      o.bubbleStyle === 'glass' || o.bubbleStyle === 'comic'
+        ? o.bubbleStyle
+        : typeof o.bubbleStyle === 'string' && /^custom_[a-z0-9_-]{1,32}$/.test(o.bubbleStyle)
+          ? o.bubbleStyle
+          : 'comic',
   }
 }
 

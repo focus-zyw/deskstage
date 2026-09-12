@@ -69,6 +69,7 @@ import {
   saveConfig,
   useConfigSnapshot,
 } from './storage/configStore'
+import { applyBubbleThemeTo, useBubbleThemes } from './storage/bubbleThemesStore'
 import { applyLaunchOnBoot } from './runtime/launchOnBoot'
 import { useOverlayHitRegions } from './runtime/useOverlayHitRegion'
 import { SettingsWindow } from './settings/SettingsWindow'
@@ -187,10 +188,26 @@ function App() {
   const config = useConfigSnapshot()
   const charNames = { A: config.names.a, B: config.names.b, C: config.names.c }
   const showWatermark = config.showWatermark
-  // 气泡主题落地到根节点(data-bubble):CSS 变量随它切换 comic/glass,设置保存后即时生效
+  // 气泡主题落地到根节点:内置 comic/glass 走 data-bubble 变量集;
+  // 气泡工坊自建主题走 inline style 变量(优先级更高),主题增删改即时生效。
+  // 选中的自定义主题不存在(被删)时回退柔彩。
+  const bubbleThemes = useBubbleThemes()
   useEffect(() => {
-    document.documentElement.dataset.bubble = config.bubbleStyle === 'glass' ? 'glass' : 'comic'
-  }, [config.bubbleStyle])
+    const root = document.documentElement
+    if (config.bubbleStyle === 'comic' || config.bubbleStyle === 'glass') {
+      applyBubbleThemeTo(root, null)
+      root.dataset.bubble = config.bubbleStyle === 'glass' ? 'glass' : 'comic'
+      return
+    }
+    const theme = bubbleThemes.find((t) => t.id === config.bubbleStyle)
+    if (!theme) {
+      applyBubbleThemeTo(root, null)
+      root.dataset.bubble = 'comic'
+      return
+    }
+    root.dataset.bubble = 'comic' // 自定义以 inline 变量为准,清理内置 data 钩子语义
+    applyBubbleThemeTo(root, theme)
+  }, [config.bubbleStyle, bubbleThemes])
   // 聊天通道:输入框开合/草稿/应答中;用户气泡(区别于角色气泡)
   const chatOpen = rt.overlays.includes('chat')
   const [chatDraft, setChatDraft] = useState('')

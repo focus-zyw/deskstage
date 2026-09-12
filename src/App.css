@@ -432,7 +432,7 @@
 .bubble {
   --bubble-surface: var(--bubble-bg);
   --bubble-edge: var(--bubble-stroke);
-  --bubble-shadow-color: rgba(118, 109, 142, 0.2);
+  --bubble-shadow-color: color-mix(in srgb, #776d8d 20%, transparent);
   --bubble-tail-x: 50%;
   --bubble-tail-rotation: 45deg;
   position: relative;
@@ -440,16 +440,16 @@
   margin-bottom: 14px;
   padding: 17px 17px 14px;
   min-width: 148px;
-  max-width: min(320px, 72vw);
+  max-width: min(var(--bubble-max-w, 320px), 72vw);
   background-color: var(--bubble-surface);
   background-image:
     radial-gradient(circle at 18% -20%, rgba(255, 255, 255, 0.2), transparent 44%),
     linear-gradient(145deg, rgba(255, 255, 255, 0.05), rgba(107, 94, 137, 0.035));
   color: var(--bubble-text);
   border: var(--bubble-stroke-w) solid var(--bubble-edge);
-  border-radius: 18px 18px 18px 9px;
+  border-radius: var(--bubble-radius, 18px) var(--bubble-radius, 18px) var(--bubble-radius, 18px) 9px;
   font-family: 'MiSans', 'HarmonyOS Sans SC', 'Microsoft YaHei UI', 'PingFang SC', sans-serif;
-  font-size: 16px;
+  font-size: var(--bubble-font-size, 16px);
   font-weight: 650;
   line-height: 1.58;
   overflow-wrap: anywhere;
@@ -465,19 +465,19 @@
   --sp: var(--bubble-acc-a);
   --bubble-surface: var(--bubble-bg-a);
   --bubble-edge: var(--bubble-stroke-a);
-  --bubble-shadow-color: rgba(224, 123, 76, 0.2);
+  --bubble-shadow-color: color-mix(in srgb, var(--sp) 20%, transparent);
 }
 .bubble[data-speaker='B'] {
   --sp: var(--bubble-acc-b);
   --bubble-surface: var(--bubble-bg-b);
   --bubble-edge: var(--bubble-stroke-b);
-  --bubble-shadow-color: rgba(79, 126, 213, 0.2);
+  --bubble-shadow-color: color-mix(in srgb, var(--sp) 20%, transparent);
 }
 .bubble[data-speaker='C'] {
   --sp: var(--bubble-acc-c);
   --bubble-surface: var(--bubble-bg-c);
   --bubble-edge: var(--bubble-stroke-c);
-  --bubble-shadow-color: rgba(126, 105, 207, 0.2);
+  --bubble-shadow-color: color-mix(in srgb, var(--sp) 20%, transparent);
 }
 .bubble::before {
   /* 情绪只改这一枚轻装饰,基础轮廓始终一致。 */
@@ -549,7 +549,7 @@
 .bubble[data-mood='angry'] { --bubble-mood-mark: '♯'; }
 .bubble[data-mood='shy'] { --bubble-mood-mark: '♡'; }
 .bubble[data-mood='excited'] { --bubble-mood-mark: '✦'; }
-.bubble.long { font-size: 14px; line-height: 1.52; }
+.bubble.long { font-size: calc(var(--bubble-font-size, 16px) - 2px); line-height: 1.52; }
 .bubble.out {
   animation: bubble-out 0.16s ease forwards;
   pointer-events: none;
@@ -667,9 +667,9 @@
 
 /* 远距离互相喊话:加大加粗 */
 .bubble.loud {
-  font-size: 17px;
+  font-size: calc(var(--bubble-font-size, 16px) + 1px);
   font-weight: 600;
-  max-width: 360px;
+  max-width: calc(var(--bubble-max-w, 320px) + 40px);
 }
 
 @keyframes bubble-in {
@@ -2837,4 +2837,48 @@
 }
 .cap-tool:active {
   background: rgba(255, 255, 255, 0.22);
+}
+
+/* 气泡工坊:预览行复用 .bubble 真样式(变量在 :root,窗口内同样生效);
+   颜色小方块与数字参数行的紧凑布局 */
+.bubble-preview {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px;
+  padding: 20px 14px 12px;
+}
+.bubble-preview .bubble {
+  margin-bottom: 0;
+}
+.bubble-color-row {
+  display: flex;
+  gap: 8px;
+}
+.bubble-color-chip {
+  display: inline-flex;
+}
+.bubble-color-chip input[type='color'] {
+  width: 34px;
+  height: 26px;
+  padding: 2px;
+  border: 1px solid var(--panel-border, rgba(255, 255, 255, 0.14));
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+}
+.bubble-nums {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px 14px;
+  margin: 10px 0;
+}
+.bubble-num {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.bubble-num input {
+  width: 100%;
 }
