@@ -8,7 +8,7 @@ import type { HotkeysConfig } from '../../storage/configStore'
 
 /** 演出控制动作清单:顺序即 hotkeys.ts 解析时同组合键冲突的让位顺序(先到先得) */
 const ACTIONS: { id: keyof HotkeysConfig; title: string; hint: string }[] = [
-  { id: 'generate', title: '生成', hint: '按分段选择器的当前模式点播一段演出(直播模式不响应,防误开播)' },
+  { id: 'generate', title: '生成', hint: '按当前选中的模式点播一段演出(直播模式不响应,防误开播)' },
   { id: 'stop', title: '停止', hint: '结束当前演出或下播' },
   { id: 'replayRandom', title: '随机播放历史', hint: '从历史里加权随机回放一段(收藏更常被抽到)' },
   { id: 'toggleChars', title: '隐藏/显示角色', hint: '一键隐藏或恢复桌面上的角色' },

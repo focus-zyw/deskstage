@@ -15,7 +15,13 @@ export type RuntimeMode =
   | { type: 'capturing' } // 框选截图中(动作由松手后的工具条决定)
   | { type: 'recording' } // 音色克隆录音中
 
-export type OverlayId = 'settings' | 'topic' | 'chat' | 'tools' | 'translation'
+export type OverlayId =
+  | 'settings'
+  | 'topic'
+  | 'chat'
+  | 'tools'
+  | 'translation'
+  | 'mode-menu' // Dock 的模式选择下拉(轻交互,无输入框,不激活窗口)
 
 interface RuntimeState {
   mode: RuntimeMode

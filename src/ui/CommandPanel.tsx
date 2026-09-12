@@ -2,6 +2,7 @@
 // 提醒类路由会先给一行"待确认"表单——时间/事项都可改,确认才入库,绝不默默设错。
 import { useEffect, useRef, useState } from 'react'
 import { useConfigSnapshot, type CtrlBarPos } from '../storage/configStore'
+import { PANEL_ANCHOR } from '../ui/dockLayout'
 import { filterCommands, nlRoute, type Command, type NlRoute } from '../features/commands/commands'
 
 interface Props {
@@ -72,7 +73,7 @@ export function CommandPanel({ innerRef, pos, commands, onClose, onAddMemo, onPe
     <div
       ref={innerRef}
       className={`settings-panel topic-panel cmd-panel${theme === 'light' ? ' light' : ''}`}
-      style={{ left: `${pos.xPct}%`, top: pos.top + 46 }}
+      style={{ left: `${pos.xPct}%`, top: pos.top + PANEL_ANCHOR }}
     >
       <div className="panel-head">
         <span>你想让我们做什么？</span>

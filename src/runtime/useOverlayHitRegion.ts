@@ -13,6 +13,8 @@ export interface OverlayRegionSpec {
   getRect: () => DOMRect
   /** 输入面板需要激活窗口以接收键盘；普通点击区保持底层应用为前台。 */
   activatesWindow?: boolean
+  /** 轻量菜单可由 Windows 钩子派发事件，避免透明 WebView 恢复整窗交互。 */
+  nativePointerTarget?: () => HTMLElement | null
 }
 
 export function useOverlayHitRegions(specs: OverlayRegionSpec[]): void {
@@ -24,6 +26,7 @@ export function useOverlayHitRegions(specs: OverlayRegionSpec[]): void {
         registerHitRegion(s.id, {
           getRect: s.getRect,
           activatesWindow: s.activatesWindow,
+          nativePointerTarget: s.nativePointerTarget,
         }),
       )
     return () => unsubs.forEach((u) => u())

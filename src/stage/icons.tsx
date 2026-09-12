@@ -303,3 +303,22 @@ export function ThumbsDownIcon() {
     </svg>
   )
 }
+
+/** Dock 模式选择按钮的下拉箭头 */
+export function ChevronDownIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width="12"
+      height="12"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <polyline points="6 9 12 15 18 9" />
+    </svg>
+  )
+}

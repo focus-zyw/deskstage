@@ -69,6 +69,8 @@ import { useCharacterLayout } from './stage/useCharacterLayout'
 import { usePerformanceDirector } from './runtime/usePerformanceDirector'
 import { useActorPresenter } from './stage/useActorPresenter'
 import { ControlBar } from './ui/ControlBar'
+import { PANEL_ANCHOR, MENU_LEFT_OFFSET } from './ui/dockLayout'
+import type { PerformanceState } from './ui/performButton'
 import { RatingChip, type RatingAsk } from './ui/RatingChip'
 import { UtilityCards } from './ui/UtilityCard'
 import {
@@ -183,14 +185,36 @@ function App() {
         : rt.mode.type === 'performing' || rt.mode.type === 'streaming'
           ? 'performing'
           : 'idle'
-  // 分段选择器当前选中模式；生成按钮按它点播
+  // 模式菜单当前选中模式；主按钮按它点播
   const [mode, setMode] = useState<Mode>('daily')
   // 内置+自定义模式(模式工坊增删时重渲染,命令注册表随之更新)
   const allModeList = useAllModes()
-  // 当前选中的自定义模式被删除时回落日常,避免分段控件失去选中项
+  // 当前选中的自定义模式被删除时回落日常,避免模式菜单失去选中项
   useEffect(() => {
     if (!allModeList.some((m) => m.id === mode)) setMode('daily')
   }, [allModeList, mode])
+  // Dock 主按钮语义态:由 RuntimeMode + 当前模式显式推导(映射表见 ui/performButton.ts)
+  const performanceState: PerformanceState =
+    rt.mode.type === 'idle'
+      ? mode === 'live'
+        ? 'idle-live'
+        : 'idle'
+      : rt.mode.type === 'generating'
+        ? 'generating'
+        : rt.mode.type === 'performing'
+          ? 'performing'
+          : rt.mode.type === 'choosing'
+            ? 'choosing'
+            : rt.mode.type === 'streaming'
+              ? 'streaming'
+              : 'locked'
+  // 模式菜单(dock 下拉):开态进 overlays 栈,享受互斥/Esc/点外部收起
+  const modeMenuOpen = rt.overlays.includes('mode-menu')
+  const modeMenuRef = useRef<HTMLDivElement>(null)
+  function toggleModeMenu() {
+    if (modeMenuOpen) closeOverlay('mode-menu')
+    else openOverlayExclusive('mode-menu')
+  }
   const settingsOpen = rt.overlays.includes('settings')
   const settingsWasOpenRef = useRef(false)
   // 设置关闭后恢复全屏舞台；打开前的缩窗在 openSettings 中 await，避免全屏透明层
@@ -251,11 +275,12 @@ function App() {
   const translationOpen = rt.overlays.includes('translation')
   const toolsOpen = rt.overlays.includes('tools')
   const overlaysOpen = rt.overlays.length > 0
-  // 面板打开期间原生热区(角色/按钮)整体让位:点击/滚轮走真实 DOM,
-  // 修"点设置窗穿透成戳角色/滚轮穿透成缩放"
+  // 模式菜单没有输入框，仍由原生钩子派发点击；只有真正的输入面板才让
+  // 全屏 WebView 恢复交互，否则展开小菜单也会让底层视频退出硬件合成。
+  const interactivePanelsOpen = rt.overlays.some((overlay) => overlay !== 'mode-menu')
   useEffect(() => {
-    setPanelsOpen(overlaysOpen)
-  }, [overlaysOpen])
+    setPanelsOpen(interactivePanelsOpen)
+  }, [interactivePanelsOpen])
   const [trInject, setTrInject] = useState<TranslationInject | null>(null)
   const trPanelRef = useRef<HTMLDivElement>(null)
   const trQuipAt = useRef(0)
@@ -747,6 +772,14 @@ function App() {
             cmdPanelRef.current?.getBoundingClientRect() ?? new DOMRect(0, 0, 0, 0),
         },
         {
+          // 模式菜单:轻交互,无输入框,始终由原生钩子派发事件。
+          id: 'mode-menu',
+          active: modeMenuOpen,
+          getRect: () =>
+            modeMenuRef.current?.getBoundingClientRect() ?? new DOMRect(0, 0, 0, 0),
+          nativePointerTarget: () => modeMenuRef.current,
+        },
+        {
           // 备忘提醒卡:右下角弹窗,不注册则点击穿透桌面,"知道了"永远点不到。
           // active 经 ref 读(声明在使用之后,直接进依赖数组会 TDZ 崩溃整个 App)
           id: 'memo-alert',
@@ -760,9 +793,14 @@ function App() {
           id: 'outside',
           active: overlaysOpen,
           getRect: () => new DOMRect(0, 0, window.innerWidth, window.innerHeight),
+          // 模式菜单单独打开时，兜底区也走原生事件；点击空白处只负责收起菜单，
+          // 不把整个透明 WebView 切成可点击窗口。
+          nativePointerTarget: modeMenuOpen
+            ? () => document.querySelector<HTMLElement>('.stage')
+            : undefined,
         },
       ],
-      [settingsOpen, topicOpen, chatOpen, translationOpen, toolsOpen, choice, overlaysOpen],
+      [settingsOpen, topicOpen, chatOpen, translationOpen, toolsOpen, choice, overlaysOpen, modeMenuOpen],
     ),
   )
 
@@ -1159,9 +1197,7 @@ function App() {
         pos={ctrlBar}
         onPosChange={applyCtrlBar}
         mode={mode}
-        onModeChange={setMode}
-        busy={phase === 'generating' || phase === 'performing'}
-        canStop={phase !== 'idle'}
+        performanceState={performanceState}
         onGenerate={() => void director.play(mode)}
         onStop={director.stop}
         toolsOpen={toolsOpen}
@@ -1182,7 +1218,41 @@ function App() {
           if (settingsOpen) closeOverlay('settings')
           else openSettings()
         }}
+        modeMenuOpen={modeMenuOpen}
+        onModeMenuToggle={toggleModeMenu}
+        onMenuClose={() => {
+          if (modeMenuOpen) closeOverlay('mode-menu')
+        }}
       />
+
+      {modeMenuOpen && (
+        <div
+          ref={modeMenuRef}
+          className="mode-menu"
+          style={{
+            left: Math.max(
+              12,
+              Math.min(window.innerWidth - 272, (ctrlBar.xPct / 100) * window.innerWidth + MENU_LEFT_OFFSET),
+            ),
+            top: ctrlBar.top + PANEL_ANCHOR,
+          }}
+        >
+          {allModeList.map((m) => (
+            <button
+              key={m.id}
+              className={`mode-menu-item${mode === m.id ? ' on' : ''}`}
+              title={m.label}
+              onClick={() => {
+                setMode(m.id)
+                closeOverlay('mode-menu')
+              }}
+            >
+              <span className="mode-menu-label">{m.label}</span>
+              {mode === m.id && <span className="mode-menu-check">✓</span>}
+            </button>
+          ))}
+        </div>
+      )}
 
       {settingsOpen && (
         <SettingsWindow

@@ -701,22 +701,43 @@
   to { opacity: 1; transform: translateY(0); }
 }
 
-/* 控制栏:位置由配置驱动(left/top 内联),可拖动;collapsed = 收起只剩把手。
-   锚定把手中心(固定偏移半个把手宽 11px)而非栏中心——展开/收起时把手位置不变 */
+/* 控制栏:统一悬浮 Dock。位置由配置驱动(left/top 内联,锚把手中心),可拖动;
+   collapsed = 收起只剩精灵球(外壳背景一并隐去)。整条共用深色半透明外壳,
+   按钮无边框,hover/原生悬停(.hot)才显浅底。
+   blur(18px) 是真机校准项:若角色 C 的 WebM 出现黑框/掉帧,降低模糊或回退实底 */
 .ctrl-bar {
   position: absolute;
-  transform: translateX(-19px);
+  transform: translateX(-19px); /* 锚把手中心:把手 38px,整体左移半个把手宽 */
+  box-sizing: border-box;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+  height: 44px;
+  padding: 0 6px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 14px;
+  background: rgba(20, 20, 30, 0.86);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
   z-index: 30;
+}
+.ctrl-bar.collapsed {
+  height: auto;
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow: none;
 }
 .ctrl-bar.collapsed > :not(.bar-grip) {
   display: none;
 }
 
-/* 拖动把手:按住移动整条工具栏 */
+/* 拖动把手:精灵球 + 球下拖动点(提示"这里能拖");按住移动整条,纯点击收起/展开 */
 .bar-grip {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -731,118 +752,148 @@
   transform: scale(1.15);
   cursor: grabbing;
 }
-/* 提字按钮的文字图标 */
-.ctrl-btn.icon .ocr-glyph,
-.ctrl-btn.icon span[aria-hidden] {
-  font-size: 13px;
-  line-height: 1;
-}
-
 .bar-grip svg {
   display: block;
   pointer-events: none; /* 点击必须落在把手上,svg 不能截获(否则拖动守卫误判) */
   filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.4));
 }
 
-/* 滑动分段选择器：日常 | 相声，滑块随选中态平移 */
-.seg {
-  position: relative;
-  display: flex;
-  padding: 3px;
-  border: 1px solid rgba(255, 255, 255, 0.25);
-  border-radius: 17px;
-  background: rgba(30, 30, 45, 0.55);
-  backdrop-filter: blur(6px);
-  transition: border-color 0.15s ease;
-}
-.seg.hot {
-  border-color: rgba(124, 108, 240, 0.9);
-}
-.seg-thumb {
-  position: absolute;
-  top: 3px;
-  bottom: 3px;
-  left: 3px;
-  border-radius: 13px;
-  background: rgba(124, 108, 240, 0.92);
-  transition: transform 0.22s ease;
-}
-.seg-btn {
-  position: relative;
-  z-index: 1;
-  min-width: 64px;
-  padding: 5px 14px;
-  border: none;
-  background: transparent;
-  color: rgba(255, 255, 255, 0.72);
-  font-size: 13px;
-  cursor: pointer;
-  transition: color 0.2s ease;
-}
-.seg-btn.on {
-  color: #fff;
-}
-
-/* 图标按钮：默认只显示图标;文字为浮层标签,展开不影响按钮/工具栏宽度 */
-.ctrl-btn {
-  padding: 6px 16px;
-  border: 1px solid rgba(255, 255, 255, 0.25);
-  border-radius: var(--radius-btn);
-  background: rgba(30, 30, 45, 0.55);
-  color: rgba(255, 255, 255, 0.85);
-  font-size: 13px;
-  cursor: pointer;
-  backdrop-filter: blur(6px);
-  transition:
-    background 0.15s ease,
-    border-color 0.15s ease;
-}
-.ctrl-btn.icon {
-  position: relative;
+/* Dock 按钮:无边框透明底,悬停/原生悬停显浅底;图标/文字统一 32px 高 */
+.dock-btn {
   display: inline-flex;
   align-items: center;
-  padding: 6px 10px;
+  justify-content: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 12.5px;
+  font-family: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
 }
-.ctrl-btn.icon svg {
+.dock-btn svg {
   display: block;
   flex: none;
 }
-.ctrl-btn.hot {
-  background: rgba(124, 108, 240, 0.92);
-  border-color: rgba(124, 108, 240, 0.92);
+.dock-btn.hot,
+.dock-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
   color: #fff;
 }
-.ctrl-btn.on {
-  border-color: rgba(124, 108, 240, 0.85);
+.dock-btn.on {
+  background: rgba(255, 255, 255, 0.14);
   color: #fff;
 }
-/* 停止按钮:有生成/演出进行中时红色描边提示 */
-.ctrl-btn.danger {
-  border-color: rgba(255, 90, 90, 0.75);
-  color: #ff9a9a;
-}
-.ctrl-btn.danger.hot {
-  background: rgba(255, 90, 90, 0.85);
-  border-color: rgba(255, 90, 90, 0.85);
-  color: #fff;
-}
-.ctrl-btn:disabled {
+.dock-btn:disabled {
   opacity: 0.35;
   cursor: default;
 }
-
-/* 生成中：呼吸闪烁 */
-.ctrl-btn.loading {
-  animation: pulse 1s ease-in-out infinite;
+.dock-btn.dock-icon {
+  width: 32px;
+  padding: 0;
 }
-@keyframes pulse {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.4;
-  }
+.dock-btn.dock-text {
+  padding: 0 12px;
+}
+
+/* 主操作:紫色实心,固定最小宽度避免 开始/停止/下播 切换时横跳 */
+.dock-primary {
+  min-width: 92px;
+  padding: 0 14px;
+  background: #7568ee;
+  color: #fff;
+}
+.dock-primary.hot,
+.dock-primary:hover {
+  background: #8578f2;
+  color: #fff;
+}
+.dock-primary:disabled {
+  background: #7568ee;
+  opacity: 0.4;
+}
+
+/* 模式选择:当前模式 + 下拉箭头;菜单开着时箭头翻转 */
+.dock-mode {
+  font-weight: 600;
+}
+.dock-mode svg {
+  opacity: 0.7;
+  transition: transform 0.15s ease;
+}
+.dock-mode.on svg {
+  transform: rotate(180deg);
+}
+.dock-mode:disabled svg {
+  opacity: 0.4;
+}
+
+/* 勿扰开启:琥珀色,不与主紫混用 */
+.dock-dnd.on {
+  color: #ffb020;
+  background: rgba(255, 176, 32, 0.14);
+}
+.dock-dnd.on.hot,
+.dock-dnd.on:hover {
+  background: rgba(255, 176, 32, 0.24);
+}
+
+/* 模式菜单:Dock 正下方弹出,与 Dock 同视觉语言;大量自定义模式时限高滚动 */
+.mode-menu {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 240px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  background: rgba(20, 20, 30, 0.92);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+  z-index: 45;
+}
+.mode-menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: 32px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 12.5px;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.mode-menu-item:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+.mode-menu-item.on {
+  background: rgba(117, 104, 238, 0.35);
+  color: #fff;
+}
+.mode-menu-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mode-menu-check {
+  flex: none;
+  color: #8578f2;
 }
 
 /* 设置面板：控制栏正下方弹出（限高滚动,防止超出 420 高的悬浮条） */
@@ -1515,8 +1566,8 @@
   transform: translateX(16px);
 }
 
-/* 分段选择 */
-.seg-group {
+/* 分段选择(设置窗口专用;加前缀避免与 Dock 按钮体系互相干扰) */
+.settings-window .seg-group {
   display: flex;
   flex-wrap: wrap;
   gap: 2px;
@@ -1525,7 +1576,7 @@
   border-radius: 10px;
   background: var(--sw-input);
 }
-.seg-btn {
+.settings-window .seg-btn {
   height: 28px;
   padding: 0 12px;
   border: 0;
@@ -1539,10 +1590,10 @@
     background 0.12s ease,
     color 0.12s ease;
 }
-.seg-btn:hover {
+.settings-window .seg-btn:hover {
   color: var(--sw-text-1);
 }
-.seg-btn.on {
+.settings-window .seg-btn.on {
   color: #fff;
   background: var(--sw-primary);
   box-shadow: 0 3px 10px rgba(133, 119, 244, 0.3);

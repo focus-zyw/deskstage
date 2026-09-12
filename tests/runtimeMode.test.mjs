@@ -75,6 +75,19 @@ test('overlays 栈:重复打开去重,exclusive 整组替换,Esc 关栈顶', () 
   assert.equal(rm.getCaps().escapeTarget, null)
 })
 
+test('mode-menu 参与 overlays 语义:exclusive 整组替换、Esc 关栈顶、关闭后栈清空', () => {
+  rm.openOverlayExclusive('mode-menu')
+  assert.deepEqual(rm.getRuntime().overlays, ['mode-menu'])
+  assert.equal(rm.getCaps().escapeTarget, 'mode-menu')
+  // 其他面板经 exclusive 打开会替换掉模式菜单(工具栏上点工具 → 菜单自动关)
+  rm.openOverlayExclusive('tools')
+  assert.deepEqual(rm.getRuntime().overlays, ['tools'])
+  assert.equal(rm.getRuntime().overlays.includes('mode-menu'), false)
+  rm.openOverlayExclusive('mode-menu')
+  rm.closeAllOverlays()
+  assert.equal(rm.getRuntime().overlays.includes('mode-menu'), false)
+})
+
 test('caps 派生:主动行为闸门 = 空闲 && 无面板 && 非勿扰', () => {
   assert.equal(rm.getCaps().proactiveAllowed, true)
   rm.openOverlay('chat')

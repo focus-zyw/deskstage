@@ -7,6 +7,7 @@ import { describeLlmError } from '../engine/llmClient'
 import { speak, stopSpeaking } from '../engine/tts'
 import { translate, MAX_INPUT_CHARS } from './translator'
 import { LANGUAGES, STYLE_LABEL, langLabel, type TranslationResult, type TranslationStyle } from './types'
+import { PANEL_ANCHOR } from '../ui/dockLayout'
 
 /** OCR 链路塞进来的原文:auto=true 时填入后立即翻译(截图翻译入口) */
 export interface TranslationInject {
@@ -175,7 +176,7 @@ export function TranslationPanel({
     <div
       ref={innerRef}
       className="tr-panel"
-      style={{ left: `${pos.xPct}%`, top: pos.top + 46 }}
+      style={{ left: `${pos.xPct}%`, top: pos.top + PANEL_ANCHOR }}
     >
       <div className="tr-head">
         <span className="tr-title">翻译</span>

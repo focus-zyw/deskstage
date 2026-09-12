@@ -1,6 +1,6 @@
 // 模式注册表：DialogMode 是"抽象父类"契约，每个模式文件是一个"子类"。
 // 新增内置模式 = 新建一个 ts 文件导出 DialogMode + 在 MODES 里加一项，
-// 分段按钮/历史徽标/重放节奏/LLM 指令全部自动感知，其余代码零改动。
+// 模式菜单/历史徽标/重放节奏/LLM 指令全部自动感知，其余代码零改动。
 // 用户自定义模式(模式工坊)运行时经 allModes()/modeOf() 动态并入,同享以上全部链路。
 import { useMemo } from 'react'
 import { crosstalkMode } from './crosstalk'
@@ -15,7 +15,7 @@ export { liveMode }
 export interface DialogMode<ID extends string = string> {
   /** 注册键，落盘到历史的 mode 字段 */
   id: ID
-  /** 分段按钮/历史徽标显示名 */
+  /** 模式菜单/历史徽标显示名 */
   label: string
   /** 徽标等场景的强调色 */
   accent: string
@@ -31,7 +31,7 @@ export interface DialogMode<ID extends string = string> {
    *  日常闲聊适合高些,相声等结构化模式只宜点缀 */
   interestTopicChance?: number
   /** 可选：自然语言路由触发词("来一段关于加班的相声"里的"相声");
-   *  缺省不可被自然语言点播,只能从分段按钮进。内置模式与模式工坊新模式都靠它进路由 */
+   *  缺省不可被自然语言点播,只能从模式菜单进。内置模式与模式工坊新模式都靠它进路由 */
   triggers?: string[]
   /** 可选：基调。'comedy'(daily/crosstalk 显式声明)= 默认互怼喜剧全套(包袱/secret反转/逗弄/关系攻守);
    *  其他描述值(如 '温暖治愈')= 非喜剧分支:prompt 裁掉默认喜剧件,tone 值本身也注入 prompt 作基调语境。
@@ -51,10 +51,10 @@ export type BuiltinMode = keyof typeof MODES
 /** 模式 id:内置键保留自动补全,同时放行自定义模式等任意字符串(历史落盘兼容) */
 export type Mode = BuiltinMode | (string & {})
 
-/** UI 按此顺序渲染内置分段选择器(自定义模式追加在后,见 allModes) */
+/** UI 按此顺序渲染内置模式(自定义模式追加在后,见 allModes) */
 export const modeList = Object.values(MODES)
 
-/** 内置 + 自定义的完整模式列表:分段按钮/命令注册/自然语言路由的动态事实源 */
+/** 内置 + 自定义的完整模式列表:模式菜单/命令注册/自然语言路由的动态事实源 */
 export function allModes(): DialogMode[] {
   const custom = getCustomModesSnapshot()
   if (custom.length === 0) return modeList

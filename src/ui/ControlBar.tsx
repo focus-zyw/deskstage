@@ -1,11 +1,20 @@
-// 控制栏:演出簇常驻(模式+生成/停止) + 工具/聊天/勿扰/设置四入口。
-// 自带原生命中区注册与悬停高亮；WebView 保持穿透，点击由指针管理器合成，
-// 拖动移动经 onPosChange 回 App 落盘。
-// 新功能不再往栏上加按钮——注册进命令面板(features/commands)。
+// 工具栏:统一悬浮 Dock。结构 = 精灵球把手(拖动/收起) + 模式选择(下拉菜单) +
+// 主按钮(开始/停止原位切换) + 工具/聊天/勿扰/设置。
+// 自带原生热区注册与悬停高亮;WebView 保持穿透,点击由指针管理器合成,
+// 拖动移动经 onPosChange 回 App 落盘。新功能不再往栏上加按钮——注册进命令面板。
 import { useEffect, useRef, useState } from 'react'
-import { PlayIcon, StopIcon, GearIcon, PokeballIcon, ChatIcon, GridIcon, BellOffIcon } from '../stage/icons'
+import {
+  PlayIcon,
+  StopIcon,
+  GearIcon,
+  PokeballIcon,
+  BellOffIcon,
+  ChevronDownIcon,
+} from '../stage/icons'
 import { registerHitRegion, onHoverChange } from '../input/pointerManager'
-import { useAllModes, type Mode } from '../performer/modes'
+import { modeOf, type Mode } from '../performer/modes'
+import { performanceButton, type PerformanceState } from './performButton'
+import { PRIMARY_MIN_WIDTH } from './dockLayout'
 import type { CtrlBarPos } from '../storage/configStore'
 
 interface Props {
@@ -13,9 +22,8 @@ interface Props {
   /** 拖动产生的位置更新;persist 由组件按拖动状态给('no' 过程 | 'now' 落盘) */
   onPosChange: (next: CtrlBarPos, persist: 'now' | 'no') => void
   mode: Mode
-  onModeChange: (m: Mode) => void
-  busy: boolean
-  canStop: boolean
+  /** 主按钮语义态:由 App 从 RuntimeMode + 当前模式算出,组件不做组合推断 */
+  performanceState: PerformanceState
   onGenerate: () => void
   onStop: () => void
   toolsOpen: boolean
@@ -26,17 +34,20 @@ interface Props {
   onDnd: () => void
   settingsOpen: boolean
   onSettings: () => void
+  /** 模式菜单开态与开关(菜单本体挂在 App 层,与各面板同锚点体系) */
+  modeMenuOpen: boolean
+  onModeMenuToggle: () => void
+  /** Dock 内动作(开始/停止/勿扰/收起)先把模式菜单关掉,避免演出已开始菜单仍悬浮 */
+  onMenuClose: () => void
 }
 
-const BAR_IDS = ['grip', 'modes', 'gen', 'stop', 'tools', 'chat', 'dnd', 'settings']
+const BAR_IDS = ['grip', 'mode', 'perform', 'tools', 'chat', 'dnd', 'settings']
 
 export function ControlBar({
   pos,
   onPosChange,
   mode,
-  onModeChange,
-  busy,
-  canStop,
+  performanceState,
   onGenerate,
   onStop,
   toolsOpen,
@@ -47,19 +58,25 @@ export function ControlBar({
   onDnd,
   settingsOpen,
   onSettings,
+  modeMenuOpen,
+  onModeMenuToggle,
+  onMenuClose,
 }: Props) {
-  // 内置+自定义模式(模式工坊增删时重渲染,分段控件与滑块随之伸缩)
-  const modeList = useAllModes()
   const [hovered, setHovered] = useState<string | null>(null)
+  // 悬停高亮:只关心栏内区域(角色/面板的悬停归 App 管)
+  const barRef = useRef<HTMLDivElement>(null)
   const gripRef = useRef<HTMLSpanElement>(null)
-  const segCtl = useRef<HTMLDivElement>(null)
-  const btnGen = useRef<HTMLButtonElement>(null)
-  const btnStop = useRef<HTMLButtonElement>(null)
+  const btnMode = useRef<HTMLButtonElement>(null)
+  const btnPerform = useRef<HTMLButtonElement>(null)
   const btnTools = useRef<HTMLButtonElement>(null)
   const btnChat = useRef<HTMLButtonElement>(null)
   const btnDnd = useRef<HTMLButtonElement>(null)
   const btnGear = useRef<HTMLButtonElement>(null)
   const dragRef = useRef<{ startX: number; startY: number; orig: CtrlBarPos; moved: boolean } | null>(null)
+
+  const perf = performanceButton(performanceState)
+  // 非 idle 一律锁模式选择:演出中切换会让"显示模式"与"实际在播"错位
+  const modeLocked = performanceState !== 'idle' && performanceState !== 'idle-live'
 
   // 悬停高亮:只关心栏内区域(角色/面板的悬停归 App 管)
   useEffect(() => {
@@ -78,17 +95,13 @@ export function ControlBar({
         getRect: () => gripRef.current!.getBoundingClientRect(),
         nativePointerTarget: () => gripRef.current,
       }),
-      registerHitRegion('modes', {
-        getRect: () => segCtl.current!.getBoundingClientRect(),
-        nativePointerTarget: () => segCtl.current,
+      registerHitRegion('mode', {
+        getRect: () => btnMode.current!.getBoundingClientRect(),
+        nativePointerTarget: () => btnMode.current,
       }),
-      registerHitRegion('gen', {
-        getRect: () => btnGen.current!.getBoundingClientRect(),
-        nativePointerTarget: () => btnGen.current,
-      }),
-      registerHitRegion('stop', {
-        getRect: () => btnStop.current!.getBoundingClientRect(),
-        nativePointerTarget: () => btnStop.current,
+      registerHitRegion('perform', {
+        getRect: () => btnPerform.current!.getBoundingClientRect(),
+        nativePointerTarget: () => btnPerform.current,
       }),
       registerHitRegion('tools', {
         getRect: () => btnTools.current!.getBoundingClientRect(),
@@ -111,7 +124,7 @@ export function ControlBar({
   }, [])
 
   function onBarPointerDown(e: React.PointerEvent<HTMLDivElement>) {
-    // 只响应把手及内部图标(图标已 pointer-events:none),按钮/分段控件不受影响
+    // 只响应把手及内部图标(图标已 pointer-events:none),按钮/菜单不受影响
     if (!(e.target instanceof Node) || !e.currentTarget.contains(e.target)) return
     dragRef.current = { startX: e.clientX, startY: e.clientY, orig: { ...pos }, moved: false }
     try {
@@ -130,10 +143,15 @@ export function ControlBar({
       if (Math.hypot(dx, dy) < 6) return // 小位移视为点击,留给收起/展开
       d.moved = true
     }
+    // 边缘钳位按 Dock 实测宽度算,贴左右边也不出屏(锚点 = 把手中心左移 19px)
+    const vw = window.innerWidth
+    const dockW = barRef.current?.offsetWidth ?? 420
+    const minX = ((6 + 19) / vw) * 100
+    const maxX = ((vw - 6 - 19 - dockW) / vw) * 100
     onPosChange(
       {
         ...d.orig,
-        xPct: Math.min(98, Math.max(2, d.orig.xPct + (dx / window.innerWidth) * 100)),
+        xPct: Math.min(Math.max(minX, d.orig.xPct + (dx / vw) * 100), Math.max(minX, maxX)),
         top: Math.min(Math.max(0, window.innerHeight - 60), Math.max(0, d.orig.top + dy)),
       },
       'no',
@@ -145,11 +163,24 @@ export function ControlBar({
     dragRef.current = null
     if (!d) return
     if (d.moved) onPosChange(pos, 'now')
-    else onPosChange({ ...pos, collapsed: !pos.collapsed }, 'now') // 纯点击:收起/展开
+    else {
+      onMenuClose() // 收起面板期间若模式菜单还开着,一并收掉
+      onPosChange({ ...pos, collapsed: !pos.collapsed }, 'now') // 纯点击:收起/展开
+    }
+  }
+
+  function onPerformClick() {
+    onMenuClose()
+    if (perf.kind === 'generate') onGenerate()
+    else onStop()
   }
 
   return (
-    <div className={`ctrl-bar${pos.collapsed ? ' collapsed' : ''}`} style={{ left: `${pos.xPct}%`, top: pos.top }}>
+    <div
+      ref={barRef}
+      className={`ctrl-bar${pos.collapsed ? ' collapsed' : ''}`}
+      style={{ left: `${pos.xPct}%`, top: pos.top }}
+    >
       <span
         ref={gripRef}
         className={`bar-grip${hovered === 'grip' ? ' hot' : ''}`}
@@ -160,73 +191,64 @@ export function ControlBar({
       >
         <PokeballIcon />
       </span>
-      <div ref={segCtl} className={`seg${hovered === 'modes' ? ' hot' : ''}`}>
-        <div
-          className="seg-thumb"
-          style={{
-            width: `calc(${100 / modeList.length}% - 3px)`,
-            transform: `translateX(${modeList.findIndex((m) => m.id === mode) * 100}%)`,
-          }}
-        />
-        {modeList.map((m) => (
-          <button key={m.id} className={`seg-btn${mode === m.id ? ' on' : ''}`} onClick={() => onModeChange(m.id)}>
-            {m.label}
-          </button>
-        ))}
-      </div>
-      <span className="bar-sep" aria-hidden="true" />
 
       <button
-        ref={btnGen}
-        className={`ctrl-btn icon${hovered === 'gen' ? ' hot' : ''}${busy ? ' loading' : ''}`}
-        disabled={busy}
-        title={mode === 'live' ? '开播(直播弹幕互动)' : '生成'}
-        onClick={onGenerate}
+        ref={btnMode}
+        className={`dock-btn dock-mode${hovered === 'mode' ? ' hot' : ''}${modeMenuOpen ? ' on' : ''}`}
+        disabled={modeLocked}
+        title={modeLocked ? '演出/占用期间不可切换模式' : '切换模式'}
+        onClick={onModeMenuToggle}
       >
-        <PlayIcon />
+        {modeOf(mode).label}
+        <ChevronDownIcon />
       </button>
 
       <button
-        ref={btnStop}
-        className={`ctrl-btn icon${hovered === 'stop' ? ' hot' : ''}${canStop ? ' danger' : ''}`}
-        disabled={!canStop}
-        title="停止"
-        onClick={onStop}
+        ref={btnPerform}
+        className={`dock-btn dock-primary${hovered === 'perform' ? ' hot' : ''}`}
+        disabled={perf.disabled}
+        title={perf.title}
+        style={{ minWidth: PRIMARY_MIN_WIDTH }}
+        onClick={onPerformClick}
       >
-        <StopIcon />
+        {perf.kind === 'generate' ? <PlayIcon /> : <StopIcon />}
+        <span>{perf.label}</span>
       </button>
       <span className="bar-sep" aria-hidden="true" />
 
       <button
         ref={btnTools}
-        className={`ctrl-btn icon${hovered === 'tools' ? ' hot' : ''}${toolsOpen ? ' on' : ''}`}
+        className={`dock-btn dock-text${hovered === 'tools' ? ' hot' : ''}${toolsOpen ? ' on' : ''}`}
         title="工具(翻译/截屏/提醒…搜命令或直接说)"
         onClick={onTools}
       >
-        <GridIcon />
+        工具
       </button>
 
       <button
         ref={btnChat}
-        className={`ctrl-btn icon${hovered === 'chat' ? ' hot' : ''}${chatOpen ? ' on' : ''}`}
+        className={`dock-btn dock-text${hovered === 'chat' ? ' hot' : ''}${chatOpen ? ' on' : ''}`}
         title="和角色说话(@甲/@乙 指定谁回)"
         onClick={onChat}
       >
-        <ChatIcon />
+        聊天
       </button>
 
       <button
         ref={btnDnd}
-        className={`ctrl-btn icon${hovered === 'dnd' ? ' hot' : ''}${dnd ? ' on' : ''}`}
+        className={`dock-btn dock-icon dock-dnd${hovered === 'dnd' ? ' hot' : ''}${dnd ? ' on' : ''}`}
         title={dnd ? '勿扰中:点击恢复声音与主动搭话' : '勿扰:静音并暂停主动搭话(提醒卡片照弹)'}
-        onClick={onDnd}
+        onClick={() => {
+          onMenuClose()
+          onDnd()
+        }}
       >
         <BellOffIcon />
       </button>
 
       <button
         ref={btnGear}
-        className={`ctrl-btn icon${hovered === 'settings' ? ' hot' : ''}${settingsOpen ? ' on' : ''}`}
+        className={`dock-btn dock-icon${hovered === 'settings' ? ' hot' : ''}${settingsOpen ? ' on' : ''}`}
         title="设置"
         onClick={onSettings}
       >
