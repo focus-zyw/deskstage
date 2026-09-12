@@ -392,6 +392,13 @@ export function ResidentActor({
     if (hidden || broken) return
     const W = 960
     const H = 540
+    // 每槽最后成功帧快照:片段切换时 src 重置会让解码器短暂不可绘制(两个槽
+    // 先后重置即出现空窗),用快照兜底保证 canvas 永不整只透明
+    const snaps = [document.createElement('canvas'), document.createElement('canvas')]
+    snaps.forEach((c) => {
+      c.width = W
+      c.height = H
+    })
     let raf = 0
     const draw = () => {
       const canvas = canvasRef.current
@@ -407,23 +414,32 @@ export function ResidentActor({
           ctx.translate(W, 0)
           ctx.scale(-1, 1)
         }
-        const back = st.front === 0 ? videoB.current : videoA.current
-        const front = st.front === 0 ? videoA.current : videoB.current
-        // 交叉淡入期:前后两帧按 (1-t)/t 混合;淡入完成后只画前台
-        if (t < 1 && back && back.readyState >= 2) {
-          ctx.globalAlpha = 1 - t
-          ctx.drawImage(back, 0, 0, W, H)
-          ctx.globalAlpha = 1
-        }
-        if (front && front.readyState >= 2) {
-          ctx.globalAlpha = t
-          try {
-            ctx.drawImage(front, 0, 0, W, H)
-          } catch {
-            // 解码器尚未就绪的瞬间:跳过该帧,下帧重试
+        const drawSlot = (slot: 0 | 1, alpha: number) => {
+          const video = slot === 0 ? videoA.current : videoB.current
+          const snap = snaps[slot]
+          const snapCtx = snap.getContext('2d')
+          if (!snapCtx) return
+          let drew = false
+          if (video && video.readyState >= 2) {
+            ctx.globalAlpha = alpha
+            try {
+              ctx.drawImage(video, 0, 0, W, H)
+              snapCtx.drawImage(video, 0, 0, W, H)
+              drew = true
+            } catch {
+              // 解码器瞬间不可绘制(seek/重置):走快照兜底
+            }
+            ctx.globalAlpha = 1
           }
-          ctx.globalAlpha = 1
+          if (!drew) {
+            ctx.globalAlpha = alpha
+            ctx.drawImage(snap, 0, 0, W, H)
+            ctx.globalAlpha = 1
+          }
         }
+        // 交叉淡入期:前后两帧按 (1-t)/t 混合;淡入完成后只画前台
+        if (t < 1) drawSlot(st.front === 0 ? 1 : 0, 1 - t)
+        drawSlot(st.front, t)
         ctx.restore()
       }
       raf = requestAnimationFrame(draw)
