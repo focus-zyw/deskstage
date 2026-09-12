@@ -8,7 +8,14 @@ import { startScreenshot, applyScreenshotHotkey } from './capture'
 import { applyAppHotkeys, setHotkeyHandler } from './hotkeys'
 import { setCharacterGenders, setCharacterNames, setPersonaOverride, nameOf, pronounOf } from './engine/persona'
 import { startEnvPolling } from './engine/envAware'
-import { setCaptureMode, initPointerManager, registerHitRegion, onHoverChange, setPanelsOpen } from './input/pointerManager'
+import {
+  setCaptureMode,
+  initPointerManager,
+  registerHitRegion,
+  onHoverChange,
+  setPanelsOpen,
+  setSettingsWindowCompact,
+} from './input/pointerManager'
 import { CaptureOverlay } from './CaptureOverlay'
 import { SPRITE_SETS, preloadSprites } from './stage/spriteSets'
 import { ResidentActor } from './stage/resident/ResidentActor'
@@ -185,6 +192,15 @@ function App() {
     if (!allModeList.some((m) => m.id === mode)) setMode('daily')
   }, [allModeList, mode])
   const settingsOpen = rt.overlays.includes('settings')
+  const settingsWasOpenRef = useRef(false)
+  // 设置关闭后恢复全屏舞台；打开前的缩窗在 openSettings 中 await，避免全屏透明层
+  // 先绘制一帧设置面板，触发底层视频的硬件合成切换。
+  useEffect(() => {
+    if (settingsWasOpenRef.current && !settingsOpen) {
+      void setSettingsWindowCompact(false).catch((e) => console.warn('恢复全屏舞台失败', e))
+    }
+    settingsWasOpenRef.current = settingsOpen
+  }, [settingsOpen])
   // 配置事实源:读同一份已落盘配置(任何 saveConfig 成功后即时发布),不再各自维护镜像
   const config = useConfigSnapshot()
   const charNames = { A: config.names.a, B: config.names.b, C: config.names.c }
@@ -887,8 +903,9 @@ function App() {
   const [settingsTabRequest, setSettingsTabRequest] = useState<SettingsTab>('general')
 
   /** 打开设置(tab 直达某分页):草稿回填与各页数据由 SettingsWindow 挂载时自取 */
-  function openSettings(tab?: SettingsTab) {
+  async function openSettings(tab?: SettingsTab) {
     setSettingsTabRequest(tab ?? 'general')
+    await setSettingsWindowCompact(true).catch((e) => console.warn('设置窗口缩放失败', e))
     openOverlayExclusive('settings')
   }
   useEffect(() => {
@@ -1168,6 +1185,7 @@ function App() {
           innerRef={panelRef}
           bridge={settingsBridge}
           initialTab={settingsTabRequest}
+          onClose={() => closeOverlay('settings')}
           onExit={requestExit}
         />
       )}

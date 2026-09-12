@@ -33,6 +33,8 @@ export interface SettingsWindowProps {
   bridge: SettingsBridge
   /** 本次打开要落到的分页(命令面板"添加提醒"直达备忘页用);仅在挂载时生效 */
   initialTab?: SettingsTab
+  /** 关闭设置并恢复全屏舞台 */
+  onClose(): void
   /** 退出程序(真正关窗在 App 侧;两段确认只服务这里的按钮) */
   onExit(): void
 }
@@ -56,7 +58,7 @@ const TAB_CONTENT: Record<SettingsTab, () => React.JSX.Element> = {
   support: SupportSettings,
 }
 
-export function SettingsWindow({ innerRef, bridge, initialTab = 'general', onExit }: SettingsWindowProps) {
+export function SettingsWindow({ innerRef, bridge, initialTab = 'general', onClose, onExit }: SettingsWindowProps) {
   const session = useSettingsSession()
   // 界面主题:读已落盘配置(基础设置里切换,保存即发布快照,窗口即时换肤)
   const theme = useConfigSnapshot().theme
@@ -181,6 +183,9 @@ export function SettingsWindow({ innerRef, bridge, initialTab = 'general', onExi
               >
                 {session.saveError ? '保存失败' : session.savedTick !== 0 ? '已保存' : '自动保存'}
               </span>
+              <button className="panel-btn" title="关闭设置" onClick={onClose}>
+                关闭
+              </button>
               <button
                 className={`set-exit${exitArmed ? ' armed' : ''}`}
                 title={exitArmed ? '再点一次确认退出' : '退出程序(3 秒内再点确认)'}
