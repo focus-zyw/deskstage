@@ -61,7 +61,9 @@ export function CustomModesSettings() {
   const [prompt, setPrompt] = useState('')
   const [gap, setGap] = useState('400')
   const [triggersText, setTriggersText] = useState('')
+  const [topicsText, setTopicsText] = useState('')
   const [scriptText, setScriptText] = useState('')
+  const [nonComedy, setNonComedy] = useState(false)
   const [armedDelete, setArmedDelete] = useState<string | null>(null)
   const disarmTimer = useRef(0)
 
@@ -71,6 +73,8 @@ export function CustomModesSettings() {
     setPrompt(mode.prompt)
     setGap(String(mode.gap))
     setTriggersText((mode.triggers ?? []).join('、'))
+    setTopicsText((mode.topics ?? []).join('、'))
+    setNonComedy(!!mode.tone && mode.tone !== 'comedy')
     setScriptText(scriptToText(mode.script))
     setError(null)
     setNote(null)
@@ -107,6 +111,12 @@ export function CustomModesSettings() {
           .split(/[、,，\s]+/)
           .map((t) => t.trim())
           .filter(Boolean),
+        topics: topicsText
+          .split(/[、,，\s]+/)
+          .map((t) => t.trim())
+          .filter(Boolean),
+        // 非喜剧基调:用模式名当基调描述(如"温暖治愈"→"夸夸"),存储层会把 'comedy' 归一为 undefined
+        tone: nonComedy ? `${label.trim()}` : undefined,
         script,
       })
       setDraft(null)
@@ -175,6 +185,19 @@ export function CustomModesSettings() {
           <SetField label="风格说明(编剧指令)" htmlFor="cfg-mode-prompt" hint="角色关系/话语结构/收尾方式,拼进每一次生成的指令">
             <textarea id="cfg-mode-prompt" rows={4} value={prompt} onChange={(e) => setPrompt(e.target.value)} />
           </SetField>
+          <SetLine
+            title="基调:非喜剧模式"
+            hint="开启后裁掉默认互怼喜剧骨架(包袱/secret反转/逗弄/互怼关系卡),你的风格说明成为主旋律。夸夸、治愈陪伴这类模式请开启"
+          >
+            <div className="seg-group">
+              <button className={`seg-btn${!nonComedy ? ' on' : ''}`} onClick={() => setNonComedy(false)}>
+                喜剧互怼(默认)
+              </button>
+              <button className={`seg-btn${nonComedy ? ' on' : ''}`} onClick={() => setNonComedy(true)}>
+                非喜剧
+              </button>
+            </div>
+          </SetLine>
           <SetLine title="台词间奏(毫秒)" hint="快嘴互怼 200~300,自然闲聊 400 左右">
             <input
               type="number"
@@ -192,6 +215,18 @@ export function CustomModesSettings() {
               type="text"
               value={triggersText}
               onChange={(e) => setTriggersText(e.target.value)}
+            />
+          </SetField>
+          <SetField
+            label="专属话题(可选)"
+            htmlFor="cfg-mode-topics"
+            hint="顿号分隔的话题角度;风格与日常吐槽不同时强烈建议填(如夸夸模式:今天做成的一件小事、让人舒服的细节),抽题优先从这里取"
+          >
+            <input
+              id="cfg-mode-topics"
+              type="text"
+              value={topicsText}
+              onChange={(e) => setTopicsText(e.target.value)}
             />
           </SetField>
           <SetField

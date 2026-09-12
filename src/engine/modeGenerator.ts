@@ -16,6 +16,8 @@ function fewShotExcerpt(mode: DialogMode): Record<string, unknown> {
     prompt: mode.prompt,
     interestTopicChance: mode.interestTopicChance,
     triggers: mode.triggers,
+    topics: mode.topics,
+    tone: mode.tone,
     script_sample: mode.script.slice(0, 2),
   }
 }
@@ -33,7 +35,9 @@ function buildSystemPrompt(): string {
     '  "prompt": "该模式的编剧指令:角色关系、话语结构、包袱/收尾方式,150字内",',
     '  "script": [兜底剧本,A/B 交替 4~8 句,每句 {"speaker":"A|B","text":"台词","action":"动作词"},最后一句带 "pauseAfter":1200 留白],',
     `  "interestTopicChance": 0~1 小数(该模式聊到使用者兴趣的概率,闲聊类高、结构化类低),`,
-    '  "triggers": ["自然语言点播触发词,1~3个中文词,第一个必须是 label"]',
+    '  "triggers": ["自然语言点播触发词,1~3个中文词,第一个必须是 label"],',
+    '  "topics": ["可选:该模式的专属话题角度,3~6个短语(如夸夸模式给:今天做成的一件小事、让人舒服的细节)。风格与默认话题池(职场/生活吐槽)不同时强烈建议给出"],',
+    '  "tone": "基调:互怼喜剧类填 comedy;与互怼喜剧结构性冲突的模式(夸夸/治愈陪伴/暖心电台等)必须给一个描述短语(如 温暖治愈,10字内)——它会裁掉默认喜剧骨架,让模式风格成为主旋律"',
     '}',
     `action 只能取这些词:${actions}。`,
     '示例(仅供参考结构):',

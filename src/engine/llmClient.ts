@@ -18,6 +18,7 @@ import {
 } from '../storage/storyStore'
 import { peekRecap, takeRecap } from '../storage/interactionStore'
 import { pickRelationship } from '../performer/modes/relationships'
+import { isComedyMode, liveMode } from '../performer/modes'
 import { currentTimeSlot } from './timeAware'
 import { duoShortPersona, nameOf, namingDiscipline, pronounOf, soloShortPersona } from './persona'
 import { moodHintLine, moodPromptBlock, type MoodEventCandidate } from './moodState'
@@ -145,8 +146,9 @@ export async function generateDialog(
     userCtx.story = injectStory ? await storyContext(topic, 2) : undefined
     interactionRecap = (await takeRecap()) ?? undefined
   }
-  // 本集临时关系:随机局势决定攻守姿态,场景卡据此构建(重试沿用同一关系,保持一致)
-  const relationship = pickRelationship(mode)
+  // 本集临时关系:随机局势决定攻守姿态,场景卡据此构建(重试沿用同一关系,保持一致)。
+  // 非喜剧模式不注入互怼向关系卡,免得把基调拽回斗嘴
+  const relationship = isComedyMode(mode) ? pickRelationship(mode) : undefined
   const envNote = cfg.envSense ? envContext(cfg.envNoteCooldownMin * 60_000) : undefined
   // 长期关系底色:随互动缓慢漂移,给当集台词定相互态度
   const bond = await getBond()
@@ -561,10 +563,17 @@ export async function generateLiveReply(
   const liveMoodLine = moodHintLine(await getMoods(), ['A', 'B', 'C'])
 
   const danmakuList = batch.map((d, i) => `${i}. ${d.username}:${d.content}`).join('\n')
+  // 直播基调:live 不锁死 comedy——改 live.ts 的 tone 声明即可切换弹幕回复整体风格
+  const liveTone = liveMode.tone?.trim()
+  const liveIsComedy = !liveTone || liveTone === 'comedy'
+  const toneLine = liveIsComedy ? '' : `本直播间整体基调:${liveTone},回复的语气、用词与收尾方式都按这个基调走。`
+  const styleLine = liveIsComedy
+    ? '语气跟各自人设走,优先友好捧场和接梗,偶尔斗嘴点缀即可,别句句抬杠'
+    : `语气跟各自人设走,并服从直播间基调(${liveTone});不要套用互怼/抬杠的默认写法`
   const messages: { role: string; content: string }[] = [
     {
       role: 'system',
-      content: `桌面情景剧正在"直播读弹幕"。两位主角:${duoShortPersona()}。常驻第三角色:${soloShortPersona('C')}(speaker "C",话少,弹幕没点名${pronounOf('C')}就不抢话)。${liveMoodLine ? `${liveMoodLine}。` : ''}${p.userName ? `主播(用户)叫"${p.userName}",提到时直接叫名字,不加"们"。` : ''}下面是最新一批直播间弹幕。挑一条最值得回的(优先问角色的、有趣的、能接梗的;刷屏/无意义/人身攻击的直接不回),由三人中的一位用各自口吻回一句——弹幕点名了${nameOf('C')}(@${nameOf('C')}/C)就由${nameOf('C')}回答,否则优先${nameOf('A')}和${nameOf('B')},${nameOf('C')}只在内容确实与${pronounOf('C')}的小管家职责相关时才接。要求:15~40字,口语化像真说话,称呼遵守上面的称呼与性别纪律;语气跟各自人设走,优先友好捧场和接梗,偶尔斗嘴点缀即可,别句句抬杠;不要复读弹幕原文。
+      content: `桌面情景剧正在"直播读弹幕"。两位主角:${duoShortPersona()}。常驻第三角色:${soloShortPersona('C')}(speaker "C",话少,弹幕没点名${pronounOf('C')}就不抢话)。${toneLine}${liveMoodLine ? `${liveMoodLine}。` : ''}${p.userName ? `主播(用户)叫"${p.userName}",提到时直接叫名字,不加"们"。` : ''}下面是最新一批直播间弹幕。挑一条最值得回的(优先问角色的、有趣的、能接梗的;刷屏/无意义/人身攻击的直接不回),由三人中的一位用各自口吻回一句——弹幕点名了${nameOf('C')}(@${nameOf('C')}/C)就由${nameOf('C')}回答,否则优先${nameOf('A')}和${nameOf('B')},${nameOf('C')}只在内容确实与${pronounOf('C')}的小管家职责相关时才接。要求:15~40字,口语化像真说话,称呼遵守上面的称呼与性别纪律;${styleLine};不要复读弹幕原文。
 ${p.banTopics ? `雷区(绝对不聊):${p.banTopics}。` : ''}
 只输出一个 JSON 对象:{"pick":<弹幕序号>,"reply":"<回复,不回则空串>","speaker":"A"或"B"或"C","action":"<动作词>"}
 action 只能是这些词之一:${[...VALID_ACTIONS].join('|')}。${bits.length ? `\n关于观众:${bits.join(';')}。` : ''}${recentReplies.length ? `\n最近已说过(不要重复,保持话题推进):${recentReplies.join(' / ')}` : ''}`,

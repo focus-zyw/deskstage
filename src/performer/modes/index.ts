@@ -9,6 +9,9 @@ import { liveMode } from './live'
 import { getCustomModesSnapshot, useCustomModes } from '../../storage/customModesStore'
 import type { DialogLine } from '../player'
 
+// 弹幕回复 prompt 需要读 live 的 tone 声明(直播基调不锁死,改 live.ts 即切换)
+export { liveMode }
+
 export interface DialogMode<ID extends string = string> {
   /** 注册键，落盘到历史的 mode 字段 */
   id: ID
@@ -30,6 +33,10 @@ export interface DialogMode<ID extends string = string> {
   /** 可选：自然语言路由触发词("来一段关于加班的相声"里的"相声");
    *  缺省不可被自然语言点播,只能从分段按钮进。内置模式与模式工坊新模式都靠它进路由 */
   triggers?: string[]
+  /** 可选：基调。'comedy'(daily/crosstalk 显式声明)= 默认互怼喜剧全套(包袱/secret反转/逗弄/关系攻守);
+   *  其他描述值(如 '温暖治愈')= 非喜剧分支:prompt 裁掉默认喜剧件,tone 值本身也注入 prompt 作基调语境。
+   *  live 不声明(不锁死):其弹幕回复 prompt 也读本字段,改 live.ts 一行即可切换直播风格 */
+  tone?: string
 }
 
 export const MODES = {
@@ -71,4 +78,10 @@ export function modeOf(id: string): DialogMode {
     getCustomModesSnapshot().find((m) => m.id === id) ??
     MODES.daily
   )
+}
+
+/** 该模式是否走默认互怼喜剧全套(tone 缺省或 'comedy');非喜剧模式裁掉喜剧件 */
+export function isComedyMode(id: string): boolean {
+  const t = modeOf(id).tone?.trim()
+  return !t || t === 'comedy'
 }

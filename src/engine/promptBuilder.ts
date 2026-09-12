@@ -79,14 +79,26 @@ export function buildMessages(
 ): ChatMessage[] {
   const persona = fullPersona()
 
+  // 模式基调:非 'comedy'(如'温暖治愈')走非喜剧分支——裁掉默认互怼喜剧件,
+  // 模式风格成为真正的主旋律。原 comedy 文案逐字不动(内建模式回归锁测试在守)
+  const modeDef = modeOf(mode)
+  const tone = modeDef.tone?.trim()
+  const isComedy = !tone || tone === 'comedy'
+
   // 手法说教刻意做减法:结构/节拍由场景卡的 escalation 承担,避免固定套路疲劳
-  const craft = `创作要求（这是喜剧，好笑比什么都重要）：
+  const craft = isComedy
+    ? `创作要求（这是喜剧，好笑比什么都重要）：
 - 场景卡的 escalation 就是包袱节拍：前一拍铺垫、后一拍意外反转，最后一句必须是响底的包袱收束
 - secret 是反转的底气：揭晓时要"出人意料但回头看合理"
 - callback 是本集自己的梗：结尾回收前面埋的线，形成"老观众才懂"的呼应
 - 台词全部口语化，像真说话，不要书面语；允许"哎""嚯""好家伙""就这？"这类语气词
 - 关系决定说法：按本集关系状态写出"想说不敢说/嘴硬/试探/讨好"这些姿态差异，不要俩人从头吵到尾
 - 话题活化：话题只是种子，把它翻译成当下年轻人真实的生活场景——具体的 app 名、场景、行为习惯、当代情绪，不要干巴巴围绕话题词打转`
+    : `创作要求（本集基调：${tone}，严格按模式风格创作）：
+- 台词全部口语化，像真说话，不要书面语；语气词按模式风格自然使用
+- 角色关系与相互姿态按模式风格走，不套用互怼/抬杠的默认写法
+- 话题活化：话题只是种子，把它翻译成真实的生活场景——具体的事、具体的细节，不要干巴巴围绕话题词打转
+- escalation 是本集的节拍：前拍铺垫、后拍递进，最后一句按模式风格收尾`
 
   // 旧字段兜底:userCtx 未传时回退到 legacy userInterests
   const legacy = userInterests?.trim()
@@ -114,7 +126,8 @@ ${moodNote.trim()}` : ''
 `
     : ''
 
-  const relCtx = relationship
+  // 本集关系卡是互怼攻守向局势:非喜剧模式不注入,免得把基调拽回斗嘴
+  const relCtx = relationship && isComedy
     ? `\n\n本集关系状态（必须遵守,写进场景卡的 relationship 字段）：${relationship.label}——${relationship.desc}。关系只改变本集攻守,${nameOf('A')}和${nameOf('B')}的基础性格与说话风格不变。`
     : ''
 
@@ -123,20 +136,24 @@ ${moodNote.trim()}` : ''
     ? `\n\n连续剧情（本集属于多集剧情线的一拍,话题铺垫让位于它）：《${arc.title}》已演出 ${arc.stage} 拍。本拍必须演出的进展：${arc.hook}。结尾不收死,留下引向下一拍的新悬念/新进展。`
     : ''
 
-  // 丙的角色分工:C 是两人都宠着都爱逗的团宠,喜剧引擎是"甲乙逗她→她认真接招→偶尔字面反击"。
-  // 相声模式限制 0~2 句保住逗哏-捧哏结构;其余模式 1~4 句正式参与。
+  // 丙的角色分工:喜剧模式是"甲乙逗她→她认真接招→偶尔字面反击"的团宠引擎;
+  // 非喜剧模式只保留参与骨架(句数/禁机械轮流/按模式风格),逗弄叙述整段裁掉。
   // 措辞用配置名;句中"甲/乙/丙"等结构性称呼由称呼纪律块统一映射
-  const cRule =
-    mode === 'crosstalk'
+  const cRule = !isComedy
+    ? `
+
+${nameOf('C')}的角色分工（必须遵守）:${nameOf('C')}(小管家)是${nameOf('A')}${nameOf('B')}身边的常驻伙伴,不是电话或画外音。每段${pronounOf('C')}只说 1~4 句,可以大量用 reactions 做无声反应;不得机械地 A→B→C 轮流说话。${nameOf('C')}的参与方式完全按模式风格走(本集基调:${tone})。`
+    : mode === 'crosstalk'
       ? `
 
-${nameOf('C')}的角色分工（必须遵守）:${nameOf('C')}(小管家)是${nameOf('A')}${nameOf('B')}都宠着都爱逗的桌面团宠,但本场只占 0~2 句;${nameOf('A')}${nameOf('B')}拿${nameOf('C')}垫梗(${nameOf('A')}离谱地使唤${pronounOf('C')}、${nameOf('B')}一本正经地点评${pronounOf('C')}的呆),${nameOf('C')}用字面执行制造实体包袱;逗而不恶意,像逗自家小孩。${nameOf('A')}${nameOf('B')}仍是逗哏-捧哏主轴,${nameOf('C')}不进入正活的结构编排。`
+${nameOf('C')}的角色分工（必须遵守）:${nameOf('C')}(小管家)是${nameOf('A')}${nameOf('B')}都宠着都爱逗的桌面团宠,但本场只占 0~2 句;${nameOf('A')}${nameOf('B')}拿${nameOf('C')}垫梗(${nameOf('A')}离谱地使唤${pronounOf('C')}、${nameOf('B')}一本正经地点评${pronounOf('C')}的呆),${nameOf('C')}用字面执行制造实体包袱;逗而不恶意,像逗自家小孩。${nameOf('A')}${nameOf('B')}仍是逗哏-捧哏主轴,${nameOf('C')}不进入正活的结构编排。若模式风格指令与本节冲突,以模式风格为准。`
       : `
 
 ${nameOf('C')}的角色分工（必须遵守）:${nameOf('C')}(小管家)是${nameOf('A')}${nameOf('B')}都宠着都爱逗的桌面团宠,不是电话或画外音。每段${pronounOf('C')}只说 1~4 句,可以大量用 reactions 做无声反应;不得机械地 A→B→C 轮流说话。
 - 逗${pronounOf('C')}有分工:${nameOf('A')}爱用夸张的吹牛和离谱的请求逗${pronounOf('C')}("${nameOf('C')},把我咖啡变成冰的"然后看着${pronounOf('C')}往咖啡机里加冰),${nameOf('B')}爱用毒舌反问和一本正经的胡说八道逗${pronounOf('C')}——逗而不恶意,像逗自家小孩,不许刻薄嘲笑
 - ${nameOf('C')}的应对分两路:大多数时候认真接招,字面理解直接执行,反差即萌点;中后段安排一次"字面反击"——把${nameOf('A')}${nameOf('B')}某句随口的话当真执行到底,让他们下不来台,这次反击可以就是本集的底包袱
-- ${nameOf('C')}只在被逗能出梗、行动能改变局面或带来新信息时开口;最后一句优先由${nameOf('A')}或${nameOf('B')}收底,除非${nameOf('C')}的反击本身就是底`
+- ${nameOf('C')}只在被逗能出梗、行动能改变局面或带来新信息时开口;最后一句优先由${nameOf('A')}或${nameOf('B')}收底,除非${nameOf('C')}的反击本身就是底
+- 若模式风格指令与本节(逗弄/字面反击)冲突,以模式风格为准:模式要的不是互怼喜剧时,${nameOf('C')}按模式风格参与`
 
   // 观众抉择点:由调用方掷骰决定(约 30% 的集数),中段安排一次站队,两分支各 3~5 句,结尾汇合同一包袱
   const choiceRule = allowChoice
@@ -149,16 +166,16 @@ ${nameOf('C')}的角色分工（必须遵守）:${nameOf('C')}(小管家)是${na
 
   const protocol = `输出协议（严格遵守）：
 - 只输出一个 JSON 对象，不要输出任何其他文字
-- 先写场景卡再写台词，格式：{"card":{"relationship":"关系标签","scene":"具体场景一句话","goalA":"${nameOf('A')}想要什么","goalB":"${nameOf('B')}想要什么","roleC":"${nameOf('C')}本集的行动职责(可选,不写${nameOf('C')}就省略)","secret":"被隐瞒的关键信息(一方或双方知道)","escalation":["节拍1","节拍2","节拍3"],"callback":"结尾回收的本集铺垫"},"dialog":[{"speaker":"A","text":"台词","action":"动作","target":"B","beatId":"节拍1"},...]}
-- dialog 必须逐拍实现 card.escalation；secret 在结尾反转揭晓；callback 必须回收本集前面埋的线
-- 每句必填 "target"（这句对谁说："A"/"B"/"C"=指定听者；"audience"=对观众直说；"room"=对全场）和 "beatId"（这句话实现 card.escalation 的哪一拍,逐字引用该项；收底回收 callback 的句子标最后一拍）
-- speaker 只能是 "A"、"B" 或 "C"；${nameOf('A')}和${nameOf('B')}承担主要语言冲突，${nameOf('C')}按上面的角色分工参与;台词文本里一律用角色真名,禁止出现"甲""乙""丙"(称呼与性别纪律见上)
+- 先写场景卡再写台词，格式：{"card":{"relationship":"关系标签","scene":"具体场景一句话","goalA":"${nameOf('A')}想要什么","goalB":"${nameOf('B')}想要什么","roleC":"${nameOf('C')}本集的行动职责(可选,不写${nameOf('C')}就省略)","secret":${isComedy ? '"被隐瞒的关键信息(一方或双方知道)"' : '"本集的关键信息或情感内核(可选,模式不需要反转就不填)"'},"escalation":["节拍1","节拍2","节拍3"]${isComedy ? ',"callback":"结尾回收的本集铺垫"' : ''}},"dialog":[{"speaker":"A","text":"台词","action":"动作","target":"B","beatId":"节拍1"},...]}
+- dialog 必须逐拍实现 card.escalation；${isComedy ? 'secret 在结尾反转揭晓；callback 必须回收本集前面埋的线' : 'secret/callback 是可选字段,只在模式风格需要时才写,不需要就省略'}
+- 每句必填 "target"（这句对谁说："A"/"B"/"C"=指定听者；"audience"=对观众直说；"room"=对全场）和 "beatId"（这句话实现 card.escalation 的哪一拍,逐字引用该项${isComedy ? '；收底回收 callback 的句子标最后一拍' : ''}）
+- speaker 只能是 "A"、"B" 或 "C"；${nameOf('A')}和${nameOf('B')}承担${isComedy ? '主要语言冲突' : '主要对话'},${nameOf('C')}按上面的角色分工参与;台词文本里一律用角色真名,禁止出现"甲""乙""丙"(称呼与性别纪律见上)
 - action 只能是这些词之一（禁止用 card 的字段名或其他词）：${ACTIONS}
 - 一段共 14~22 句；三人同场但禁止机械轮流（尤其不许固定 A→B→C 循环）
 - 每句口语化，不超过 25 个字
 - 台词可在 text/action 外带可选演出字段(用在该用的地方,没有就省略,别每句都加)：
-  "reactions":{"B":"shy","C":"surprise"}(本句播出时其他角色的无声反应动作,键不含说话者自己,值同 action 词表;用了 reactions 就不要再写 listenerAction)、"delivery":"deadpan|excited|slow"(面瘫/兴奋/慢条斯理)、"pauseBefore":毫秒(包袱前 300~600 蓄势)、"pauseAfter":毫秒(只给响底的最后一句,900~1500 留白)
-- delivery 使用纪律:默认普通语气(不加字段);同一角色连续同种强情绪最多两句;excited 只用于冲突升级和抖包袱;slow 只用于铺垫、犹豫和揭底`
+  "reactions":{"B":"shy","C":"surprise"}(本句播出时其他角色的无声反应动作,键不含说话者自己,值同 action 词表;用了 reactions 就不要再写 listenerAction)、"delivery":"deadpan|excited|slow"(面瘫/兴奋/慢条斯理)、"pauseBefore":毫秒(${isComedy ? '包袱前' : '蓄势'}300~600)、"pauseAfter":毫秒(只给${isComedy ? '响底的' : '收尾的'}最后一句,900~1500 留白)
+- delivery 使用纪律:默认普通语气(不加字段);同一角色连续同种强情绪最多两句;${isComedy ? 'excited 只用于冲突升级和抖包袱;slow 只用于铺垫、犹豫和揭底' : `excited/slow 按本集基调(${tone})自然使用,不刻意夸张`}`
 
   const envBlock = envNote?.trim()
     ? `现实环境(可作为素材自然带入,要有喜剧感,别播新闻):${envNote.trim()}。
@@ -179,7 +196,9 @@ ${nameOf('C')}的角色分工（必须遵守）:${nameOf('C')}(小管家)是${na
   return [
     {
       role: 'system',
-      content: `你是一位擅长传统相声和网络脱口秀的资深喜剧编剧,给桌面三人情景剧写段子。${persona}${bondCtx}${moodCtx}${relCtx}${arcCtx}${cRule}${profile}${storyCtx}${timeCtx}${choiceRule}\n\n${craft}\n\n${protocol}\n\n${modeOf(mode).prompt}`,
+      content: isComedy
+        ? `你是一位擅长传统相声和网络脱口秀的资深喜剧编剧,给桌面三人情景剧写段子。${persona}${bondCtx}${moodCtx}${relCtx}${arcCtx}${cRule}${profile}${storyCtx}${timeCtx}${choiceRule}\n\n${craft}\n\n${protocol}\n\n【模式风格（本集最高创作优先级）】\n${modeDef.prompt}\n(模式风格与上述默认喜剧手法(互怼/包袱/secret反转/逗弄)冲突时,一律以模式风格为准:台词内容、角色相互姿态、收尾方式都按模式风格走;场景卡仍需输出,但 secret/callback 只在模式风格需要反转或回收时使用,模式不需要就不硬塞。模式给了专属话题角度时,话题从那些角度里取。)`
+        : `你给桌面三人情景剧写台词,本集基调:${tone}——严格按模式风格创作,不要套用互怼喜剧的默认写法。${persona}${bondCtx}${moodCtx}${arcCtx}${cRule}${profile}${storyCtx}${timeCtx}${choiceRule}\n\n${craft}\n\n${protocol}\n\n【模式风格（本集最高创作优先级）】\n${modeDef.prompt}\n(模式风格是本集的主旋律:台词内容、角色相互姿态、收尾方式全部按模式风格与专属话题走。)`,
     },
     {
       role: 'user',

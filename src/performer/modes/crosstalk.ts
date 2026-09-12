@@ -25,4 +25,6 @@ export const crosstalkMode: DialogMode<'crosstalk'> = {
   interestTopicChance: 0.12,
   // 自然语言点播触发词("来一段相声/来一段段子")
   triggers: ['相声', '段子'],
+  // 基调显式声明:默认互怼喜剧全套
+  tone: 'comedy',
 }

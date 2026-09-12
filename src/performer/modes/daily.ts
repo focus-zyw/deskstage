@@ -23,4 +23,6 @@ export const dailyMode: DialogMode<'daily'> = {
   interestTopicChance: 0.35,
   // 自然语言点播触发词("来一段日常/来一段闲聊")
   triggers: ['日常', '闲聊'],
+  // 基调显式声明:默认互怼喜剧全套
+  tone: 'comedy',
 }

@@ -45,6 +45,7 @@ export function sanitizeCustomMode(raw: unknown): Omit<DialogMode, 'id'> & { id:
     ? (o.triggers as unknown[]).map((t) => (typeof t === 'string' ? t.trim().slice(0, 12) : '')).filter(Boolean).slice(0, 8)
     : undefined
   const chance = Number(o.interestTopicChance)
+  const tone = typeof o.tone === 'string' ? o.tone.trim().slice(0, 20) : ''
   return {
     id,
     label,
@@ -55,6 +56,7 @@ export function sanitizeCustomMode(raw: unknown): Omit<DialogMode, 'id'> & { id:
     topics: topics && topics.length > 0 ? topics : undefined,
     interestTopicChance: Number.isFinite(chance) ? Math.min(1, Math.max(0, chance)) : undefined,
     triggers: triggers && triggers.length > 0 ? triggers : undefined,
+    tone: tone && tone !== 'comedy' ? tone : undefined, // 'comedy' 归 undefined(与缺省同义,省一条分支)
   }
 }
 
