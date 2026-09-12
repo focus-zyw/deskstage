@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "prototype:settings": "vite --open /settings-prototype.html",
+    "prototype:chatlog": "vite --open /chatlog-prototype.html",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "test": "node --test tests/*.test.mjs",
