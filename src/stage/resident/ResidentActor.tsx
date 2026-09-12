@@ -104,6 +104,10 @@ export function ResidentActor({
   // 由 ambient/poke 持有者注册——动作完整播完才回待机,不再被固定计时器掐断
   const endedHandlerRef = useRef<(() => void) | null>(null)
   const ambientRef = useRef<ResidentClipId | null>(null)
+  // scripted 动作完成持有:戳一戳/插话等经 presenter 设置的表情(angry 等),
+  // 会被 say 的固定回收计时提前降级回 idle——非说话状态下保持播完再切(see hold 逻辑)
+  const [holdClip, setHoldClip] = useState<ResidentClipId | null>(null)
+  const lastScriptedRef = useRef<ResidentClipId | null>(null)
 
   // "真空闲":没有说话/拖拽/点击回应/剧情动作——随机链与漫游只在这种时候起步
   const idleLike =
@@ -125,9 +129,39 @@ export function ResidentActor({
     roaming,
     ambient,
   })
+  // scripted 命中判定(scripted 在 resolve 优先级中位于 poke/roaming/ambient 之前,
+  // 此布尔成立即 target 由 scripted 提供)
+  const scriptedActive = !hidden && !dragging && !speaking && !!action && action !== 'idle'
+  if (scriptedActive && resolved) {
+    lastScriptedRef.current = resolved.clip
+  } else {
+    // scripted 被 presenter 的 say 回收提前降级为 idle:非说话状态下进入持有,
+    // 把刚降级的非循环表情播完(否则 angry 等约10秒的片段只播 presenter 给的2秒)
+    const idleNow = !resolved || resolved.clip === 'idle'
+    if (
+      lastScriptedRef.current &&
+      !holdClip &&
+      idleNow &&
+      !speaking &&
+      !pokeClip &&
+      !ambient &&
+      !roaming
+    ) {
+      setHoldClip(lastScriptedRef.current)
+    }
+    if (!idleNow || speaking) lastScriptedRef.current = null
+  }
   // 缺失片段就地回退 idle(触发 effect 重跑);idle 也缺失 → broken,整身不渲染
-  const target =
+  let target =
     resolved && missing.includes(resolved.clip) ? { clip: 'idle' as const, loop: true } : resolved
+  // hold 拦截:scripted 动作被提前降级后,继续播完它;被新意图打断时撤销持有
+  if (holdClip) {
+    if (target && target.clip !== 'idle') {
+      setHoldClip(null)
+    } else if (!speaking && !pokeClip && !ambient && !roaming) {
+      target = { clip: holdClip, loop: false }
+    }
+  }
 
   useEffect(() => {
     if (!target) return
@@ -257,6 +291,18 @@ export function ResidentActor({
       setAmbient(null)
     }
   }, [canFrolic, idleLike])
+
+  // hold(被 presenter 计时器降级的 scripted 表情)的回收注册:播完(ended)或兜底超时后撤销。
+  // 声明在 ambient effect 之后:endedHandlerRef 后注册者赢,hold 期间不被 ambient 抢走
+  useEffect(() => {
+    if (!holdClip) return
+    endedHandlerRef.current = () => setHoldClip(null)
+    const fallback = window.setTimeout(() => setHoldClip(null), ACTION_FALLBACK_MS)
+    return () => {
+      window.clearTimeout(fallback)
+      endedHandlerRef.current = null
+    }
+  }, [holdClip])
 
   // 漫游:真空闲时随机起步,小步幅步进推进(热区矩形随每步刷新),打断即停
   useEffect(() => {
