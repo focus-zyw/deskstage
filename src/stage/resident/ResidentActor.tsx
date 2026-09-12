@@ -196,10 +196,11 @@ export function ResidentActor({
       if (settled || gen !== genRef.current) return
       settled = true
       window.clearTimeout(timer)
-      // canvas 合成:记录交叉淡入起点与前台槽位,绘制循环按 FADE_MS 混合两路解码
+      // canvas 合成:记录前台槽位。fadeStart=0 表示"等待新片段首个有效帧",
+      // 绘制循环探到有效帧后才起算交叉淡入——旧片段全程兜底显示,无空窗
       const backIdx: 0 | 1 = frontIdx.current === 0 ? 1 : 0
       drawState.current.front = backIdx
-      drawState.current.fadeStart = performance.now()
+      drawState.current.fadeStart = 0
       // 淡出完成后再停旧片段:立刻 pause 会冻住淡出中间帧
       const outgoing = frontEl
       window.setTimeout(() => {
@@ -409,54 +410,52 @@ export function ResidentActor({
     if (hidden || broken) return
     const W = 960
     const H = 540
-    // 每槽最后成功帧快照:片段切换时 src 重置会让解码器短暂不可绘制(两个槽
-    // 先后重置即出现空窗),用快照兜底保证 canvas 永不整只透明
-    const snaps = [document.createElement('canvas'), document.createElement('canvas')]
-    snaps.forEach((c) => {
-      c.width = W
-      c.height = H
-    })
+    // 有效帧探针(1×1):片段切换 seek/重置后解码器 readyState 已就绪但
+    // 像素平面尚未呈现,drawImage 会画出全透明帧——探到有效帧前继续显示旧片段
+    const probe = document.createElement('canvas')
+    probe.width = 1
+    probe.height = 1
+    const probeCtx = probe.getContext('2d', { willReadFrequently: true })
+    const hasFrame = (video: HTMLVideoElement | null): boolean => {
+      if (!video || video.readyState < 2 || !probeCtx) return false
+      try {
+        probeCtx.clearRect(0, 0, 1, 1)
+        probeCtx.drawImage(video, 0, 0, 1, 1)
+        return probeCtx.getImageData(0, 0, 1, 1).data[3] > 8
+      } catch {
+        return false
+      }
+    }
     let raf = 0
     const draw = () => {
       const canvas = canvasRef.current
       const ctx = canvas?.getContext('2d')
       if (ctx) {
         const st = drawState.current
-        const t = st.fadeStart
-          ? Math.min(1, (performance.now() - st.fadeStart) / FADE_MS)
-          : 1
+        const inSlot = st.front
+        const outSlot: 0 | 1 = st.front === 0 ? 1 : 0
+        const inVideo = inSlot === 0 ? videoA.current : videoB.current
+        const outVideo = outSlot === 0 ? videoA.current : videoB.current
+        const inHas = hasFrame(inVideo)
+        // 新片段首个有效帧到达才起算淡入;未就绪时 t=0 → 旧片段全程兜底显示
+        if (inHas && !st.fadeStart) st.fadeStart = performance.now()
+        const t = st.fadeStart ? Math.min(1, (performance.now() - st.fadeStart) / FADE_MS) : 0
         ctx.clearRect(0, 0, W, H)
         ctx.save()
         if (st.flip) {
           ctx.translate(W, 0)
           ctx.scale(-1, 1)
         }
-        const drawSlot = (slot: 0 | 1, alpha: number) => {
-          const video = slot === 0 ? videoA.current : videoB.current
-          const snap = snaps[slot]
-          const snapCtx = snap.getContext('2d')
-          if (!snapCtx) return
-          let drew = false
-          if (video && video.readyState >= 2) {
-            ctx.globalAlpha = alpha
-            try {
-              ctx.drawImage(video, 0, 0, W, H)
-              snapCtx.drawImage(video, 0, 0, W, H)
-              drew = true
-            } catch {
-              // 解码器瞬间不可绘制(seek/重置):走快照兜底
-            }
-            ctx.globalAlpha = 1
-          }
-          if (!drew) {
-            ctx.globalAlpha = alpha
-            ctx.drawImage(snap, 0, 0, W, H)
-            ctx.globalAlpha = 1
-          }
+        // 交叉淡入:旧片段 (1-t) 渐隐 + 新片段 t 渐入,任一时刻合成不透明度恒为 1
+        if (outVideo && t < 1 && hasFrame(outVideo)) {
+          ctx.globalAlpha = 1 - t
+          ctx.drawImage(outVideo, 0, 0, W, H)
         }
-        // 交叉淡入期:前后两帧按 (1-t)/t 混合;淡入完成后只画前台
-        if (t < 1) drawSlot(st.front === 0 ? 1 : 0, 1 - t)
-        drawSlot(st.front, t)
+        if (inVideo && t > 0) {
+          ctx.globalAlpha = t
+          ctx.drawImage(inVideo, 0, 0, W, H)
+        }
+        ctx.globalAlpha = 1
         ctx.restore()
       }
       raf = requestAnimationFrame(draw)
