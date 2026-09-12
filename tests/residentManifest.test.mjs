@@ -32,16 +32,19 @@ after(async () => {
 
 test('词表动作映射到候选片段,未知动作回退 idle', () => {
   assert.deepEqual(clipsForAction('talk'), ['talk'])
-  assert.deepEqual(clipsForAction('thinking'), ['think'])
+  assert.deepEqual(clipsForAction('thinking'), ['think', 'pace'])
   assert.deepEqual(clipsForAction('happy'), ['happy', 'wave'])
   assert.deepEqual(clipsForAction('surprise'), ['surprise', 'startled'])
-  // C 没有独立素材的动作:回退待机,不让协议感知具体文件
-  assert.deepEqual(clipsForAction('sad'), ['idle'])
+  // 动作补缺:此前回退待机的四个词,现在各有贴语义的片段
+  assert.deepEqual(clipsForAction('sad'), ['sigh', 'fallen'])
+  assert.deepEqual(clipsForAction('sleepy'), ['yawn', 'nap'])
+  assert.deepEqual(clipsForAction('shake'), ['squash'])
+  assert.deepEqual(clipsForAction('jump'), ['jump_smash'])
   assert.deepEqual(clipsForAction('不存在动作'), ['idle'])
 })
 
 test('C 内部动作(围观/互动/待机链)映射到专属片段', () => {
-  assert.deepEqual(clipsForAction('working'), ['working', 'focus'])
+  assert.deepEqual(clipsForAction('working'), ['working', 'focus', 'filing', 'note_quick'])
   assert.deepEqual(clipsForAction('stretch'), ['stretch'])
   assert.deepEqual(clipsForAction('hum'), ['hum'])
   assert.deepEqual(clipsForAction('tap'), ['tap'])
@@ -74,7 +77,19 @@ test('本地已抓取的素材文件真实存在(资源在库时不允许运行�
     // 素材未抓取时跳过(脚本 scripts/fetch-c-animations.mjs 可补齐),应用侧静默降级
     return
   }
-  for (const clip of ['idle', 'talk', 'think', 'happy', 'wave', 'angry', 'surprise', 'startled', 'caught', 'turn', 'walk', 'float', 'drag', 'working', 'focus', 'stretch', 'hum', 'tap']) {
+  const all = [
+    'idle', 'talk', 'think', 'happy', 'wave', 'angry', 'surprise', 'startled', 'caught', 'turn', 'walk', 'float', 'drag',
+    'working', 'focus', 'stretch', 'hum', 'tap',
+    'sigh', 'fallen', 'yawn', 'nap', 'squash', 'jump_smash', 'cheer', 'pace',
+    'wipe', 'screen_mutter', 'daze', 'cat', 'mirror', 'cube', 'toy_car', 'kick_shuttle', 'rocking_horse', 'spin_top', 'animals', 'butterflies',
+    'tickle', 'scared',
+    'brush', 'breakfast', 'lunch', 'what_to_eat', 'dinner', 'fan', 'watermelon', 'ice_cream', 'snowman', 'hotpot',
+    'fu', 'red_packet', 'dumplings', 'fireworks', 'lion_dance', 'rice_cake', 'tangyuan', 'sky_lantern', 'zongzi', 'qixi_needle', 'mooncake', 'chongyang', 'chongyang_cake', 'laba_porridge', 'christmas_tree', 'trick_treat', 'qingtuan',
+    'rage_quit', 'whale_slam', 'dance', 'swing_dance', 'spin_show',
+    'filing', 'note_quick',
+    'whale_rise', 'whale_bubble', 'dove', 'card_magic', 'juggle', 'gomoku', 'bloom', 'eat_token',
+  ]
+  for (const clip of all) {
     assert.equal(existsSync(path.join(dir, `${clip}.webm`)), true, `${clip}.webm 缺失`)
   }
 })

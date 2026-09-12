@@ -8,18 +8,18 @@ import type { ResidentClipId } from './residentTypes'
 const ACTION_CLIPS: Record<string, ResidentClipId[]> = {
   idle: ['idle'],
   talk: ['talk'],
-  thinking: ['think'],
+  thinking: ['think', 'pace'],
   happy: ['happy', 'wave'],
-  laugh: ['happy', 'wave'],
+  laugh: ['happy', 'wave', 'cheer'],
   wave: ['wave'],
   shy: ['surprise'],
   surprise: ['surprise', 'startled'],
   angry: ['angry'],
-  // C 没有独立素材的动作:语义最近或直接回退待机
-  sad: ['idle'],
-  sleepy: ['idle'],
-  shake: ['idle'],
-  jump: ['happy'],
+  // 动作补缺:此前这些词回退待机,现在各有贴语义的片段
+  sad: ['sigh', 'fallen'],
+  sleepy: ['yawn', 'nap'],
+  shake: ['squash'],
+  jump: ['jump_smash'],
 }
 
 /** C 内部动作(状态机/交互专用,对话协议不产生这些词) */
@@ -29,14 +29,66 @@ const INTERNAL_CLIPS: Record<string, ResidentClipId[]> = {
   float: ['float'],
   drag: ['drag'],
   caught: ['caught'],
-  // 工具任务围观:写代码为主,忙碌点按作候选
-  working: ['working', 'focus'],
+  // 工具任务围观:写代码为主,忙碌点按/清点归档/轻快记录做候选
+  working: ['working', 'focus', 'filing', 'note_quick'],
   // 久坐提醒:伸懒腰
   stretch: ['stretch'],
   // 待机哼歌
   hum: ['hum'],
   // 点击回应:敲桌面互动
   tap: ['tap'],
+}
+
+/** 待机链候选(管家日常与玩心,单次片段):擦桌/对屏碎碎念是本职,其余是玩心 */
+export const AMBIENT_CLIPS: readonly ResidentClipId[] = [
+  'turn',
+  'caught',
+  'hum',
+  'wipe',
+  'screen_mutter',
+  'daze',
+  'cat',
+  'mirror',
+  'cube',
+  'toy_car',
+  'kick_shuttle',
+  'rocking_horse',
+  'spin_top',
+  'animals',
+  'butterflies',
+]
+
+/** 稀有彩蛋池:超低频惊喜(鲸鱼大招/魔术/杂技/吃Token),不进常规池避免被稀释 */
+export const RARE_CLIPS: readonly ResidentClipId[] = [
+  'whale_rise',
+  'whale_bubble',
+  'dove',
+  'card_magic',
+  'juggle',
+  'gomoku',
+  'bloom',
+  'eat_token',
+]
+
+/** 稀有彩蛋触发概率 */
+export const RARE_CHANCE = 0.02
+
+/** 点击回应候选(乖巧管家式的反应;挠痒咯咯笑/被吓一跳是新候选) */
+export const POKE_CLIPS: readonly ResidentClipId[] = ['happy', 'wave', 'startled', 'caught', 'tap', 'tickle', 'scared']
+
+/** 时间情境池:特定时段/季节小管家会做的事(与情绪池取并集,时间特色占大头) */
+export function timeAmbientClips(slotId: string, month: number): readonly ResidentClipId[] {
+  const bySlot: Record<string, readonly ResidentClipId[]> = {
+    earlyMorning: ['brush'],
+    morning: ['breakfast'],
+    noon: ['lunch'],
+    afternoon: ['what_to_eat'],
+    dusk: ['dinner'],
+  }
+  const clips = [...(bySlot[slotId] ?? [])]
+  if (month >= 6 && month <= 8) clips.push('fan', 'watermelon', 'ice_cream')
+  if (month === 12 || month <= 2) clips.push('snowman', 'hotpot')
+  return clips
 }
 
 const FALLBACK: ResidentClipId[] = ['idle']
@@ -53,7 +105,24 @@ export function pickClip(action: string, rand: () => number = Math.random): Resi
 }
 
 /** 循环片段:持续状态(待机/说话/思考/移动/拖拽/工作)循环播放;反应类单次播完停在末帧 */
-const LOOPING = new Set<ResidentClipId>(['idle', 'talk', 'think', 'walk', 'float', 'drag', 'working'])
+const LOOPING = new Set<ResidentClipId>([
+  'idle',
+  'talk',
+  'think',
+  'walk',
+  'float',
+  'drag',
+  'working',
+  'focus',
+  'filing',
+  'note_quick',
+  'pace',
+  'wipe',
+  'cat',
+  'cube',
+  'daze',
+  'screen_mutter',
+])
 
 export function isLoopingClip(clip: ResidentClipId): boolean {
   return LOOPING.has(clip)
@@ -80,6 +149,9 @@ export function preloadResident(): void {
   const clips = new Set<ResidentClipId>([
     ...Object.values(ACTION_CLIPS).flat(),
     ...Object.values(INTERNAL_CLIPS).flat(),
+    ...AMBIENT_CLIPS,
+    ...POKE_CLIPS,
+    ...RARE_CLIPS,
   ])
   for (const clip of clips) {
     const video = document.createElement('video')

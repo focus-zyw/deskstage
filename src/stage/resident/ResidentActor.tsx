@@ -16,12 +16,13 @@ import {
   POKE_HOLD_MS,
   ROAM_PAUSE_MAX_MS,
   ROAM_PAUSE_MIN_MS,
-  ambientClipsForMood,
   ambientIntervalScale,
+  pickAmbientClip,
   pokeClipsForMood,
   resolveResidentClip,
   shouldFlip,
 } from './residentMachine'
+import { currentTimeSlot } from '../../engine/timeAware'
 import { moodOf } from '../../storage/moodStore'
 import { nextRoamTarget, ROAM_SPEED_PCT_PER_SEC } from './residentMotion'
 import type { ResidentClipId } from './residentTypes'
@@ -219,15 +220,24 @@ export function ResidentActor({
   const canFrolic = active && !calm && !hidden
 
   // 随机待机链:真空闲时每隔一段时间做一个小动作;任何打断(说话/拖拽/剧情)即停。
-  // 情绪余波在每次调度时现读(C 的心情不好时不哼歌改敲桌面,蔫了间隔拉长);
-  // 情绪变化不重置节奏,下一拍自然采用新池
+  // 每拍调度时现读情境(节日满屏节日感/饭点吃饭/季节特色/情绪偏置/2% 稀有彩蛋),
+  // 心情与时间变化不重置节奏,下一拍自然采用新池
   useEffect(() => {
     if (!canFrolic || !idleLike) return
     let hold = 0
     const scale = ambientIntervalScale(moodOf('C'))
     const timer = window.setTimeout(
       () => {
-        setAmbient(pickOf(ambientClipsForMood(moodOf('C'))))
+        const now = new Date()
+        setAmbient(
+          pickAmbientClip({
+            mood: moodOf('C'),
+            slotId: currentTimeSlot().id,
+            month: now.getMonth() + 1,
+            day: now.getDate(),
+            year: now.getFullYear(),
+          }),
+        )
         hold = window.setTimeout(() => setAmbient(null), AMBIENT_HOLD_MS)
       },
       (AMBIENT_MIN_MS + Math.random() * (AMBIENT_MAX_MS - AMBIENT_MIN_MS)) * scale,
