@@ -1,17 +1,20 @@
-// 群聊:聊天记录页 = 一个群——可发言(@ 补全)、群名可改、背景图/头像可自定义上传。
-// 发送走 bridge.onGroupSend(与主聊天框同源:角色应答/演出插话/消息落盘一条链);
-// 消息流靠 chatLogStore 版本订阅实时刷新——角色逐句应答落盘即冒出。
-// 分页按"条数"计(台词+消息,初始 80 条):一次渲染太多文本既慢也看不过来。
-// 演出集块以"转发卡片"样式穿插;集管理(赞/踩/删除)仍在「演出历史」页。
+// 群聊(方案A沉浸式):页面即群——无卡片套娃,占满设置窗内容区。
+// 发送走 bridge.onGroupSend(与主聊天框同源);消息靠 chatLogStore 版本订阅实时刷新。
+// 信息结构(对齐 chatlog-prototype.html 方案A + C 的演出卡片):
+//  - 连续同一角色只显示一次头像/名字/时间,后续气泡紧跟(follow);
+//  - 时间只在换人、间隔较久或跨日期时出现;
+//  - 演出开场插系统事件行「小桌剧场开始了一段日常 [▶ 从头播放]」;
+//  - 长演出(≥10 句)折叠成演出卡片避免刷屏,可展开通读;
+//  - 角色气泡悬停出现小型 ▶,从该句回放(不占整个气泡当按钮)。
+// 集管理(赞/踩/删除/收藏)仍在「演出历史」页。
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { ChangeEvent } from 'react'
+import type { ChangeEvent, KeyboardEvent } from 'react'
 import { listEpisodes, type Episode } from '../../storage/historyStore'
 import {
   listChatTurns,
   clearChatLog,
   buildFeed,
   useChatLogVersion,
-  type FeedItem,
   type ChatLogEntry,
 } from '../../storage/chatLogStore'
 import { loadGroupBg, saveGroupBg, clearGroupBg } from '../../storage/groupBgStore'
@@ -23,6 +26,7 @@ import {
   type AvatarKey,
   type AvatarMap,
 } from '../../storage/avatarStore'
+import { modeOf } from '../../performer/modes'
 import { useConfigSnapshot } from '../../storage/configStore'
 import type { Speaker } from '../../performer/dialogSchema'
 import {
@@ -33,14 +37,16 @@ import {
   type MentionTarget,
 } from '../../ui/mention'
 import { useSettings } from '../useSettingsSession'
-import { SettingsCard } from '../SettingsPrimitives'
-import { fmtTime } from '../format'
 
 /** 每页条数(集内台词逐句计数,至少保最新一集)与消息条数上限 */
 const PAGE_LINES = 80
 const MAX_TURNS = 100
 /** 单次最多翻到的集数(与 listEpisodes 上限一致) */
 const MAX_EPS = 200
+/** 同一角色连续发言时,间隔超过该值重新显示头像/名字/时间 */
+const REGROUP_GAP_MS = 5 * 60 * 1000
+/** 长演出阈值:台词达到该数的集折叠成演出卡片 */
+const LONG_EP_LINES = 10
 const WEEKDAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
 const DELIVERY_LABEL: Record<string, string> = { deadpan: '面瘫', excited: '兴奋', slow: '慢条斯理' }
 
@@ -141,8 +147,99 @@ function takeNewestByLineBudget(eps: Episode[], budget: number): Episode[] {
   return out
 }
 
+// ---------- 信息流行渲染模型(纯结构,分组规则集中在此) ----------
+
+type MsgRow = {
+  kind: 'msg'
+  key: string
+  who: Speaker | 'user'
+  text: string
+  ts: number
+  /** true = 显示头像(+角色的名字/时间);false = 同人紧跟气泡 */
+  header: boolean
+  /** 语气标注(仅角色台词,面瘫/兴奋/慢条斯理) */
+  deliveryLabel?: string
+  /** 非空 = 悬停 ▶ 从该句回放(角色消息;用户消息不可回放) */
+  replay?: Episode
+}
+type Row =
+  | { kind: 'day'; key: string; label: string }
+  | { kind: 'event'; key: string; ep: Episode; label: string }
+  | { kind: 'card'; key: string; ep: Episode }
+  | MsgRow
+
+/** 把演出集与聊天消息编织成消息流:日期分隔/事件行/演出卡片/分组气泡 */
+function buildRows(visibleEps: Episode[], turns: ChatLogEntry[], expandedEps: Set<number>): Row[] {
+  const out: Row[] = []
+  let prevWho: Speaker | 'user' | null = null
+  let prevTs = 0
+  let prevDay: string | null = null
+  const pushDay = (ts: number) => {
+    const k = dayKey(ts)
+    if (k !== prevDay) {
+      out.push({ kind: 'day', key: `day${ts}-${out.length}`, label: dayLabel(ts) })
+      prevWho = null // 跨日期重新分组
+      prevDay = k
+    }
+  }
+  const pushEpLines = (ep: Episode, keyPrefix: string) => {
+    for (let i = 0; i < ep.lines.length; i++) {
+      const l = ep.lines[i]
+      const header = prevWho === null || l.speaker !== prevWho || ep.ts - prevTs > REGROUP_GAP_MS
+      out.push({
+        kind: 'msg',
+        key: `${keyPrefix}-${i}`,
+        who: l.speaker,
+        text: l.text,
+        ts: ep.ts,
+        header,
+        deliveryLabel: l.delivery ? DELIVERY_LABEL[l.delivery] : undefined,
+        replay: { ...ep, lines: ep.lines.slice(i) },
+      })
+      prevWho = l.speaker
+      prevTs = ep.ts
+    }
+  }
+  for (const item of buildFeed(visibleEps, turns)) {
+    if (item.kind === 'episode') {
+      const ep = item.ep
+      pushDay(ep.ts)
+      prevWho = null // 演出边界重新分组
+      prevTs = ep.ts
+      if (ep.lines.length >= LONG_EP_LINES) {
+        // 长演出折叠成卡片;展开后紧随全部台词
+        out.push({ kind: 'card', key: `card${ep.ts}`, ep })
+        if (expandedEps.has(ep.ts)) pushEpLines(ep, `ep${ep.ts}`)
+        continue
+      }
+      out.push({ kind: 'event', key: `ev${ep.ts}`, ep, label: modeOf(ep.mode).label })
+      pushEpLines(ep, `ep${ep.ts}`)
+    } else {
+      const e = item.entry
+      pushDay(e.ts)
+      const who: Speaker | 'user' = e.who === 'user' ? 'user' : e.who
+      const header = prevWho === null || who !== prevWho || e.ts - prevTs > REGROUP_GAP_MS
+      out.push({
+        kind: 'msg',
+        key: `chat${e.ts}-${out.length}`, // 同批应答共享 ts,按位置保唯一
+        who,
+        text: e.text,
+        ts: e.ts,
+        header,
+        replay:
+          who === 'user'
+            ? undefined
+            : { ts: e.ts, mode: 'daily', fav: false, lines: [{ speaker: who as Speaker, text: e.text, action: 'talk' }] },
+      })
+      prevWho = who
+      prevTs = e.ts
+    }
+  }
+  return out
+}
+
 export function ChatLogSettings() {
-  const { bridge, flashCard, saveField } = useSettings()
+  const { bridge, saveField } = useSettings()
   const config = useConfigSnapshot()
   const names = config.names
   const group = config.groupChat
@@ -151,12 +248,13 @@ export function ChatLogSettings() {
   const [turns, setTurns] = useState<ChatLogEntry[]>([])
   const [loading, setLoading] = useState(true)
   const [clearArmed, setClearArmed] = useState(false)
-  // 群设置展开 / 背景图 / 头像
-  const [showSettings, setShowSettings] = useState(false)
+  // 群设置抽屉 / 背景图 / 头像 / 长演出展开
+  const [drawerOpen, setDrawerOpen] = useState(false)
   const [bgDataUrl, setBgDataUrl] = useState<string | null>(null)
   const [bgBusy, setBgBusy] = useState(false)
   const [bgTick, setBgTick] = useState(0)
   const [avatars, setAvatars] = useState<AvatarMap>({ a: null, b: null, c: null, user: null })
+  const [expandedEps, setExpandedEps] = useState<Set<number>>(new Set())
   // 头像裁剪弹窗:cropKey 非 null 时打开;zoom 相对 cover 比例(1 = 恰好盖满),off = 图片左上角在视口内的偏移
   const [cropKey, setCropKey] = useState<AvatarKey | null>(null)
   const [cropImg, setCropImg] = useState<HTMLImageElement | null>(null)
@@ -170,7 +268,7 @@ export function ChatLogSettings() {
   const [mention, setMention] = useState<{ query: string } | null>(null)
   const [mentionIdx, setMentionIdx] = useState(0)
   const [sendHint, setSendHint] = useState('')
-  const inputRef = useRef<HTMLInputElement>(null)
+  const inputRef = useRef<HTMLTextAreaElement>(null)
 
   // 演出集:一次拉足(与历史页同源,上限内),渲染侧按条数预算截取
   useEffect(() => {
@@ -227,6 +325,7 @@ export function ChatLogSettings() {
   const prependAtRef = useRef(0)
   const [scrollable, setScrollable] = useState(false)
   const visibleEps = useMemo(() => takeNewestByLineBudget(allEps, budget), [allEps, budget])
+  const rows = useMemo(() => buildRows(visibleEps, turns, expandedEps), [visibleEps, turns, expandedEps])
   useEffect(() => {
     let raf2 = 0
     const settle = () => {
@@ -243,14 +342,22 @@ export function ChatLogSettings() {
     settle()
     raf2 = requestAnimationFrame(() => requestAnimationFrame(settle))
     return () => cancelAnimationFrame(raf2)
-  }, [visibleEps, turns, showSettings])
+  }, [rows])
+
+  // 输入框随内容自长(1 行起,封顶后内部滚动)
+  useEffect(() => {
+    const el = inputRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${Math.min(110, el.scrollHeight)}px`
+  }, [draft])
 
   async function onClearTurns() {
     await clearChatLog()
     setTurns(await listChatTurns(MAX_TURNS))
   }
 
-  // ---------- 群设置:群名即存、背景与头像 ----------
+  // ---------- 群设置抽屉:群名即存、背景与头像 ----------
 
   function renameGroup(name: string) {
     const v = name.trim()
@@ -373,11 +480,6 @@ export function ChatLogSettings() {
     return () => el.removeEventListener('wheel', onWheel)
   })
 
-  async function onClearAvatar(k: AvatarKey) {
-    await clearAvatar(k)
-    setAvatars((m) => ({ ...m, [k]: null }))
-  }
-
   // ---------- 发送与 @ 补全 ----------
 
   async function sendDraft() {
@@ -420,6 +522,33 @@ export function ChatLogSettings() {
     })
   }
 
+  function onDraftKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
+    if (e.nativeEvent.isComposing) return // 输入法组词中的 Enter/方向键不归我们管
+    if (mention && mentionMatches.length > 0) {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault()
+        const step = e.key === 'ArrowDown' ? 1 : mentionMatches.length - 1
+        setMentionIdx((i) => (i + step) % mentionMatches.length)
+        return
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault()
+        pickMention(mentionMatches[mentionIdx % mentionMatches.length])
+        return
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        e.stopPropagation() // 只收起补全
+        setMention(null)
+        return
+      }
+    }
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault() // Enter 发送,Shift+Enter 换行
+      void sendDraft()
+    }
+  }
+
   const mentionCandidates = useMemo(
     () => mentionTargets({ A: names.a, B: names.b, C: names.c }),
     [names.a, names.b, names.c],
@@ -427,7 +556,6 @@ export function ChatLogSettings() {
   const mentionMatches = mention ? filterMentionTargets(mentionCandidates, mention.query) : []
 
   const speakerName = (s: Speaker) => (s === 'A' ? names.a : s === 'B' ? names.b : names.c)
-  const items: FeedItem[] = buildFeed(visibleEps, turns)
   const bgActive = group.bg && !!bgDataUrl
   const hasMore = visibleEps.length < allEps.length
   // 裁剪弹窗几何:显示尺寸与钳制后的偏移(拖拽/滑杆/滚轮共用一套钳制)
@@ -437,67 +565,207 @@ export function ChatLogSettings() {
   const dispH = cropImg ? cropImg.naturalHeight * cropScale : 0
   const cropOx = clampOffset(off.x, CROP_VIEW, dispW)
   const cropOy = clampOffset(off.y, CROP_VIEW, dispH)
-  const avatarOf = (k: AvatarKey) => avatars[k]
   const avatarAccent = (k: AvatarKey) =>
     k === 'a' ? 'var(--bubble-acc-a)' : k === 'b' ? 'var(--bubble-acc-b)' : k === 'c' ? 'var(--bubble-acc-c)' : 'var(--accent)'
   const avatarLetter = (k: AvatarKey) =>
     k === 'user' ? '我' : ((k === 'a' ? names.a : k === 'b' ? names.b : names.c)[0] ?? '?')
 
   return (
-    <SettingsCard
-      card="聊天记录"
-      flash={flashCard}
-      title="聊天记录"
-      desc="像群聊一样翻看与发言:你的消息在右,角色消息在左;点角色消息即从那句开始播放,收藏/删除在「演出历史」页"
-      action={
-        <button
-          className={`hist-clear${clearArmed ? ' danger' : ''}`}
-          disabled={turns.length === 0}
-          onClick={() => {
-            if (!clearArmed) {
-              setClearArmed(true)
-              window.setTimeout(() => setClearArmed(false), 3000)
-              return
-            }
-            setClearArmed(false)
-            void onClearTurns()
-          }}
-        >
-          {clearArmed ? '确认清空?' : '清空聊天消息'}
-        </button>
-      }
-    >
-      <div className={`group-chat${bgActive ? ' has-bg' : ''}`}>
-        {bgActive && <div className="group-bg" style={{ backgroundImage: `url(${bgDataUrl})` }} />}
+    <div className={`group-chat${bgActive ? ' has-bg' : ''}`} data-card="聊天记录">
+      {bgActive && <div className="group-bg" style={{ backgroundImage: `url(${bgDataUrl})` }} />}
 
-        <div className="group-head">
-          <span className="group-name">{group.name}</span>
-          <button
-            className={`group-gear${showSettings ? ' on' : ''}`}
-            title="群设置"
-            onClick={() => setShowSettings(!showSettings)}
-          >
-            ⚙
+      <div className="group-head">
+        <span className="group-name">{group.name}</span>
+        <button
+          className={`group-gear${drawerOpen ? ' on' : ''}`}
+          title="群设置"
+          onClick={() => setDrawerOpen(!drawerOpen)}
+        >
+          ⚙
+        </button>
+      </div>
+
+      <div
+        className="chatlog-feed"
+        onScroll={() => {
+          const el = feedRef.current
+          if (!el) return
+          stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40
+          // 离开底部后顶到上方 80px 内自动前置加载(节流防惯性滚动连发);前置后视口锚定由 settle 负责。
+          // 要求已离开底部:总内容略超视口时,贴底状态的 scrollTop 绝对值本身就 < 80,不算"向上滚"
+          const now = Date.now()
+          if (!stickRef.current && el.scrollTop < 80 && hasMore && now - prependAtRef.current > 150) {
+            prependAtRef.current = now
+            setBudget((b) => b + PAGE_LINES)
+          }
+        }}
+      >
+        {hasMore && !scrollable && !loading && (
+          <button className="chatlog-earlier" onClick={() => setBudget((b) => b + PAGE_LINES)}>
+            加载更早
+          </button>
+        )}
+        {loading && <div className="hist-empty">加载中…</div>}
+        {!loading && rows.length === 0 && (
+          <div className="hist-empty">还没有聊天记录——在下面说一句,或点 ▶ 来一段演出试试</div>
+        )}
+        {rows.map((row) => {
+          if (row.kind === 'day') {
+            return (
+              <div className="chatlog-day" key={row.key}>
+                {row.label}
+              </div>
+            )
+          }
+          if (row.kind === 'event') {
+            return (
+              <div className="chatlog-event" key={row.key}>
+                小桌剧场开始了一段{row.label}
+                <button title="从头播放这段演出" onClick={() => bridge.onReplay(row.ep)}>
+                  ▶ 从头播放
+                </button>
+              </div>
+            )
+          }
+          if (row.kind === 'card') {
+            const ep = row.ep
+            const expanded = expandedEps.has(ep.ts)
+            return (
+              <div className="stage-card" key={row.key}>
+                <div className="stage-cover">
+                  <b>{ep.topic || ep.card?.scene || '小桌剧场'}</b>
+                </div>
+                <div className="stage-info">
+                  <span>
+                    {modeOf(ep.mode).label} · {ep.lines.length} 句 · {hhmm(ep.ts)}
+                  </span>
+                  <span className="stage-acts">
+                    <button className="ghost" onClick={() => setExpandedEps((s) => {
+                      const next = new Set(s)
+                      if (next.has(ep.ts)) next.delete(ep.ts)
+                      else next.add(ep.ts)
+                      return next
+                    })}>
+                      {expanded ? '收起' : '展开对话'}
+                    </button>
+                    <button className="play" onClick={() => bridge.onReplay(ep)}>▶ 播放</button>
+                  </span>
+                </div>
+              </div>
+            )
+          }
+          // 消息行:header 行带头像(+角色名/时间);follow 行同人紧跟
+          const isMe = row.who === 'user'
+          return (
+            <div
+              key={row.key}
+              className={[
+                'chatlog-row',
+                isMe ? 'me' : `spk-${row.who.toLowerCase()}`,
+                row.header ? '' : 'follow',
+              ].join(' ')}
+            >
+              {row.header && (
+                <Avatar
+                  src={isMe ? avatars.user : avatars[row.who.toLowerCase() as 'a' | 'b' | 'c']}
+                  letter={isMe ? '我' : speakerName(row.who as Speaker)[0] ?? '?'}
+                  accent={avatarAccent(isMe ? 'user' : (row.who.toLowerCase() as AvatarKey))}
+                />
+              )}
+              <div className="chatlog-main">
+                {row.header && !isMe && (
+                  <span className="chatlog-name">
+                    {speakerName(row.who as Speaker)} · {hhmm(row.ts)}
+                    {row.deliveryLabel ? ` · ${row.deliveryLabel}` : ''}
+                  </span>
+                )}
+                <div className="bubble-wrap">
+                  <div className="chatlog-bubble">{row.text}</div>
+                  {row.replay && (
+                    <button
+                      className="bubble-play"
+                      title={isMe ? '' : '从这句播放'}
+                      onClick={() => row.replay && bridge.onReplay(row.replay)}
+                    >
+                      ▶
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+
+      <div className="group-input">
+        {sendHint && <div className="group-hint">{sendHint}</div>}
+        {mention && mentionMatches.length > 0 && (
+          <div className="group-mention">
+            {mentionMatches.map((c: MentionTarget, i: number) => (
+              <button
+                key={c.id}
+                type="button"
+                className={`mention-item${i === mentionIdx % mentionMatches.length ? ' on' : ''}`}
+                onMouseDown={(e) => {
+                  e.preventDefault() // 保持输入框焦点
+                  pickMention(c)
+                }}
+              >
+                @{c.name}
+                <span className="mention-key">{c.key}</span>
+              </button>
+            ))}
+          </div>
+        )}
+        <div className="group-input-row">
+          <button className="group-at" title="@ 角色" onClick={insertAt}>
+            @
+          </button>
+          <textarea
+            ref={inputRef}
+            className="group-textarea"
+            rows={1}
+            placeholder="在群里说点什么…(Enter 发送,Shift+Enter 换行,@ 指定谁回)"
+            value={draft}
+            onChange={(e) => {
+              const v = e.target.value
+              setDraft(v)
+              const caret = e.target.selectionStart ?? v.length
+              setMention(mentionContext(v.slice(0, caret)))
+              setMentionIdx(0)
+            }}
+            onKeyDown={onDraftKeyDown}
+          />
+          <button className="group-send" disabled={!draft.trim()} onClick={() => void sendDraft()}>
+            发送
           </button>
         </div>
+      </div>
 
-        {showSettings && (
-          <div className="group-settings">
-            <label className="group-field">
-              <span>群名</span>
-              <input
-                type="text"
-                defaultValue={group.name}
-                maxLength={20}
-                placeholder="我们的群"
-                onBlur={(e) => renameGroup(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
-                }}
-              />
-            </label>
-            <div className="group-field">
-              <span>聊天背景</span>
+      {drawerOpen && (
+        <div className="group-drawer">
+          <div className="drawer-head">
+            <span>群设置</span>
+            <button className="drawer-close" title="关闭" onClick={() => setDrawerOpen(false)}>
+              ✕
+            </button>
+          </div>
+          <label className="drawer-field">
+            <span>群名</span>
+            <input
+              type="text"
+              defaultValue={group.name}
+              maxLength={20}
+              placeholder="我们的群"
+              onBlur={(e) => renameGroup(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+              }}
+            />
+          </label>
+          <div className="drawer-field">
+            <span>聊天背景</span>
+            <div className="drawer-row">
               <label className="group-bg-btn">
                 {bgBusy ? '处理中…' : '上传图片'}
                 <input type="file" accept="image/*" hidden onChange={(e) => void onPickBg(e)} />
@@ -508,19 +776,25 @@ export function ChatLogSettings() {
                 </button>
               )}
             </div>
-            <div className="group-field">
-              <span>头像</span>
+          </div>
+          <div className="drawer-field">
+            <span>头像</span>
+            <div className="avatar-grid">
               {AVATAR_KEYS.map((k) => (
-                <label key={k} className="avatar-slot" title={`${k === 'user' ? '我' : speakerName(k.toUpperCase() as Speaker)} 的头像,点击更换`}>
-                  <Avatar src={avatarOf(k)} letter={avatarLetter(k)} accent={avatarAccent(k)} />
-                  {avatarOf(k) && (
+                <label
+                  key={k}
+                  className="avatar-slot"
+                  title={`${k === 'user' ? '我' : speakerName(k.toUpperCase() as Speaker)} 的头像,点击更换`}
+                >
+                  <Avatar src={avatars[k]} letter={avatarLetter(k)} accent={avatarAccent(k)} />
+                  {avatars[k] && (
                     <button
                       className="avatar-x"
                       title="恢复默认头像"
                       onClick={(e) => {
                         e.preventDefault() // 取消 label 默认行为,不弹文件框
                         e.stopPropagation()
-                        void onClearAvatar(k)
+                        void clearAvatar(k).then(() => setAvatars((m) => ({ ...m, [k]: null })))
                       }}
                     >
                       ✕
@@ -531,125 +805,26 @@ export function ChatLogSettings() {
               ))}
             </div>
           </div>
-        )}
-
-        <div
-          className="chatlog-feed"
-          onScroll={() => {
-            const el = feedRef.current
-            if (!el) return
-            stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40
-            // 离开底部后顶到上方 80px 内自动前置加载(节流防惯性滚动连发);前置后视口锚定由 settle 负责。
-            // 要求已离开底部:总内容略超视口时,贴底状态的 scrollTop 绝对值本身就 < 80,不算"向上滚"
-            const now = Date.now()
-            if (!stickRef.current && el.scrollTop < 80 && hasMore && now - prependAtRef.current > 150) {
-              prependAtRef.current = now
-              setBudget((b) => b + PAGE_LINES)
-            }
-          }}
-        >
-          {hasMore && !scrollable && !loading && (
-            <button className="chatlog-earlier" onClick={() => setBudget((b) => b + PAGE_LINES)}>
-              加载更早
-            </button>
-          )}
-          {loading && <div className="hist-empty">加载中…</div>}
-          {!loading && items.length === 0 && (
-            <div className="hist-empty">还没有聊天记录——在下面说一句,或点 ▶ 来一段演出试试</div>
-          )}
-          {items.map((item, i) => {
-            const day = dayKey(item.ts)
-            const prevDay = i > 0 ? dayKey(items[i - 1].ts) : null
-            return (
-              <div key={item.kind === 'episode' ? `ep${item.ts}` : `chat${item.ts}-${i}`}>
-                {day !== prevDay && <div className="chatlog-day">{dayLabel(item.ts)}</div>}
-                {item.kind === 'episode' ? (
-                  <EpisodeBlock
-                    ep={item.ep}
-                    speakerName={speakerName}
-                    avatars={avatars}
-                    names={names}
-                    onReplay={bridge.onReplay}
-                  />
-                ) : (
-                  <ChatRow
-                    entry={item.entry}
-                    speakerName={speakerName}
-                    avatars={avatars}
-                    userLetter={avatarLetter('user')}
-                    onReplay={bridge.onReplay}
-                  />
-                )}
-              </div>
-            )
-          })}
-        </div>
-
-        <div className="group-input">
-          {sendHint && <div className="group-hint">{sendHint}</div>}
-          {mention && mentionMatches.length > 0 && (
-            <div className="group-mention">
-              {mentionMatches.map((c: MentionTarget, i: number) => (
-                <button
-                  key={c.id}
-                  type="button"
-                  className={`mention-item${i === mentionIdx % mentionMatches.length ? ' on' : ''}`}
-                  onMouseDown={(e) => {
-                    e.preventDefault() // 保持输入框焦点
-                    pickMention(c)
-                  }}
-                >
-                  @{c.name}
-                  <span className="mention-key">{c.key}</span>
-                </button>
-              ))}
-            </div>
-          )}
-          <div className="group-input-row">
-            <button className="group-at" title="@ 角色" onClick={insertAt}>
-              @
-            </button>
-            <input
-              ref={inputRef}
-              type="text"
-              placeholder="在群里说点什么…(@ 指定谁回)"
-              value={draft}
-              onChange={(e) => {
-                const v = e.target.value
-                setDraft(v)
-                const caret = e.target.selectionStart ?? v.length
-                setMention(mentionContext(v.slice(0, caret)))
-                setMentionIdx(0)
-              }}
-              onKeyDown={(e) => {
-                if (mention && mentionMatches.length > 0) {
-                  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-                    e.preventDefault()
-                    const step = e.key === 'ArrowDown' ? 1 : mentionMatches.length - 1
-                    setMentionIdx((i) => (i + step) % mentionMatches.length)
-                    return
-                  }
-                  if (e.key === 'Enter' || e.key === 'Tab') {
-                    e.preventDefault()
-                    pickMention(mentionMatches[mentionIdx % mentionMatches.length])
-                    return
-                  }
-                  if (e.key === 'Escape') {
-                    e.preventDefault()
-                    e.stopPropagation() // 只收起补全
-                    setMention(null)
-                    return
-                  }
+          <div className="drawer-danger">
+            <button
+              className={`hist-clear${clearArmed ? ' danger' : ''}`}
+              disabled={turns.length === 0}
+              onClick={() => {
+                if (!clearArmed) {
+                  setClearArmed(true)
+                  window.setTimeout(() => setClearArmed(false), 3000)
+                  return
                 }
-                if (e.key === 'Enter') void sendDraft()
+                setClearArmed(false)
+                void onClearTurns()
               }}
-            />
-            <button className="panel-btn primary" disabled={!draft.trim()} onClick={() => void sendDraft()}>
-              发送
+            >
+              {clearArmed ? '确认清空?' : '清空聊天消息'}
             </button>
+            <p>只清聊天消息,演出历史不受影响;收藏/删除整段演出在「演出历史」页</p>
           </div>
         </div>
-      </div>
+      )}
 
       {cropKey && cropImg && (
         <div
@@ -715,7 +890,7 @@ export function ChatLogSettings() {
           </div>
         </div>
       )}
-    </SettingsCard>
+    </div>
   )
 }
 
@@ -726,85 +901,5 @@ function Avatar(props: { src: string | null; letter: string; accent: string }) {
     <span className="chatlog-avatar letter" style={{ background: props.accent }}>
       {props.letter}
     </span>
-  )
-}
-
-/** 一段演出:不再框成卡片——台词平铺为普通聊天气泡(真实聊天软件的样子)。
- *  点任意一句从那里开始回放(取该句到结尾的切片,不写历史) */
-function EpisodeBlock(props: {
-  ep: Episode
-  speakerName(s: Speaker): string
-  avatars: AvatarMap
-  names: { a: string; b: string; c: string }
-  onReplay(ep: Episode): void
-}) {
-  const { ep, speakerName, avatars, names, onReplay } = props
-  return (
-    <>
-      {ep.lines.map((l, i) => (
-        <div className={`chatlog-row spk-${l.speaker.toLowerCase()}`} key={i}>
-          <Avatar
-            src={avatars[l.speaker.toLowerCase() as 'a' | 'b' | 'c']}
-            letter={(l.speaker === 'A' ? names.a : l.speaker === 'B' ? names.b : names.c)[0] ?? '?'}
-            accent={`var(--bubble-acc-${l.speaker.toLowerCase()})`}
-          />
-          <div className="chatlog-main">
-            <span className="chatlog-name">
-              {speakerName(l.speaker)} · {hhmm(ep.ts)}
-              {l.delivery && DELIVERY_LABEL[l.delivery] ? ` · ${DELIVERY_LABEL[l.delivery]}` : ''}
-            </span>
-            <div
-              className="chatlog-bubble click"
-              title="点击:从这里开始播放"
-              onClick={() => onReplay({ ...ep, lines: ep.lines.slice(i) })}
-            >
-              {l.text}
-            </div>
-          </div>
-        </div>
-      ))}
-    </>
-  )
-}
-
-/** 一条聊天消息:user 右侧(不可点),角色左侧——点角色消息单句重说 */
-function ChatRow(props: {
-  entry: ChatLogEntry
-  speakerName(s: Speaker): string
-  avatars: AvatarMap
-  userLetter: string
-  onReplay(ep: Episode): void
-}) {
-  const { entry, speakerName, avatars, userLetter, onReplay } = props
-  const who = entry.who
-  const spk: Speaker | null = who === 'user' ? null : who
-  if (!spk) {
-    return (
-      <div className="chatlog-row me" title={fmtTime(entry.ts)}>
-        <Avatar src={avatars.user} letter={userLetter} accent="var(--accent)" />
-        <div className="chatlog-main">
-          <div className="chatlog-bubble">{entry.text}</div>
-        </div>
-      </div>
-    )
-  }
-  return (
-    <div className={`chatlog-row spk-${spk.toLowerCase()}`} title={fmtTime(entry.ts)}>
-      <Avatar src={avatars[spk.toLowerCase() as 'a' | 'b' | 'c']} letter={speakerName(spk)[0] ?? '?'} accent={`var(--bubble-acc-${spk.toLowerCase()})`} />
-      <div className="chatlog-main">
-        <span className="chatlog-name">
-          {speakerName(spk)} · {hhmm(entry.ts)}
-        </span>
-        <div
-          className="chatlog-bubble click"
-          title="点击:再说一遍这句"
-          onClick={() =>
-            onReplay({ ts: entry.ts, mode: 'daily', fav: false, lines: [{ speaker: spk, text: entry.text, action: 'talk' }] })
-          }
-        >
-          {entry.text}
-        </div>
-      </div>
-    </div>
   )
 }
