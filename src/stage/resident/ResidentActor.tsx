@@ -94,8 +94,14 @@ export function ResidentActor({
   const [pokeClip, setPokeClip] = useState<ResidentClipId | null>(null)
   const [roaming, setRoaming] = useState(false)
   const [roamDir, setRoamDir] = useState(0)
+  // 两个 video 只做离屏解码(不直接显示)——WebView2 透明窗口中媒体表面与 DOM
+  // 重合成时 alpha 会被错误混合(移动其它元素/hover 都会让 C 整只变半透明),
+  // 逐帧 drawImage 到 canvas 的合成路径不经过媒体表面通道,免疫该怪癖
   const videoA = useRef<HTMLVideoElement | null>(null)
   const videoB = useRef<HTMLVideoElement | null>(null)
+  const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  // 绘制状态:前台槽位/交叉淡入起点/镜像——rAF 绘制循环读,activate 更新
+  const drawState = useRef({ front: 0 as 0 | 1, fadeStart: 0, flip: false })
   const frontIdx = useRef(0)
   const currentClip = useRef<ResidentClipId | null>(null)
   const genRef = useRef(0)
@@ -182,8 +188,10 @@ export function ResidentActor({
       if (settled || gen !== genRef.current) return
       settled = true
       window.clearTimeout(timer)
-      backEl.style.opacity = '1'
-      frontEl.style.opacity = '0'
+      // canvas 合成:记录交叉淡入起点与前台槽位,绘制循环按 FADE_MS 混合两路解码
+      const backIdx: 0 | 1 = frontIdx.current === 0 ? 1 : 0
+      drawState.current.front = backIdx
+      drawState.current.fadeStart = performance.now()
       // 淡出完成后再停旧片段:立刻 pause 会冻住淡出中间帧
       const outgoing = frontEl
       window.setTimeout(() => {
@@ -376,6 +384,54 @@ export function ResidentActor({
 
   useEffect(() => () => window.clearTimeout(pokeTimer.current), [])
 
+  // canvas 合成绘制循环:video 只做离屏解码,每帧 drawImage 到 canvas——
+  // WebView2 透明窗口中媒体表面与 DOM 重合成时 alpha 会被错误混合
+  // (移动其它元素/hover 都曾让 C 整只变半透明),canvas 路径不经过媒体表面通道。
+  // 仅 C 可见时运转;hidden/broken 时暂停
+  useEffect(() => {
+    if (hidden || broken) return
+    const W = 960
+    const H = 540
+    let raf = 0
+    const draw = () => {
+      const canvas = canvasRef.current
+      const ctx = canvas?.getContext('2d')
+      if (ctx) {
+        const st = drawState.current
+        const t = st.fadeStart
+          ? Math.min(1, (performance.now() - st.fadeStart) / FADE_MS)
+          : 1
+        ctx.clearRect(0, 0, W, H)
+        ctx.save()
+        if (st.flip) {
+          ctx.translate(W, 0)
+          ctx.scale(-1, 1)
+        }
+        const back = st.front === 0 ? videoB.current : videoA.current
+        const front = st.front === 0 ? videoA.current : videoB.current
+        // 交叉淡入期:前后两帧按 (1-t)/t 混合;淡入完成后只画前台
+        if (t < 1 && back && back.readyState >= 2) {
+          ctx.globalAlpha = 1 - t
+          ctx.drawImage(back, 0, 0, W, H)
+          ctx.globalAlpha = 1
+        }
+        if (front && front.readyState >= 2) {
+          ctx.globalAlpha = t
+          try {
+            ctx.drawImage(front, 0, 0, W, H)
+          } catch {
+            // 解码器尚未就绪的瞬间:跳过该帧,下帧重试
+          }
+          ctx.globalAlpha = 1
+        }
+        ctx.restore()
+      }
+      raf = requestAnimationFrame(draw)
+    }
+    raf = requestAnimationFrame(draw)
+    return () => cancelAnimationFrame(raf)
+  }, [hidden, broken])
+
   /** 点击身体:反应动画完整播完(ended 驱动回收,兜底超时防卡死)后回待机 + 外部戳一戳链路;
    *  反应池随 C 的心情走 */
   const handlePoke = () => {
@@ -388,9 +444,9 @@ export function ResidentActor({
 
   if (broken) return null
 
-  // 方向性片段(走路)与实际移动方向相反时水平镜像视频,否则看起来在"倒着走";
-  // 只翻 video 层,名牌与气泡在 stage 内但不受 video 选择器影响
+  // 方向性片段(走路)与实际移动方向相反时水平镜像——由绘制循环在 canvas 变换中执行
   const flip = shouldFlip(target?.clip ?? 'idle', roamDir)
+  drawState.current.flip = flip
 
   return (
     // 舞台宽度必须显式给出:父容器(.actor)是 shrink-wrap 的 flex 列,
@@ -400,11 +456,11 @@ export function ResidentActor({
       style={width ? { width } : undefined}
     >
       <Bubble text={bubble} speaker="C" below={below} loud={loud} action={action} />
-      <div className={`resident-stage${flip ? ' face-left' : ''}`}>
-        {/* 初始透明度由 CSS 承担(0),前台切换经 DOM 直接改 style——
-            若用 React style prop,重渲染会把 JS 设置的值重置回 0 造成黑帧 */}
-        <video ref={videoA} className="resident-video" muted playsInline preload="auto" disablePictureInPicture />
-        <video ref={videoB} className="resident-video" muted playsInline preload="auto" disablePictureInPicture />
+      <div className="resident-stage">
+        {/* video 为离屏解码器(opacity 0 保持解码),canvas 是唯一可见合成面 */}
+        <video ref={videoA} className="resident-decoder" muted playsInline preload="auto" disablePictureInPicture />
+        <video ref={videoB} className="resident-decoder" muted playsInline preload="auto" disablePictureInPicture />
+        <canvas ref={canvasRef} className="resident-canvas" width={960} height={540} />
         <div ref={hitBoxRef} className="resident-hitbox" title={name} onClick={handlePoke} />
         {name && <div className="resident-name">{name}</div>}
       </div>

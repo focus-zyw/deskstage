@@ -604,24 +604,23 @@
   width: 100%;
   aspect-ratio: 16 / 9; /* 素材 640×360 */
 }
-.resident-video {
+/* video 只做离屏解码(opacity 0 保持解码,不直接显示):
+   WebView2 透明窗口中媒体表面与 DOM 重合成时 alpha 会被错误混合
+   (移动其它元素/hover 都曾让 C 整只变半透明),故显示走 canvas 路径 */
+.resident-decoder {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  pointer-events: none;
+  user-select: none;
+}
+/* 唯一可见合成面:绘制循环逐帧 drawImage 自离屏解码器 */
+.resident-canvas {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
-  opacity: 0;
-  transition: opacity 0.2s ease;
   pointer-events: none;
-  user-select: none;
-  /* 强制独立合成层:窗口交互态切换(hover/点击引发 ignoreCursorEvents 切换)时,
-     视频层被系统直接重合成会瞬时变淡——提升为独立层规避 */
-  will-change: opacity;
-  transform: translateZ(0);
-}
-/* 方向性片段(走路)与移动方向相反时水平镜像,避免"倒着走";
-   只翻 video 层——名牌/hitbox 与它是兄弟节点,不受影响 */
-.resident-stage.face-left .resident-video {
-  transform: scaleX(-1);
 }
 /* 精确身体命中框:只覆盖画面中央的身体,大片透明区域不拦截桌面点击 */
 .resident-hitbox {
@@ -1294,6 +1293,8 @@
   align-items: center;
   justify-content: space-between;
   gap: 18px;
+  /* 右侧控件过宽时整行换行,而不是把左侧文案挤成一字一列的竖排 */
+  flex-wrap: wrap;
 }
 .set-copy {
   min-width: 0;
@@ -1517,6 +1518,7 @@
 /* 分段选择 */
 .seg-group {
   display: flex;
+  flex-wrap: wrap;
   gap: 2px;
   padding: 3px;
   border: 1px solid var(--sw-border);
@@ -1768,7 +1770,8 @@
 }
 .settings-window .hist-fav,
 .settings-window .hist-del,
-.settings-window .hist-rate {
+.settings-window .hist-rate,
+.settings-window .hist-vid {
   flex: none;
   width: 24px;
   height: 24px;
@@ -1782,6 +1785,19 @@
   transition:
     color 0.12s ease,
     background 0.12s ease;
+}
+/* 视频工坊导入按钮:SVG 图标居中,悬停点亮主色 */
+.settings-window .hist-vid {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.settings-window .hist-vid svg {
+  display: block;
+}
+.settings-window .hist-vid:hover {
+  background: var(--sw-hover);
+  color: var(--sw-primary);
 }
 .settings-window .hist-fav:hover,
 .settings-window .hist-rate:hover {
@@ -2005,6 +2021,8 @@
   display: flex;
   align-items: center;
   gap: 8px;
+  /* 长条目(如已保存的完整路径)换行而不是被挤成一字一列 */
+  flex-wrap: wrap;
 }
 
 /* 快捷键录入的无效按键提示(字母/数字单键不收,告知规则) */
@@ -3017,16 +3035,45 @@
 .settings-window .chatlog-act.on {
   color: #f5c542;
 }
+/* 消息行:头像 + 名牌/气泡纵列;自己的消息整行反转(头像在右) */
 .settings-window .chatlog-row {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 7px;
+  max-width: 86%;
+  min-width: 0;
+}
+.settings-window .chatlog-row.me {
+  align-self: flex-end;
+  flex-direction: row-reverse;
+}
+.settings-window .chatlog-main {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 3px;
-  max-width: 86%;
+  min-width: 0;
 }
-.settings-window .chatlog-row.me {
-  align-self: flex-end;
+.settings-window .chatlog-row.me .chatlog-main {
   align-items: flex-end;
+}
+.settings-window .chatlog-avatar {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  object-fit: cover;
+  margin-top: 2px;
+}
+.settings-window .chatlog-avatar.letter {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  user-select: none;
 }
 .settings-window .chatlog-name {
   font-size: 10px;
@@ -3054,6 +3101,7 @@
   white-space: pre-wrap;
   word-break: break-word;
   width: fit-content;
+  max-width: 100%;
 }
 .settings-window .chatlog-row.me .chatlog-bubble {
   background: var(--accent-weak);
@@ -3066,7 +3114,9 @@
   position: relative;
   display: flex;
   flex-direction: column;
-  height: min(64vh, 640px);
+  /* 高度必须连同卡片头一起装进设置窗内容区(set-body ~620px),
+     否则卡片底部(最新消息+输入框)会被外层滚动折叠藏住——"最新对话看不全"的根因 */
+  height: min(46vh, 500px);
   border: 1px solid var(--sw-border-soft);
   border-radius: 10px;
   background: var(--sw-card);
@@ -3265,4 +3315,36 @@
 .settings-window .group-mention .mention-key {
   font-size: 10px;
   color: var(--sw-text-3);
+}
+/* 群设置里的头像编辑位:点击换图,悬停角标 ✕ 清除 */
+.settings-window .avatar-slot {
+  position: relative;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  cursor: pointer;
+  flex: none;
+}
+.settings-window .avatar-slot .chatlog-avatar {
+  width: 34px;
+  height: 34px;
+  margin-top: 0;
+}
+.settings-window .avatar-x {
+  position: absolute;
+  right: -5px;
+  top: -5px;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  border: none;
+  background: var(--sw-hover);
+  color: var(--sw-text-3);
+  font-size: 9px;
+  line-height: 1;
+  padding: 0;
+  cursor: pointer;
+}
+.settings-window .avatar-x:hover {
+  color: var(--sw-err);
 }
