@@ -200,7 +200,6 @@ export function ResidentActor({
       // 绘制循环探到有效帧后才起算交叉淡入——旧片段全程兜底显示,无空窗
       const backIdx: 0 | 1 = frontIdx.current === 0 ? 1 : 0
       drawState.current.front = backIdx
-      drawState.current.fadeStart = 0
       // 淡出完成后再停旧片段:立刻 pause 会冻住淡出中间帧
       const outgoing = frontEl
       window.setTimeout(() => {
@@ -436,26 +435,21 @@ export function ResidentActor({
         const outSlot: 0 | 1 = st.front === 0 ? 1 : 0
         const inVideo = inSlot === 0 ? videoA.current : videoB.current
         const outVideo = outSlot === 0 ? videoA.current : videoB.current
+        // 硬切显示:新片段探到首个有效帧的瞬间整体切换——
+        // 透明桌面上任何交叉淡化都会让角色经过半透明状态,视觉上就是"变透明一闪"
         const inHas = hasFrame(inVideo)
-        // 新片段首个有效帧到达才起算淡入;未就绪时 t=0 → 旧片段全程兜底显示
-        if (inHas && !st.fadeStart) st.fadeStart = performance.now()
-        const t = st.fadeStart ? Math.min(1, (performance.now() - st.fadeStart) / FADE_MS) : 0
         ctx.clearRect(0, 0, W, H)
         ctx.save()
         if (st.flip) {
           ctx.translate(W, 0)
           ctx.scale(-1, 1)
         }
-        // 交叉淡入:旧片段 (1-t) 渐隐 + 新片段 t 渐入,任一时刻合成不透明度恒为 1
-        if (outVideo && t < 1 && hasFrame(outVideo)) {
-          ctx.globalAlpha = 1 - t
+        if (inHas && inVideo) {
+          ctx.drawImage(inVideo, 0, 0, W, H)
+        } else if (outVideo && hasFrame(outVideo)) {
+          // 新片段未就绪(加载/seek 中):继续显示旧片段,无空窗
           ctx.drawImage(outVideo, 0, 0, W, H)
         }
-        if (inVideo && t > 0) {
-          ctx.globalAlpha = t
-          ctx.drawImage(inVideo, 0, 0, W, H)
-        }
-        ctx.globalAlpha = 1
         ctx.restore()
       }
       raf = requestAnimationFrame(draw)
