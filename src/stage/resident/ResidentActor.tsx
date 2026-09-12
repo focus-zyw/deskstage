@@ -107,8 +107,16 @@ export function ResidentActor({
   const genRef = useRef(0)
   const pokeTimer = useRef(0)
   // 单次片段(待机链/点击回应)播完的回收回调:双槽切换的 onended 转发到这里,
-  // 由 ambient/poke 持有者注册——动作完整播完才回待机,不再被固定计时器掐断
+  // 由 ambient/poke 持有者注册——动作完整播完才回待机,不再被固定计时器掐断。
+  // 注册/清理必须带归属校验(清理只清自己的),否则无关 effect 的 cleanup
+  // 会把别人刚注册的回收处理器抹掉(曾致 pokeClip 卡 12 秒兜底)
   const endedHandlerRef = useRef<(() => void) | null>(null)
+  const setEndedHandler = (handler: () => void) => {
+    endedHandlerRef.current = handler
+  }
+  const clearEndedHandler = (handler: () => void) => {
+    if (endedHandlerRef.current === handler) endedHandlerRef.current = null
+  }
   const ambientRef = useRef<ResidentClipId | null>(null)
   // scripted 动作完成持有:戳一戳/插话等经 presenter 设置的表情(angry 等),
   // 会被 say 的固定回收计时提前降级回 idle——非说话状态下保持播完再切(see hold 逻辑)
@@ -278,6 +286,7 @@ export function ResidentActor({
   useEffect(() => {
     if (!canFrolic || !idleLike) return
     let fallback = 0
+    let handler: () => void = () => setAmbient(null)
     const scale = ambientIntervalScale(moodOf('C'))
     const timer = window.setTimeout(
       () => {
@@ -291,28 +300,36 @@ export function ResidentActor({
             year: now.getFullYear(),
           }),
         )
-        endedHandlerRef.current = () => setAmbient(null)
-        fallback = window.setTimeout(() => setAmbient(null), ACTION_FALLBACK_MS)
+        handler = () => setAmbient(null)
+        setEndedHandler(handler)
+        fallback = window.setTimeout(() => {
+          clearEndedHandler(handler)
+          setAmbient(null)
+        }, ACTION_FALLBACK_MS)
       },
       (AMBIENT_MIN_MS + Math.random() * (AMBIENT_MAX_MS - AMBIENT_MIN_MS)) * scale,
     )
     return () => {
       window.clearTimeout(timer)
       window.clearTimeout(fallback)
-      endedHandlerRef.current = null
+      if (handler) clearEndedHandler(handler)
       setAmbient(null)
     }
   }, [canFrolic, idleLike])
 
   // hold(被 presenter 计时器降级的 scripted 表情)的回收注册:播完(ended)或兜底超时后撤销。
-  // 声明在 ambient effect 之后:endedHandlerRef 后注册者赢,hold 期间不被 ambient 抢走
+  // 声明在 ambient effect 之后:最近注册者赢,hold 期间不被 ambient 抢走
   useEffect(() => {
     if (!holdClip) return
-    endedHandlerRef.current = () => setHoldClip(null)
-    const fallback = window.setTimeout(() => setHoldClip(null), ACTION_FALLBACK_MS)
+    const handler = () => setHoldClip(null)
+    setEndedHandler(handler)
+    const fallback = window.setTimeout(() => {
+      clearEndedHandler(handler)
+      setHoldClip(null)
+    }, ACTION_FALLBACK_MS)
     return () => {
       window.clearTimeout(fallback)
-      endedHandlerRef.current = null
+      clearEndedHandler(handler)
     }
   }, [holdClip])
 
@@ -452,9 +469,13 @@ export function ResidentActor({
    *  反应池随 C 的心情走 */
   const handlePoke = () => {
     setPokeClip(pickOf(pokeClipsForMood(moodOf('C'))))
-    endedHandlerRef.current = () => setPokeClip(null)
+    const handler = () => setPokeClip(null)
+    setEndedHandler(handler)
     window.clearTimeout(pokeTimer.current)
-    pokeTimer.current = window.setTimeout(() => setPokeClip(null), ACTION_FALLBACK_MS)
+    pokeTimer.current = window.setTimeout(() => {
+      clearEndedHandler(handler)
+      setPokeClip(null)
+    }, ACTION_FALLBACK_MS)
     onPoke?.()
   }
 
