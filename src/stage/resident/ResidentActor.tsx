@@ -134,6 +134,10 @@ export function ResidentActor({
   const scriptedActive = !hidden && !dragging && !speaking && !!action && action !== 'idle'
   if (scriptedActive && resolved) {
     lastScriptedRef.current = resolved.clip
+    // App.poke 在设置 scripted 表情的同时,handlePoke 也会设 pokeClip(点击反应动画)
+    // ——scripted 优先级更高,pokeClip 被压制后永不播放也等不到 ended,
+    // 挂着会卡住下方的 hold 进入条件与 ambient 调度,就地清除
+    if (pokeClip) setPokeClip(null)
   } else {
     // scripted 被 presenter 的 say 回收提前降级为 idle:非说话状态下进入持有,
     // 把刚降级的非循环表情播完(否则 angry 等约10秒的片段只播 presenter 给的2秒)
