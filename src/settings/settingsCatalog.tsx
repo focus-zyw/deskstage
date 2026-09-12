@@ -8,6 +8,7 @@ export type SettingsTab =
   | 'persona'
   | 'modes'
   | 'bubble'
+  | 'video'
   | 'voice'
   | 'live'
   | 'hotkeys'
@@ -86,6 +87,16 @@ export const SETTINGS_NAV: { group: string; items: { id: SettingsTab; label: str
         icon: (
           <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
             <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
+          </svg>
+        ),
+      },
+      {
+        id: 'video',
+        label: '视频工坊',
+        icon: (
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="2" y="5" width="14" height="14" rx="2" />
+            <path d="M22 8l-6 4 6 4V8z" />
           </svg>
         ),
       },
@@ -212,6 +223,7 @@ export const TAB_GROUP: Record<SettingsTab, string> = {
   persona: '偏好设置',
   modes: '偏好设置',
   bubble: '偏好设置',
+  video: '偏好设置',
   voice: '偏好设置',
   live: '偏好设置',
   hotkeys: '偏好设置',
@@ -256,6 +268,17 @@ export const SETTINGS_SEARCH_INDEX: { tab: SettingsTab; card: string; label: str
   { tab: 'bubble', card: 'AI 生成主题', label: 'AI 生成气泡主题', keywords: '气泡 自定义 生成 配色 字号 圆角 工坊' },
   { tab: 'bubble', card: '编辑主题', label: '气泡主题编辑', keywords: '气泡 颜色 透明度 模糊 字号 宽度 圆角 编辑' },
   { tab: 'bubble', card: '自定义主题', label: '自定义气泡主题列表', keywords: '气泡 自定义 删除 列表' },
+  // 视频工坊
+  { tab: 'video', card: '视频服务', label: '视频服务商', keywords: '即梦 seedance 方舟 海螺 minimax 清影 智谱 cogvideox 视频生成' },
+  { tab: 'video', card: '视频服务', label: '视频 API Key', keywords: '视频 密钥 key 鉴权' },
+  { tab: 'video', card: '视频服务', label: '视频模型', keywords: 'seedance video-01 cogvideox 模型' },
+  { tab: 'video', card: '画面参数', label: '视频时长', keywords: '时长 5秒 10秒 秒数' },
+  { tab: 'video', card: '画面参数', label: '画面比例', keywords: '比例 横屏 竖屏 16:9 9:16' },
+  { tab: 'video', card: '画面参数', label: '分辨率', keywords: '分辨率 480p 720p 1080p 清晰度' },
+  { tab: 'video', card: '画面参数', label: '预估费用', keywords: '费用 价格 计费 免费 额度' },
+  { tab: 'video', card: '生成视频', label: '从演出生成视频', keywords: '生成 视频 演出 台词 分镜 转译' },
+  { tab: 'video', card: '生成视频', label: '视频参考图', keywords: '参考图 立绘 首帧 图生视频 一致性' },
+  { tab: 'video', card: '任务列表', label: '视频任务列表', keywords: '任务 列表 进度 保存 本地 下载 删除' },
   // 角色人设
   { tab: 'persona', card: '角色名字', label: '角色A的名字', keywords: '名字 称呼 名牌' },
   { tab: 'persona', card: '角色名字', label: '角色B的名字', keywords: '名字 称呼 名牌' },

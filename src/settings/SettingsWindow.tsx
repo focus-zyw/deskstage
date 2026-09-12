@@ -14,6 +14,7 @@ import { ModelSettings } from './tabs/ModelSettings'
 import { PersonaSettings } from './tabs/PersonaSettings'
 import { CustomModesSettings } from './tabs/CustomModesSettings'
 import { BubbleSettings } from './tabs/BubbleSettings'
+import { VideoSettings } from './tabs/VideoSettings'
 import { VoiceSettings } from './tabs/VoiceSettings'
 import { LiveSettings } from './tabs/LiveSettings'
 import { HotkeysSettings } from './tabs/HotkeysSettings'
@@ -42,6 +43,7 @@ const TAB_CONTENT: Record<SettingsTab, () => React.JSX.Element> = {
   persona: PersonaSettings,
   modes: CustomModesSettings,
   bubble: BubbleSettings,
+  video: VideoSettings,
   voice: VoiceSettings,
   live: LiveSettings,
   hotkeys: HotkeysSettings,

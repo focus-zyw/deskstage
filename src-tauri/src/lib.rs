@@ -8,6 +8,7 @@ mod capture;
 mod env;
 mod ocr;
 mod pointer_hook;
+mod video_save;
 mod webchat;
 mod bili_http;
 
@@ -134,6 +135,8 @@ pub fn run() {
       webchat::webchat_main_visible,
       ocr::ocr_clipboard,
       ocr::clipboard_image_base64,
+      video_save::video_save_from_url,
+      video_save::reveal_in_explorer,
       bili_http::bili_http_request
     ])
     .setup(|app| {

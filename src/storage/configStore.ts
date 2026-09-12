@@ -86,6 +86,25 @@ export interface VoiceConfig {
   emotionHints: boolean
 }
 
+/** 视频生成供应商:即梦(火山方舟 Seedance)/ 海螺 MiniMax / 智谱清影 */
+export const VIDEO_GEN_PROVIDERS = ['ark', 'minimax', 'zhipu'] as const
+export type VideoGenProviderId = (typeof VIDEO_GEN_PROVIDERS)[number]
+
+/** 视频生成(视频工坊)配置:各服务 Key 独立;模型覆盖键 = 供应商 id */
+export interface VideoGenConfig {
+  provider: VideoGenProviderId
+  /** 每个供应商分别记忆的 API Key:键 = 供应商 id */
+  apiKeys: Record<string, string>
+  /** 手改的模型 id 覆盖:键 = 供应商 id(缺省用引擎预设第一档,均为便宜档优先) */
+  models: Record<string, string>
+  /** 单条时长(秒):5 或 10 */
+  durationSeconds: number
+  ratio: '16:9' | '9:16' | '1:1' | '4:3' | '3:4'
+  resolution: '480p' | '720p' | '1080p'
+  /** 首次生成前的费用确认已完成(之后不再弹) */
+  costConfirmed: boolean
+}
+
 /** 使用者画像:手填的"角色认识你"信息(多值字段逗号/顿号/换行分隔) */
 export interface UserProfile {
   /** 称呼,如"小张"(角色会这样叫你) */
@@ -109,6 +128,8 @@ export interface AppConfig {
   model: string
   /** 使用者画像:手填的"角色认识你"信息,注入所有对话 prompt */
   userProfile: UserProfile
+  /** 视频生成(视频工坊):即梦/海螺/清影的 Key、模型与画面参数 */
+  videoGen: VideoGenConfig
   /** 角色语音 */
   voice: VoiceConfig
   /** 空闲多少分钟后自动重放历史对话;0 = 关闭 */
@@ -248,6 +269,16 @@ export const DEFAULT_CONFIG: AppConfig = {
   hotkeys: { generate: '', stop: '', replayRandom: '', toggleChars: '', rateUp: '', rateDown: '', rateFav: '' },
   userInterests: '',
   userProfile: { userName: '', occupation: '', likes: '', dislikes: '', banTopics: '' },
+  // 视频生成:默认即梦(方舟 Seedance)+ 便宜档模型;Key 空 = 未配置,提交前由 missingSetup 拦下
+  videoGen: {
+    provider: 'ark',
+    apiKeys: {},
+    models: {},
+    durationSeconds: 5,
+    ratio: '16:9',
+    resolution: '720p',
+    costConfirmed: false,
+  },
   webchatEnabled: false,
   webchatSite: 'deepseek',
   envSense: true,
@@ -383,6 +414,42 @@ function sanitizeVoice(v: unknown): VoiceConfig {
       local: slot3('local', rawAssign.local),
     },
     emotionHints: o.emotionHints !== false,
+  }
+}
+
+/** 清洗视频生成配置:provider/时长/比例/分辨率只认白名单;Key 与模型覆盖限量防膨胀。
+ *  导出供测试(与 sanitizeCharacters 同惯例) */
+export function sanitizeVideoGen(v: unknown): VideoGenConfig {
+  const d = DEFAULT_CONFIG.videoGen
+  const o = (v ?? {}) as Record<string, unknown>
+  const collect = (src: unknown, cap: number): Record<string, string> => {
+    const out: Record<string, string> = {}
+    if (!src || typeof src !== 'object' || Array.isArray(src)) return out
+    for (const [k, val] of Object.entries(src as Record<string, unknown>)) {
+      if (typeof val === 'string' && k.length > 0 && k.length <= 40) {
+        out[k.slice(0, 40)] = val.slice(0, cap)
+      }
+      if (Object.keys(out).length >= 20) break
+    }
+    return out
+  }
+  const duration = Number(o.durationSeconds)
+  const ratio = String(o.ratio)
+  const resolution = String(o.resolution)
+  return {
+    provider: (VIDEO_GEN_PROVIDERS as readonly string[]).includes(String(o.provider))
+      ? (o.provider as VideoGenProviderId)
+      : d.provider,
+    apiKeys: collect(o.apiKeys, 300),
+    models: collect(o.models, 120),
+    durationSeconds: duration === 5 || duration === 10 ? duration : d.durationSeconds,
+    ratio: (['16:9', '9:16', '1:1', '4:3', '3:4'] as const).includes(ratio as VideoGenConfig['ratio'])
+      ? (ratio as VideoGenConfig['ratio'])
+      : d.ratio,
+    resolution: resolution === '480p' || resolution === '720p' || resolution === '1080p'
+      ? resolution
+      : d.resolution,
+    costConfirmed: o.costConfirmed === true,
   }
 }
 
@@ -536,6 +603,7 @@ function sanitizeConfig(obj: unknown): AppConfig {
     hotkeys: sanitizeHotkeys(o.hotkeys),
     userInterests: typeof o.userInterests === 'string' ? o.userInterests.trim() : '',
     userProfile: sanitizeUserProfile(o.userProfile, typeof o.userInterests === 'string' ? o.userInterests : ''),
+    videoGen: sanitizeVideoGen(o.videoGen),
     webchatEnabled: o.webchatEnabled === true,
     webchatSite: o.webchatSite === 'doubao' ? 'doubao' : 'deepseek',
     envSense: o.envSense !== false,

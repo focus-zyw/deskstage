@@ -1316,6 +1316,56 @@
 .set-note.hotkey-conflict {
   color: var(--sw-err);
 }
+/* 视频工坊任务列表:条目/状态徽标/结果预览 */
+.video-task {
+  display: grid;
+  gap: 6px;
+  padding: 10px 0;
+  border-top: 1px solid var(--sw-border-soft);
+}
+.video-task-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.video-status {
+  flex: none;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 8px;
+  border-radius: 999px;
+}
+.video-status.st-queued,
+.video-status.st-running {
+  color: var(--sw-primary);
+  background: rgba(133, 119, 244, 0.14);
+}
+.video-status.st-succeeded {
+  color: var(--sw-ok);
+  background: rgba(82, 215, 189, 0.14);
+}
+.video-status.st-failed {
+  color: var(--sw-err);
+  background: rgba(255, 113, 133, 0.14);
+}
+.video-task-meta {
+  font-size: 11px;
+  color: var(--sw-text-3);
+  word-break: break-all;
+}
+.video-task-prompt {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--sw-text-2);
+  word-break: break-word;
+}
+.video-preview {
+  width: 100%;
+  max-width: 360px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.35);
+}
 .set-control {
   display: flex;
   align-items: center;
