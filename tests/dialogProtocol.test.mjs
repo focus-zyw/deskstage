@@ -57,8 +57,12 @@ test('场景卡可选 roleC:缺省不废卡,有值时保留', () => {
     schema.sanitizeSceneCard({ ...base, roleC: '把A吹牛的内容当真,开始销毁菜谱' }).roleC,
     '把A吹牛的内容当真,开始销毁菜谱',
   )
-  // 卡上有 roleC 也救不了缺 secret 的卡
-  assert.equal(schema.sanitizeSceneCard({ ...base, roleC: 'x', secret: '' }), undefined)
+  // 清洗层只看数据合法性:缺 secret 不再废卡(非喜剧卡要能活着落盘),
+  // 喜剧模式的 secret/callback 是否必有由 validatePerformanceScript 的 comedy 选项把关
+  const noSecret = schema.sanitizeSceneCard({ ...base, roleC: 'x', secret: '' })
+  assert.equal(noSecret.roleC, 'x')
+  assert.equal(noSecret.secret, undefined)
+  assert.equal(noSecret.escalation.length, 3)
 })
 
 test('listenersOf:room=除说话者全员;指定听者归一;audience/缺省无听者', () => {

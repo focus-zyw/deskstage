@@ -893,10 +893,11 @@ function App() {
     // 应答全程不阻塞受理返回:调用方发完即清输入,应答靠消息落盘订阅实时冒出
     void (async () => {
       try {
-        // TurnBatch:被@角色先答,另一位有料才补;生成失败回落单句应答(原行为)
+        // TurnBatch:默认只由被@角色回答;明确同时问三人才放开三句。生成失败回落单句应答(原行为)
+        const groupAsk = /你们|大家|各位|三位|每人|每个人|各自|都怎么|都说说/.test(text)
         let batch: DialogLine[] | null = null
         try {
-          batch = await generateTurnBatch({ userText: text, target: who, window: chatWindow() })
+          batch = await generateTurnBatch({ userText: text, target: who, window: chatWindow(), groupAsk })
         } catch {
           batch = null // 静默回落
         }

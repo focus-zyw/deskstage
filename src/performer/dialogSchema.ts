@@ -90,9 +90,11 @@ export interface SceneCard {
   goalB: string
   /** 丙(C)在本集的行动职责(可选):她把哪句吹牛/误会当真并落实成后果 */
   roleC?: string
-  secret: string
+  /** 反转底牌:喜剧模式必有(由 validatePerformanceScript 按基调把关),
+   *  非喜剧模式可省略——清洗层只看数据合法性,不裁卡 */
+  secret?: string
   escalation: string[]
-  callback: string
+  callback?: string
 }
 
 const PAUSE_MAX_MS = 1500
@@ -240,7 +242,9 @@ export function sanitizeDialog(raw: unknown, minLines?: number): DialogLine[] {
   return lines
 }
 
-/** 清洗场景卡:关键字段缺失时整卡丢弃(演出不依赖卡,卡只是编剧质量工具) */
+/** 清洗场景卡:基础结构(relationship/scene/escalation)缺失时整卡丢弃。
+ *  secret/callback 是可选语义字段——是否必有由模式校验层(validatePerformanceScript
+ *  的 comedy 选项)把关,这里只看数据形状,避免非喜剧卡在清洗层无声消失 */
 export function sanitizeSceneCard(v: unknown): SceneCard | undefined {
   const o = (v ?? {}) as Record<string, unknown>
   const str = (x: unknown, cap: number): string =>
@@ -255,8 +259,8 @@ export function sanitizeSceneCard(v: unknown): SceneCard | undefined {
   const escalation = Array.isArray(o.escalation)
     ? o.escalation.map((x) => str(x, 40)).filter(Boolean).slice(0, 6)
     : []
-  if (!relationship || !scene || !secret || escalation.length === 0) return undefined
-  return { relationship, scene, goalA, goalB, roleC: roleC || undefined, secret, escalation, callback }
+  if (!relationship || !scene || escalation.length === 0) return undefined
+  return { relationship, scene, goalA, goalB, roleC: roleC || undefined, secret: secret || undefined, escalation, callback: callback || undefined }
 }
 
 /** 清洗抉择点:prompt 与恰好两个带唯一 id 的选项 */
@@ -307,12 +311,22 @@ function speakerStreakWarning(lines: DialogLine[]): string | null {
   return null
 }
 
-export function validatePerformanceScript(script: PerformanceScript, minLines = 4): ScriptValidation {
+export function validatePerformanceScript(
+  script: PerformanceScript,
+  minLines = 4,
+  opts: { comedy?: boolean } = {},
+): ScriptValidation {
   const fatal: string[] = []
   const warnings: string[] = []
   const lines = script.before
   if (lines.length < minLines) {
     fatal.push(`正片台词不足 ${minLines} 句(实际 ${lines.length} 句)`)
+  }
+  // 喜剧模式规则层:卡在但 secret/callback 缺失 → fatal(可被定点修复补字段);
+  // 卡整体缺失仍容忍(卡可缺,照常播)。非喜剧模式不检查
+  if (opts.comedy && script.card) {
+    if (!script.card.secret) fatal.push('喜剧模式场景卡缺 secret(反转底牌)')
+    if (!script.card.callback) fatal.push('喜剧模式场景卡缺 callback(结尾回收线)')
   }
   const streak = speakerStreakWarning(lines)
   if (streak) warnings.push(streak)

@@ -139,7 +139,7 @@ export async function composeVideoPrompt(
   const card = input.episode?.card
   if (card) {
     userParts.push(
-      `【场景卡】关系:${card.relationship};场景:${card.scene};暗线:${card.secret};收梗:${card.callback}`,
+      `【场景卡】关系:${card.relationship};场景:${card.scene};暗线:${card.secret ?? '无'};收梗:${card.callback ?? '无'}`,
     )
   }
   const digest = scriptDigest(lines)

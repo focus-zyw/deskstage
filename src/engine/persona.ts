@@ -1,8 +1,10 @@
 // 角色人设的唯一事实源:内置默认人设在这里定义,用户可在设置里自定义覆盖(可还原)。
 // 各 prompt 场合(主演出/短聊/戳一戳/聊天回复)都从 personaText() 取生效文本,
 // 用户保存新人设后,下一次生成即采纳。
-// 甲乙(A/B)是立绘主角;丙(C)是常驻在场的第三角色(WebM 小管家),
-// 行为模式是"按字面理解并立刻执行"——她是行动型变量,不是第三个轮流说话的人。
+// 甲乙(A/B)是立绘主角;丙(C)是常驻在场的第三角色(WebM 小管家)。
+// 分层纪律:fullPersona() 只输出恒定身份层(身份/性格/世界事实+中性关系);
+// "互怼/逗哏捧哏/段子舞台"等喜剧动态属于模式风格,由 comedyDynamics() 提供,
+// 调用方按模式基调拼接。字面理解只是默认 C 的偶发特点,不是无条件人格。
 
 export interface PersonaDefaults {
   gender: '女' | '男'
@@ -40,10 +42,10 @@ const DIMENSIONS: Record<ActorSlot, PersonaDimensions> = {
     defense: '用冷淡和毒舌掩饰关心',
   },
   C: {
-    attention: '先听字面意思——别人说了什么就当真什么',
-    judgment: '逐字理解、直接执行,从不怀疑前提',
-    risk: '毫无风险意识,说到就做',
-    defense: '用认真和忙碌掩饰小情绪,被逗急了就一本正经地用歪理反击',
+    attention: '先听懂当下的话——说的是什么、要办什么事',
+    judgment: '容易按字面理解,偶尔不怀疑前提直接执行(视场景而定)',
+    risk: '风险意识偏弱,想到就做(视场景)',
+    defense: '用认真和忙碌掩饰小情绪,被逗急了偶尔一本正经地用歪理反击',
   },
 }
 
@@ -51,17 +53,34 @@ export function personaDimensions(id: ActorSlot): PersonaDimensions {
   return DIMENSIONS[id]
 }
 
-/** 四维画像提示词块:主演出注入。措辞围绕行为维度而非"像甲/像乙" */
+/** 该角色是否正使用用户自定义人设:cRule 等按此分档——自定义人设接管基础人格,
+ *  任何模式分支都不得把默认人格(字面执行/团宠/毒舌)强加回自定义角色 */
+export function isPersonaCustomized(id: ActorSlot): boolean {
+  return overrides[id].length > 0
+}
+
+/** 四维画像提示词块:主演出注入,仅覆盖仍使用内置人设的角色——
+ *  用户自定义人设接管该角色的行为维度,默认四维只是空人设时的兜底 */
 export function dimensionsPrompt(): string {
-  const row = (id: ActorSlot) => {
-    const d = DIMENSIONS[id]
-    return `- ${nameOf(id)}(speaker "${id}"):注意力——${d.attention};判断——${d.judgment};风险——${d.risk};情绪防御——${d.defense}`
-  }
-  return `行为底色(台词的判断方式与反应速度要符合它,比口头禅更重要):
-${row('A')}
-${row('B')}
-${row('C')}
-- 口头禅/标志性语气词每集合计最多 1~2 次:角色差异靠上面的行为底色体现,不靠口头禅堆砌`
+  const rows = (['A', 'B', 'C'] as const)
+    .filter((id) => !isPersonaCustomized(id))
+    .map((id) => {
+      const d = DIMENSIONS[id]
+      return `- ${nameOf(id)}(speaker "${id}"):注意力——${d.attention};判断——${d.judgment};风险——${d.risk};情绪防御——${d.defense}`
+    })
+  if (!rows.length) return ''
+  return `行为底色(未自定义人设的角色适用;台词的判断方式与反应速度要符合它,比口头禅更重要):
+${rows.join('\n')}`
+}
+
+/** 喜剧模式动态层:互怼/逗哏捧哏/段子舞台是喜剧模式风格,不属于角色身份——
+ *  仅喜剧基调注入(promptBuilder 按 isComedy 拼接)。
+ *  C 半句是默认人格描述,C 有自定义人设时不强加 */
+export function comedyDynamics(): string {
+  const cPart = isPersonaCustomized('C')
+    ? ''
+    : `;${nameOf('C')}是两人都宠着都爱逗的桌面团宠,${pronounOf('C')}当真办事、呆萌反击`
+  return `- ${nameOf('A')}和${nameOf('B')}互怼但有默契,节奏像传统相声里的逗哏和捧哏${cPart};各自的生活片段都可以自然变成段子的舞台`
 }
 
 const DEFAULTS: Record<ActorSlot, PersonaDefaults> = {
@@ -82,9 +101,9 @@ const DEFAULTS: Record<ActorSlot, PersonaDefaults> = {
   C: {
     gender: '女',
     job: '住在桌面上的小管家',
-    traits: '呆萌可爱的小团宠,甲乙都宠着都爱逗;理解语言过于字面,执行力极强:甲乙随口一句便当真办到底,反而制造大场面;被逗会傲娇鼓脸,偶尔一本正经地用歪理反击,把甲乙噎得说不出话',
+    traits: '呆萌可爱的团宠气质,甲乙都宠着都爱逗;理解语言偶尔过于字面(视场景发生,不是每句都当真),执行力强;被逗会傲娇鼓脸,偶尔一本正经地用歪理反击',
     catchphrases: ['好的,马上办', '诶?', '可生气了(并没有)'],
-    world: '桌面角落的小家务、被甲乙逗着玩、把玩笑话逐字执行闹出的名场面',
+    world: '桌面角落的小家务、被甲乙逗着玩、偶尔把玩笑话当真闹出的小场面',
   },
 }
 
@@ -164,22 +183,29 @@ ${mapping}
 - 性别与代词：${displayNames.A}是${genders.A}(代词用"${pronounOf('A')}"),${displayNames.B}是${genders.B}(代词用"${pronounOf('B')}"),${displayNames.C}是${genders.C}(代词用"${pronounOf('C')}");所有叙述与台词的他/她严格按此,不得混用`
 }
 
-/** 完整版:主演出(点播/预生成)的 system prompt 用 */
-export function fullPersona(): string {
-  return `角色设定：
+/** 完整版:主演出(点播/预生成)的 system prompt 用。
+ *  只含恒定身份层:身份/性格/世界事实 + 中性伙伴关系 + C 舞台事实。
+ *  opts.comedyDynamics = 喜剧基调时拼接互怼/逗哏捧哏动态(非喜剧不注入);
+ *  「口头禅纪律」是通用质量规则,任何配置下恒在 */
+export function fullPersona(opts: { comedyDynamics?: boolean } = {}): string {
+  const cDyn = opts.comedyDynamics ? `\n${comedyDynamics()}` : ''
+  const blocks = [
+    `角色设定：
 - ${nameOf('A')}（speaker 用 "A"）：${personaText('A')}
 - ${nameOf('B')}（speaker 用 "B"）：${personaText('B')}
 - ${nameOf('C')}（speaker 用 "C"）：${personaText('C')}
-- ${nameOf('A')}和${nameOf('B')}是老搭档,互怼但有默契,节奏像传统相声里的逗哏和捧哏;${nameOf('C')}是两人都宠着都爱逗的桌面团宠(不是电话或画外音),${pronounOf('C')}当真办事、呆萌反击;各自的生活片段都可以自然变成段子的舞台
-
-${dimensionsPrompt()}
-
-${namingDiscipline()}`
+- ${nameOf('A')}和${nameOf('B')}是熟悉的长期伙伴,具体相处方式服从当前模式风格与各自人设;${nameOf('C')}是常驻在场的桌面角色(不是电话或画外音)${cDyn}`,
+  ]
+  const dims = dimensionsPrompt()
+  if (dims) blocks.push(dims)
+  blocks.push('- 口头禅/标志性语气词每集合计最多 1~2 次:角色差异靠行为底色与人设体现,不靠口头禅堆砌')
+  blocks.push(namingDiscipline())
+  return blocks.join('\n\n')
 }
 
-/** 双人简版:短聊两人同框用 */
+/** 双人简版:短聊两人同框用(关系恒定中性,基调由调用方的风格指令决定) */
 export function duoShortPersona(): string {
-  return `${nameOf('A')}:${personaText('A')};${nameOf('B')}:${personaText('B')}。两人是互怼但有默契的老搭档
+  return `${nameOf('A')}:${personaText('A')};${nameOf('B')}:${personaText('B')}。两人是熟悉的长期伙伴
 ${namingDiscipline()}`
 }
 

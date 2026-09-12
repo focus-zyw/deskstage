@@ -41,12 +41,22 @@ test('短期窗口:空白文本不入列', () => {
   assert.equal(turnWindow.chatWindow().length, 0)
 })
 
-test('TurnBatch 校验:被@角色必须首答,speaker 只能 A/B/C,最多 3 句', () => {
+test('TurnBatch 校验:被@角色必须首答,speaker 只能 A/B/C,硬上限 3 句', () => {
   assert.equal(llm.validateTurnBatch([line('B', '先答')], 'A'), null) // 首答不是被@角色
   assert.ok(llm.validateTurnBatch([line('A', '先答')], 'A'))
   assert.ok(llm.validateTurnBatch([line('A', '先答'), line('B', '补刀')], 'A'))
-  assert.equal(llm.validateTurnBatch([line('A', '1'), line('B', '2'), line('A', '3'), line('B', '4')], 'A'), null) // 超 3 句
+  assert.equal(llm.validateTurnBatch([line('A', '1'), line('B', '2'), line('A', '3'), line('B', '4')], 'A'), null) // 超 3 句硬上限
   assert.equal(llm.validateTurnBatch([line('C', '先答')], 'A'), null) // 被@的是 A,C 抢首答不行
+})
+
+test('TurnBatch 校验:普通消息默认最多 2 句(超出截断),群体提问 maxLines=3', () => {
+  const three = [line('A', '先答'), line('B', '补一句'), line('C', '也凑一句')]
+  const normal = llm.validateTurnBatch(three, 'A')
+  assert.equal(normal.length, 2, '默认截到目标先答+一人补充,第三人不上台')
+  assert.equal(normal[0].speaker, 'A')
+  assert.equal(normal[1].speaker, 'B')
+  assert.equal(llm.validateTurnBatch(three, 'A', { maxLines: 3 }).length, 3, '明确群体提问放开三句')
+  assert.equal(llm.validateTurnBatch([line('A', '先答')], 'A', { maxLines: 3 }).length, 1)
 })
 
 test('TurnBatch 校验:@C 时 C 首答,三人合法(常驻第三人接入聊天)', () => {
@@ -85,4 +95,13 @@ test('解围纪律:存在且覆盖关键约束(拉扯两轮必须解围)', () =>
   assert.match(d, /赊账|虚拟道具|降低条件/)
   assert.match(d, /递台阶/)
   assert.match(d, /绝不要求观众提供现实中无法交给虚拟角色的实物/)
+})
+
+test('解围纪律分档:单人版自己换方案,不安排"其他角色递台阶"', () => {
+  const solo = llm.soloRescueDiscipline()
+  assert.match(solo, /解围纪律/)
+  assert.match(solo, /不得连续重复同一条件/)
+  assert.match(solo, /赊账|虚拟道具|降低条件/)
+  assert.match(solo, /绝不要求观众提供现实中无法交给虚拟角色的实物/)
+  assert.doesNotMatch(solo, /递台阶|其他角色/, '单句协议里没有其他角色可调度')
 })

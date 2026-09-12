@@ -102,14 +102,20 @@ test('量化边界:双通道组合出七个情绪面', () => {
   assert.equal(ms.quantizeMood(mood(-1.4, 2.5)).id, 'calm')
 })
 
-test('主演出块:只列有波澜的角色,带"不是主要矛盾/模式风格优先"纪律', () => {
+test('主演出块:只列有波澜的角色,带"不迁怒观众/不是主要矛盾/模式风格优先"纪律', () => {
   const block = ms.moodPromptBlock(table(mood(0, 2.5), mood(-2, 3)), T0)
   assert.match(block, /当前心情余波/)
-  assert.match(block, /乙还在气头上/)
-  assert.match(block, /余怒未消/)
+  assert.match(block, /乙情绪稍紧绷/)
+  assert.match(block, /有点来气/)
+  assert.match(block, /不迁怒观众/)
+  assert.match(block, /不要求观众安抚/)
   assert.match(block, /不是本集主要矛盾/)
   assert.match(block, /以模式风格为准/)
   assert.doesNotMatch(block, /甲/)
+  // 负面余波不再要求用户哄:蔫了的描述去掉"需要被哄"
+  const sadBlock = ms.moodPromptBlock(table(mood(0, 2.5), mood(-2, 2)), T0)
+  assert.doesNotMatch(sadBlock, /需要被哄/)
+  assert.match(sadBlock, /随当前对话自然回暖/)
 })
 
 test('主演出块:全员平静返回空串(不注水)', () => {
@@ -121,11 +127,13 @@ test('主演出块:衰减 30 小时后情绪归平静,不再注入', () => {
   assert.equal(block, '')
 })
 
-test('短通道单行:有波澜才给一行,平静为空', () => {
+test('短通道单行:有波澜才给一行,平静为空,带不迁怒纪律', () => {
   const line = ms.moodHintLine(table(mood(0, 2.5), mood(-2, 1), mood(2, 4)), ['A', 'B', 'C'], T0)
   assert.match(line, /心情余波/)
   assert.match(line, /乙蔫了/)
   assert.match(line, /丙兴奋劲还没过/)
+  assert.match(line, /不迁怒观众/)
+  assert.match(line, /不要求安抚/)
   assert.match(line, /以任务为准/)
   assert.equal(ms.moodHintLine(table(mood(0, 2.5)), ['A'], T0), '')
 })

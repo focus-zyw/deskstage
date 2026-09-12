@@ -112,8 +112,8 @@ export interface MoodFace {
 }
 
 const FACES: Record<MoodFace['id'], MoodFace> = {
-  angry: { id: 'angry', label: '还在气头上', desc: '余怒未消,前几句语气冲,但被逗可以顺台阶下' },
-  sad: { id: 'sad', label: '蔫了', desc: '提不起劲,声音发闷,需要被哄才缓得过来' },
+  angry: { id: 'angry', label: '情绪稍紧绷', desc: '有点来气,语速快半拍、口吻略冲;只体现在语气细节,不迁怒观众,不要求观众哄,被逗可以顺台阶下' },
+  sad: { id: 'sad', label: '蔫了', desc: '提不起劲,声音发闷、话少半拍;不迁怒观众,不要求观众哄,随当前对话自然回暖' },
   excited: { id: 'excited', label: '兴奋劲还没过', desc: '精神头特别足,话密爱接梗,容易越说越上头' },
   content: { id: 'content', label: '心情不错', desc: '松弛愉快,愿意捧场接梗' },
   restless: { id: 'restless', label: '有点坐不住', desc: '精力过剩,注意力发散,忍不住想搞事' },
@@ -141,7 +141,7 @@ export function moodPromptBlock(table: MoodTable, now = Date.now()): string {
     .map(({ who, face }) => `- ${nameOf(who)}${face.label}(${face.desc})`)
   if (rows.length === 0) return ''
   return [
-    '当前心情余波(跨集带过来的情绪惯性:影响开场姿态与前几句语气,随剧情自然消解,不是本集主要矛盾,不要每句都提;与模式风格要求冲突时以模式风格为准,余波只体现在开场姿态与语气细节):',
+    '当前心情余波(跨集带过来的情绪惯性:只体现在轻微语气与动作细节,不迁怒观众、不要求观众安抚,随剧情自然消解,不是本集主要矛盾,不要每句都提;与模式风格要求冲突时以模式风格为准):',
     ...rows,
   ].join('\n')
 }
@@ -157,7 +157,7 @@ export function moodHintLine(
     .filter(({ face }) => face.id !== 'calm')
     .map(({ who, face }) => `${nameOf(who)}${face.label}`)
   if (rows.length === 0) return ''
-  return `心情余波(语气带出来,不要明说,与本段任务冲突时以任务为准):${rows.join('、')}`
+  return `心情余波(只体现在轻微语气与动作中,不迁怒观众、不要求安抚,与本段任务冲突时以任务为准):${rows.join('、')}`
 }
 
 // ---------- 集内瞬时情绪(插话通道:蒸馏未提交,持久档里还没有本集情绪) ----------
