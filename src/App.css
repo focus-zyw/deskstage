@@ -2990,51 +2990,6 @@
   background: var(--sw-hover);
   color: var(--sw-text-1);
 }
-.settings-window .chatlog-ep {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  border: 1px solid var(--sw-border-soft);
-  border-radius: 10px;
-  background: var(--sw-card);
-  padding: 8px;
-}
-.settings-window .chatlog-ep-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.settings-window .chatlog-ep-meta {
-  flex: 1;
-  min-width: 0;
-  font-size: 11px;
-  color: var(--sw-text-3);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.settings-window .chatlog-ep-actions {
-  display: flex;
-  gap: 2px;
-}
-.settings-window .chatlog-act {
-  width: 22px;
-  height: 22px;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--sw-text-3);
-  font-size: 12px;
-  line-height: 1;
-  cursor: pointer;
-}
-.settings-window .chatlog-act:hover {
-  background: var(--sw-hover);
-  color: var(--sw-text-1);
-}
-.settings-window .chatlog-act.on {
-  color: #f5c542;
-}
 /* 消息行:头像 + 名牌/气泡纵列;自己的消息整行反转(头像在右) */
 .settings-window .chatlog-row {
   display: flex;
@@ -3108,6 +3063,17 @@
   border-color: var(--accent-strong);
   border-radius: 12px 4px 12px 12px;
 }
+/* 可回放的气泡(角色消息):hover 提示可点 */
+.settings-window .chatlog-bubble.click {
+  cursor: pointer;
+}
+.settings-window .chatlog-bubble.click:hover {
+  border-color: var(--accent-strong);
+  background: var(--sw-hover);
+}
+.settings-window .group-chat.has-bg .chatlog-bubble.click:hover {
+  background: rgba(30, 42, 70, 0.9);
+}
 
 /* ---------- 群聊(聊天记录页) ---------- */
 .settings-window .group-chat {
@@ -3122,12 +3088,15 @@
   background: var(--sw-card);
   overflow: hidden;
 }
-/* 背景图层:盖满整窗,消息层压在其上 */
+/* 背景图层:盖满整窗,消息层压在其上。
+   定位元素绘制在普通流内容之上——不设 z-index 会把静态定位的消息流整个盖住 */
 .settings-window .group-bg {
   position: absolute;
   inset: 0;
+  z-index: 0;
   background-size: cover;
   background-position: center;
+  pointer-events: none;
 }
 /* 背景图上的暗化遮罩:任何图都保住消息可读(light 主题换白纱) */
 .settings-window .group-bg::after {
@@ -3139,9 +3108,10 @@
 .settings-window.light .group-bg::after {
   background: rgba(255, 255, 255, 0.72);
 }
-/* 群聊头:群名居中,齿轮挂右 */
+/* 群聊头:群名居中,齿轮挂右(内容层压背景之上) */
 .settings-window .group-head {
   position: relative;
+  z-index: 1;
   display: flex;
   justify-content: center;
   align-items: center;
@@ -3179,6 +3149,7 @@
 /* 群设置折叠区:群名 + 背景 */
 .settings-window .group-settings {
   position: relative;
+  z-index: 1;
   display: flex;
   align-items: center;
   flex-wrap: wrap;
@@ -3212,16 +3183,14 @@
 }
 /* 消息流:群聊窗体内弹性撑满(覆盖独立滚动节的 max-height) */
 .settings-window .group-chat .chatlog-feed {
+  position: relative;
+  z-index: 1;
   flex: 1;
   min-height: 0;
   max-height: none;
   height: auto;
 }
-/* 带背景图时:卡片与气泡换半透明底,日期分隔同步 */
-.settings-window .group-chat.has-bg .chatlog-ep {
-  background: rgba(16, 24, 42, 0.78);
-  border-color: rgba(255, 255, 255, 0.08);
-}
+/* 带背景图时:气泡换半透明底,日期分隔同步 */
 .settings-window .group-chat.has-bg .chatlog-bubble {
   background: rgba(16, 24, 42, 0.78);
 }
@@ -3231,7 +3200,6 @@
 .settings-window .group-chat.has-bg .chatlog-day {
   background: rgba(16, 24, 42, 0.7);
 }
-.settings-window.light .group-chat.has-bg .chatlog-ep,
 .settings-window.light .group-chat.has-bg .chatlog-bubble,
 .settings-window.light .group-chat.has-bg .chatlog-day {
   background: rgba(255, 255, 255, 0.82);
@@ -3242,6 +3210,7 @@
 /* 输入区:@ + 输入框 + 发送 */
 .settings-window .group-input {
   position: relative;
+  z-index: 1;
   padding: 8px 10px;
   border-top: 1px solid var(--sw-border-soft);
   background: var(--sw-input);
@@ -3347,4 +3316,59 @@
 }
 .settings-window .avatar-x:hover {
   color: var(--sw-err);
+}
+/* 头像裁剪弹窗:fixed 相对 transformed 的设置窗根定位——遮罩恰好盖住设置窗口,不落桌面 */
+.settings-window .avatar-crop-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(4, 8, 18, 0.6);
+}
+.settings-window .avatar-crop-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  border: 1px solid var(--sw-border);
+  border-radius: 12px;
+  background: var(--sw-card);
+}
+.settings-window .avatar-crop-title {
+  font-size: 12px;
+  color: var(--sw-text-2);
+}
+.settings-window .avatar-crop-view {
+  position: relative;
+  width: 240px;
+  height: 240px;
+  overflow: hidden;
+  border-radius: 10px;
+  /* 白底与最终产物一致(cropToDataUrl 对透明区填白):预览即所得 */
+  background: #fff;
+  cursor: grab;
+  touch-action: none;
+}
+.settings-window .avatar-crop-view:active {
+  cursor: grabbing;
+}
+.settings-window .avatar-crop-img {
+  position: absolute;
+  user-select: none;
+  pointer-events: none;
+}
+.settings-window .avatar-crop-slider {
+  width: 240px;
+}
+.settings-window .avatar-crop-actions {
+  display: flex;
+  gap: 8px;
+}
+.settings-window .avatar-crop-actions .group-bg-btn.primary {
+  background: var(--sw-primary);
+  border-color: var(--sw-primary);
+  color: #fff;
 }

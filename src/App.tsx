@@ -997,11 +997,15 @@ function App() {
         await updateMemo(memo.id, { fired: true })
         setMemoAlerts((list) => [...list, { id: memo.id, text: memo.text }])
         if (phaseRef.current === 'idle') {
+          let line: string
           try {
-            speak('C', await memoReminderLine(memo.text), undefined, 'proactive')
+            line = await memoReminderLine(memo.text)
           } catch {
-            speak('C', `叮——该「${memo.text}」了`, undefined, 'proactive')
+            line = `叮——该「${memo.text}」了`
           }
+          speak('C', line, undefined, 'proactive')
+          // 小管家的提醒进聊天记录:C 也是群成员(与 @C 应答同一条落盘链,失败静默)
+          recordTurn('C', line)
         }
         try {
           const lines = await generateShortChat('memo', director.recentLines(), memo.text)
