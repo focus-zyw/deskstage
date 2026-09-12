@@ -1,5 +1,5 @@
 // 角色舞台布局:位置拖动(各自独立)/滚轮缩放(全局一致)/落盘防抖/最近交互置顶,
-// 以及拖拽结束后的"距离演出"(按长期关系 bond 给文案与表现,并缓慢回写关系)。
+// 以及拖拽结束后的"搬家回应"(被拖角色自己一句轻反馈,不做任何关系/账本记录)。
 // 布局只管几何与手势;台词呈现(present)与戳一戳(onPoke)由调用方注入,
 // 这样本模块不依赖气泡/说话状态,可独立测试。
 import { useRef, useState } from 'react'
@@ -11,15 +11,8 @@ import {
   type CharPos,
   type CtrlBarPos,
 } from '../storage/configStore'
-import { getBond, shiftBond } from '../storage/storyStore'
-import { logDrag } from '../storage/interactionStore'
-import { bondTierOf, reactBonded, distanceBands } from '../engine/interactionRules'
+import { distanceBands, dragDropLine, dragDropLineC } from '../engine/interactionRules'
 import type { Speaker } from '../performer/player'
-
-/** 距离演出的降频参数:冷却 + 概率闸双管齐下——拖拽是桌面玩具的核心乐趣,
- *  每次拖完都被抱怨会变成唠叨,降频成"偶尔彩蛋"(数值可按手感微调) */
-const DIST_COOLDOWN_MS = 45_000
-const DIST_SAY_CHANCE = 0.35
 
 export interface CharacterLayoutDeps {
   /** 距离演出仅在空闲时触发 */
@@ -45,8 +38,6 @@ export function useCharacterLayout(deps: CharacterLayoutDeps) {
   const [dragUi, setDragUi] = useState<Speaker | null>(null)
   const [dropFor, setDropFor] = useState<Speaker | null>(null)
   const dropTimer = useRef(0)
-  // 距离演出冷却记账(12s)
-  const distLastAt = useRef<Record<string, number>>({})
   const dragRef = useRef<{ who: Speaker; startX: number; startY: number; orig: CharPos; moved: boolean } | null>(null)
   // 拖动中的角色命中区膨胀为全窗口:快速拖动时光标冲出角色矩形,
   // 否则穿透窗口会立刻恢复 ignoreCursorEvents,拖拽被中断
@@ -146,54 +137,35 @@ export function useCharacterLayout(deps: CharacterLayoutDeps) {
     }
   }
 
-  /** 拖拽结束后的距离演出:按长期关系(bond)给出不同文案与表现,并缓慢回写关系。
-   *  贴近=亲近信号(trust+0.1);叠一起/拖太远=摩擦信号(rivalry+);12s 冷却。
-   *  C 不参与距离演出(她按自己的逻辑漫游,不进甲乙的关系物理) */
-  async function maybeDistancePlay(who: Speaker) {
-    if (who === 'C') return
+  /** 拖拽落地的一句"搬家"式反馈:拖拽是布局操作,不是冒犯——
+   *  不进负面账本、不动信任/敌对,由被拖动的角色自己回应一句(含 C);
+   *  仅空闲时说话,演出/生成期间拖拽就是纯粹挪位置 */
+  function maybeDistancePlay(who: Speaker) {
     if (!deps.isIdle()) return
-    const other: Speaker = who === 'A' ? 'B' : 'A'
+    if (who === 'C') {
+      deps.present('C', dragDropLineC(), 'happy', 2000)
+      return
+    }
+    const bands = distanceBands(charCfg.height)
     const ax = (charCfg.A.xPct / 100) * window.innerWidth
     const bx = (charCfg.B.xPct / 100) * window.innerWidth
     const dx = Math.abs(ax - bx)
-    const bands = distanceBands(charCfg.height)
-    const now = Date.now()
-    // 拖拽是桌面玩具的核心乐趣,每次拖完都被抱怨会变成唠叨:
-    // 冷却 45s + 35% 概率闸双管齐下,把抱怨降频成"偶尔彩蛋"。
-    // 概率闸先掷——没掷中不说话也不占冷却,下一次拖拽仍有触发机会
-    const cooled = (kind: string) => now - (distLastAt.current[kind] ?? 0) > DIST_COOLDOWN_MS
-    const says = (kind: string) => Math.random() < DIST_SAY_CHANCE && cooled(kind)
-    const mark = (kind: string) => { distLastAt.current[kind] = now }
 
-    const bond = await getBond()
-    const tier = bondTierOf(bond.trust, bond.rivalry)
-
-    if (dx < bands.overlap && says('overlap')) {
-      mark('overlap')
-      deps.present(other, reactBonded(other, 'overlap', tier), tier === 'strained' ? 'angry' : 'surprise', 2000)
-      // 推开:被拖者向远离方向挪 6%(关系好时推开幅度减半,挤挤更热闹)
+    if (dx < bands.overlap) {
+      deps.present(who, dragDropLine('overlap'), 'surprise', 2000)
+      // 叠一起时被拖者自己挪开 6%:纯几何防重叠,与关系无关
       const cfg = charCfgRef.current
-      const dir = (cfg[who].xPct <= cfg[other].xPct ? -6 : 6) * (tier === 'warm' ? 0.5 : 1)
+      const other: Speaker = who === 'A' ? 'B' : 'A'
+      const dir = cfg[who].xPct <= cfg[other].xPct ? -6 : 6
       applyChars({ ...cfg, [who]: { ...cfg[who], xPct: Math.min(97, Math.max(3, cfg[who].xPct + dir)) } }, 'now')
-      void shiftBond(0, 0.3)
-      void logDrag()
       return
     }
-    if (dx < bands.close && says('close')) {
-      mark('close')
-      const act = tier === 'warm' ? 'happy' : tier === 'strained' ? 'angry' : 'surprise'
-      deps.present(other, reactBonded(other, 'close', tier), act, 2200)
-      void shiftBond(0.1, 0)
-      void logDrag()
+    if (dx < bands.close) {
+      deps.present(who, dragDropLine('close'), 'happy', 2200)
       return
     }
-    if (dx > window.innerWidth * 0.6 && says('far')) {
-      mark('far')
-      const act = tier === 'strained' ? 'angry' : tier === 'warm' ? 'sad' : 'talk'
-      deps.present('A', reactBonded('A', 'far', tier), act, 2400, true)
-      deps.present('B', reactBonded('B', 'far', tier), act, 2400, true)
-      void shiftBond(-0.1, 0.4)
-      void logDrag()
+    if (dx > window.innerWidth * 0.6) {
+      deps.present(who, dragDropLine('far'), 'talk', 2200)
     }
   }
 

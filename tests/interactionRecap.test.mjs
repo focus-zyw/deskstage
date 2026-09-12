@@ -36,15 +36,13 @@ async function poke(times, kind = 'pokeA') {
   for (let i = 0; i < times; i++) await store.logInteraction(kind)
 }
 
-test('攒够阈值后 takeRecap 报出本期量,并把戳/拖计数清零', async () => {
+test('攒够阈值后 takeRecap 报出本期戳量,并把计数清零', async () => {
   await poke(2)
   await poke(1, 'pokeC')
-  await store.logDrag()
   const recap = await store.takeRecap()
-  assert.ok(recap, '达到阈值应有抱怨文案')
+  assert.ok(recap, '达到阈值应有素材文案')
   assert.match(recap, /2 次/) // 甲被戳 2 次
   assert.match(recap, /1 回/) // 小管家被戳 1 回
-  assert.match(recap, /1 次/) // 拖拽 1 次
   // 消费后计数归零:不足阈值,再 take 为 null
   assert.equal(await store.takeRecap(), null)
 })
@@ -63,5 +61,15 @@ test('清零后重新攒,只报新量不报终身累计', async () => {
   const recap = await store.takeRecap()
   assert.ok(recap)
   assert.match(recap, /3 次/)
-  assert.ok(!recap.match(/拖近又拽远 [1-9]/), '上期的拖拽数不应再出现')
+})
+
+test('拖拽是布局操作:不再进账本、不再出现在回收文案里', async () => {
+  // 旧版接口已删除:logDrag 不存在
+  assert.equal('logDrag' in store, false)
+  // 大量"拖拽"也不会攒出抱怨素材(没有任何字段会因此增长)
+  const before = await store.peekRecap()
+  await poke(1, 'pokeA')
+  const after = await store.peekRecap()
+  if (before == null) assert.ok(after == null || !/拖/.test(after))
+  assert.ok(!/拖近又拽远/.test(after ?? ''))
 })

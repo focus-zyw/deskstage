@@ -76,92 +76,41 @@ export function bondTierOf(trust: number, rivalry: number): BondTier {
   return 'neutral'
 }
 
-// 按关系档位区分的拖拽文案:warm 甜/纵容,strained 记仇/较劲,neutral 走基础表
-const BOND_CLOSE: Record<BondTier, Record<'A' | 'B', readonly string[]>> = {
-  warm: {
-    A: [
-      '（一把揽住肩膀）好家伙,一天不见搭档,浑身不得劲！',
-      '（凑近压低声音）跟你说个秘密——这块屏上,就你顺眼！',
-    ],
-    B: [
-      '（没挪开）……别得意。今天就赏你挤这半步',
-      '（往旁边挪了半寸,声音很小）……坐吧',
-    ],
-  },
-  neutral: {
-    A: TOO_CLOSE.A,
-    B: TOO_CLOSE.B,
-  },
-  strained: {
-    A: [
-      '（侧身挡住）无事献殷勤——说！是不是想让我把旧账一笔勾销！',
-      '别套近乎！你上次坑我的样子,我还记着呢！',
-    ],
-    B: [
-      '（拿文件夹隔开）先清账,再谈距离。这是原则',
-      '（后退半步）离我三尺。上次你也是这么说的',
-    ],
-  },
+/** 拖拽落地的一句"搬家"式回应:拖拽是布局操作,不是冒犯行为——
+ *  由被拖动的角色自己说,语气轻松(偶尔惊讶/傲娇),不抱怨、不翻账、不记仇 */
+const DRAG_DROP: Record<'close' | 'far' | 'overlap', readonly string[]> = {
+  close: [
+    '咦,今天坐这边吗?也行。',
+    '好,今日座位升级成同桌。',
+    '（打量新位置）嗯,这边的风景还不错。',
+  ],
+  far: [
+    '新工位有点远,记得喊我。',
+    '（打量四周）行,换个大平层,就是有点空旷。',
+    '工位隔远了,暗号记得喊大声点。',
+  ],
+  overlap: [
+    '座位好像不够了,我挪一点。',
+    '哎哎,个人空间!……行吧,挤挤也行。',
+    '（往边上挪了挪）同桌就同桌,台词一人一句说好了。',
+  ],
 }
 
-const BOND_FAR: Record<BondTier, Record<'A' | 'B', readonly string[]>> = {
-  warm: {
-    A: [
-      '（拢嘴大喊）喂——！我的捧哏跑了,这活儿一个人没法干啊！',
-      '回来回来！刚那包袱就差你递最后一杠了！',
-    ],
-    B: [
-      '（叹气,往前两步）……不是想你。是一个人看着你不放心',
-      '（小步跟上）……就五分钟,说好的',
-    ],
-  },
-  neutral: {
-    A: TOO_FAR.A,
-    B: TOO_FAR.B,
-  },
-  strained: {
-    A: [
-      '（背过身喊）走就走！正好省个人拆我台！',
-      '（喊完又补一句）……你要真走了,这堆账找谁算去！',
-    ],
-    B: [
-      '（头也不回）巴不得。清账之前,咱俩不熟',
-      '（远处的声音）先说好,账清之前,别喊我',
-    ],
-  },
+/** C 被拖动的一句回应:小管家把搬家当工作交接 */
+const DRAG_DROP_C = [
+  '小管家搬家完成,这里也能开工!',
+  '（抱着小键盘落座）新坐标已归档,服务不打烊。',
+  '收到,工位已更新~有吩咐随时喊我。',
+]
+
+/** 拖拽落地回应:被拖动的角色自己说一句,一人一句 */
+export function dragDropLine(kind: 'close' | 'far' | 'overlap'): string {
+  return pick(DRAG_DROP[kind])
 }
 
-const BOND_OVERLAP: Record<BondTier, Record<'A' | 'B', readonly string[]>> = {
-  warm: {
-    A: ['好家伙,挤一块了——这才叫亲密无间！（越说越得意）'],
-    B: ['（没推开）……下不为例', '（认命地往边上挪了挪）……挤就挤吧'],
-  },
-  neutral: {
-    A: OVERLAP.A,
-    B: OVERLAP.B,
-  },
-  strained: {
-    A: ['挤什么挤！账没清的人,没有站位权！', '（往外拱）先出去！跟我保持法律距离！'],
-    B: [
-      '（使劲推开）重。下去。别以为挤过来就能赖账',
-      '（拿键盘隔开）站住。把话说清楚,再过来',
-    ],
-  },
-}
-
-const BOND_TABLE = {
-  close: BOND_CLOSE,
-  far: BOND_FAR,
-  overlap: BOND_OVERLAP,
-} as const
-
-/** 按关系档位取拖拽反应文案;neutral 直接走基础表 */
-export function reactBonded(
-  who: 'A' | 'B',
-  kind: 'close' | 'far' | 'overlap',
-  tier: BondTier,
-): string {
-  return pick(BOND_TABLE[kind][tier][who])
+/** C 被拖动:小管家专属回应 */
+export function dragDropLineC(): string {
+  return pick(DRAG_DROP_C)
 }
 
 /** 距离阈值(按角色身高换算) */
@@ -169,8 +118,9 @@ export function distanceBands(height: number) {
   return { overlap: height * 0.35, close: height * 0.95 }
 }
 
-/** 注入下一集的账本文案(次数由调用方填);丙被戳才提丙 */
-export function recapText(pokeA: number, pokeB: number, drags: number, pokeC = 0): string {
+/** 注入下一集的账本文案(只记戳一戳;拖拽是布局操作,不进账本);丙被戳才提丙 */
+export function recapText(pokeA: number, pokeB: number, pokeC = 0): string {
   const cPart = pokeC > 0 ? `,连${nameOf('C')}都被戳了 ${pokeC} 回` : ''
-  return `上集演出时,观众没少捣乱——戳了${nameOf('A')} ${pokeA} 次、戳了${nameOf('B')} ${pokeB} 次${cPart},还把你们拖近又拽远 ${drags} 次。开场先让两人抱怨一下"观众今天特别欠",再自然进入正题。`
+  return `观众戳了${nameOf('A')} ${pokeA} 次、戳了${nameOf('B')} ${pokeB} 次${cPart}。`
 }
+

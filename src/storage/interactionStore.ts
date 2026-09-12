@@ -1,5 +1,6 @@
-// 互动事件账本:data/interactions.json。记录观众对角色的捣乱行为,
-// 攒够后在下一集生成的 prompt 里注入"抱怨观众"的开场素材(注入即清零计数)。
+// 互动事件账本:data/interactions.json。记录观众对角色的戳一戳行为
+// (拖拽是布局操作,不进账本),攒够后在下一集生成的 prompt 里注入
+// "一人一句带过"的开场素材(注入即清零计数)。
 // 与 story.json(记忆系统)互不干涉;浏览器预览降级 localStorage。
 
 import { readTextFile, writeTextFile, exists, mkdir } from '@tauri-apps/plugin-fs'
@@ -79,16 +80,16 @@ async function writeAll(stats: InteractionStats): Promise<void> {
   }
 }
 
-/** 记录一次捣乱行为 */
+/** 记录一次观众互动(戳/插话等,中性计数,不做负面定性) */
 export async function logInteraction(kind: 'pokeA' | 'pokeB' | 'pokeC' | 'interrupts' | 'drags'): Promise<void> {
   const stats = await readAll()
   const next = sanitize({ ...stats, [kind]: (stats as unknown as Record<string, number>)[kind] + 1, sinceInject: stats.sinceInject + 1 })
   await writeAll(next)
 }
 
-/** 若攒够素材,返回注入下一集 prompt 的抱怨文案(调用方注入后应调 markInjected)。
- *  消费时把戳/拖计数一并清零——账本是"这一期攒的量",不无限累计,
- *  否则开场抱怨会报出"拖了上百次"这种吓人的终身累计数 */
+/** 若攒够素材,返回注入下一集 prompt 的互动量陈述(调用方注入后应调 markInjected)。
+ *  消费时把戳计数一并清零——账本是"这一期攒的量",不无限累计,
+ *  否则开场提一嘴会报出"戳了上百次"这种吓人的终身累计数 */
 export async function takeRecap(): Promise<string | null> {
   const stats = await readAll()
   if (stats.sinceInject < INJECT_THRESHOLD) return null
@@ -98,7 +99,7 @@ export async function takeRecap(): Promise<string | null> {
     sinceInject: 0,
   })
   await writeAll(next)
-  return recapText(stats.pokeA, stats.pokeB, stats.drags, stats.pokeC)
+  return recapText(stats.pokeA, stats.pokeB, stats.pokeC)
 }
 
 /** 预览版 takeRecap:判定条件与文案完全一致,但不重置计数——预生成场景先 peek,
@@ -106,13 +107,13 @@ export async function takeRecap(): Promise<string | null> {
 export async function peekRecap(): Promise<string | null> {
   const stats = await readAll()
   if (stats.sinceInject < INJECT_THRESHOLD) return null
-  return recapText(stats.pokeA, stats.pokeB, stats.drags, stats.pokeC)
+  return recapText(stats.pokeA, stats.pokeB, stats.pokeC)
 }
 
 /** 记被打断的角色对应的账本键 */
 const POKE_KEY: Record<Speaker, 'pokeA' | 'pokeB' | 'pokeC'> = { A: 'pokeA', B: 'pokeB', C: 'pokeC' }
 
-/** 打断是双倍恶劣行为:额外 +1 */
+/** 打断演出比戳一下分量重:额外 +1 */
 export async function logInterrupt(target: Speaker): Promise<void> {
   const stats = await readAll()
   const key = POKE_KEY[target]
@@ -122,11 +123,6 @@ export async function logInterrupt(target: Speaker): Promise<void> {
     interrupts: stats.interrupts + 1,
     sinceInject: stats.sinceInject + 2,
   }))
-}
-
-export async function logDrag(): Promise<void> {
-  const stats = await readAll()
-  await writeAll(sanitize({ ...stats, drags: stats.drags + 1, sinceInject: stats.sinceInject + 1 }))
 }
 
 // ---------- 主动行为降频记账 ----------
