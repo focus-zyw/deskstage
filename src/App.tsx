@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, Suspense, lazy } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { listen, emitTo } from '@tauri-apps/api/event'
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow'
@@ -16,7 +16,9 @@ import {
   onHoverChange,
   setPanelsOpen,
 } from './input/pointerManager'
-import { CaptureOverlay } from './CaptureOverlay'
+// 截屏浮层与翻译面板只在对应会话里出现,直播链(含 pako/B站协议)只在开播时用:
+// 三者都按需拉取,不进启动首屏的关键路径
+const CaptureOverlay = lazy(() => import('./CaptureOverlay').then((m) => ({ default: m.CaptureOverlay })))
 import { SPRITE_SETS, preloadSprites } from './stage/spriteSets'
 import { ResidentActor } from './stage/resident/ResidentActor'
 import { preloadResident } from './stage/resident/residentManifest'
@@ -36,9 +38,16 @@ import { bumpTopicFavored } from './storage/memoryStore'
 import { getDueMemos, addMemo, updateMemo } from './storage/memoStore'
 import { findEpisodeByEid, toggleFavorite, type Episode } from './storage/historyStore'
 import { rateEpisode } from './storage/feedbackStore'
-import { TranslationPanel, type TranslationInject } from './translation/TranslationPanel'
+import type { TranslationInject } from './translation/TranslationPanel'
 import { extractTextFromClipboard } from './translation/ocr'
-import { startLiveSession, stopLiveSession, type LiveReply } from './runtime/liveDanmaku'
+const TranslationPanel = lazy(() =>
+  import('./translation/TranslationPanel').then((m) => ({ default: m.TranslationPanel })),
+)
+// 直播链(pako/B站弹幕协议/登录)只开播时才需要:按需拉取,模块缓存在此
+import type { LiveReply } from './runtime/liveDanmaku'
+type LiveModule = typeof import('./runtime/liveDanmaku')
+let liveModPromise: Promise<LiveModule> | null = null
+const loadLiveModule = (): Promise<LiveModule> => (liveModPromise ??= import('./runtime/liveDanmaku'))
 import { CommandPanel } from './ui/CommandPanel'
 import { ChoicePanel } from './ui/ChoicePanel'
 import {
@@ -374,7 +383,7 @@ function App() {
     onLive: () => startStreaming(),
     teardown: () => {
       liveStopRef.current?.()
-      stopLiveSession()
+      void loadLiveModule().then((m) => m.stopLiveSession())
       clearProps()
       setUserBubble(null)
     },
@@ -620,20 +629,22 @@ function App() {
             liveStopRef.current = null
             resolve('直播已结束')
           }
-          void startLiveSession(cfg.live.platform, cfg.live.roomId, {
-            onReply: presentLiveReply,
-            onStatus: (s) => {
-              report(
-                s.state === 'live'
-                  ? '已连接,读弹幕中'
-                  : s.state === 'connecting'
-                    ? `连接中${s.detail ? `(${s.detail})` : ''}`
-                    : s.state === 'error'
-                      ? `异常:${s.detail ?? ''}(自动重连)`
-                      : (s.detail ?? s.state),
-              )
-            },
-          })
+          void loadLiveModule().then(({ startLiveSession }) =>
+            startLiveSession(cfg.live.platform, cfg.live.roomId, {
+              onReply: presentLiveReply,
+              onStatus: (s) => {
+                report(
+                  s.state === 'live'
+                    ? '已连接,读弹幕中'
+                    : s.state === 'connecting'
+                      ? `连接中${s.detail ? `(${s.detail})` : ''}`
+                      : s.state === 'error'
+                        ? `异常:${s.detail ?? ''}(自动重连)`
+                        : (s.detail ?? s.state),
+                )
+              },
+            }),
+          )
         })
       })
       } catch (e) {
@@ -1601,7 +1612,8 @@ function App() {
         <UtilityCards />
 
         {captureShot && (
-          <CaptureOverlay
+          <Suspense fallback={null}>
+            <CaptureOverlay
             path={captureShot}
             onDone={(ok, action, savedPath) => {
               endCapture() // 无论成败都恢复框选前的演出态
@@ -1618,19 +1630,22 @@ function App() {
                 void runUtilityTask('save', '保存截图', 'A', async () => `已保存:${savedPath}`)
               }
             }}
-          />
+            />
+          </Suspense>
         )}
 
         {translationOpen && (
-          <TranslationPanel
-            innerRef={trPanelRef}
-            pos={ctrlBar}
-            inject={trInject}
-            onClose={() => closeOverlay('translation')}
-            onScreenshotTranslate={startScreenshotFlow}
-            onTranslated={translateQuip}
-            onState={onTranslateState}
-          />
+          <Suspense fallback={null}>
+            <TranslationPanel
+              innerRef={trPanelRef}
+              pos={ctrlBar}
+              inject={trInject}
+              onClose={() => closeOverlay('translation')}
+              onScreenshotTranslate={startScreenshotFlow}
+              onTranslated={translateQuip}
+              onState={onTranslateState}
+            />
+          </Suspense>
         )}
 
         {toolsOpen && (

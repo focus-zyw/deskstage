@@ -1,7 +1,9 @@
 // 设置窗口:独立 WebView 的表单窗口——左栏导航+搜索、标题栏(保存状态/完成/退出)、
 // 右侧内容区分发到各分页组件。会话(草稿/即存)经 SettingsContext 下发;
 // 跨窗口行为经事件桥:动作/配置保存发往主窗,分页跳转由主窗 settings-goto 驱动。
-import { useEffect, useRef, useState } from 'react'
+// 16 个分页全部 React.lazy:入口只载导航/框架,分页代码首次访问才拉取——
+// 视频工坊(视频生成引擎)与直播登录(qrcode)这类重依赖不再随窗口启动加载。
+import { Suspense, lazy, useEffect, useRef, useState } from 'react'
 import { listen } from '@tauri-apps/api/event'
 import {
   SettingsContext,
@@ -11,22 +13,23 @@ import {
 } from './useSettingsSession'
 import { SETTINGS_NAV, SETTINGS_SEARCH_INDEX, TAB_GROUP, type SettingsTab } from './settingsCatalog'
 import { useConfigSnapshot } from '../storage/configStore'
-import { GeneralSettings } from './tabs/GeneralSettings'
-import { ModelSettings } from './tabs/ModelSettings'
-import { PersonaSettings } from './tabs/PersonaSettings'
-import { CustomModesSettings } from './tabs/CustomModesSettings'
-import { BubbleSettings } from './tabs/BubbleSettings'
-import { VideoSettings } from './tabs/VideoSettings'
-import { VoiceSettings } from './tabs/VoiceSettings'
-import { LiveSettings } from './tabs/LiveSettings'
-import { HotkeysSettings } from './tabs/HotkeysSettings'
-import { PrivacySettings } from './tabs/PrivacySettings'
-import { MemorySettings } from './tabs/MemorySettings'
-import { MemoSettings } from './tabs/MemoSettings'
-import { FavoritesSettings } from './tabs/FavoritesSettings'
-import { HistorySettings } from './tabs/HistorySettings'
-import { ChatLogSettings } from './tabs/ChatLogSettings'
-import { SupportSettings } from './tabs/SupportSettings'
+
+const GeneralSettings = lazy(() => import('./tabs/GeneralSettings').then((m) => ({ default: m.GeneralSettings })))
+const ModelSettings = lazy(() => import('./tabs/ModelSettings').then((m) => ({ default: m.ModelSettings })))
+const PersonaSettings = lazy(() => import('./tabs/PersonaSettings').then((m) => ({ default: m.PersonaSettings })))
+const CustomModesSettings = lazy(() => import('./tabs/CustomModesSettings').then((m) => ({ default: m.CustomModesSettings })))
+const BubbleSettings = lazy(() => import('./tabs/BubbleSettings').then((m) => ({ default: m.BubbleSettings })))
+const VideoSettings = lazy(() => import('./tabs/VideoSettings').then((m) => ({ default: m.VideoSettings })))
+const VoiceSettings = lazy(() => import('./tabs/VoiceSettings').then((m) => ({ default: m.VoiceSettings })))
+const LiveSettings = lazy(() => import('./tabs/LiveSettings').then((m) => ({ default: m.LiveSettings })))
+const HotkeysSettings = lazy(() => import('./tabs/HotkeysSettings').then((m) => ({ default: m.HotkeysSettings })))
+const PrivacySettings = lazy(() => import('./tabs/PrivacySettings').then((m) => ({ default: m.PrivacySettings })))
+const MemorySettings = lazy(() => import('./tabs/MemorySettings').then((m) => ({ default: m.MemorySettings })))
+const MemoSettings = lazy(() => import('./tabs/MemoSettings').then((m) => ({ default: m.MemoSettings })))
+const FavoritesSettings = lazy(() => import('./tabs/FavoritesSettings').then((m) => ({ default: m.FavoritesSettings })))
+const HistorySettings = lazy(() => import('./tabs/HistorySettings').then((m) => ({ default: m.HistorySettings })))
+const ChatLogSettings = lazy(() => import('./tabs/ChatLogSettings').then((m) => ({ default: m.ChatLogSettings })))
+const SupportSettings = lazy(() => import('./tabs/SupportSettings').then((m) => ({ default: m.SupportSettings })))
 
 export interface SettingsWindowProps {
   /** 独立窗口形态下无命中区注册,保留参数兼容旧调用(可传 null ref) */
@@ -41,7 +44,7 @@ export interface SettingsWindowProps {
   onExit(): void
 }
 
-const TAB_CONTENT: Record<SettingsTab, () => React.JSX.Element> = {
+const TAB_CONTENT: Record<SettingsTab, React.LazyExoticComponent<() => React.JSX.Element>> = {
   general: GeneralSettings,
   model: ModelSettings,
   persona: PersonaSettings,
@@ -148,6 +151,7 @@ export function SettingsWindow({ innerRef, bridge, initialTab = 'general', onClo
 
   return (
     <SettingsContext.Provider value={value}>
+      <Suspense fallback={<div className="set-body" style={{ opacity: 0.5 }}>分页加载中…</div>}>
       <div ref={innerRef} className={`settings-window${theme === 'light' ? ' light' : ''}`}>
         <aside className="set-side">
           <div className="set-brand">
@@ -254,6 +258,7 @@ export function SettingsWindow({ innerRef, bridge, initialTab = 'general', onClo
           </div>
         </section>
       </div>
+      </Suspense>
     </SettingsContext.Provider>
   )
 }
