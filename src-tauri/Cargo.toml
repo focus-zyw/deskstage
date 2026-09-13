@@ -1,8 +1,8 @@
 [package]
 name = "app"
-version = "0.1.0"
-description = "A Tauri App"
-authors = ["you"]
+version = "0.2.0"
+description = "桌面虚拟角色:演出、直播互动与桌面陪伴"
+authors = ["focus"]
 license = ""
 repository = ""
 edition = "2021"
