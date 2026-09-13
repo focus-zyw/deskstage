@@ -1135,9 +1135,13 @@ function App() {
     director.rearmPrefetch(mode, null) // 重新随机补一单
   }
 
-  /** 退出程序:两段确认的"已武装"态在 SettingsWindow 内,这里只真正关窗 */
-  function requestExit() {
-    void getCurrentWindow().close()
+  /** 退出程序:两段确认的"已武装"态在 SettingsWindow 内,这里真正退干净。
+   *  必须先销毁设置窗再销毁主窗——只关主窗会留下孤儿设置窗,进程不退出
+   *  (角色消失但应用还活着,真实事故);全部窗口关闭后 Tauri 才会退出进程 */
+  async function requestExit() {
+    const settings = await WebviewWindow.getByLabel('settings')
+    await settings?.destroy().catch(() => {})
+    await getCurrentWindow().destroy().catch(() => {})
   }
 
   // 角色互动深模块:戳/摸头/投喂的唯一入口(连戳分级/即兴/吃撑冷却全在模块内,

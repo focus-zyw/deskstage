@@ -3,7 +3,7 @@
 // 跨窗口行为经事件桥:动作/配置保存发往主窗,分页跳转由主窗 settings-goto 驱动。
 // 16 个分页全部 React.lazy:入口只载导航/框架,分页代码首次访问才拉取——
 // 视频工坊(视频生成引擎)与直播登录(qrcode)这类重依赖不再随窗口启动加载。
-import { Suspense, lazy, useEffect, useRef, useState } from 'react'
+import { Component, Suspense, lazy, useEffect, useRef, useState, type ReactNode } from 'react'
 import { listen } from '@tauri-apps/api/event'
 import {
   SettingsContext,
@@ -61,6 +61,30 @@ const TAB_CONTENT: Record<SettingsTab, React.LazyExoticComponent<() => React.JSX
   history: HistorySettings,
   chatlog: ChatLogSettings,
   support: SupportSettings,
+}
+
+/** 分页懒加载的失败兜底:chunk 拉取失败(dev server 没起/版本错位/网络抖动)时
+ *  React.lazy 会把拒绝缓存到永远,没有边界就整窗卡死在"加载中"(真实事故)。
+ *  切分页时自动清状态重试;重试再失败给出"重载设置窗"——整窗 reload 是最干净的
+ *  重试(浏览器模块表会缓存失败的 import,原地重试无效) */
+class TabErrorBoundary extends Component<{ tab: string; children: ReactNode }, { failed: boolean }> {
+  state = { failed: false }
+  static getDerivedStateFromError() {
+    return { failed: true }
+  }
+  render() {
+    if (this.state.failed) {
+      return (
+        <div className="set-note">
+          分页加载失败。
+          <button className="panel-btn" onClick={() => location.reload()}>
+            重载设置窗
+          </button>
+        </div>
+      )
+    }
+    return this.props.children
+  }
 }
 
 export function SettingsWindow({ innerRef, bridge, initialTab = 'general', onClose, onExit }: SettingsWindowProps) {
@@ -151,7 +175,6 @@ export function SettingsWindow({ innerRef, bridge, initialTab = 'general', onClo
 
   return (
     <SettingsContext.Provider value={value}>
-      <Suspense fallback={<div className="set-body" style={{ opacity: 0.5 }}>分页加载中…</div>}>
       <div ref={innerRef} className={`settings-window${theme === 'light' ? ' light' : ''}`}>
         <aside className="set-side">
           <div className="set-brand">
@@ -253,12 +276,16 @@ export function SettingsWindow({ innerRef, bridge, initialTab = 'general', onClo
                 ))}
               </div>
             ) : (
-              <TabContent />
+              // key = 分页 id:切页即重挂载边界,失败状态自然清零
+              <TabErrorBoundary key={settingsTab} tab={settingsTab}>
+                <Suspense fallback={<div className="set-note">分页加载中…</div>}>
+                  <TabContent />
+                </Suspense>
+              </TabErrorBoundary>
             )}
           </div>
         </section>
       </div>
-      </Suspense>
     </SettingsContext.Provider>
   )
 }

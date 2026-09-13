@@ -2,6 +2,7 @@
 // 都走 emitTo('main') 事件,不再持有主窗任何对象。groupSend 需要受理结果,
 // 用 requestId + 回执事件做一次应答式往返(超时按 busy 兜底)。
 import { emit, emitTo, listen } from '@tauri-apps/api/event'
+import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { inTauri } from '../storage/configStore'
 import type { SettingsBridge } from './useSettingsSession'
@@ -19,10 +20,12 @@ export async function hideSettingsWindow(): Promise<void> {
   await getCurrentWindow().hide()
 }
 
-/** 设置窗请求退出整个应用(走主窗的退出确认流程) */
+/** 设置窗请求退出整个应用:直接走 Rust 整进程退出(app.exit)。
+ *  不能绕道主窗:主窗是第一个被退出的窗口,若它已先关,事件会发进已销毁的
+ *  WebView 石沉大海,应用停在"角色消失但进程还在"的孤儿态(真实事故复现过) */
 export async function requestAppExit(): Promise<void> {
   if (!inTauri) return
-  await emit(APP_EXIT_REQUEST_EVENT)
+  await invoke('exit_app').catch(() => {})
 }
 
 interface PendingReply {

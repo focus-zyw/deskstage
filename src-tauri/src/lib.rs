@@ -110,6 +110,13 @@ fn report_csp_violation(directive: String, blocked: String, source: String) {
     log::warn!("CSP 违规: directive={directive} blocked={blocked} source={source}");
 }
 
+// 整进程退出:设置窗是常驻第二 WebView,任何窗口单独 close() 都会让应用
+// 变成"角色消失但进程还在"的孤儿态(真实事故);退出必须走这里
+#[tauri::command]
+fn exit_app(app: tauri::AppHandle) {
+    app.exit(0);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -132,6 +139,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             set_noactivate,
             report_csp_violation,
+            exit_app,
             pointer_hook::set_native_pointer_regions,
             audio_capture::list_audio_sessions,
             audio_capture::start_capture,

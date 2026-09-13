@@ -54,7 +54,7 @@ function concat(chunks: Uint8Array[]): Uint8Array {
 interface Wire {
   stream: ReadableStream<Uint8Array>
   /** invoke 结束后调用:正常关闭或以错误终止流 */
-  finish(result: { status: number } | Error, okStatus?: boolean): void
+  finish(status: number | Error, okStatus?: boolean): void
 }
 
 /** invoke 的 Channel 事件 ↔ ReadableStream 的双向粘合。
@@ -65,6 +65,8 @@ interface Wire {
 function wireChannel(): { channel: Channel<unknown>; wire: Wire } {
   const channel = new Channel<unknown>()
   const queue: Uint8Array[] = []
+  const diagnosticChunks: Uint8Array[] = []
+  let diagnosticBytes = 0
   let upstreamDone = false // 哨兵已到
   let error: Error | null = null
   let settledOk: boolean | null = null // invoke 结算结果;null = 未结算
@@ -72,7 +74,16 @@ function wireChannel(): { channel: Channel<unknown>; wire: Wire } {
   channel.onmessage = (raw) => {
     const bytes = toBytes(raw)
     if (bytes.length === 0) upstreamDone = true
-    else queue.push(bytes)
+    else {
+      queue.push(bytes)
+      // 消费方可能在 invoke 返回状态码之前已经取走 queue;单独保留一个很小的
+      // 响应前缀,确保非 2xx 错误仍能展示厂商返回的诊断信息。
+      if (diagnosticBytes < 300) {
+        const prefix = bytes.slice(0, 300 - diagnosticBytes)
+        diagnosticChunks.push(prefix)
+        diagnosticBytes += prefix.length
+      }
+    }
     notify?.()
     notify = null
   }
@@ -104,17 +115,17 @@ function wireChannel(): { channel: Channel<unknown>; wire: Wire } {
         }
       },
     }),
-    finish: (result, okStatus = true) => {
-      if (result instanceof Error) {
-        error = result
+    finish: (status, okStatus = true) => {
+      if (status instanceof Error) {
+        error = status
       } else if (!okStatus) {
-        const detail = new TextDecoder().decode(concat(queue.splice(0))).trim()
-        const err = new Error(`HTTP ${result.status}${detail ? `: ${detail.slice(0, 300)}` : ''}`)
-        ;(err as Error & { status?: number }).status = result.status
+        const detail = new TextDecoder().decode(concat(diagnosticChunks)).trim()
+        const err = new Error(`HTTP ${status}${detail ? `: ${detail.slice(0, 300)}` : ''}`)
+        ;(err as Error & { status?: number }).status = status
         ;(err as Error & { serverMsg?: string }).serverMsg = detail
         error = err
       }
-      settledOk = !(result instanceof Error) && okStatus
+      settledOk = !(status instanceof Error) && okStatus
       wake()
     },
   }
@@ -127,13 +138,13 @@ async function runInvoke(
   opts: EndpointOptions,
   channel: Channel<unknown>,
   requestId: string,
-): Promise<{ status: number }> {
+): Promise<number> {
   const onAbort = () => {
     void invoke('endpoint_cancel', { requestId }).catch(() => {})
   }
   opts.signal?.addEventListener('abort', onAbort, { once: true })
   try {
-    return await invoke<{ status: number }>('endpoint_request', {
+    return await invoke<number>('endpoint_request', {
       requestId,
       kind,
       pathAndQuery,
@@ -188,7 +199,7 @@ export function openEndpointStream(
   const { channel, wire } = wireChannel()
   const invokePromise = runInvoke(kind, pathAndQuery, opts, channel, nextRequestId())
   invokePromise.then(
-    (r) => wire.finish(r, r.status >= 200 && r.status < 300),
+    (status) => wire.finish(status, status >= 200 && status < 300),
     (e) => wire.finish(e instanceof Error ? e : new Error(String(e))),
   )
   // 流消费方只认 stream;done 的拒绝已经过 finish 进了流,吞掉避免 unhandled rejection
