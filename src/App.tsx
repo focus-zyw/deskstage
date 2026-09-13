@@ -28,7 +28,8 @@ import { generateShortChat, memoReminderLine, generateDailyLinePack } from './en
 import { loadLinePacks, saveLinePack, dayKey } from './storage/linePackStore'
 import { createChatSession } from './session/ChatSession'
 import { pushTurn, type TurnWho } from './dialogue/turnWindow'
-import { appendChatTurns } from './storage/chatLogStore'
+import { appendChatTurns, listChatTurns } from './storage/chatLogStore'
+import { FirstRunWizard } from './wizard/FirstRunWizard'
 import { resetDismissals } from './storage/interactionStore'
 import { ensureMoodLoaded } from './storage/moodStore'
 import { noteActivity } from './runtime/proactiveScheduler'
@@ -1180,6 +1181,22 @@ function App() {
   }
 
   // 空闲 3 分钟无互动 → 角色打瞌睡(sleepy);任何互动/演出/面板恢复
+  // 首启向导:只对"零痕迹"用户弹——老配置升级(wizardDone 缺省 false)但已有
+  // 聊天记录或称呼的用户不弹;新用户完成/跳过后 wizardDone 落盘,不再出现。
+  // "第一次成功互动"本地判定:发送 → 任一通道回复 → 气泡呈现 → 聊天落盘一条。
+  const [wizardOpen, setWizardOpen] = useState(false)
+  const wizardConfigRef = useRef(config)
+  useEffect(() => {
+    wizardConfigRef.current = config
+  })
+  useEffect(() => {
+    void (async () => {
+      const cfg = wizardConfigRef.current
+      if (cfg.wizardDone) return
+      const turns = await listChatTurns(1).catch(() => [])
+      if (turns.length === 0 && !cfg.userProfile.userName.trim()) setWizardOpen(true)
+    })()
+  }, [config.wizardDone])
   const [sleepyOn, setSleepyOn] = useState(false)
   useEffect(() => {
     if (phase !== 'idle' || settingsOpen || topicOpen || chatOpen || charHidden) return
@@ -1198,7 +1215,8 @@ function App() {
   const bFacesLeft = charCfg.B.xPct >= charCfg.A.xPct
 
   return (
-    <div
+    <>
+      <div
       className="stage"
       onPointerDown={(e) => {
         // 点在面板/工具栏之外 → 收起已打开的面板(穿透窗口下 e.target 即 .stage 本体)
@@ -1665,7 +1683,27 @@ function App() {
         {showWatermark && (
           <div className="watermark">空闲时自动重放历史 · 选模式点 ▶ 生成一集 · 拖精灵球移动工具栏</div>
         )}
+
       </div>
+      {wizardOpen && (
+        <FirstRunWizard
+          onDone={(skipped) => {
+            setWizardOpen(false)
+            if (skipped) {
+              presenterSay('A', '演示模式开启!▶ 里全是内置剧目,填了 Key 更有料~', {
+                action: 'happy',
+                ms: 4200,
+              })
+            } else {
+              presenterSay('A', '都连好了,来聊两句试试?点下面的输入框就行~', {
+                action: 'happy',
+                ms: 4200,
+              })
+            }
+          }}
+        />
+      )}
+      </>
   )
 }
 

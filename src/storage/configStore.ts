@@ -199,6 +199,9 @@ export interface AppConfig {
   /** 舞台气泡风格:comic=柔彩角色主题(默认,历史 key 保持兼容);glass=夜色半透明;
    *  custom_ 开头 = 气泡工坊自建主题 id(选中的主题被删除时运行时回退 comic) */
   bubbleStyle: 'comic' | 'glass' | (string & {})
+  /** 首启向导已完成。老配置升级后该字段缺省 false,但向导只对"零痕迹"用户弹出
+   *  (无聊天记录且未填称呼),老用户不会被误打扰 */
+  wizardDone: boolean
 }
 
 /** 翻译面板配置 */
@@ -311,6 +314,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   live: { platform: 'bilibili', roomId: '', cookie: '', giftReactionsEnabled: true },
   launchOnBoot: false,
   bubbleStyle: 'comic',
+  wizardDone: false,
 }
 
 /** 清洗使用者画像:逐字段裁剪;likes 为空时回落旧 userInterests 字段(老配置平滑迁移) */
@@ -701,6 +705,7 @@ export function sanitizeConfig(obj: unknown): AppConfig {
       }
     })(),
     launchOnBoot: o.launchOnBoot === true,
+    wizardDone: o.wizardDone === true,
     // 内置白名单 ∪ 气泡工坊自建主题 id;其他值(手改配置写错)回 comic
     bubbleStyle:
       o.bubbleStyle === 'glass' || o.bubbleStyle === 'comic'
