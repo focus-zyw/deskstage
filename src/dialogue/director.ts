@@ -25,6 +25,8 @@ export interface EpisodeRequest {
   continueFromPrevious?: boolean
   /** 预生成:上下文只预览,副作用推迟到开播采纳(adoptDeferred) */
   deferContextAdoption?: boolean
+  /** 诊断会话 id(可选):本集生成进诊断环 */
+  diagTurnId?: string
 }
 
 export interface PreparedEpisode {
@@ -70,6 +72,7 @@ export function createDialogueDirector(deps: DialogueDirectorDeps = {}) {
       signal: req.signal,
       continueFromPrevious: req.continueFromPrevious ?? false,
       deferContextAdoption: req.deferContextAdoption,
+      diagTurnId: req.diagTurnId,
     })
     return { script, eid: newId() }
   }

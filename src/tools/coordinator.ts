@@ -33,6 +33,8 @@ interface GatedObservation {
   ok: boolean
   summary: string
   errorCode?: string
+  /** search_memory 命中的记忆引用(gatedRun 里按条件展开写入,声明在此供消费方读取) */
+  memoryRefs?: TurnPreparation['memoryRefs']
 }
 
 /** 确认卡的输入摘要:"text:晚上好呀"(清洗后的参数,超长截断) */

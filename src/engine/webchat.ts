@@ -5,6 +5,7 @@
 // (Rust 的「已取消」在这里转回 AbortError,llmClient 的回退逻辑照旧识别)。
 import { invoke } from '@tauri-apps/api/core'
 import { getConfig, inTauri } from '../storage/configStore'
+import { diag, type LlmCallKind } from '../diag/store'
 
 export type WebchatSite = 'deepseek' | 'doubao'
 
@@ -21,11 +22,14 @@ export function mergeMessages(messages: { role: string; content: string }[]): st
 let askSeq = 0
 
 /** 一轮网页生成:整段 prompt 进,网页模型原始回复出。
- *  完成判定(见过生成中 → 不忙 → 稳定 2.5 秒)在 Rust 侧,见 webchat.rs run_ask */
+ *  完成判定(见过生成中 → 不忙 → 稳定 2.5 秒)在 Rust 侧,见 webchat.rs run_ask。
+ *  diagRef(可选):传入后本请求进诊断环——耗时、错误与 CDP 阶段轨迹
+ *  (webchat_last_trace:拉起/发送/首忙/首文/稳定),回答"网络 or CDP or 模型" */
 export async function webchatAsk(
   prompt: string,
   signal?: AbortSignal,
   timeoutMs = 180_000,
+  diagRef?: { turnId: string; call: LlmCallKind },
 ): Promise<string> {
   if (!inTauri) throw new Error('网页版生成仅桌面端可用')
   if (signal?.aborted) throw new DOMException('已中止', 'AbortError')
@@ -35,15 +39,73 @@ export async function webchatAsk(
     void invoke('webchat_cancel', { requestId }).catch(() => {})
   }
   signal?.addEventListener('abort', onAbort, { once: true })
+  const t0 = Date.now()
+  const pullTrace = () => {
+    if (!diagRef) return
+    void invoke<{
+      request_id: string
+      stages: { stage: string; ms: number }[]
+      total_ms: number
+      error?: string
+    } | null>('webchat_last_trace')
+      .then((trace) => {
+        if (!trace || trace.request_id !== requestId) return
+        diag.webchatStages(diagRef.turnId, {
+          requestId,
+          stages: trace.stages,
+          totalMs: trace.total_ms,
+          error: trace.error,
+        })
+      })
+      .catch(() => {})
+  }
   try {
-    return await invoke<string>('webchat_ask', {
+    const out = await invoke<string>('webchat_ask', {
       requestId,
       prompt,
       site: cfg.webchatSite,
       timeoutMs,
     })
+    if (diagRef) {
+      diag.llmFinished(diagRef.turnId, {
+        call: diagRef.call,
+        transport: 'webchat',
+        ok: true,
+        elapsedMs: Date.now() - t0,
+        outputChars: out.length,
+      })
+    }
+    pullTrace()
+    return out
   } catch (e) {
-    if (String(e) === '已取消') throw new DOMException('已中止', 'AbortError')
+    if (String(e) === '已取消') {
+      if (diagRef) {
+        diag.llmFinished(diagRef.turnId, {
+          call: diagRef.call,
+          transport: 'webchat',
+          ok: false,
+          cancelled: true,
+          elapsedMs: Date.now() - t0,
+          outputChars: 0,
+        })
+      }
+      pullTrace()
+      throw new DOMException('已中止', 'AbortError')
+    }
+    if (diagRef) {
+      const msg = String((e as Error)?.message ?? e)
+      diag.llmFinished(diagRef.turnId, {
+        call: diagRef.call,
+        transport: 'webchat',
+        ok: false,
+        elapsedMs: Date.now() - t0,
+        outputChars: 0,
+        // CDP 链路错误统一归 cdp 类;阶段轨迹会带更细的分段
+        errorKind: /超时|timeout/i.test(msg) ? 'timeout' : 'cdp',
+        serverMsg: msg.slice(0, 160),
+      })
+    }
+    pullTrace()
     throw e
   } finally {
     signal?.removeEventListener('abort', onAbort)

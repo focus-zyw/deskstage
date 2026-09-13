@@ -14,6 +14,8 @@
 // 与 runtimeMode 同款:UI 直订这里,不经 caps 转发,避免状态副本。
 import { useSyncExternalStore } from 'react'
 import type { ChatSession } from './ChatSession'
+import { diag } from '../diag/store'
+import { registerSecretValue } from '../diag/redact'
 import type { AsrConfig, VoiceChatConfig } from '../storage/configStore'
 import { rmsDbfs, MIC_SAMPLE_RATE } from '../engine/mic'
 import {
@@ -144,29 +146,46 @@ export function createVoiceSession(deps: VoiceSessionDeps, publish: Publish): Vo
     })
   }
 
-  /** 一段话音 → 识别 → 发给聊天。迟到链(被打断/新句顶掉)按代次丢弃 */
+  /** 一段话音 → 识别 → 发给聊天。迟到链(被打断/新句顶掉)按代次丢弃。
+   *  诊断:ASR 成功 → 指标并入本回合会话;失败/空结果 → 独立 mini 会话
+   *  (否则"为什么这次没有说话"在面板上完全不可见) */
   async function handleUtterance(pcm: Int16Array): Promise<void> {
     if (phase !== 'listening' || !activeMode) return
     const seq = ++turnSeq
     setPhase('transcribing')
+    const asrT0 = Date.now()
+    const audioMs = Math.round((pcm.length / MIC_SAMPLE_RATE) * 1000)
     let text = ''
+    let asrError: string | undefined
     try {
       text = (await deps.transcribe(pcm)).trim()
     } catch (e) {
+      asrError = String((e as Error)?.message ?? e).slice(0, 60)
       if (seq !== turnSeq) return
       setPhase('listening')
-      setNote(`识别失败:${String((e as Error)?.message ?? e).slice(0, 80)}`)
+      setNote(`识别失败:${asrError}`)
+      const miniId = `asr-${seq}-${asrT0}`
+      diag.beginTurn({ id: miniId, source: 'voice', text: '', ts: asrT0 })
+      diag.asrResult(miniId, { ms: Date.now() - asrT0, chars: 0, audioMs, errorKind: asrError })
+      diag.turnFinished(miniId, { outcome: 'failed', totalMs: Date.now() - asrT0, replyChars: 0, replySentences: 0 })
+      diag.finish(miniId)
       return
     }
+    const asrMs = Date.now() - asrT0
     if (seq !== turnSeq) return
     if (!text) {
       setPhase('listening')
       setNote('没听清,再试一次?')
+      const miniId = `asr-${seq}-${asrT0}`
+      diag.beginTurn({ id: miniId, source: 'voice', text: '', ts: asrT0 })
+      diag.asrResult(miniId, { ms: asrMs, chars: 0, audioMs, errorKind: 'empty' })
+      diag.turnFinished(miniId, { outcome: 'silent', totalMs: Date.now() - asrT0, replyChars: 0, replySentences: 0 })
+      diag.finish(miniId)
       return
     }
     setNote('')
     setPhase('thinking')
-    const r = await deps.chat.send(text, { voice: true })
+    const r = await deps.chat.send(text, { voice: true, diagAsr: { ms: asrMs, chars: text.length, audioMs } })
     if (seq !== turnSeq) return
     if (r !== 'accepted') {
       setPhase('listening')
@@ -331,6 +350,7 @@ export function installVoiceSession(init: {
       createTracker: (td) => createVoiceTracker(td),
       transcribe: async (pcm) => {
         const cfg = await init.loadConfig()
+        registerSecretValue(cfg.asr.apiKey)
         const provider = (await import('../engine/asr')).asrProviderById(cfg.asr.provider)
         return provider.transcribe(pcm, MIC_SAMPLE_RATE, cfg.asr.model)
       },

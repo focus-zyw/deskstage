@@ -27,6 +27,7 @@ import { planInterjectionTakeover, keepChoiceOpts } from '../dialogue/interjecti
 import { pushTurn, chatWindow } from '../dialogue/turnWindow'
 import { nameOf } from '../engine/persona'
 import { recentMoodHint } from '../engine/moodState'
+import { diag } from '../diag/store'
 import { noteEpisodeAbandoned } from '../storage/moodStore'
 import type { CurateReport } from '../engine/storyCurator'
 import { listEpisodes, loadRecentHistory, type Episode, type TopicRef } from '../storage/historyStore'
@@ -125,6 +126,8 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
   const generateAbort = useRef<AbortController | null>(null)
   // 当前正在播放的台词数组,供 onLineStart 回调预合成下一句语音
   const playingLines = useRef<DialogLine[]>([])
+  /** 当前演出回合的诊断会话(演出/插话链路的生成与 TTS 事件都归到它) */
+  const perfDiag = useRef<{ id: string; startedAt: number } | null>(null)
 
   // 演出播放器:逐句呈现委托给 ActorPresenter,这里只管推进节奏与记账
   const player = useRef<PerformancePlayer | null>(null)
@@ -137,7 +140,17 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
       onLineStart: (line, index) => {
         if (nowPlaying.current) nowPlaying.current.index = index
         pendingEpisode.current?.playedAccum.push(line) // 真实已播路径:跨接回播放持续累计
-        const handle = speakTracked(line.speaker, line.text, line.delivery, 'performance')
+        // 诊断:动作触发逐句记账;TTS 引擎事件带会话引用归组
+        if (perfDiag.current) {
+          diag.actionFired(perfDiag.current.id, { speaker: line.speaker, action: line.action ?? 'talk', seg: index })
+        }
+        const handle = speakTracked(
+          line.speaker,
+          line.text,
+          line.delivery,
+          'performance',
+          perfDiag.current ? { turnId: perfDiag.current.id, segIndex: index } : undefined,
+        )
         const next = playingLines.current[index + 1]
         if (next) prefetchVoice(next.speaker, next.text, next.delivery)
         const estimate = Math.round(bubbleDuration(line.text) / deliverySpeed(line.delivery))
@@ -205,6 +218,17 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
         nowPlaying.current = null
         // 收底拍:响底台词与表情定格 2.6s 给观众笑的时间,然后全员放松回 idle
         deps.presenter.settle(2600)
+        if (perfDiag.current) {
+          const played = p?.playedAccum ?? []
+          diag.turnFinished(perfDiag.current.id, {
+            outcome: 'spoke',
+            totalMs: Date.now() - perfDiag.current.startedAt,
+            replyChars: played.reduce((n, l) => n + l.text.length, 0),
+            replySentences: played.length,
+          })
+          diag.finish(perfDiag.current.id)
+          perfDiag.current = null
+        }
       },
       onStopped: () => {
         // 接回换场:播放权交给"反应回合+剩余剧本",不动账、不提交
@@ -217,6 +241,17 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
           lastLines.current = p.playedAccum
         }
         pendingEpisode.current = null
+        if (perfDiag.current) {
+          const played = p?.playedAccum ?? []
+          diag.turnFinished(perfDiag.current.id, {
+            outcome: 'cancelled',
+            totalMs: Date.now() - perfDiag.current.startedAt,
+            replyChars: played.reduce((n, l) => n + l.text.length, 0),
+            replySentences: played.length,
+          })
+          diag.finish(perfDiag.current.id)
+          perfDiag.current = null
+        }
       },
     })
   }
@@ -321,6 +356,9 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
         return 'A'
       }
       let reaction: DialogLine[] = []
+      const intjId = `intj-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+      const intjT0 = Date.now()
+      diag.beginTurn({ id: intjId, source: 'interjection', text: msg.text, ts: intjT0 })
       try {
         reaction = await generateInterjectionBatch({
           userText: msg.text,
@@ -329,9 +367,18 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
           bridgeTo: playingLines.current[index + 1]?.text ?? '',
           moodHint: recentMoodHint(p.playedAccum) || undefined,
           window: chatWindow(),
+          diagTurnId: intjId,
         })
       } catch {
         reaction = [] // 生成失败:跳过反应直接续播,不卡演出
+      } finally {
+        diag.turnFinished(intjId, {
+          outcome: reaction.length > 0 ? 'spoke' : 'silent',
+          totalMs: Date.now() - intjT0,
+          replyChars: reaction.reduce((n, l) => n + l.text.length, 0),
+          replySentences: reaction.length,
+        })
+        diag.finish(intjId)
       }
       const plan = planInterjectionTakeover({
         reaction,
@@ -529,6 +576,9 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
     // ① 缓存优先:peek 兼容条目 → adopt(topicPlan) CAS → adopted 才删缓存开播;
     //    stale 丢弃缓存(永久作废)走下方规划,绝不误播旧计划
     const manualTopic = req0.topic
+    const diagId = `perf-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    perfDiag.current = { id: diagId, startedAt: Date.now() }
+    diag.beginTurn({ id: diagId, source: 'performance', text: manualTopic ?? '' })
     const check = await buildPrefetchCheck(cfg, m, manualTopic, req0.intent)
     const entry = await peekCompatiblePrefetch(m, check)
     if (entry) {
@@ -604,6 +654,7 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
         topicPlan: plan,
         recentLines: lastLines.current,
         signal: ctrl.signal,
+        diagTurnId: perfDiag.current?.id,
       })
       if (ctrl.signal.aborted) {
         topicDirector.release(plan.planId) // 中止:剧本没播,不采纳不留幽灵话题

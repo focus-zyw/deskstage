@@ -19,6 +19,7 @@ import { startEnvPolling, stopEnvPolling } from '../engine/envAware'
 import { applyScreenshotHotkey } from '../capture'
 import { applyAppHotkeys } from '../hotkeys'
 import type { SettingsBridge } from './useSettingsSession'
+import { initDiagBridgeServer } from '../diag/bridge'
 
 /** 配置副作用:差分驱动。快照每次发布都与上一版逐字段比对,变化的才触发——
  *  首次回调只建立基线(启动初始化仍由各模块自行完成,避免双跑) */
@@ -62,6 +63,7 @@ export interface SettingsBridgeServerRefs {
 /** 初始化主窗侧监听与配置副作用;返回卸载函数(App 卸载时清理) */
 export function initSettingsBridgeServer(refs: SettingsBridgeServerRefs): Promise<UnlistenFn[]> {
   initConfigEffects()
+  void initDiagBridgeServer().catch(() => {}) // 诊断推送/动作受理:失败不影响主桥
   return Promise.all([
     listen<{
       kind: 'replay' | 'reset-layout' | 'reset-c' | 'privacy-tip' | 'support-thanks' | 'group-send'

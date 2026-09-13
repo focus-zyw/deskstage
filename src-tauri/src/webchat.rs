@@ -55,6 +55,71 @@ const CANCELLED: &str = "已取消";
 
 type WsStream = WebSocketStream<MaybeTlsStream<TokioTcpStream>>;
 
+/// 单次 ask 的阶段轨迹(诊断面板用):回答"网络 or CDP or 模型"问题——
+/// 卡在拉起浏览器(edge_ready 慢)= CDP/环境问题;发送后 first_text 久等 =
+/// 站点/模型慢;各阶段都正常但超时 = 模型问题。只记时间戳与阶段名,无正文。
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct AskTrace {
+    pub request_id: String,
+    pub stages: Vec<TraceStage>,
+    pub total_ms: u64,
+    pub error: Option<String>,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct TraceStage {
+    pub stage: String,
+    pub ms: u64,
+}
+
+/// 只留最近一次(前端在 ask 结束后立即拉取;不放 Tauri state,避免动调用方装配)
+static LAST_TRACE: Mutex<Option<AskTrace>> = Mutex::new(None);
+
+/// 阶段记录器:阶段名 + 相对 ask 起点的毫秒数
+struct TraceBuilder {
+    request_id: String,
+    t0: Instant,
+    stages: Vec<TraceStage>,
+}
+
+impl TraceBuilder {
+    fn new(request_id: &str) -> Self {
+        Self {
+            request_id: request_id.to_string(),
+            t0: Instant::now(),
+            stages: Vec::new(),
+        }
+    }
+
+    fn mark(&mut self, stage: &str) {
+        self.stages.push(TraceStage {
+            stage: stage.to_string(),
+            ms: self.t0.elapsed().as_millis() as u64,
+        });
+    }
+
+    fn finish(self, error: Option<String>) {
+        let total_ms = self.t0.elapsed().as_millis() as u64;
+        let trace = AskTrace {
+            request_id: self.request_id,
+            stages: self.stages,
+            total_ms,
+            error,
+        };
+        if let Ok(mut slot) = LAST_TRACE.lock() {
+            *slot = Some(trace);
+        }
+    }
+}
+
+/// 最近一次 ask 的阶段轨迹(只读;前端在 ask 完成后拉取并挂到诊断会话上)
+#[tauri::command]
+pub fn webchat_last_trace() -> Option<AskTrace> {
+    LAST_TRACE.lock().ok().and_then(|slot| slot.clone())
+}
+
 /// ask 并发与取消标记(进程内;并发 = 1,与 UI 单生成槽一致)
 #[derive(Default)]
 pub struct AskState {
@@ -389,7 +454,17 @@ pub async fn webchat_ask(
     }
     let ask_secs = timeout_ms.unwrap_or(ASK_TIMEOUT_SECS * 1000) / 1000;
     let profile = profile_dir(&app)?;
-    let result = run_ask(&profile, &state, &request_id, &prompt, &site, ask_secs).await;
+    let mut trace = TraceBuilder::new(&request_id);
+    let result = run_ask(
+        &profile,
+        &state,
+        &request_id,
+        &prompt,
+        &site,
+        ask_secs,
+        &mut trace,
+    )
+    .await;
     // 统一清理:任何退出路径都释放占用槽、清取消标记、恢复主覆盖层(角色回屏)
     if let Ok(mut slot) = state.inflight.lock() {
         *slot = None;
@@ -398,6 +473,8 @@ pub async fn webchat_ask(
         set.remove(&request_id);
     }
     show_main(&app, true);
+    // 阶段轨迹落库(成功/失败都留;前端 webchat_last_trace 拉取)
+    trace.finish(result.as_ref().err().cloned());
     result
 }
 
@@ -408,6 +485,7 @@ async fn run_ask(
     prompt: &str,
     site: &str,
     ask_secs: u64,
+    trace: &mut TraceBuilder,
 ) -> Result<String, String> {
     let a = adapter(site).ok_or_else(|| format!("未知站点: {site}"))?;
     let is_cancelled = || {
@@ -419,9 +497,11 @@ async fn run_ask(
     };
 
     let (mut port, mut browser) = ensure_edge(profile, site).await?;
+    trace.mark("edge_ready");
     let mut target_id = ensure_page_target(&mut browser, site).await?;
     drop(browser);
     let mut cdp = connect_page(port, &target_id).await?;
+    trace.mark("page_connected");
 
     // 等目标页上下文稳定(首次创建的标签页要从 about:blank 导航过来)
     for _ in 0..30 {
@@ -433,6 +513,7 @@ async fn run_ask(
             _ => tokio::time::sleep(Duration::from_millis(800)).await,
         }
     }
+    trace.mark("ctx_stable");
 
     // 发送阶段:随导航殉职 = 已发出的强信号,放行
     let send_expr = format!("({})({})", a.send_js(), json_arg(prompt));
@@ -449,11 +530,13 @@ async fn run_ask(
                 .get("beforeText")
                 .and_then(Value::as_str)
                 .map(String::from);
+            trace.mark("sent");
         }
         Err(e) => {
             if !is_context_lost(&e) {
                 return Err(e);
             }
+            trace.mark("sent_context_lost");
         }
     }
 
@@ -463,6 +546,7 @@ async fn run_ask(
     let watch_expr = format!("({})({})", a.snap_js(), json_arg(&head));
     let t0 = Instant::now();
     let mut saw_generating = false;
+    let mut saw_text = false;
     let mut last = String::new();
     let mut stable_since: Option<Instant> = None;
     loop {
@@ -477,8 +561,9 @@ async fn run_ask(
                 let snap: Value = serde_json::from_str(raw.as_str().unwrap_or("{}"))
                     .unwrap_or_else(|_| json!({}));
                 let busy = snap.get("busy").and_then(Value::as_bool).unwrap_or(false);
-                if busy {
+                if busy && !saw_generating {
                     saw_generating = true;
+                    trace.mark("first_busy");
                 }
                 if snap.get("turnError").and_then(Value::as_bool) == Some(true) {
                     return Err("站点返回了错误提示(发送失败)".into());
@@ -497,11 +582,16 @@ async fn run_ask(
                 let changed = before_text
                     .as_ref()
                     .is_some_and(|b| !text.is_empty() && &text != b);
+                if !text.is_empty() && !saw_text {
+                    saw_text = true;
+                    trace.mark("first_text");
+                }
                 let has_answer = !text.is_empty() && !truncated;
                 if (saw_generating || grew || changed) && !busy && has_answer {
                     if text == last {
                         let since = stable_since.get_or_insert_with(Instant::now);
                         if since.elapsed() >= Duration::from_millis(STABLE_MS) {
+                            trace.mark("stable_done");
                             return Ok(text);
                         }
                     } else {
@@ -516,6 +606,7 @@ async fn run_ask(
             Err(e) => {
                 // 上下文随导航销毁:重连同标签页的新上下文;标签页被关则重找/重建,
                 // 轮询状态保留。重连失败本身不再区分原因,下一轮按超时收敛
+                trace.mark("reconnect");
                 drop(cdp);
                 tokio::time::sleep(Duration::from_millis(1000)).await;
                 cdp = match connect_page(port, &target_id).await {
@@ -608,6 +699,26 @@ pub async fn webchat_probe(app: AppHandle, site: String) -> Result<ProbeResult, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 阶段轨迹:阶段按序追加、毫秒数单调、finish 落库 LAST_TRACE 且可取回
+    #[test]
+    fn trace_builder_records_and_publishes() {
+        let request_id = format!("trace-test-{}", std::process::id());
+        let mut trace = TraceBuilder::new(&request_id);
+        trace.mark("edge_ready");
+        std::thread::sleep(Duration::from_millis(2));
+        trace.mark("sent");
+        let err = Some("网页生成超时".to_string());
+        let total_hint = trace.t0.elapsed().as_millis() as u64;
+        trace.finish(err.clone());
+        let got = LAST_TRACE.lock().unwrap().clone().expect("轨迹应已落库");
+        assert_eq!(got.request_id, request_id);
+        assert_eq!(got.stages.len(), 2);
+        assert_eq!(got.stages[0].stage, "edge_ready");
+        assert!(got.stages[1].ms >= got.stages[0].ms);
+        assert!(got.total_ms >= total_hint.saturating_sub(1));
+        assert_eq!(got.error, err);
+    }
 
     /// 真机 CDP 冒烟:拉起专用 Edge(临时 profile)→ 浏览器级 Target 域 → 页面 evaluate。
     /// 会短暂弹出 Edge 窗口;CI 跳过,本机 `cargo test -- --ignored` 验证。

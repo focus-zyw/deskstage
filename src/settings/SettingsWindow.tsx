@@ -29,6 +29,7 @@ const MemoSettings = lazy(() => import('./tabs/MemoSettings').then((m) => ({ def
 const FavoritesSettings = lazy(() => import('./tabs/FavoritesSettings').then((m) => ({ default: m.FavoritesSettings })))
 const HistorySettings = lazy(() => import('./tabs/HistorySettings').then((m) => ({ default: m.HistorySettings })))
 const ChatLogSettings = lazy(() => import('./tabs/ChatLogSettings').then((m) => ({ default: m.ChatLogSettings })))
+const DiagSettings = lazy(() => import('./tabs/DiagSettings').then((m) => ({ default: m.DiagSettings })))
 const SupportSettings = lazy(() => import('./tabs/SupportSettings').then((m) => ({ default: m.SupportSettings })))
 
 export interface SettingsWindowProps {
@@ -60,6 +61,7 @@ const TAB_CONTENT: Record<SettingsTab, React.LazyExoticComponent<() => React.JSX
   favorites: FavoritesSettings,
   history: HistorySettings,
   chatlog: ChatLogSettings,
+  dev: DiagSettings,
   support: SupportSettings,
 }
 

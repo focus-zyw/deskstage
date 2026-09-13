@@ -13,6 +13,8 @@ import {
   type TtsProviderId,
 } from '../../storage/configStore'
 import { isLateNight } from '../timeAware'
+import { diag, type DiagRef } from '../../diag/store'
+import { registerSecretValue } from '../../diag/redact'
 import { CACHE_VERSION, diskGet, diskPut, hashOf, inflight, memGet, memPut } from './cache'
 import { gptsovitsProvider } from './gptsovits'
 import { localProvider } from './local'
@@ -310,8 +312,15 @@ function ensureCached(spec: LineSpec): Promise<ArrayBuffer> {
 
 // ---------- 播放 ----------
 
-/** 整段播放(worklet 不可用/缓存命中路径):wav 字节 → blobUrl → <audio> */
-function playViaElement(bytes: ArrayBuffer, my: number, channel: TtsChannel, gainDb: number): void {
+/** 整段播放(worklet 不可用/缓存命中路径):wav 字节 → blobUrl → <audio>。
+ *  diag:合成耗时/出声时刻/播完时长进诊断;segment 事件在 onended 统一发 */
+function playViaElement(
+  bytes: ArrayBuffer,
+  my: number,
+  channel: TtsChannel,
+  gainDb: number,
+  diagInfo?: { diagRef: DiagRef; synthMs?: number; cacheHit: boolean },
+): void {
   if (my !== epoch) return
   clearActive()
   activeChannel = channel
@@ -319,11 +328,30 @@ function playViaElement(bytes: ArrayBuffer, my: number, channel: TtsChannel, gai
   const audio = new Audio(url)
   audio.volume = Math.min(1, 10 ** (gainDb / 20)) // 深夜档降音量在播放端做
   currentEl = audio
+  let audibleAt = 0
   // 首帧声音真正开始播放(非仅 play() 调用成功)
-  audio.addEventListener('playing', () => markAudible(my), { once: true })
+  audio.addEventListener(
+    'playing',
+    () => {
+      audibleAt = Date.now()
+      markAudible(my)
+    },
+    { once: true },
+  )
   audio.onended = () => {
     URL.revokeObjectURL(url)
     markEnded(my)
+    if (diagInfo) {
+      diag.ttsSegment(diagInfo.diagRef.turnId, {
+        seg: diagInfo.diagRef.segIndex ?? 0,
+        epoch: my,
+        outcome: 'played',
+        synthMs: diagInfo.synthMs,
+        audibleAt: audibleAt || undefined,
+        playbackMs: audibleAt ? Date.now() - audibleAt : undefined,
+        cacheHit: diagInfo.cacheHit,
+      })
+    }
     if (currentEl === audio) {
       currentEl = null
       activeChannel = null
@@ -337,6 +365,14 @@ function playViaElement(bytes: ArrayBuffer, my: number, channel: TtsChannel, gai
     .catch((err) => {
       console.warn('[tts] play 被拒(自动播放策略?)', err)
       markEnded(my)
+      if (diagInfo) {
+        diag.ttsSegment(diagInfo.diagRef.turnId, {
+          seg: diagInfo.diagRef.segIndex ?? 0,
+          epoch: my,
+          outcome: 'failed',
+          reason: 'play 被拒(自动播放策略?)',
+        })
+      }
       if (currentEl === audio) {
         currentEl = null
         activeChannel = null
@@ -351,10 +387,25 @@ function streamingSupported(): boolean {
 
 /** 说一句:停掉当前语音,起播这句。fire-and-forget,失败静默。
  *  channel 决定仲裁优先级(chat<performance<utility<proactive);勿扰时全静。
+ *  diag(可选):诊断会话引用,传入后本段语音全生命周期进诊断环。
  *  返回领取的句序号(配合 speakTracked/waitSpokenEnd);-1 = 被更高优先级压制,本轮无声 */
-export function speak(speaker: Speaker, text: string, delivery?: string, channel: TtsChannel = 'chat'): number {
+export function speak(
+  speaker: Speaker,
+  text: string,
+  delivery?: string,
+  channel: TtsChannel = 'chat',
+  diagRef?: DiagRef,
+): number {
   // 低优先级不打断高优先级在播:直接丢弃本次请求(不改 epoch,不惊动当前语音)
   if (isBusy() && activeChannel && CHANNEL_PRIORITY[channel] < CHANNEL_PRIORITY[activeChannel]) {
+    if (diagRef) {
+      diag.ttsSegment(diagRef.turnId, {
+        seg: diagRef.segIndex ?? 0,
+        epoch: -1,
+        outcome: 'demoted',
+        reason: `被在播的 ${activeChannel} 语音压制(${channel} < ${CHANNEL_PRIORITY[activeChannel]} 优先级)`,
+      })
+    }
     if (!warnedDemoted) {
       warnedDemoted = true
       console.warn(`[tts] ${channel} 请求被在播的 ${activeChannel} 压制,本次无声`)
@@ -364,38 +415,58 @@ export function speak(speaker: Speaker, text: string, delivery?: string, channel
   // 进函数即领序号:若先发的句子合成慢,完成时序号已落后,不会反向覆盖新句
   const my = ++epoch
   flushWaiters()
+  if (diagRef) {
+    diag.ttsRequest(diagRef.turnId, {
+      seg: diagRef.segIndex ?? 0,
+      speaker,
+      chars: text.length,
+      channel,
+      epoch: my,
+      action: diagRef.action,
+    })
+  }
   void (async () => {
     try {
       const cfg = await getConfig()
       if (cfg.dnd) {
         markEnded(my)
-        return // 勿扰:全静(提醒走常驻卡片兜底)
+        if (diagRef) diag.ttsSegment(diagRef.turnId, { seg: diagRef.segIndex ?? 0, epoch: my, outcome: 'silent', reason: '勿扰(夜间免打扰)开启,全静' })
+        return
       }
       if (!cfg.voice.enabled) {
         markEnded(my)
+        if (diagRef) diag.ttsSegment(diagRef.turnId, { seg: diagRef.segIndex ?? 0, epoch: my, outcome: 'silent', reason: '角色语音开关关闭' })
         return
       }
       const spec = await resolveLine(cfg, speaker, text, delivery)
       if (!spec || my !== epoch) {
         markEnded(my)
+        if (diagRef && !spec) {
+          diag.ttsSegment(diagRef.turnId, { seg: diagRef.segIndex ?? 0, epoch: my, outcome: 'silent', reason: 'TTS 供应商未配置完整(缺密钥/音色)' })
+        }
         return
       }
+      // 持密处登记:诊断脱敏的精确值替换需要真实密钥原文
+      registerSecretValue(spec.creds.apiKey)
       const gainDb = isLateNight() ? -8 : 0
+      const seg = diagRef?.segIndex ?? 0
 
       // 缓存命中 / 预取在途:整段 wav 直接播,零流式开销(演出逐句主要走这里)
       const running = inflight.get(spec.hash)
       const cached = memGet(spec.hash) ?? (running ? undefined : await diskGet(spec.hash))
       if (cached) {
-        playViaElement(cached, my, channel, gainDb)
+        playViaElement(cached, my, channel, gainDb, diagRef ? { diagRef, synthMs: 0, cacheHit: true } : undefined)
         return
       }
       if (running) {
-        playViaElement(await running, my, channel, gainDb)
+        const startedAt = Date.now()
+        playViaElement(await running, my, channel, gainDb, diagRef ? { diagRef, synthMs: Date.now() - startedAt, cacheHit: true } : undefined)
         return
       }
 
       if (!streamingSupported()) {
-        playViaElement(await ensureCached(spec), my, channel, gainDb)
+        const whole = await ensureCached(spec)
+        playViaElement(whole, my, channel, gainDb, diagRef ? { diagRef, synthMs: 0, cacheHit: false } : undefined)
         return
       }
       const t0 = Date.now()
@@ -404,10 +475,13 @@ export function speak(speaker: Speaker, text: string, delivery?: string, channel
         stream = await spec.provider.synthesizeStream(requestOf(spec), spec.creds)
       } catch (e) {
         console.warn('[tts] 流式合成失败,降级整段', e)
-        playViaElement(await ensureCached(spec), my, channel, gainDb)
+        if (diagRef) diag.ttsSegment(diagRef.turnId, { seg, epoch: my, outcome: 'failed', reason: '流式合成失败,降级整段缓存' })
+        const whole = await ensureCached(spec)
+        playViaElement(whole, my, channel, gainDb, diagRef ? { diagRef, synthMs: Date.now() - t0, cacheHit: false } : undefined)
         return
       }
-      if (import.meta.env.DEV) console.info(`[tts] 流式首包 ${Date.now() - t0}ms(整句缓存未命中时首声随首包到达)`)
+      const firstPacketMs = Date.now() - t0
+      if (import.meta.env.DEV) console.info(`[tts] 流式首包 ${firstPacketMs}ms(整句缓存未命中时首声随首包到达)`)
       if (my !== epoch) {
         void stream.body.cancel().catch(() => {})
         return
@@ -415,6 +489,7 @@ export function speak(speaker: Speaker, text: string, delivery?: string, channel
       // 起播前一刻才掐上一句:首块到达即无缝接上
       clearActive()
       activeChannel = channel
+      let audibleAt = 0
       let sess: StreamSession | null = null
       try {
         sess = await streamPlayer.session(
@@ -422,16 +497,33 @@ export function speak(speaker: Speaker, text: string, delivery?: string, channel
           gainDb,
           () => {
             markEnded(my)
+            // 播完/收尾:补发带播放时长的段事件(首包事件已先行)
+            if (diagRef) {
+              diag.ttsSegment(diagRef.turnId, {
+                seg,
+                epoch: my,
+                outcome: 'played',
+                synthMs: firstPacketMs,
+                audibleAt: audibleAt || undefined,
+                playbackMs: audibleAt ? Date.now() - audibleAt : undefined,
+                cacheHit: false,
+              })
+            }
             if (sess && activeSession === sess && epoch === my) {
               activeSession = null
               activeChannel = null
             }
           },
-          () => markAudible(my), // worklet 首帧真实输出
+          () => {
+            audibleAt = Date.now()
+            markAudible(my) // worklet 首帧真实输出
+          },
         )
       } catch (e) {
         console.warn('[tts] 流式播放初始化失败,降级整段', e)
-        playViaElement(await ensureCached(spec), my, channel, gainDb)
+        if (diagRef) diag.ttsSegment(diagRef.turnId, { seg, epoch: my, outcome: 'failed', reason: '流式播放初始化失败,降级整段缓存' })
+        const whole = await ensureCached(spec)
+        playViaElement(whole, my, channel, gainDb, diagRef ? { diagRef, synthMs: firstPacketMs, cacheHit: false } : undefined)
         return
       }
       activeSession = sess
@@ -442,6 +534,7 @@ export function speak(speaker: Speaker, text: string, delivery?: string, channel
         console.warn('[tts] 流式播放中断(静默降级)', e)
         sess.stop()
         markEnded(my)
+        if (diagRef) diag.ttsSegment(diagRef.turnId, { seg, epoch: my, outcome: 'failed', reason: '流式播放中断(读取超时/断流)' })
       }
       if (full) processAndCache(spec.hash, full)
       else if (activeSession === sess) {
@@ -453,6 +546,14 @@ export function speak(speaker: Speaker, text: string, delivery?: string, channel
     } catch (e) {
       console.warn('[tts] 语音合成/播放失败(静默降级)', e)
       markEnded(my)
+      if (diagRef) {
+        diag.ttsSegment(diagRef.turnId, {
+          seg: diagRef.segIndex ?? 0,
+          epoch: my,
+          outcome: 'failed',
+          reason: String((e as Error)?.message ?? e).slice(0, 100),
+        })
+      }
     }
   })()
   return my
@@ -474,11 +575,28 @@ export function prefetchVoice(speaker: Speaker, text: string, delivery?: string)
   })()
 }
 
-/** 停止当前语音(演出停止/切换时) */
+/** 停止当前语音(演出停止/切换时)。诊断:ttsStopped(trigger=global) */
 export function stopSpeaking(): void {
+  stopSpeakingInner('global')
+}
+
+/** 内部统一停声:记录停声前的在播状态供诊断("取消后仍播放"排查的关键证据) */
+function stopSpeakingInner(trigger: 'cancel' | 'global', diagRef?: DiagRef): void {
+  const hadActiveSession = !!activeSession || !!(currentEl && !currentEl.paused)
+  const channel = activeChannel ?? undefined
+  const before = epoch
   epoch++
   flushWaiters()
   clearActive()
+  if (diagRef) {
+    diag.ttsStopped(diagRef.turnId, {
+      trigger,
+      hadActiveSession,
+      activeChannel: channel,
+      epochBefore: before,
+      epochAfter: epoch,
+    })
+  }
 }
 
 /** 一句语音的生命周期句柄 */
@@ -493,14 +611,31 @@ export interface SpeechHandle {
 
 /** 说一句并拿到完整生命周期句柄。返回 null = 被更高优先级压制,本轮无声。
  *  演出播放器用它做语音驱动的台词推进:气泡随首帧声音上屏,闭嘴随语音结束 */
-export function speakTracked(speaker: Speaker, text: string, delivery?: string, channel: TtsChannel = 'chat'): SpeechHandle | null {
-  const my = speak(speaker, text, delivery, channel)
+export function speakTracked(
+  speaker: Speaker,
+  text: string,
+  delivery?: string,
+  channel: TtsChannel = 'chat',
+  diagRef?: DiagRef,
+): SpeechHandle | null {
+  const my = speak(speaker, text, delivery, channel, diagRef)
   if (my < 0) return null
   return {
     started: waitAudible(my),
     ended: waitSpokenEnd(my),
     stop: () => {
-      if (epoch === my) stopSpeaking()
+      if (epoch === my) {
+        stopSpeakingInner('cancel', diagRef)
+      } else if (diagRef) {
+        // stop 时句已不是当前句(epoch 被后来的 speak/停声推进):句柄停声 no-op,
+        // 这正是"取消后声音还在"的候选现场,记下来供面板对照
+        diag.ttsSegment(diagRef.turnId, {
+          seg: diagRef.segIndex ?? 0,
+          epoch: my,
+          outcome: 'stop-noop',
+          reason: `stop 时已非当前句(epoch=${epoch} ≠ ${my}),停声未生效`,
+        })
+      }
     },
   }
 }

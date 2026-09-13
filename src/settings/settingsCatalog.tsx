@@ -18,6 +18,7 @@ export type SettingsTab =
   | 'favorites'
   | 'history'
   | 'chatlog'
+  | 'dev'
   | 'support'
 
 /** 左侧导航:偏好设置 / 数据管理 两组 */
@@ -198,6 +199,15 @@ export const SETTINGS_NAV: { group: string; items: { id: SettingsTab; label: str
           </svg>
         ),
       },
+      {
+        id: 'dev',
+        label: '链路诊断',
+        icon: (
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+          </svg>
+        ),
+      },
     ],
   },
   {
@@ -233,6 +243,7 @@ export const TAB_GROUP: Record<SettingsTab, string> = {
   favorites: '数据管理',
   history: '数据管理',
   chatlog: '数据管理',
+  dev: '数据管理',
   support: '支持',
 }
 
@@ -348,6 +359,10 @@ export const SETTINGS_SEARCH_INDEX: { tab: SettingsTab; card: string; label: str
   { tab: 'history', card: '演出历史', label: '演出历史', keywords: '回放 收藏 删除 历史' },
   // 聊天记录
   { tab: 'chatlog', card: '聊天记录', label: '聊天记录', keywords: '聊天 记录 对话 消息 回放 翻看 历史 微信 气泡' },
+  // 链路诊断(开发)
+  { tab: 'dev', card: '链路诊断', label: '链路诊断', keywords: '诊断 调试 dev 开发 回放 首token 延迟 tts llm 网页回退 cdp 排错 日志' },
+  { tab: 'dev', card: '详情捕获', label: '详情捕获', keywords: '诊断 详情 脱敏 隐私 捕获 十分钟 临时' },
+  { tab: 'dev', card: '诊断数据', label: '导出与清空', keywords: '诊断 导出 清空 诊断包' },
   // 支持作者
   { tab: 'support', card: '请作者喝杯奶茶', label: '支持作者', keywords: '支持 捐赠 打赏 赞助 收款码 微信 支付宝 抽奖' },
   { tab: 'support', card: '心意扭蛋机', label: '心意扭蛋机', keywords: '抽奖 扭蛋 单抽 十连 次数 保底 稀有' },

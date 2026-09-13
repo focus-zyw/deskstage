@@ -48,12 +48,15 @@ function newTurnId(): string {
 }
 import { speak, speakTracked, prefetchVoice } from '../engine/tts'
 import { streamVoiceReply } from '../engine/llmClient'
+import { diag, type DiagRef } from '../diag/store'
 
 export type SendResult = 'accepted' | 'busy' | 'empty'
 
 export interface SendOptions {
   /** 语音对话路径:首帧声音上屏 + 句级提交 + ended 驱动推进 */
   voice?: boolean
+  /** 语音路径的 ASR 结果摘要(结构,无正文):受理时并入本回合诊断会话 */
+  diagAsr?: { ms: number; chars: number; audioMs?: number; errorKind?: string }
 }
 
 export interface ChatSnapshot {
@@ -108,6 +111,8 @@ export interface ChatEngineDeps {
     toolNote?: string
     /** 回合记忆上下文(显式传入;实现不得再自读 memoryStore——"注入即所见") */
     memory?: TurnMemoryContext
+    /** 诊断会话 id(可选):传入后本次生成的请求进诊断环 */
+    diagTurnId?: string
   }): Promise<DialogLine[]>
   singleReply(
     target: Speaker,
@@ -115,6 +120,7 @@ export interface ChatEngineDeps {
     signal?: AbortSignal,
     toolNote?: string,
     memory?: TurnMemoryContext,
+    diagTurnId?: string,
   ): Promise<string>
   /** 角色工具协调(可选):用户回合先过工具系统——本句话要不要截图/识字/查记忆。
    *  返回的 note 由协调器渲染好(截断+不可信包裹),这里只透传给生成函数;
@@ -139,14 +145,15 @@ export interface ChatEngineDeps {
   ): void
   facts: {
     known(): Promise<string[]>
-    extract(text: string, known: string[]): Promise<FactCandidate[]>
+    extract(text: string, known: string[], diagTurnId?: string): Promise<FactCandidate[]>
     merge(candidates: FactCandidate[]): Promise<unknown>
   }
   tts: {
-    speak(who: Speaker, text: string): void
+    /** diag:诊断会话引用(可选),传入后 TTS 引擎按段发诊断事件 */
+    speak(who: Speaker, text: string, diag?: DiagRef): void
     /** 语音路径:生命周期句柄;null = 被更高优先级压制。返回句柄由会话持有,
      *  cancel() 时句柄级停声(不全局 stopSpeaking,不碰提醒/工具播报) */
-    speakTracked?(who: Speaker, text: string): SpeechHandle | null
+    speakTracked?(who: Speaker, text: string, diag?: DiagRef): SpeechHandle | null
     /** 预合成(不播):语音路径在播第 i 句时预合成第 i+1,句间零等待 */
     prefetch?(who: Speaker, text: string): void
   }
@@ -161,6 +168,8 @@ export interface ChatEngineDeps {
     memory?: TurnMemoryContext
     /** 句子入队回调(入队时机 = 消费方还在播上一句,正好预合成) */
     onQueued?(line: DialogLine): void
+    /** 诊断会话 id(可选) */
+    diagTurnId?: string
   }): AsyncGenerator<DialogLine>
   /** 回合记忆检索(缺省 = memoryStore.prepareTurnMemory;测试注入固定上下文) */
   prepareMemory?(input: { query: string; n?: number }): Promise<TurnMemoryContext>
@@ -183,8 +192,8 @@ export function createChatSession(
 ): ChatSession {
   const deps: ChatEngineDeps = {
     turnBatch: (input) => generateTurnBatch({ ...input, window: chatWindow() }),
-    singleReply: (target, userText, signal, toolNote, memory) =>
-      generateUserChatReply(target, userText, signal, toolNote, memory),
+    singleReply: (target, userText, signal, toolNote, memory, diagTurnId) =>
+      generateUserChatReply(target, userText, signal, toolNote, memory, diagTurnId),
     recordTurn: (who, text, meta) => {
       pushTurn({ who, text })
       void appendChatTurns([
@@ -201,14 +210,14 @@ export function createChatSession(
     },
     facts: {
       known: async () => topFacts(await getMemory(), 8),
-      extract: (text, known) => extractFacts(text, known),
+      extract: (text, known, diagTurnId) => extractFacts(text, known, diagTurnId),
       merge: (candidates) => mergeFacts(candidates),
     },
     tts: {
-      speak: (who, text) => {
-        void speak(who, text, undefined, 'chat')
+      speak: (who, text, d) => {
+        void speak(who, text, undefined, 'chat', d)
       },
-      speakTracked: (who, text) => speakTracked(who, text, undefined, 'voice'),
+      speakTracked: (who, text, d) => speakTracked(who, text, undefined, 'voice', d),
       prefetch: (who, text) => prefetchVoice(who, text),
     },
     streamTurn: (input) => streamVoiceReply(input),
@@ -237,6 +246,8 @@ export function createChatSession(
   // 当前在飞的取消源与语音句柄:cancel() 真取消的两个抓手
   let currentAbort: AbortController | null = null
   let currentHandle: SpeechHandle | null = null
+  /** 当前在飞回合的诊断会话 id(cancel 时发 cancelRequested 用) */
+  let currentTurnId: string | null = null
   const idleWaiters: Array<() => void> = []
 
   function emit(): void {
@@ -273,17 +284,44 @@ export function createChatSession(
   }
   let rotation: Speaker = 'A'
 
+  /** 后台事实提取:候选/合并决策进诊断环(id 级,无正文),提取正文绝不入诊断 */
   function backgroundFacts(text: string, turnId: string | null): void {
     void (async () => {
+      const t0 = Date.now()
       try {
         const known = await deps.facts.known()
-        const candidates = await deps.facts.extract(text, known)
+        const candidates = await deps.facts.extract(text, known, turnId ?? undefined)
+        type MergeSummary = { changed: number; addedIds: string[]; supersededIds: string[]; rejected: number }
+        let merged: MergeSummary | null = null
         if (candidates.length > 0) {
           // 来源随候选入 evidence:turnId 可定位聊天轮,excerpt 是"它为什么知道"
-          await deps.facts.merge(candidates.map((c) => ({ ...c, turnId, excerpt: text.slice(0, 120) })))
+          const result: unknown = await deps.facts.merge(
+            candidates.map((c) => ({ ...c, turnId, excerpt: text.slice(0, 120) })),
+          )
+          merged = result as MergeSummary | null
         }
-      } catch {
-        // 后台记忆提取:不阻塞、失败静默
+        if (turnId) {
+          diag.memoryWrite(turnId, {
+            candidates: candidates.length,
+            changed: merged?.changed ?? 0,
+            addedIds: merged?.addedIds ?? [],
+            supersededIds: merged?.supersededIds ?? [],
+            rejected: merged?.rejected ?? 0,
+            ms: Date.now() - t0,
+          })
+        }
+      } catch (e) {
+        if (turnId) {
+          diag.memoryWrite(turnId, {
+            candidates: 0,
+            changed: 0,
+            addedIds: [],
+            supersededIds: [],
+            rejected: 0,
+            ms: Date.now() - t0,
+            error: String((e as Error)?.message ?? e).slice(0, 120),
+          })
+        }
       }
     })()
   }
@@ -313,14 +351,47 @@ export function createChatSession(
       // 稳定轮 id:受理即定,贯穿 chatLog/提取/参考记忆;角色句以 parentTurnId 回链
       const turnId = newTurnId()
       const acceptedAt = Date.now()
+      // 诊断:回合受理即开会话(默认档只记结构:长度/语言/盐哈希/target)
+      diag.beginTurn({
+        id: turnId,
+        source: opts.voice ? 'voice' : 'chat',
+        text,
+        target: who,
+        groupAsk: GROUP_ASK_RE.test(text),
+        voice: !!opts.voice,
+        ts: acceptedAt,
+      })
+      diag.detailText(turnId, { textKind: 'input', text })
+      if (opts.diagAsr) diag.asrResult(turnId, opts.diagAsr)
       host.presentUser(text, who)
       host.onUserActive()
       deps.recordTurn('user', text, { entryId: turnId, ts: acceptedAt })
       // 应答全程不阻塞受理返回:调用方发完即清输入,应答靠落盘订阅实时冒出
       void (async () => {
         const sleep = (ms: number) => new Promise<void>((r) => deps.clock.setTimeout(r, ms))
+        currentTurnId = turnId
+        // 诊断:回合结果在所有出口统一收口(呈现句数即回复句数;语音是否真出声由 tts 段事件回答)
+        let presentCount = 0
+        let replyChars = 0
+        const finishTurn = (outcome: 'spoke' | 'silent' | 'failed' | 'cancelled'): void => {
+          diag.turnFinished(turnId, {
+            outcome,
+            totalMs: Date.now() - acceptedAt,
+            replyChars,
+            replySentences: presentCount,
+          })
+          // 定稿:once 模式的详情捕获在此自动关闭;后台记忆写入仍会迟到追加
+          diag.finish(turnId)
+        }
         // 回合记忆上下文:受理后检索一次;prompt 注入与 present/record 引用全部由它派生
+        const memoryT0 = Date.now()
         const memory = (await deps.prepareMemory?.({ query: text, n: 3 }).catch(() => emptyTurnMemory())) ?? emptyTurnMemory()
+        // 诊断:注入了哪些记忆 id、检索候选与落选原因(id/分数/枚举,无正文)
+        diag.memorySelection(turnId, {
+          ms: Date.now() - memoryT0,
+          selected: memory.selected.map((s) => ({ id: s.id, score: s.score, source: s.source })),
+          candidates: memory.candidates.map((c) => ({ id: c.id, score: c.score, outcome: c.outcome })),
+        })
         const withTrace = (await deps.includeTrace?.().catch(() => false)) ?? false
         const turnTrace = withTrace ? traceOf(memory) : undefined
         let turnRefsCombined: ChatMemoryRef[] = [...memory.refs]
@@ -340,7 +411,11 @@ export function createChatSession(
         }
         /** 呈现一句(首句携带参考记忆徽标;TTS 故障不吞呈现) */
         const present = (l: DialogLine): number => {
+          presentCount += 1
+          replyChars += l.text.length
           const holdMs = chatLineHoldMs(l.text)
+          diag.actionFired(turnId, { speaker: l.speaker, action: l.action ?? 'talk', seg: presentCount - 1 })
+          diag.detailText(turnId, { textKind: 'reply', text: l.text, seg: presentCount - 1 })
           try {
             host.presentTurn({
               speaker: l.speaker,
@@ -360,14 +435,26 @@ export function createChatSession(
           // 永不进 backgroundFacts——不可信数据不入长期记忆
           let toolNote: string | undefined
           if (deps.tools) {
+            const toolsT0 = Date.now()
             const prep = await deps.tools({ userText: text }, abort.signal)
-            if (cancelled() || abort.signal.aborted) return
+            diag.toolsPrepare(turnId, {
+              ms: Date.now() - toolsT0,
+              clarified: !!prep.clarify,
+              hasNote: !!prep.note,
+              memoryRefs: prep.memoryRefs?.length ?? 0,
+            })
+            if (cancelled() || abort.signal.aborted) {
+              finishTurn('cancelled')
+              return
+            }
             if (prep.clarify) {
               // 意图含糊:角色反问一句,本回合到此为止(不烧一次生成)
-              host.presentTurn({ speaker: who, text: prep.clarify, holdMs: chatLineHoldMs(prep.clarify) })
-              deps.tts.speak(who, prep.clarify)
+              const clar: DialogLine = { speaker: who, text: prep.clarify, action: 'talk' }
+              present(clar)
+              deps.tts.speak(who, prep.clarify, { turnId, segIndex: 0 })
               deps.recordTurn(who, prep.clarify)
               deps.clock.setTimeout(() => host.clearUser(text), 400)
+              finishTurn('spoke')
               return
             }
             toolNote = prep.note
@@ -379,8 +466,8 @@ export function createChatSession(
           const groupAsk = GROUP_ASK_RE.test(text)
           /** 语音单句:气泡随首帧声音上屏;台词播完才提交(句级提交——打断时
            *  "说到一半"的句子不进上下文,与 barge-in 截断语义对齐) */
-          const speakLine = async (l: DialogLine): Promise<void> => {
-            const handle = deps.tts.speakTracked?.(l.speaker, l.text) ?? null
+          const speakLine = async (l: DialogLine, seg: number): Promise<void> => {
+            const handle = deps.tts.speakTracked?.(l.speaker, l.text, { turnId, segIndex: seg }) ?? null
             // 先登记再等首声:cancel 从登记那一刻起就能句柄级停声,无死角
             if (handle) currentHandle = handle
             if (!handle || (await handle.started) !== 'audible') {
@@ -407,21 +494,27 @@ export function createChatSession(
               if (cancelled()) return
               const nxt = lines[i + 1]
               if (nxt) deps.tts.prefetch?.(nxt.speaker, nxt.text)
-              await speakLine(lines[i])
+              await speakLine(lines[i], i)
             }
           }
           /** 整段兜底:turnBatch 失败回落单句应答(原语义) */
           const batchFallback = async (): Promise<DialogLine[]> => {
             let batch: DialogLine[] | null = null
             try {
-              batch = await deps.turnBatch({ userText: text, target: who, groupAsk, signal: abort.signal, toolNote, memory })
+              batch = await deps.turnBatch({ userText: text, target: who, groupAsk, signal: abort.signal, toolNote, memory, diagTurnId: turnId })
             } catch (e) {
               if (cancelled() || (e as Error)?.name === 'AbortError') throw e
+              diag.fallback(turnId, {
+                call: 'turnBatch',
+                from: 'turnBatch',
+                reason: `整批失败 → 单句回落:${String((e as Error)?.message ?? e).slice(0, 100)}`,
+              })
               batch = null // 静默回落
             }
             if (!batch || batch.length === 0) {
+              diag.fallback(turnId, { call: 'singleReply', from: 'turnBatch', reason: '整批为空 → 单句回落' })
               batch = [
-                { speaker: who, text: await deps.singleReply(who, text, abort.signal, toolNote, memory), action: 'talk' },
+                { speaker: who, text: await deps.singleReply(who, text, abort.signal, toolNote, memory, turnId), action: 'talk' },
               ]
             }
             return batch
@@ -438,18 +531,30 @@ export function createChatSession(
               signal: abort.signal,
               toolNote,
               memory,
+              diagTurnId: turnId,
               onQueued: (l) => deps.tts.prefetch?.(l.speaker, l.text),
             })
             if (iter) {
               try {
                 for await (const l of iter) {
-                  if (cancelled()) return
-                  await speakLine(l)
+                  if (cancelled()) {
+                    finishTurn('cancelled')
+                    return
+                  }
+                  await speakLine(l, spoken)
                   spoken += 1
                 }
               } catch (e) {
-                if (cancelled() || (e as Error)?.name === 'AbortError') return
+                if (cancelled() || (e as Error)?.name === 'AbortError') {
+                  finishTurn('cancelled')
+                  return
+                }
                 streamBroken = true
+                diag.fallback(turnId, {
+                  call: 'streamVoice',
+                  from: 'stream',
+                  reason: `流式中断 → ${spoken > 0 ? '保留已说部分' : '整段回落'}:${String((e as Error)?.message ?? e).slice(0, 100)}`,
+                })
               }
             }
             if (spoken === 0) {
@@ -459,11 +564,15 @@ export function createChatSession(
             }
           } else {
             const batch = await batchFallback()
-            for (const l of batch) {
-              if (cancelled()) return // 取消:迟到内容不再呈现
+            for (let i = 0; i < batch.length; i++) {
+              const l = batch[i]
+              if (cancelled()) {
+                finishTurn('cancelled')
+                return // 取消:迟到内容不再呈现
+              }
               const holdMs = present(l)
               try {
-                deps.tts.speak(l.speaker, l.text)
+                deps.tts.speak(l.speaker, l.text, { turnId, segIndex: i })
               } catch {
                 // TTS 故障不吞落盘(文本呈现与提交照常)
               }
@@ -474,16 +583,23 @@ export function createChatSession(
           if (!cancelled()) {
             deps.clock.setTimeout(() => host.clearUser(text), 400)
           }
+          // runBatch 逐句间被取消会静默返回,不能按 spoke 定稿
+          finishTurn(cancelled() ? 'cancelled' : presentCount > 0 ? 'spoke' : 'silent')
         } catch (e) {
-          if (cancelled() || (e as Error)?.name === 'AbortError') return
+          if (cancelled() || (e as Error)?.name === 'AbortError') {
+            finishTurn('cancelled')
+            return
+          }
           host.clearUser(text)
           host.presentFallback({
             speaker: who,
             text: '（信号不好，没听清…再说一遍？）',
           })
+          finishTurn('failed')
         } finally {
           if (gen === generation) {
             currentAbort = null
+            currentTurnId = null
             busy = false
             emit()
             resolveIdle()
@@ -497,6 +613,13 @@ export function createChatSession(
     cancel(): void {
       if (!busy) return
       generation += 1 // 在飞代次全部作废:迟到响应/收尾路径按 cancelled() 丢弃
+      if (currentTurnId) {
+        diag.cancelRequested(currentTurnId, {
+          generation,
+          hadHandle: !!currentHandle,
+          hadAbort: !!currentAbort,
+        })
+      }
       currentAbort?.abort() // 真取消:LLM 请求/流读取随 signal 断开,不烧额度
       currentHandle?.stop() // 句柄级停声:只停本轮语音,不碰提醒/工具播报
       currentHandle = null

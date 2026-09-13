@@ -1,9 +1,11 @@
 import { getConfig } from '../storage/configStore'
 import type { UserProfile } from '../storage/configStore'
-import { complete, completeStream } from './llmGateway'
+import { complete, completeStream, type GatewayDiag } from './llmGateway'
 import { createSentenceSplitter } from './sentenceSplitter'
 import { buildMessages, renderAudienceContext, renderViewerBrief, type UserContext } from './promptBuilder'
 import { mergeMessages, webchatAsk } from './webchat'
+import { diag, type LlmCallKind } from '../diag/store'
+import { scrubSecrets } from '../diag/redact'
 import {
   getMemory,
   prepareTurnMemory,
@@ -87,6 +89,47 @@ function serverMessage(e: unknown): string {
   }
 }
 
+/** 端点 host(诊断展示用,只留 host 不留路径与参数) */
+function hostOf(baseUrl: string): string | undefined {
+  try {
+    return new URL(baseUrl).host
+  } catch {
+    return undefined
+  }
+}
+
+/** llm_started 埋点(prompt 结构一次记全;turnId 缺省 = 本调用不进诊断) */
+function noteLlmStart(
+  turnId: string | undefined,
+  call: LlmCallKind,
+  transport: 'api' | 'webchat',
+  cfg: { model: string; baseUrl: string },
+  messages: { role: string; content: string }[],
+  opts: { contextLines?: number; timeoutMs?: number } = {},
+): void {
+  if (!turnId) return
+  const chars = messages.map((m) => String(m.content).length)
+  const promptChars = chars.reduce((a, b) => a + b, 0)
+  const systemChars = messages.reduce((a, m, i) => (m.role === 'system' ? a + chars[i] : a), 0)
+  diag.llmStarted(turnId, {
+    call,
+    transport,
+    model: transport === 'api' ? cfg.model : undefined,
+    endpointHost: transport === 'api' ? hostOf(cfg.baseUrl) : undefined,
+    promptChars,
+    systemChars,
+    userChars: promptChars - systemChars,
+    contextLines: opts.contextLines ?? 0,
+    timeoutMs: opts.timeoutMs,
+  })
+}
+
+/** 回退原因的短文案(强制 scrub,面板直接展示) */
+function fallbackReason(e: unknown): string {
+  const raw = (e as Error)?.message || String(e)
+  return scrubSecrets(raw).slice(0, 120)
+}
+
 /** 调用 OpenAI 兼容 /chat/completions，返回原始文本。HTTP 细节在 llmGateway;
  *  这里固定创作参数:温度 1.1(要放得开)、90s 超时,可被外部中止。
  *  jsonMode=false 用于纯文本应答(戳一戳吐槽/聊天回复):这些调用本就不该强迫
@@ -95,8 +138,9 @@ async function chatRaw(
   messages: { role: string; content: string }[],
   signal?: AbortSignal,
   jsonMode = true,
+  diagRef?: GatewayDiag,
 ): Promise<string> {
-  return complete({ messages, temperature: 1.1, maxTokens: 4000, jsonMode, timeoutMs: 90_000, signal })
+  return complete({ messages, temperature: 1.1, maxTokens: 4000, jsonMode, timeoutMs: 90_000, signal, diag: diagRef })
 }
 
 /** 解析并规范化 LLM 输出:交给 dialogSchema 统一处理(容忍围栏/混杂文本,
@@ -141,6 +185,8 @@ export interface GenerateDialogRequest {
   /** 预生成模式:上下文只预览不消费——注入冷却/recap 消费挂到 script.adoption,
    *  真正开播时由播放侧调 adoptDeferredContext 一次性提交(预生成零副作用) */
   deferContextAdoption?: boolean
+  /** 诊断会话 id(可选):点播导演在 play 时起会话,传入后本集生成进诊断环 */
+  diagTurnId?: string
 }
 
 /**
@@ -148,7 +194,7 @@ export interface GenerateDialogRequest {
  * 失败自动重试 1 次（含 JSON 不合规），仍失败抛错，由调用方兜底。
  */
 export async function generateDialog(req: GenerateDialogRequest): Promise<PerformanceScript> {
-  const { mode, topicPlan, recentLines, signal, continueFromPrevious = false, deferContextAdoption } = req
+  const { mode, topicPlan, recentLines, signal, continueFromPrevious = false, deferContextAdoption, diagTurnId } = req
   const topic = topicPlan.card.title
   const cfg = await getConfig()
   const memory = await prepareTurnMemory({ query: topic, n: 8 })
@@ -207,8 +253,9 @@ export async function generateDialog(req: GenerateDialogRequest): Promise<Perfor
     return script
   }
   if (cfg.webchatEnabled) {
+    noteLlmStart(diagTurnId, 'dialog', 'webchat', cfg, messages, { timeoutMs: 180_000 })
     try {
-      const raw = await webchatAsk(mergeMessages(messages), signal, 180_000)
+      const raw = await webchatAsk(mergeMessages(messages), signal, 180_000, diagTurnId ? { turnId: diagTurnId, call: 'dialog' } : undefined)
       const script = parseDialog(raw)
       // 结构不合格 → 抛错回落 API 通道重新生成,不让死抉择/残缺剧本上台;
       // 掷中抉择点但模型没给 → 同样回落 API 通道(那边有定点修复闸门兜着)
@@ -217,15 +264,17 @@ export async function generateDialog(req: GenerateDialogRequest): Promise<Perfor
     } catch (e) {
       if (signal?.aborted || (e as Error)?.name === 'AbortError') throw e
       console.warn('[webchat] 网页生成失败,本次回退 API:', e)
+      if (diagTurnId) diag.fallback(diagTurnId, { call: 'dialog', from: 'webchat', reason: fallbackReason(e) })
     }
   }
+  noteLlmStart(diagTurnId, 'dialog', 'api', cfg, messages, { timeoutMs: 90_000 })
   let lastErr: unknown = new Error('未知错误')
   let noJsonMode = false // 该端点不支持 response_format 时降级(400 判定)
   let repairedOnce = false // 每次生成只做一次定点修复
   for (let attempt = 0; attempt < 2; attempt++) {
     if (signal?.aborted) throw new DOMException('已中止', 'AbortError')
     try {
-      const raw = await chatRaw(messages, signal, !noJsonMode)
+      const raw = await chatRaw(messages, signal, !noJsonMode, diagTurnId ? { turnId: diagTurnId, call: 'dialog' } : undefined)
       let choiceRejected: unknown
       let script = parseDialog(raw, 4, { onChoiceRejected: (v) => { choiceRejected = v } })
       // 结构不合格先做一次定点修复(最小改动,不整体重写);拿不回可播放结构才吃掉重试/走兜底
@@ -502,6 +551,8 @@ export async function generateUserChatReply(
   toolNote?: string,
   /** 回合记忆上下文(显式传入;缺省才自取——"注入即所见"的单一来源) */
   memory?: TurnMemoryContext,
+  /** 诊断会话 id(可选) */
+  diagTurnId?: string,
 ): Promise<string> {
   const cfg = await getConfig()
   const factList = memory ? memory.promptFacts : (await prepareTurnMemory({ query: userText, n: 3 })).promptFacts
@@ -521,8 +572,9 @@ export async function generateUserChatReply(
   // 外部取消(打断/新一轮)与内部超时合流:任一触发即真断请求
   const onAbort = () => ctrl.abort()
   signal?.addEventListener('abort', onAbort, { once: true })
+  noteLlmStart(diagTurnId, 'singleReply', 'api', cfg, messages, { timeoutMs: 8_000 })
   try {
-    let raw = (await chatRaw(messages, ctrl.signal, false)).trim()
+    let raw = (await chatRaw(messages, ctrl.signal, false, diagTurnId ? { turnId: diagTurnId, call: 'singleReply' } : undefined)).trim()
     if (raw.startsWith('{')) {
       try {
         const obj = JSON.parse(raw) as { text?: unknown; content?: unknown }
@@ -599,6 +651,8 @@ export async function generateTurnBatch(input: {
   toolNote?: string
   /** 回合记忆上下文(显式传入;缺省才自取) */
   memory?: TurnMemoryContext
+  /** 诊断会话 id(可选):ChatSession 传入后本请求进诊断环 */
+  diagTurnId?: string
 }): Promise<DialogLine[]> {
   const cfg = await getConfig()
   const factList = input.memory ? input.memory.promptFacts : (await prepareTurnMemory({ query: input.userText, n: 3 })).promptFacts
@@ -637,8 +691,9 @@ ${rescueDiscipline()}`,
   const timer = setTimeout(() => ctrl.abort(new DOMException('超时', 'TimeoutError')), 12_000)
   const onAbort = () => ctrl.abort()
   input.signal?.addEventListener('abort', onAbort, { once: true })
+  noteLlmStart(input.diagTurnId, 'turnBatch', 'api', cfg, messages, { contextLines: input.window.length, timeoutMs: 12_000 })
   try {
-    const raw = await chatRaw(messages, ctrl.signal)
+    const raw = await chatRaw(messages, ctrl.signal, true, input.diagTurnId ? { turnId: input.diagTurnId, call: 'turnBatch' } : undefined)
     return validateTurnBatch(parseDialog(raw, 1).before, input.target, { maxLines: input.groupAsk ? 3 : 2 }) ?? []
   } finally {
     clearTimeout(timer)
@@ -660,6 +715,8 @@ export async function generateInterjectionBatch(input: {
    *  插话发生在集内,本集蒸馏尚未提交,持久档里还没有这集的情绪 */
   moodHint?: string
   window: { who: TurnWho; text: string }[]
+  /** 诊断会话 id(可选):演出中插话的生成进诊断环 */
+  diagTurnId?: string
 }): Promise<DialogLine[]> {
   const cfg = await getConfig()
   const persona = `${duoShortPersona()};${soloShortPersona('C')}`
@@ -688,8 +745,9 @@ ${rescueDiscipline()}`,
   ]
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(new DOMException('超时', 'TimeoutError')), 12_000)
+  noteLlmStart(input.diagTurnId, 'interject', 'api', cfg, messages, { contextLines: input.window.length, timeoutMs: 12_000 })
   try {
-    const raw = await chatRaw(messages, ctrl.signal)
+    const raw = await chatRaw(messages, ctrl.signal, true, input.diagTurnId ? { turnId: input.diagTurnId, call: 'interject' } : undefined)
     return validateTurnBatch(parseDialog(raw, 1).before, input.target, { maxLines: 3 }) ?? []
   } finally {
     clearTimeout(timer)
@@ -721,6 +779,8 @@ export async function generateLiveReply(
   batch: LiveDanmakuBrief[],
   recentReplies: string[],
   signal?: AbortSignal,
+  /** 诊断会话 id(可选) */
+  diagTurnId?: string,
 ): Promise<LivePetAction> {
   const cfg = await getConfig()
   const mem = await getMemory()
@@ -753,6 +813,7 @@ ${soloRescueDiscipline()}`,
     jsonMode: true,
     timeoutMs: 10_000,
     signal,
+    diag: diagTurnId ? { turnId: diagTurnId, call: 'liveSingle' } : undefined,
   })
   const m = raw.match(/\{[\s\S]*\}/)
   if (!m) throw new Error('弹幕决策未返回 JSON')
@@ -777,6 +838,8 @@ export async function generateLiveReplyBatch(
   batch: LiveDanmakuBrief[],
   recentReplies: string[],
   deps: { webchatAsk: typeof webchatAsk } = { webchatAsk },
+  /** 诊断会话 id(可选):弹幕会话的网页生成进诊断环 */
+  diagTurnId?: string,
 ): Promise<LiveBatchReply[]> {
   const cfg = await getConfig()
   const memory = await prepareTurnMemory({ query: batch.map((d) => d.content).join(' '), n: 3 })
@@ -797,7 +860,8 @@ action 只能是这些词之一:${[...VALID_ACTIONS].join('|')}。${brief ? `\n$
 ${soloRescueDiscipline()}`
 
   const prompt = `${system}\n\n${danmakuList}`
-  const raw = await deps.webchatAsk(prompt, undefined, 180_000)
+  noteLlmStart(diagTurnId, 'liveBatch', 'webchat', cfg, [{ role: 'system', content: system }, { role: 'user', content: danmakuList }], { timeoutMs: 180_000 })
+  const raw = await deps.webchatAsk(prompt, undefined, 180_000, diagTurnId ? { turnId: diagTurnId, call: 'liveBatch' } : undefined)
   const replies = sanitizeLiveReplyBatch(raw, batch.length)
   if (replies.length === 0) throw new Error('网页攒批回复全部无效')
   return replies
@@ -834,8 +898,11 @@ export function sanitizeLiveReplyBatch(raw: string, batchLength: number): LiveBa
 export async function extractFacts(
   userText: string,
   known: string[],
+  /** 诊断会话 id(可选):后台记忆提取默认不记,ChatSession 会传 */
+  diagTurnId?: string,
 ): Promise<FactCandidate[]> {
   const cats: FactCategory[] = ['identity', 'preference', 'habit', 'people', 'event', 'other']
+  const cfg = await getConfig()
   // slot 白名单 = memorySlots 的封闭词表;白名单外的 slot 由清洗归 undefined
   const slotList = MEMORY_SLOTS.join('|')
   // 第一道隐私闸:禁止规则在提取 prompt 就生效(第二道在 mergeFacts 入库前)
@@ -852,8 +919,9 @@ export async function extractFacts(
   ]
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(new DOMException('超时', 'TimeoutError')), 6_000)
+  noteLlmStart(diagTurnId, 'facts', 'api', cfg, messages, { timeoutMs: 6_000 })
   try {
-    const raw = await chatRaw(messages, ctrl.signal)
+    const raw = await chatRaw(messages, ctrl.signal, true, diagTurnId ? { turnId: diagTurnId, call: 'facts' } : undefined)
     const m = raw.match(/\{[\s\S]*\}/)
     if (!m) return []
     const obj = JSON.parse(m[0]) as { facts?: unknown }
@@ -1151,9 +1219,26 @@ export async function* streamVoiceReply(input: {
   memory?: TurnMemoryContext
   /** 句子入队回调(入队时机 = 消费方还在播上一句,正好预合成) */
   onQueued?(line: DialogLine): void
+  /** 诊断会话 id(可选):语音路径的生成请求进诊断环 */
+  diagTurnId?: string
 }): AsyncGenerator<DialogLine> {
   const cfg = await getConfig()
-  if (cfg.webchatEnabled) throw new Error('网页版生成通道不支持流式')
+  if (cfg.webchatEnabled) {
+    // 网页通道不支持流式:抛错由 ChatSession 整段回落(诊断记一条回退链)
+    if (input.diagTurnId) {
+      diag.llmFinished(input.diagTurnId, {
+        call: 'streamVoice',
+        transport: 'webchat',
+        ok: false,
+        elapsedMs: 0,
+        outputChars: 0,
+        errorKind: 'unsupported',
+        serverMsg: '网页版生成通道不支持流式',
+      })
+      diag.fallback(input.diagTurnId, { call: 'streamVoice', from: 'stream', reason: '网页版开启,流式不可用 → 整段回落' })
+    }
+    throw new Error('网页版生成通道不支持流式')
+  }
   const factList = input.memory ? input.memory.promptFacts : (await prepareTurnMemory({ query: input.userText, n: 3 })).promptFacts
   const p: UserProfile = cfg.userProfile
   const persona = soloShortPersona(input.target)
@@ -1176,20 +1261,27 @@ export async function* streamVoiceReply(input: {
   let wake: (() => void) | null = null
   let done = false
   let failure: unknown = null
+  const streamT0 = Date.now()
   const push = (text: string) => {
     const line: DialogLine = { speaker: input.target, text, action: 'talk' }
     sentences += 1
+    // 首句闭合 = 语音"开口延迟"的决定项(网络 TTFB + 凑满一句的最短文本)
+    if (sentences === 1 && input.diagTurnId) {
+      diag.llmFirstSentence(input.diagTurnId, { call: 'streamVoice', ms: Date.now() - streamT0 })
+    }
     queue.push(line)
     input.onQueued?.(line)
     wake?.()
     wake = null
   }
+  noteLlmStart(input.diagTurnId, 'streamVoice', 'api', cfg, messages, { timeoutMs: 30_000 })
   const pump = completeStream({
     messages,
     temperature: 1.1,
     maxTokens: 400,
     timeoutMs: 30_000,
     signal: input.signal,
+    diag: input.diagTurnId ? { turnId: input.diagTurnId, call: 'streamVoice' } : undefined,
     onDelta: (piece) => {
       for (const s of splitter.feed(piece)) push(s)
     },

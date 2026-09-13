@@ -13,6 +13,7 @@ import { getConfig } from '../storage/configStore'
 import { noteActivity } from './proactiveScheduler'
 import { showProp } from './propEffects'
 import { createGiftReactions, type GiftReactions } from './giftReactions'
+import { diag } from '../diag/store'
 import type { Speaker } from '../performer/dialogSchema'
 
 export interface LiveReply {
@@ -138,21 +139,39 @@ async function pump(s: Session): Promise<void> {
   s.callTimes.push(now)
   // 在途仲裁:请求前记录版本,期间礼物感谢插队呈现(revision 变化)则本批结果作废
   const revision = s.reactions.gate.capture()
+  // 诊断:每批一次 AI 决策 = 一个弹幕会话(输入是批内弹幕拼接的结构信息)
+  const batchId = `live-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  const batchT0 = Date.now()
+  const briefs = batch.map((d) => ({ username: d.username, content: d.content }))
+  diag.beginTurn({ id: batchId, source: 'danmaku', text: briefs.map((b) => b.content).join(' '), ts: batchT0 })
+  const finishBatch = (outcome: 'spoke' | 'silent' | 'failed'): void => {
+    diag.turnFinished(batchId, {
+      outcome,
+      totalMs: Date.now() - batchT0,
+      replyChars: 0,
+      replySentences: 0,
+    })
+    diag.finish(batchId)
+  }
   try {
-    const briefs = batch.map((d) => ({ username: d.username, content: d.content }))
     let replies: { pick: number; reply: string; speaker: Speaker; action: string }[]
     try {
       if (s.webchat) {
-        replies = await generateLiveReplyBatch(briefs, s.recentReplies)
+        replies = await generateLiveReplyBatch(briefs, s.recentReplies, undefined, batchId)
       } else {
-        const r = await generateLiveReply(briefs, s.recentReplies)
+        const r = await generateLiveReply(briefs, s.recentReplies, undefined, batchId)
         replies = r.reply ? [r] : []
       }
     } catch (webchatErr) {
       // 网页档失败回退 API 单条版;没 Key 则无从回退,按丢批处理(与现有 catch 语义一致)
       if (!s.hasApiKey) throw webchatErr
       console.warn('[live] 网页攒批回复失败,本次回退 API 单条', webchatErr)
-      const r = await generateLiveReply(briefs, s.recentReplies)
+      diag.fallback(batchId, {
+        call: 'liveBatch',
+        from: 'webchat',
+        reason: `网页攒批失败 → API 单条:${String((webchatErr as Error)?.message ?? webchatErr).slice(0, 100)}`,
+      })
+      const r = await generateLiveReply(briefs, s.recentReplies, undefined, batchId)
       replies = r.reply ? [r] : []
     }
     // 等待期间已下播 → 丢弃;礼物感谢已插队 → 丢弃(否则会顶掉刚上的感谢气泡)
@@ -169,9 +188,11 @@ async function pump(s: Session): Promise<void> {
       if (r !== replies[replies.length - 1]) await new Promise((res) => setTimeout(res, 3_500))
     }
     // replies 为空 = AI 判定这批都不值得回,静默丢批
+    finishBatch(replies.length > 0 ? 'spoke' : 'silent')
   } catch (e) {
     // 单批失败不致命(网络/超时/解析),静默丢批等下一批;控制台留痕排障
     console.warn('[live] 弹幕决策失败(丢批)', e)
+    finishBatch('failed')
   } finally {
     s.busy = false
   }

@@ -402,15 +402,32 @@ function pushEvidence(fact: MemoryFact, ev: MemoryEvidence): void {
 }
 
 /** 批量合并提取候选:规则闸 → 近似/槽位去重 → slot 冲突替代 → 新建。
- *  命中规则的候选直接丢弃(第二道闸,第一道在提取 prompt)。返回处理数 */
-export async function mergeFacts(candidates: FactCandidate[]): Promise<number> {
-  if (candidates.length === 0) return 0
+ *  命中规则的候选直接丢弃(第二道闸,第一道在提取 prompt)。
+ *  返回写入摘要(诊断用:id 级决策,正文永不回传) */
+export interface MergeFactsSummary {
+  changed: number
+  /** 新建条目的 id */
+  addedIds: string[]
+  /** 被 slot 冲突替代的旧条目 id */
+  supersededIds: string[]
+  /** 被规则闸/空内容拒绝的候选数 */
+  rejected: number
+}
+
+export async function mergeFacts(candidates: FactCandidate[]): Promise<MergeFactsSummary> {
+  if (candidates.length === 0) return { changed: 0, addedIds: [], supersededIds: [], rejected: 0 }
   return mutateMemory((mem) => {
     const now = Date.now()
     let changed = 0
+    let rejected = 0
+    const addedIds: string[] = []
+    const supersededIds: string[] = []
     for (const c of candidates) {
       const content = c.content.trim().slice(0, 120)
-      if (!content) continue
+      if (!content) {
+        rejected++
+        continue
+      }
       const slot = isMemorySlot(c.slot) ? c.slot : undefined
       const value = slot && c.value ? normalizeSlotValue(slot, c.value) : undefined
       const sensitivity = maxSensitivity(
@@ -422,6 +439,7 @@ export async function mergeFacts(candidates: FactCandidate[]): Promise<number> {
         c.volatility ?? (slot ? SLOT_POLICY[slot].volatility : defaultVolatility(c.category ?? 'other'))
       // 规则闸:命中禁止规则的内容永不入库
       if (mem.rules.some((r) => ruleMatches({ content, slot, category: c.category ?? 'other', sensitivity }, r))) {
+        rejected++
         continue
       }
       // 定位既有条目:优先同 slot 同值,其次精确同文,最后 2-gram 近似(≥0.85 双向)
@@ -447,7 +465,10 @@ export async function mergeFacts(candidates: FactCandidate[]): Promise<number> {
           existing.lastConfirmedAt = now
         } else if (verdict === 'supersede') {
           existing.status = 'superseded'
-          mem.facts.push(newFact({ ...c, content, category: c.category ?? existing.category, slot, value, sensitivity, volatility }, now))
+          supersededIds.push(existing.id)
+          const fresh = newFact({ ...c, content, category: c.category ?? existing.category, slot, value, sensitivity, volatility }, now)
+          mem.facts.push(fresh)
+          addedIds.push(fresh.id)
         } else {
           pushEvidence(existing, {
             turnId: c.turnId ?? null,
@@ -459,11 +480,13 @@ export async function mergeFacts(candidates: FactCandidate[]): Promise<number> {
         changed++
         continue
       }
-      mem.facts.push(newFact({ ...c, content, category: c.category ?? 'other', slot, value, sensitivity, volatility }, now))
+      const fresh = newFact({ ...c, content, category: c.category ?? 'other', slot, value, sensitivity, volatility }, now)
+      mem.facts.push(fresh)
+      addedIds.push(fresh.id)
       changed++
     }
     mem.facts = evict(mem.facts)
-    return { data: mem, result: changed }
+    return { data: mem, result: { changed, addedIds, supersededIds, rejected } }
   })
 
   function newFact(

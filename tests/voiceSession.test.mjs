@@ -112,7 +112,11 @@ test('PTT 全链:开会话→按住收音→松开→识别→send(voice:true)�
   await tick()
   await tick()
   assert.equal(w.latest().phase, 'thinking')
-  assert.deepEqual(w.calls.send, [{ text: '你好呀', opts: { voice: true } }])
+  // 诊断埋点后 opts 携带 diagAsr(耗时为运行时值,只验形状)
+  assert.equal(w.calls.send.length, 1)
+  assert.equal(w.calls.send[0].text, '你好呀')
+  assert.equal(w.calls.send[0].opts.voice, true)
+  assert.equal(w.calls.send[0].opts.diagAsr.chars, 3)
 
   w.resolveIdle() // 回答结束
   await tick()
@@ -228,7 +232,16 @@ test('免按键模式:speech-end 直接触发转写并发送', async () => {
   await tick()
   await tick()
   assert.equal(w.latest().phase, 'thinking')
-  assert.deepEqual(w.calls.send, [{ text: '你好呀', opts: { voice: true } }])
+  // 诊断埋点后 opts 携带 diagAsr(耗时为运行时值,只验形状)
+  assert.equal(w.calls.send.length, 1)
+  assert.equal(w.calls.send[0].text, '你好呀')
+  assert.equal(w.calls.send[0].opts.voice, true)
+  assert.deepEqual(
+    { voice: w.calls.send[0].opts.voice, asrShape: typeof w.calls.send[0].opts.diagAsr },
+    { voice: true, asrShape: 'object' },
+  )
+  assert.equal(typeof w.calls.send[0].opts.diagAsr.ms, 'number')
+  assert.equal(w.calls.send[0].opts.diagAsr.chars, 3)
   assert.equal(w.latest().stormLatched, false)
 })
 

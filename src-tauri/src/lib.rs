@@ -164,6 +164,7 @@ pub fn run() {
             webchat::webchat_login,
             webchat::webchat_probe,
             webchat::webchat_main_visible,
+            webchat::webchat_last_trace,
             ocr::ocr_clipboard,
             ocr::clipboard_image_base64,
             video_save::video_save_from_url,

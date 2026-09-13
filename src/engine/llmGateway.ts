@@ -1,8 +1,17 @@
 // 通用 LLM 请求网关:创作(相声/段子)与工具型调用(翻译等)共用的底层通道。
 // 与 llmClient 的分界:这里只管"发请求拿文本",不带任何人设/记忆/话题上下文;
 // 温度、超时、json_mode 由调用方按用途给——创作 1.1,翻译等稳定性调用 0.2。
+// 诊断:调用方传 diag(turnId+call 标签)才发事件——llmFinished(耗时/状态/错误分类)
+// 与流式 llmFirstToken;错误分类是"网络 or 超时 or HTTP or 模型"问题的第一层归纳。
 import { getConfig, inTauri } from '../storage/configStore'
+import { diag, type LlmCallKind, type LlmErrorKind } from '../diag/store'
 import { openEndpointStream, requestEndpoint, type EndpointKind } from './endpointProxy'
+
+/** 诊断引用:不传 = 本次调用不进诊断环 */
+export interface GatewayDiag {
+  turnId: string
+  call: LlmCallKind
+}
 
 /** 多模态消息内容:纯文本,或 文本+图片 混排(OpenAI 兼容视觉格式,智谱/通义等一致) */
 export type GatewayContent =
@@ -27,6 +36,28 @@ export interface CompletionOptions {
   jsonMode?: boolean
   timeoutMs?: number
   signal?: AbortSignal
+  /** 诊断引用(可选):turnId + 调用点标签,传入才记诊断事件 */
+  diag?: GatewayDiag
+}
+
+/** 错误分类:超时/HTTP 状态/网络层/解析/空响应/取消,供诊断与面板归纳 */
+export function classifyLlmError(e: unknown): {
+  cancelled: boolean
+  errorKind?: LlmErrorKind
+  status?: number
+  serverMsg?: string
+} {
+  const err = e as Error & { status?: number; serverMsg?: string; name?: string }
+  if (err?.name === 'AbortError') return { cancelled: true }
+  if (err?.name === 'TimeoutError') return { cancelled: false, errorKind: 'timeout' }
+  if (typeof err?.status === 'number') {
+    return { cancelled: false, errorKind: 'http', status: err.status, serverMsg: err.serverMsg }
+  }
+  const msg = String(err?.message ?? err ?? '')
+  if (/JSON/i.test(msg)) return { cancelled: false, errorKind: 'parse' }
+  if (/空响应/.test(msg)) return { cancelled: false, errorKind: 'empty' }
+  if (/网络|请求失败|fetch|network|连接|ECONN|timeout of/i.test(msg)) return { cancelled: false, errorKind: 'network' }
+  return { cancelled: false, errorKind: 'unknown' }
 }
 
 /** 响应解析与错误分类:status/serverMsg 挂在错误对象上,供 describeLlmError 展示 */
@@ -64,10 +95,14 @@ export async function complete(options: CompletionOptions): Promise<string> {
     timeoutMs = 90_000,
     signal,
   } = options
+  const d = options.diag
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(new DOMException('超时', 'TimeoutError')), timeoutMs)
-  const onAbort = () => ctrl.abort()
+  // 透传外部 signal 的 abort reason:调用方的内部超时(如 turnBatch 12s)原本在这里
+  // 被抹成普通 AbortError,与用户取消无法区分——诊断会失真,回落语义也会跟着错
+  const onAbort = () => ctrl.abort(signal?.reason)
   signal?.addEventListener('abort', onAbort, { once: true })
+  let t0 = 0
   try {
     const cfg = await getConfig()
     const model = options.model?.trim() || cfg.model
@@ -84,6 +119,9 @@ export async function complete(options: CompletionOptions): Promise<string> {
         ? { thinking: { type: 'disabled' } }
         : {}),
     })
+    // 计时从请求真正发出起算(getConfig 的缓存读不算网络延迟)
+    t0 = Date.now()
+    let out: string
     if (!inTauri) {
       // 浏览器预览:无 Tauri 运行时,走原生 fetch(靠对方 CORS 头;仅开发调试)
       const res = await fetch(`${baseUrl}/chat/completions`, {
@@ -92,16 +130,43 @@ export async function complete(options: CompletionOptions): Promise<string> {
         body,
         signal: ctrl.signal,
       })
-      return await readCompletion({ status: res.status, text: () => res.text() })
+      out = await readCompletion({ status: res.status, text: () => res.text() })
+    } else {
+      // 桌面端:配置端点代理——origin/鉴权由 Rust 解析,自定义 http/https 端点
+      // (LM Studio、局域网网关等)不再依赖静态 scope 与 CORS
+      const { status, body: respBytes } = await requestEndpoint(kind, '/chat/completions', {
+        body,
+        timeoutMs,
+        signal: ctrl.signal,
+      })
+      out = await readCompletion({ status, text: () => new TextDecoder().decode(respBytes) })
     }
-    // 桌面端:配置端点代理——origin/鉴权由 Rust 解析,自定义 http/https 端点
-    // (LM Studio、局域网网关等)不再依赖静态 scope 与 CORS
-    const { status, body: respBytes } = await requestEndpoint(kind, '/chat/completions', {
-      body,
-      timeoutMs,
-      signal: ctrl.signal,
-    })
-    return await readCompletion({ status, text: () => new TextDecoder().decode(respBytes) })
+    if (d) {
+      diag.llmFinished(d.turnId, {
+        call: d.call,
+        transport: 'api',
+        ok: true,
+        elapsedMs: Date.now() - t0,
+        outputChars: out.length,
+      })
+    }
+    return out
+  } catch (e) {
+    if (d && t0 > 0) {
+      const c = classifyLlmError(e)
+      diag.llmFinished(d.turnId, {
+        call: d.call,
+        transport: 'api',
+        ok: false,
+        cancelled: c.cancelled,
+        elapsedMs: Date.now() - t0,
+        outputChars: 0,
+        errorKind: c.errorKind,
+        status: c.status,
+        serverMsg: c.serverMsg,
+      })
+    }
+    throw e
   } finally {
     clearTimeout(timer)
     signal?.removeEventListener('abort', onAbort)
@@ -163,12 +228,20 @@ export async function completeStream(
     signal,
     onDelta,
   } = options
+  const d = options.diag
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(new DOMException('超时', 'TimeoutError')), timeoutMs)
-  const onAbort = () => ctrl.abort()
+  // 同 complete:透传外部 abort reason,超时不再伪装成用户取消
+  const onAbort = () => ctrl.abort(signal?.reason)
   signal?.addEventListener('abort', onAbort, { once: true })
   const fulls: string[] = []
+  let t0 = 0
+  let firstTokenAt = 0
   const parse = createSseParser((piece) => {
+    if (d && t0 > 0 && firstTokenAt === 0) {
+      firstTokenAt = Date.now()
+      diag.llmFirstToken(d.turnId, { call: d.call, transport: 'api', ms: firstTokenAt - t0 })
+    }
     fulls.push(piece)
     onDelta(piece)
   })
@@ -177,6 +250,7 @@ export async function completeStream(
     const model = options.model?.trim() || cfg.model
     const baseUrl = cfg.baseUrl
     const body = JSON.stringify({ model, messages, temperature, max_tokens: maxTokens, stream: true })
+    t0 = Date.now()
     if (!inTauri) {
       const res = await fetch(`${baseUrl}/chat/completions`, {
         method: 'POST',
@@ -198,7 +272,7 @@ export async function completeStream(
         if (value) parse.push(new TextDecoder().decode(value, { stream: true }))
       }
       parse.end()
-      return fulls.join('')
+      return finishStreamOk(fulls.join(''))
     }
     const { stream } = openEndpointStream(kind, '/chat/completions', {
       body,
@@ -212,9 +286,38 @@ export async function completeStream(
       if (value) parse.push(new TextDecoder().decode(value, { stream: true }))
     }
     parse.end()
-    return fulls.join('')
+    return finishStreamOk(fulls.join(''))
+  } catch (e) {
+    if (d && t0 > 0) {
+      const c = classifyLlmError(e)
+      diag.llmFinished(d.turnId, {
+        call: d.call,
+        transport: 'api',
+        ok: false,
+        cancelled: c.cancelled,
+        elapsedMs: Date.now() - t0,
+        outputChars: fulls.join('').length,
+        errorKind: c.errorKind,
+        status: c.status,
+        serverMsg: c.serverMsg,
+      })
+    }
+    throw e
   } finally {
     clearTimeout(timer)
     signal?.removeEventListener('abort', onAbort)
+  }
+
+  function finishStreamOk(full: string): string {
+    if (d && t0 > 0) {
+      diag.llmFinished(d.turnId, {
+        call: d.call,
+        transport: 'api',
+        ok: true,
+        elapsedMs: Date.now() - t0,
+        outputChars: full.length,
+      })
+    }
+    return full
   }
 }
