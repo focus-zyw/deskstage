@@ -1,17 +1,18 @@
 // 气泡主题存储:用户在"气泡工坊"里自建的气泡外观主题,落盘 appData/data/bubble-themes.json。
+// 文件读写统一走 Rust 状态中心(data_get/data_set:进程锁串行化 + 原子写 + store-changed
+// 广播到两窗),本模块不再直接碰文件——设置窗写入后主窗经广播载荷即时采纳。
 // 主题即数据:全部字段落到 CSS 变量,应用时经 applyBubbleThemeTo 注入根节点;
 // 内置 comic/glass 走 :root[data-bubble] 变量集,自定义主题走 inline style 变量(优先级更高)。
 // 浏览器预览(无 Tauri 运行时)降级 localStorage,与 configStore 同一套约定。
 // 上限 10 个防膨胀;id 强制 custom_ 前缀,永不可能与内置主题撞键;坏数据拒收不静默修。
 import { useSyncExternalStore } from 'react'
-import { readTextFile, writeTextFile, exists, mkdir } from '@tauri-apps/plugin-fs'
-import { appDataDir, join } from '@tauri-apps/api/path'
+import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 import { withFileLock } from './writeLock'
 import { inTauri } from './configStore'
-import { notifyMainStoreChanged } from './crossWindow'
 
 const LS_KEY = 'vc-bubble-themes'
-const FILE_NAME = 'bubble-themes.json'
+const STORE_ID = 'bubble-themes'
 
 /** 自定义气泡主题数量上限 */
 export const BUBBLE_THEME_LIMIT = 10
@@ -141,42 +142,47 @@ let loaded = false
 export async function ensureBubbleThemesLoaded(): Promise<void> {
   if (loaded) return
   loaded = true
-  const next = await withFileLock('bubble-themes', async () => {
-    if (!inTauri) {
-      try {
-        const raw = localStorage.getItem(LS_KEY)
-        return raw ? sanitizeBubbleThemes(JSON.parse(raw)) : []
-      } catch (e) {
-        console.warn('气泡主题读取失败，按空处理', e)
-        return []
-      }
-    }
+  if (!inTauri) {
     try {
-      const base = await appDataDir()
-      const dir = await join(base, 'data')
-      if (!(await exists(dir))) await mkdir(dir, { recursive: true })
-      const file = await join(dir, FILE_NAME)
-      if (await exists(file)) return sanitizeBubbleThemes(JSON.parse(await readTextFile(file)))
-      await writeTextFile(file, JSON.stringify({ version: 1, themes: [] }, null, 2))
+      const raw = localStorage.getItem(LS_KEY)
+      publish(raw ? sanitizeBubbleThemes(JSON.parse(raw)) : [])
     } catch (e) {
       console.warn('气泡主题读取失败，按空处理', e)
+      publish([])
     }
-    return []
-  })
-  publish(next)
+    return
+  }
+  try {
+    // Rust 状态中心:进程锁串行 + 内存缓存,坏数据按空仓处理
+    publish(sanitizeBubbleThemes(await invoke<unknown>('data_get', { store: STORE_ID })))
+  } catch (e) {
+    console.warn('气泡主题读取失败，按空处理', e)
+    publish([])
+  }
 }
 
-/** 主窗侧刷新:设置窗改了主题后经 store-changed 触发,强制重读磁盘 */
-export async function refreshBubbleThemesFromDisk(): Promise<void> {
-  loaded = false
-  await ensureBubbleThemesLoaded()
+/** 写型操作共用:全量替换落盘(Rust 原子写 + 广播),返回清洗后的全量列表 */
+async function persistThemes(merged: BubbleTheme[]): Promise<BubbleTheme[]> {
+  if (!inTauri) {
+    localStorage.setItem(LS_KEY, JSON.stringify({ version: 1, themes: merged }))
+    publish(merged)
+    return merged
+  }
+  const saved = await invoke<unknown>('data_set', {
+    store: STORE_ID,
+    value: { version: 1, themes: merged },
+  })
+  const next = sanitizeBubbleThemes(saved)
+  loaded = true
+  publish(next)
+  return next
 }
 
 /** 新增或更新一个主题(按 id upsert);超限抛错由调用方提示 */
 export async function saveBubbleTheme(theme: BubbleTheme): Promise<BubbleTheme[]> {
   const clean = sanitizeBubbleTheme(theme)
   if (!clean) throw new Error('主题数据不合法')
-  const next = await withFileLock('bubble-themes', async () => {
+  return withFileLock(STORE_ID, async () => {
     const current = snapshot
     const idx = current.findIndex((t) => t.id === clean.id)
     const merged =
@@ -186,40 +192,23 @@ export async function saveBubbleTheme(theme: BubbleTheme): Promise<BubbleTheme[]
           ? null
           : [...current, clean]
     if (merged === null) throw new Error(`自定义气泡主题最多 ${BUBBLE_THEME_LIMIT} 个`)
-    if (!inTauri) {
-      localStorage.setItem(LS_KEY, JSON.stringify({ version: 1, themes: merged }))
-      return merged
-    }
-    const base = await appDataDir()
-    const dir = await join(base, 'data')
-    if (!(await exists(dir))) await mkdir(dir, { recursive: true })
-    const file = await join(dir, FILE_NAME)
-    await writeTextFile(file, JSON.stringify({ version: 1, themes: merged }, null, 2))
-    return merged
+    return persistThemes(merged)
   })
-  publish(next)
-  notifyMainStoreChanged('bubble-themes')
-  return next
 }
 
 /** 删除一个主题;id 不存在时静默(幂等) */
 export async function removeBubbleTheme(id: string): Promise<BubbleTheme[]> {
-  const next = await withFileLock('bubble-themes', async () => {
-    const merged = snapshot.filter((t) => t.id !== id)
-    if (!inTauri) {
-      localStorage.setItem(LS_KEY, JSON.stringify({ version: 1, themes: merged }))
-      return merged
-    }
-    const base = await appDataDir()
-    const dir = await join(base, 'data')
-    if (!(await exists(dir))) await mkdir(dir, { recursive: true })
-    const file = await join(dir, FILE_NAME)
-    await writeTextFile(file, JSON.stringify({ version: 1, themes: merged }, null, 2))
-    return merged
+  return withFileLock(STORE_ID, async () => persistThemes(snapshot.filter((t) => t.id !== id)))
+}
+
+if (inTauri) {
+  // Rust 状态中心的广播(store_set 成功后发给全部窗口,含写者,幂等采纳):
+  // 设置窗写入后主窗即时拿到新主题,不再依赖"通知后回磁盘重读"的旧通路
+  void listen<{ store?: string; value?: unknown }>('store-changed', (e) => {
+    if (e.payload?.store !== STORE_ID || e.payload.value === undefined) return
+    loaded = true
+    publish(sanitizeBubbleThemes(e.payload.value))
   })
-  publish(next)
-  notifyMainStoreChanged('bubble-themes')
-  return next
 }
 
 // ---------- 应用:主题数据 → 根节点 CSS 变量 ----------

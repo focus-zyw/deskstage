@@ -1,12 +1,12 @@
-// 配置外置:appData/data/config.json。首次运行写入默认值,之后读文件。
-// 改配置两条路：编辑该文件后重启，或在应用内设置面板保存（立即生效）。
+// 配置外置:appData/data/config.json,唯一写者是 Rust 统一状态中心(config_service)。
+// 两个 WebView 都不直接碰文件:读经 config_get(版本迁移+凭据库密钥回填),写经
+// config_set(Rust 进程锁串行化 + 密钥事务 + 临时文件 rename 原子写 + config-changed
+// 广播到全部窗口)。字段级 schema 校验/清洗/默认值单源在本文件(FIELD_SANITIZERS 表),
+// Rust 不复制 schema。保存失败时磁盘与内存旧值原样保留(回滚)。
 // API Key / B站 Cookie 等敏感值不在此文件——只进系统凭据库(见 ./secrets.ts)。
 // 浏览器预览(无 Tauri 运行时)降级为 localStorage,保证 dev 调试可用。
 import { useSyncExternalStore } from 'react'
-import { readTextFile, writeTextFile, exists, mkdir } from '@tauri-apps/plugin-fs'
-import { appDataDir, join } from '@tauri-apps/api/path'
-import { emitTo, listen } from '@tauri-apps/api/event'
-import { getCurrentWindow } from '@tauri-apps/api/window'
+import { listen } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
 import { withFileLock } from './writeLock'
 import { readSecret, writeSecret, type SecretId } from './secrets'
@@ -697,127 +697,176 @@ export function sanitizeCharacters(v: unknown): CharactersConfig {
   }
 }
 
-let cache: Promise<AppConfig> | null = null
+/** 清洗锁定的聊天主题:空/非法回 null(从话题池随机) */
+function sanitizeTopicOverride(v: unknown): string | null {
+  return typeof v === 'string' && v.trim() ? v.trim() : null
+}
 
-/** 从任意 JSON 对象构造合法配置(字段级清洗,文件与 localStorage 共用;导出供测试) */
-export function sanitizeConfig(obj: unknown): AppConfig {
-  const o = (obj ?? {}) as Record<string, unknown>
+/** 清洗性别纪律:只认'男'/'女',逐槽回落出厂默认 */
+function sanitizeGenders(v: unknown): { a: '女' | '男'; b: '女' | '男'; c: '女' | '男' } {
+  const g = (v: unknown, dft: '女' | '男'): '女' | '男' => (v === '男' || v === '女' ? v : dft)
+  const gd = (v ?? {}) as Record<string, unknown>
+  return { a: g(gd.a, '女'), b: g(gd.b, '男'), c: g(gd.c, '女') }
+}
+
+/** 清洗环境感知冷却:10 分钟(防刷屏)~ 1440 分钟(一天);非法/缺省回 6 小时(历史行为) */
+function sanitizeEnvNoteCooldownMin(v: unknown): number {
+  const n = Number(v)
+  return Number.isFinite(n) && n > 0 ? Math.min(1440, Math.max(10, Math.round(n))) : 360
+}
+
+/** 清洗久坐提醒:时长钳位 15~120 分钟,非法回 45 */
+function sanitizeBreakReminder(v: unknown): { enabled: boolean; minutes: number } {
+  const b = (v ?? {}) as Record<string, unknown>
   return {
-    apiKey: String(o.apiKey || DEFAULT_CONFIG.apiKey),
-    apiKeys: sanitizeApiKeys(o.apiKeys),
-    voice: sanitizeVoice(o.voice),
-    baseUrl: String(o.baseUrl || DEFAULT_CONFIG.baseUrl),
-    model: String(o.model || DEFAULT_CONFIG.model),
-    autoReplayMin: sanitizeReplayMin(o.autoReplayMin),
-    characters: sanitizeCharacters(o.characters),
-    charactersHidden: o.charactersHidden === true,
-    topicOverride:
-      typeof o.topicOverride === 'string' && o.topicOverride.trim()
-        ? o.topicOverride.trim()
-        : null,
-    theme: o.theme === 'light' ? 'light' : 'dark',
-    ctrlBar: sanitizeCtrlBar(o.ctrlBar),
-    showWatermark: o.showWatermark === true,
-    choiceChance: clampNum(o.choiceChance, 0, 1, DEFAULT_CONFIG.choiceChance),
-    genders: ((): { a: '女' | '男'; b: '女' | '男'; c: '女' | '男' } => {
-      const g = (v: unknown, dft: '女' | '男'): '女' | '男' => (v === '男' || v === '女' ? v : dft)
-      const gd = (o.genders ?? {}) as Record<string, unknown>
-      return { a: g(gd.a, '女'), b: g(gd.b, '男'), c: g(gd.c, '女') }
-    })(),
-    screenshot: sanitizeScreenshot(o.screenshot),
-    hotkeys: sanitizeHotkeys(o.hotkeys),
-    userInterests: typeof o.userInterests === 'string' ? o.userInterests.trim() : '',
-    userProfile: sanitizeUserProfile(o.userProfile, typeof o.userInterests === 'string' ? o.userInterests : ''),
-    videoGen: sanitizeVideoGen(o.videoGen),
-    webchatEnabled: o.webchatEnabled === true,
-    webchatSite: o.webchatSite === 'doubao' ? 'doubao' : 'deepseek',
-    envSense: o.envSense !== false,
-    envNoteCooldownMin: ((): number => {
-      const n = Number(o.envNoteCooldownMin)
-      // 10 分钟(防刷屏)~ 1440 分钟(一天);非法/缺省回 6 小时(历史行为)
-      return Number.isFinite(n) && n > 0 ? Math.min(1440, Math.max(10, Math.round(n))) : 360
-    })(),
-    breakReminder: ((): { enabled: boolean; minutes: number } => {
-      const b = (o.breakReminder ?? {}) as Record<string, unknown>
-      return {
-        enabled: b.enabled === true,
-        minutes: Math.min(120, Math.max(15, Number(b.minutes) || 45)),
-      }
-    })(),
-    persona: ((): { a: string; b: string; c: string } => {
-      const pr = (o.persona ?? {}) as Record<string, unknown>
-      // 与设置页 textarea 的 maxLength 一致:写超长会被这里截断,别让 UI 放行存不下的文本
-      const cap = (x: unknown): string => (typeof x === 'string' ? x.trim().slice(0, 2000) : '')
-      return { a: cap(pr.a), b: cap(pr.b), c: cap(pr.c) }
-    })(),
-    names: ((): { a: string; b: string; c: string } => {
-      const nm = (o.names ?? {}) as Record<string, unknown>
-      const name = (x: unknown, dft: string): string => (typeof x === 'string' ? x.trim().slice(0, 12) : '') || dft
-      return { a: name(nm.a, '甲'), b: name(nm.b, '乙'), c: name(nm.c, '丙') }
-    })(),
-    memo: ((): { advanceMin: number } => {
-      const mm = (o.memo ?? {}) as Record<string, unknown>
-      const v = Number(mm.advanceMin)
-      return { advanceMin: Number.isFinite(v) && v >= 1 ? Math.min(1440, Math.round(v)) : 30 }
-    })(),
-    groupChat: sanitizeGroupChat(o.groupChat),
-    dnd: o.dnd === true,
-    dailyLinePack: o.dailyLinePack !== false,
-    proactivity:
-      o.proactivity === 'quiet' || o.proactivity === 'lively' ? o.proactivity : 'balanced',
-    translation: ((): TranslationConfig => {
-      const t = (o.translation ?? {}) as Record<string, unknown>
-      const code = (x: unknown, dft: string): string => {
-        const s = typeof x === 'string' ? x.trim().slice(0, 24) : ''
-        // 只放行 auto 与已知语言代码,手改配置文件写进奇怪值时回默认
-        return s === 'auto' || LANGUAGES.some((l) => l.code === s) ? s : dft
-      }
-      return {
-        sourceLanguage: code(t.sourceLanguage, DEFAULT_CONFIG.translation.sourceLanguage),
-        targetLanguage: code(t.targetLanguage, DEFAULT_CONFIG.translation.targetLanguage),
-        style:
-          t.style === 'literal' || t.style === 'polished'
-            ? t.style
-            : DEFAULT_CONFIG.translation.style,
-        autoSpeak: t.autoSpeak === true,
-      }
-    })(),
-    ocr: ((): OcrConfig => {
-      const d = DEFAULT_CONFIG.ocr
-      const c = (o.ocr ?? {}) as Record<string, unknown>
-      const str = (x: unknown, cap: number): string =>
-        typeof x === 'string' ? x.trim().slice(0, cap) : ''
-      // key 留空 = 关闭 AI 识别;地址/模型清空则回默认,防止拼出打不通的端点
-      return {
-        apiKey: str(c.apiKey, 200),
-        baseUrl: str(c.baseUrl, 200) || d.baseUrl,
-        model: str(c.model, 100) || d.model,
-        engine: c.engine === 'local' || c.engine === 'ai' ? c.engine : 'auto',
-      }
-    })(),
-    live: ((): LiveConfig => {
-      const c = (o.live ?? {}) as Record<string, unknown>
-      // platform 只认白名单值(抖音为桩,v1 恒回 bilibili);roomId 纯数字校验;cookie 截断防膨胀
-      const roomId = typeof c.roomId === 'string' ? c.roomId.trim().slice(0, 32) : ''
-      return {
-        platform: c.platform === 'douyin' ? 'douyin' : 'bilibili',
-        roomId: /^\d*$/.test(roomId) ? roomId : '',
-        cookie: typeof c.cookie === 'string' ? c.cookie.trim().slice(0, 600) : '',
-        giftReactionsEnabled: c.giftReactionsEnabled !== false,
-      }
-    })(),
-    launchOnBoot: o.launchOnBoot === true,
-    wizardDone: o.wizardDone === true,
-    tools: sanitizeToolPrefs(o.tools),
-    // 内置白名单 ∪ 气泡工坊自建主题 id;其他值(手改配置写错)回 comic
-    bubbleStyle:
-      o.bubbleStyle === 'glass' || o.bubbleStyle === 'comic'
-        ? o.bubbleStyle
-        : typeof o.bubbleStyle === 'string' && /^custom_[a-z0-9_-]{1,32}$/.test(o.bubbleStyle)
-          ? o.bubbleStyle
-          : 'comic',
+    enabled: b.enabled === true,
+    minutes: Math.min(120, Math.max(15, Number(b.minutes) || 45)),
   }
 }
+
+/** 清洗人设:与设置页 textarea 的 maxLength 一致(2000),写超长在这里被截断 */
+function sanitizePersona(v: unknown): { a: string; b: string; c: string } {
+  const pr = (v ?? {}) as Record<string, unknown>
+  const cap = (x: unknown): string => (typeof x === 'string' ? x.trim().slice(0, 2000) : '')
+  return { a: cap(pr.a), b: cap(pr.b), c: cap(pr.c) }
+}
+
+/** 清洗角色名:截断 12 字,空回落出厂名 */
+function sanitizeNames(v: unknown): { a: string; b: string; c: string } {
+  const nm = (v ?? {}) as Record<string, unknown>
+  const name = (x: unknown, dft: string): string => (typeof x === 'string' ? x.trim().slice(0, 12) : '') || dft
+  return { a: name(nm.a, '甲'), b: name(nm.b, '乙'), c: name(nm.c, '丙') }
+}
+
+/** 清洗备忘提前量:1~1440 分钟,非法回 30 */
+function sanitizeMemo(v: unknown): { advanceMin: number } {
+  const mm = (v ?? {}) as Record<string, unknown>
+  const v2 = Number(mm.advanceMin)
+  return { advanceMin: Number.isFinite(v2) && v2 >= 1 ? Math.min(1440, Math.round(v2)) : 30 }
+}
+
+/** 清洗翻译面板:语言代码只放行 auto 与已知语言(手改配置写进奇怪值时回默认) */
+function sanitizeTranslation(v: unknown): TranslationConfig {
+  const t = (v ?? {}) as Record<string, unknown>
+  const code = (x: unknown, dft: string): string => {
+    const s = typeof x === 'string' ? x.trim().slice(0, 24) : ''
+    return s === 'auto' || LANGUAGES.some((l) => l.code === s) ? s : dft
+  }
+  return {
+    sourceLanguage: code(t.sourceLanguage, DEFAULT_CONFIG.translation.sourceLanguage),
+    targetLanguage: code(t.targetLanguage, DEFAULT_CONFIG.translation.targetLanguage),
+    style:
+      t.style === 'literal' || t.style === 'polished'
+        ? t.style
+        : DEFAULT_CONFIG.translation.style,
+    autoSpeak: t.autoSpeak === true,
+  }
+}
+
+/** 清洗 AI 识别配置:key 留空 = 关闭 AI 识别;地址/模型清空则回默认,防止拼出打不通的端点 */
+function sanitizeOcr(v: unknown): OcrConfig {
+  const d = DEFAULT_CONFIG.ocr
+  const c = (v ?? {}) as Record<string, unknown>
+  const str = (x: unknown, cap: number): string =>
+    typeof x === 'string' ? x.trim().slice(0, cap) : ''
+  return {
+    apiKey: str(c.apiKey, 200),
+    baseUrl: str(c.baseUrl, 200) || d.baseUrl,
+    model: str(c.model, 100) || d.model,
+    engine: c.engine === 'local' || c.engine === 'ai' ? c.engine : 'auto',
+  }
+}
+
+/** 清洗直播配置:platform 只认白名单值(抖音为桩,v1 恒回 bilibili);
+ *  roomId 纯数字校验;cookie 截断防膨胀 */
+function sanitizeLive(v: unknown): LiveConfig {
+  const c = (v ?? {}) as Record<string, unknown>
+  const roomId = typeof c.roomId === 'string' ? c.roomId.trim().slice(0, 32) : ''
+  return {
+    platform: c.platform === 'douyin' ? 'douyin' : 'bilibili',
+    roomId: /^\d*$/.test(roomId) ? roomId : '',
+    cookie: typeof c.cookie === 'string' ? c.cookie.trim().slice(0, 600) : '',
+    giftReactionsEnabled: c.giftReactionsEnabled !== false,
+  }
+}
+
+/** 清洗气泡风格:内置白名单 ∪ 气泡工坊自建主题 id;其他值(手改配置写错)回 comic */
+function sanitizeBubbleStyle(v: unknown): AppConfig['bubbleStyle'] {
+  return v === 'glass' || v === 'comic'
+    ? v
+    : typeof v === 'string' && /^custom_[a-z0-9_-]{1,32}$/.test(v)
+      ? v
+      : 'comic'
+}
+
+/** 顶层字段清洗器表——schema 校验的单源。sanitizeConfig 全量套表(读路径);
+ *  sanitizePartial 只套出现的键(写路径,invoke 前最后一道闸)。新增配置字段
+ *  只改 AppConfig 接口 + DEFAULT_CONFIG + 这张表,读写两条路自动一致 */
+const FIELD_SANITIZERS: { [K in keyof AppConfig]: (v: unknown, all: Record<string, unknown>) => AppConfig[K] } = {
+  apiKey: (v) => String(v || DEFAULT_CONFIG.apiKey),
+  apiKeys: sanitizeApiKeys,
+  baseUrl: (v) => String(v || DEFAULT_CONFIG.baseUrl),
+  model: (v) => String(v || DEFAULT_CONFIG.model),
+  userProfile: (v, all) => sanitizeUserProfile(v, typeof all.userInterests === 'string' ? all.userInterests : ''),
+  videoGen: sanitizeVideoGen,
+  voice: sanitizeVoice,
+  autoReplayMin: sanitizeReplayMin,
+  characters: sanitizeCharacters,
+  charactersHidden: (v) => v === true,
+  topicOverride: sanitizeTopicOverride,
+  theme: (v) => (v === 'light' ? 'light' : 'dark'),
+  choiceChance: (v) => clampNum(v, 0, 1, DEFAULT_CONFIG.choiceChance),
+  genders: sanitizeGenders,
+  ctrlBar: sanitizeCtrlBar,
+  showWatermark: (v) => v === true,
+  screenshot: sanitizeScreenshot,
+  hotkeys: sanitizeHotkeys,
+  userInterests: (v) => (typeof v === 'string' ? v.trim() : ''),
+  webchatEnabled: (v) => v === true,
+  webchatSite: (v) => (v === 'doubao' ? 'doubao' : 'deepseek'),
+  envSense: (v) => v !== false,
+  envNoteCooldownMin: sanitizeEnvNoteCooldownMin,
+  breakReminder: sanitizeBreakReminder,
+  persona: sanitizePersona,
+  names: sanitizeNames,
+  memo: sanitizeMemo,
+  groupChat: sanitizeGroupChat,
+  dnd: (v) => v === true,
+  dailyLinePack: (v) => v !== false,
+  proactivity: (v) => (v === 'quiet' || v === 'lively' ? v : 'balanced'),
+  translation: sanitizeTranslation,
+  ocr: sanitizeOcr,
+  live: sanitizeLive,
+  launchOnBoot: (v) => v === true,
+  wizardDone: (v) => v === true,
+  tools: sanitizeToolPrefs,
+  bubbleStyle: sanitizeBubbleStyle,
+}
+
+/** 从任意 JSON 对象构造合法配置(全量套清洗器表;文件与 localStorage 共用;导出供测试) */
+export function sanitizeConfig(obj: unknown): AppConfig {
+  const o = (obj ?? {}) as Record<string, unknown>
+  const out: Record<string, unknown> = {}
+  for (const key of Object.keys(FIELD_SANITIZERS) as (keyof AppConfig)[]) {
+    out[key] = FIELD_SANITIZERS[key](o[key], o)
+  }
+  return out as unknown as AppConfig
+}
+
+/** 写前校验:只清洗 update 里出现的顶层键,表外键(UNKNOWN 字段)拒绝——
+ *  schema 外的数据不落盘。saveConfig 在 invoke('config_set') 前调用,
+ *  Rust 侧不复制 schema,这里是落盘前最后一道闸。导出供测试 */
+export function sanitizePartial(update: Partial<AppConfig>): Partial<AppConfig> {
+  const o = (update ?? {}) as Record<string, unknown>
+  const out: Record<string, unknown> = {}
+  for (const key of Object.keys(o)) {
+    if (!(key in FIELD_SANITIZERS)) continue
+    out[key] = FIELD_SANITIZERS[key as keyof AppConfig](o[key], o)
+  }
+  return out as Partial<AppConfig>
+}
+
+let cache: Promise<AppConfig> | null = null
 
 // ---------- 密钥通道:配置文件不落明文,敏感值只进系统凭据库 ----------
 // 内存快照(AppConfig)里仍是真实值:所有 cfg.apiKey.trim() 判空与设置页回显
@@ -907,72 +956,61 @@ export function getConfig(): Promise<AppConfig> {
         return resolveSecrets(DEFAULT_CONFIG)
       }
       try {
-        // 首次读取前把历史明文迁进凭据库(Rust 进程级单飞,双窗并发安全)。
-        // 失败不阻塞读取:文件里的旧明文经 sanitize 照常可用,下次启动重试
-        await invoke('secrets_migrate_if_needed').catch((e) => {
-          console.warn('明文密钥迁移未完成,下次启动重试', e)
-        })
-        const base = await appDataDir()
-        const dir = await join(base, 'data')
-        if (!(await exists(dir))) await mkdir(dir, { recursive: true })
-        const file = await join(dir, 'config.json')
-        if (await exists(file)) {
-          return resolveSecrets(sanitizeConfig(JSON.parse(await readTextFile(file))))
-        }
-        await writeTextFile(file, JSON.stringify(stripSecrets(DEFAULT_CONFIG), null, 2))
+        // Rust 统一状态中心:首读单飞加载(明文迁移→版本迁移→凭据库密钥回填),
+        // 返回值已含真实密钥;sanitizeConfig 兜底(读路径 schema 校验)并剥掉 version 戳
+        return sanitizeConfig(await invoke<unknown>('config_get'))
       } catch (e) {
+        // 磁盘抖动等瞬时失败:回退默认且不缓存失败结果,下次 getConfig 重试磁盘
         console.warn('配置读取失败，使用默认', e)
+        cache = null
+        return DEFAULT_CONFIG
       }
-      return resolveSecrets(DEFAULT_CONFIG)
     })()
   }
   return cache
 }
 
-/** 保存配置：先落盘，成功后刷新内存缓存。下一次生成即用新值，无需重启。
- *  读-改-写进锁:布局保存与设置保存并发时不会互相覆盖。
- *  窗口拆分后主窗是唯一写者:落盘成功即广播 config-changed,设置窗收到后强制
- *  重读重发布,两端快照不漂移(设置窗的保存经 config-save 事件汇入主窗,
- *  广播同时兼作它的保存完成回执) */
+/** 保存配置：Rust 侧成功落盘后才返回(失败则磁盘与内存旧值原样保留 = 回滚)。
+ *  串行化/密钥写库/原子写/config-changed 广播全部在 Rust 状态中心完成,
+ *  两个窗口(乃至任何调用方)并发保存都在同一把进程锁内排队,不会互相覆盖。
+ *  update 按顶层键清洗(schema 外字段拒绝);嵌套对象须整节提交(浅合并语义) */
 export async function saveConfig(update: Partial<AppConfig>): Promise<AppConfig> {
-  // 密钥字段改道凭据库:update 触及的密钥先写库,成功才落盘其余字段;
-  // 写库失败整次保存报错,不产生"配置已变、凭据未变"的半态。空串 = 清除凭据。
-  await Promise.all(
-    SECRET_FIELDS.map(async (f) => {
-      const v = getByPath(update, f.path)
-      if (v === undefined) return
-      await writeSecret(f.id, f.map ? JSON.stringify(v ?? {}) : String(v ?? ''))
-    }),
-  )
-  const next = await withFileLock('config', async () => {
-    const current = await getConfig()
-    // 快照含真实密钥值(订阅方与返回值照常可读);落盘副本经 stripSecrets 剥离
-    const snapshot = { ...current, ...update }
-    if (!inTauri) {
+  if (!inTauri) {
+    // 浏览器预览降级:密钥经 localStorage 通道改道,剥离后快照落 localStorage
+    await Promise.all(
+      SECRET_FIELDS.map(async (f) => {
+        const v = getByPath(update, f.path)
+        if (v === undefined) return
+        await writeSecret(f.id, f.map ? JSON.stringify(v ?? {}) : String(v ?? ''))
+      }),
+    )
+    const next = await withFileLock('config', async () => {
+      const current = await getConfig()
+      const snapshot = { ...current, ...update }
       localStorage.setItem(LS_KEY, JSON.stringify(stripSecrets(snapshot)))
       return snapshot
-    }
-    const base = await appDataDir()
-    const dir = await join(base, 'data')
-    if (!(await exists(dir))) await mkdir(dir, { recursive: true })
-    const file = await join(dir, 'config.json')
-    await writeTextFile(file, JSON.stringify(stripSecrets(snapshot), null, 2))
-    return snapshot
-  })
+    })
+    cache = Promise.resolve(next)
+    publishConfig(next)
+    return next
+  }
+  // 写前最后一道 schema 闸:顶层键白名单清洗(与读路径同一张 FIELD_SANITIZERS 表)
+  const clean = sanitizePartial(update)
+  const next = sanitizeConfig(await invoke<unknown>('config_set', { update: clean }))
   cache = Promise.resolve(next)
   publishConfig(next)
-  if (inTauri && getCurrentWindow().label === 'main') {
-    void emitTo('settings', 'config-changed', { config: next }).catch(() => {})
-  }
   return next
 }
 
 if (inTauri) {
-  // 收到另一窗的保存广播:丢弃内存缓存强制重读文件并补发通知,
-  // 让本窗所有 useConfigSnapshot 消费者(舞台换肤/布局/模式表)拿到新值
-  void listen<{ config?: AppConfig }>('config-changed', () => {
-    cache = null
-    void getConfig().then(publishConfig)
+  // Rust 状态中心的广播是唯一同步通路(config_set 成功后发给全部窗口,含写者,
+  // 幂等采纳):直接采纳载荷并发布,不再弃缓存重读文件——旧实现每条广播
+  // 触发 7 次凭据库读取,现在零额外 IO
+  void listen<{ config?: unknown }>('config-changed', (e) => {
+    if (!e.payload || typeof e.payload !== 'object' || !('config' in e.payload)) return
+    const next = sanitizeConfig(e.payload.config)
+    cache = Promise.resolve(next)
+    publishConfig(next)
   })
 }
 

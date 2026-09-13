@@ -1,19 +1,20 @@
 // 自定义模式存储:用户在"模式工坊"里创建的演出模式(DialogMode 纯数据),落盘 appData/data/custom-modes.json。
+// 文件读写统一走 Rust 状态中心(data_get/data_set:进程锁串行化 + 原子写 + store-changed
+// 广播到两窗),本模块不再直接碰文件——设置窗写入后主窗经广播载荷即时采纳。
 // 模式即数据:运行时与内置 MODES 合并后,分段按钮/历史徽标/自然语言路由/LLM 指令自动感知,无需改代码。
 // 浏览器预览(无 Tauri 运行时)降级 localStorage,与 configStore 同一套约定。
 // 上限 20 个防膨胀;id 强制 custom_ 前缀,永不可能与内置模式撞键。
 import { useSyncExternalStore } from 'react'
-import { readTextFile, writeTextFile, exists, mkdir } from '@tauri-apps/plugin-fs'
-import { appDataDir, join } from '@tauri-apps/api/path'
+import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 import { withFileLock } from './writeLock'
 import { inTauri } from './configStore'
-import { notifyMainStoreChanged } from './crossWindow'
 import { sanitizeDialogLine } from '../performer/dialogSchema'
 import type { DialogLine } from '../performer/player'
 import type { DialogMode } from '../performer/modes'
 
 const LS_KEY = 'vc-custom-modes'
-const FILE_NAME = 'custom-modes.json'
+const STORE_ID = 'custom-modes'
 
 /** 自定义模式数量上限:分段控件宽度有限,防 LLM 批量灌垃圾 */
 export const CUSTOM_MODE_LIMIT = 20
@@ -116,42 +117,47 @@ let loaded = false
 export async function ensureCustomModesLoaded(): Promise<void> {
   if (loaded) return
   loaded = true
-  const next = await withFileLock('custom-modes', async () => {
-    if (!inTauri) {
-      try {
-        const raw = localStorage.getItem(LS_KEY)
-        return raw ? sanitizeCustomModes(JSON.parse(raw)) : []
-      } catch (e) {
-        console.warn('自定义模式读取失败，按空处理', e)
-        return []
-      }
-    }
+  if (!inTauri) {
     try {
-      const base = await appDataDir()
-      const dir = await join(base, 'data')
-      if (!(await exists(dir))) await mkdir(dir, { recursive: true })
-      const file = await join(dir, FILE_NAME)
-      if (await exists(file)) return sanitizeCustomModes(JSON.parse(await readTextFile(file)))
-      await writeTextFile(file, JSON.stringify({ version: 1, modes: [] }, null, 2))
+      const raw = localStorage.getItem(LS_KEY)
+      publish(raw ? sanitizeCustomModes(JSON.parse(raw)) : [])
     } catch (e) {
       console.warn('自定义模式读取失败，按空处理', e)
+      publish([])
     }
-    return []
-  })
-  publish(next)
+    return
+  }
+  try {
+    // Rust 状态中心:进程锁串行 + 内存缓存,坏数据按空仓处理
+    publish(sanitizeCustomModes(await invoke<unknown>('data_get', { store: STORE_ID })))
+  } catch (e) {
+    console.warn('自定义模式读取失败，按空处理', e)
+    publish([])
+  }
 }
 
-/** 主窗侧刷新:设置窗改了自定义模式后经 store-changed 触发 */
-export async function refreshCustomModesFromDisk(): Promise<void> {
-  loaded = false
-  await ensureCustomModesLoaded()
+/** 写型操作共用:全量替换落盘(Rust 原子写 + 广播),返回清洗后的全量列表 */
+async function persistModes(merged: CustomMode[]): Promise<CustomMode[]> {
+  if (!inTauri) {
+    localStorage.setItem(LS_KEY, JSON.stringify({ version: 1, modes: merged }))
+    publish(merged)
+    return merged
+  }
+  const saved = await invoke<unknown>('data_set', {
+    store: STORE_ID,
+    value: { version: 1, modes: merged },
+  })
+  const next = sanitizeCustomModes(saved)
+  loaded = true
+  publish(next)
+  return next
 }
 
 /** 新增或更新一个自定义模式(按 id upsert);超限抛错,由调用方提示。返回更新后的全量列表 */
 export async function saveCustomMode(mode: CustomMode): Promise<CustomMode[]> {
   const clean = sanitizeCustomMode(mode)
   if (!clean) throw new Error('模式数据不合法')
-  const next = await withFileLock('custom-modes', async () => {
+  return withFileLock(STORE_ID, async () => {
     const current = snapshot
     const idx = current.findIndex((m) => m.id === clean.id)
     const merged =
@@ -161,38 +167,21 @@ export async function saveCustomMode(mode: CustomMode): Promise<CustomMode[]> {
           ? null
           : [...current, clean as CustomMode]
     if (merged === null) throw new Error(`自定义模式最多 ${CUSTOM_MODE_LIMIT} 个`)
-    if (!inTauri) {
-      localStorage.setItem(LS_KEY, JSON.stringify({ version: 1, modes: merged }))
-      return merged
-    }
-    const base = await appDataDir()
-    const dir = await join(base, 'data')
-    if (!(await exists(dir))) await mkdir(dir, { recursive: true })
-    const file = await join(dir, FILE_NAME)
-    await writeTextFile(file, JSON.stringify({ version: 1, modes: merged }, null, 2))
-    return merged
+    return persistModes(merged)
   })
-  publish(next)
-  notifyMainStoreChanged('custom-modes')
-  return next
 }
 
 /** 删除一个自定义模式;id 不存在时静默(幂等) */
 export async function removeCustomMode(id: string): Promise<CustomMode[]> {
-  const next = await withFileLock('custom-modes', async () => {
-    const merged = snapshot.filter((m) => m.id !== id)
-    if (!inTauri) {
-      localStorage.setItem(LS_KEY, JSON.stringify({ version: 1, modes: merged }))
-      return merged
-    }
-    const base = await appDataDir()
-    const dir = await join(base, 'data')
-    if (!(await exists(dir))) await mkdir(dir, { recursive: true })
-    const file = await join(dir, FILE_NAME)
-    await writeTextFile(file, JSON.stringify({ version: 1, modes: merged }, null, 2))
-    return merged
+  return withFileLock(STORE_ID, async () => persistModes(snapshot.filter((m) => m.id !== id)))
+}
+
+if (inTauri) {
+  // Rust 状态中心的广播(store_set 成功后发给全部窗口,含写者,幂等采纳):
+  // 设置窗写入后主窗即时拿到新模式,不再依赖"通知后回磁盘重读"的旧通路
+  void listen<{ store?: string; value?: unknown }>('store-changed', (e) => {
+    if (e.payload?.store !== STORE_ID || e.payload.value === undefined) return
+    loaded = true
+    publish(sanitizeCustomModes(e.payload.value))
   })
-  publish(next)
-  notifyMainStoreChanged('custom-modes')
-  return next
 }

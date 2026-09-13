@@ -2,12 +2,13 @@
 // facts[]:从聊天里自动提取的"关于观众的事实"(LLM 后台提取,本模块只管存取合并);
 // topicStats:话题种子的 seen/favored/replays 计数,驱动 pickTopic 偏好加权;
 // counters:戳/模式使用等行为计数。
-// 全部写操作走 withFileLock;浏览器预览降级 localStorage。失败静默不影响演出。
+// 文件读写统一走 Rust 状态中心(data_get/data_set:进程锁串行化 + 原子写 +
+// store-changed 广播到两窗,广播载荷直接采纳进缓存)。浏览器预览降级 localStorage。
+// 失败静默不影响演出。
 
-import { readTextFile, writeTextFile, exists, mkdir } from '@tauri-apps/plugin-fs'
-import { appDataDir, join } from '@tauri-apps/api/path'
+import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 import { withFileLock } from './writeLock'
-import { notifyMainStoreChanged } from './crossWindow'
 import { inTauri } from './configStore'
 
 export type FactCategory = 'identity' | 'preference' | 'habit' | 'people' | 'event' | 'other'
@@ -52,13 +53,6 @@ let cache: MemoryData | null = null
 
 function clone(data: MemoryData): MemoryData {
   return JSON.parse(JSON.stringify(data)) as MemoryData
-}
-
-async function memoryFile(): Promise<string> {
-  const base = await appDataDir()
-  const dir = await join(base, 'data')
-  if (!(await exists(dir))) await mkdir(dir, { recursive: true })
-  return join(dir, 'memory.json')
 }
 
 /** 清洗一条来自文件/LLM 的事实,非法返回 null */
@@ -126,8 +120,8 @@ async function loadRaw(): Promise<MemoryData> {
     return clone(EMPTY)
   }
   try {
-    const file = await memoryFile()
-    if (await exists(file)) return sanitize(JSON.parse(await readTextFile(file)))
+    // Rust 状态中心:进程锁串行 + 内存缓存,坏数据/缺文件按空仓处理
+    return sanitize(await invoke<unknown>('data_get', { store: 'memory' }))
   } catch (e) {
     console.warn('记忆读取失败', e)
   }
@@ -140,21 +134,23 @@ export async function getMemory(): Promise<MemoryData> {
   return clone(cache)
 }
 
-/** 主窗侧刷新:设置窗改了记忆后经 store-changed 触发,丢弃缓存待下次读取 */
-export function refreshMemoryFromDisk(): void {
-  cache = null
-}
-
-/** 变更落盘(调用方已在锁内完成读改写计算) */
+/** 变更落盘(Rust 原子写 + store-changed 广播,两窗缓存经广播采纳保持一致) */
 async function persist(next: MemoryData): Promise<void> {
   cache = next
-  notifyMainStoreChanged('memory')
   if (!inTauri) {
     localStorage.setItem(LS_KEY, JSON.stringify(next))
     return
   }
-  const file = await memoryFile()
-  await writeTextFile(file, JSON.stringify(next, null, 2))
+  await invoke<unknown>('data_set', { store: 'memory', value: next })
+}
+
+if (inTauri) {
+  // Rust 状态中心的广播(data_set 成功后发给全部窗口,含写者,幂等采纳):
+  // 任一窗改了记忆(设置页删改/主窗提取合并),两窗缓存即时对齐
+  void listen<{ store?: string; value?: unknown }>('store-changed', (e) => {
+    if (e.payload?.store !== 'memory' || e.payload.value === undefined) return
+    cache = sanitize(e.payload.value)
+  })
 }
 
 /** 淘汰排序:非置顶优先丢,lastSeen 旧者优先 */

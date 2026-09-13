@@ -96,43 +96,31 @@ fn kind_spec(kind: &str) -> Result<(&'static str, bool), String> {
     }
 }
 
-/// 从配置文件解析 base。前端写配置非原子:撕裂读稍候重试一次。
-/// config.json 不含明文密钥(PR A),读它不等于读凭证。
+/// 解析端点 base。统一状态中心的内存配置优先:写路径经临时文件 rename 原子提交、
+/// 加载在进程锁内单飞,内存态永不撕裂——旧"撕裂读稍候重试"补丁随之退役。
+/// 服务未加载(极端场景)才回退读一次文件。config.json 不含明文密钥,读它不等于读凭证。
 fn configured_base(app: &AppHandle, kind: &str) -> Result<String, String> {
     let (pointer, _) = kind_spec(kind)?;
+    let pick = |v: &Value| -> Result<String, String> {
+        let s = v.pointer(pointer).and_then(Value::as_str).unwrap_or("").trim();
+        if s.is_empty() {
+            Err("未配置端点地址(请在设置里填写后重试)".into())
+        } else {
+            Ok(s.to_string())
+        }
+    };
+    if let Some(v) = crate::config_service::committed(app) {
+        return pick(&v);
+    }
     let path = app
         .path()
         .app_data_dir()
         .map_err(|e| e.to_string())?
         .join("data")
         .join("config.json");
-    let mut last_err: Option<String> = None;
-    for attempt in 0..2 {
-        let outcome = (|| -> Result<String, String> {
-            let raw = std::fs::read_to_string(&path).map_err(|e| format!("读取配置失败: {e}"))?;
-            let v: Value = serde_json::from_str(&raw).map_err(|e| format!("配置解析失败: {e}"))?;
-            let s = v
-                .pointer(pointer)
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .trim()
-                .to_string();
-            if s.is_empty() {
-                return Err("未配置端点地址(请在设置里填写后重试)".into());
-            }
-            Ok(s)
-        })();
-        match outcome {
-            Ok(s) => return Ok(s),
-            Err(e) => {
-                last_err = Some(e);
-                if attempt == 0 {
-                    std::thread::sleep(Duration::from_millis(150));
-                }
-            }
-        }
-    }
-    Err(last_err.unwrap_or_else(|| "读取配置失败".into()))
+    let raw = std::fs::read_to_string(&path).map_err(|e| format!("读取配置失败: {e}"))?;
+    let v: Value = serde_json::from_str(&raw).map_err(|e| format!("配置解析失败: {e}"))?;
+    pick(&v)
 }
 
 /// 鉴权头由 Rust 注入(密钥不流经前端);gptsovits 本地服务无鉴权

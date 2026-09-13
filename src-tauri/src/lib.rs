@@ -7,6 +7,7 @@ mod asr;
 mod audio_capture;
 mod bili_http;
 mod capture;
+mod config_service;
 mod endpoint_proxy;
 mod env;
 mod mic_capture;
@@ -139,6 +140,7 @@ pub fn run() {
         .manage(webchat::AskState::default())
         .manage(endpoint_proxy::ProxyState::default())
         .manage(mic_capture::MicState::default())
+        .manage(config_service::ConfigState::default())
         .invoke_handler(tauri::generate_handler![
             set_noactivate,
             report_csp_violation,
@@ -171,6 +173,10 @@ pub fn run() {
             secrets::secret_set,
             secrets::secret_delete,
             secrets::secrets_migrate_if_needed,
+            config_service::config_get,
+            config_service::config_set,
+            config_service::data_get,
+            config_service::data_set,
             endpoint_proxy::endpoint_request,
             endpoint_proxy::endpoint_cancel
         ])

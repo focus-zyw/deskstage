@@ -10,7 +10,7 @@
 // 原子性:先写凭据库并逐条读回验证,全部成功后才用临时文件+rename 重写配置;
 // 任一步失败保留旧配置不动,下次启动重试。成功后不留明文备份。
 
-use serde_json::Value;
+use serde_json::{Map, Value};
 use std::sync::{Mutex, OnceLock};
 use tauri::Manager;
 
@@ -33,6 +33,50 @@ fn id_allowed(id: &str) -> Result<(), String> {
         Ok(())
     } else {
         Err(format!("未知的 SecretId: {id}"))
+    }
+}
+
+/// 密钥路径表:(config.json 内 JSON 路径, SecretId, map 型整组一条)。
+/// 路径治理单源:提取/剥离/回填/写库事务(config_service)全部遍历这张表,
+/// 新增密钥只改这里与前端 configStore 的 SECRET_FIELDS。
+pub const SECRET_PATHS: &[(&[&str], &str, bool)] = &[
+    (&["apiKey"], "llm:apiKey", false),
+    (&["apiKeys"], "llm:apiKeys", true),
+    (&["voice", "apiKey"], "tts:voice", false),
+    (&["voice", "minimax", "apiKey"], "tts:minimax", false),
+    (&["voice", "asr", "apiKey"], "asr:siliconflow", false),
+    (&["videoGen", "apiKeys"], "video:apiKeys", true),
+    (&["ocr", "apiKey"], "ocr:apiKey", false),
+    (&["live", "cookie"], "live:cookie", false),
+];
+
+/// 按 JSON 路径只读(存在才返回 Some);提取与写库事务共用。
+pub fn value_at<'a>(cfg: &'a Value, path: &[&str]) -> Option<&'a Value> {
+    let mut cur = cfg;
+    for key in path {
+        cur = cur.get(key)?;
+    }
+    Some(cur)
+}
+
+/// 按 JSON 路径设值,中间层缺对象/非对象时补建为空对象(与前端 setByPath 同语义);
+/// 根不是对象时放弃(调用方保证 config 根为对象)。
+fn set_at_path(cfg: &mut Value, path: &[&str], value: Value) {
+    let mut cur: Option<&mut Value> = Some(cfg);
+    for key in &path[..path.len() - 1] {
+        cur = cur.and_then(|v| {
+            // 顺序借用:先判型(共享)→必要时补建空对象(可变,用完即还)→再下钻
+            if !v.get(key).is_some_and(Value::is_object) {
+                v.as_object_mut()?
+                    .insert((*key).to_string(), Value::Object(Map::new()));
+            }
+            v.get_mut(key)
+        });
+    }
+    if let Some(cur) = cur {
+        if let Some(map) = cur.as_object_mut() {
+            map.insert(path[path.len() - 1].to_string(), value);
+        }
     }
 }
 
@@ -148,69 +192,50 @@ fn migrate_config_file(app: &tauri::AppHandle) -> Result<bool, String> {
 /// 从配置对象提取全部明文密钥,返回 (SecretId, 值)。空串/缺字段跳过;
 /// map 型(apiKeys)整体序列化为紧凑 JSON。
 fn extract_secrets(cfg: &Value) -> Vec<(String, String)> {
-    let str_at = |path: &[&str]| -> Option<String> {
-        let mut cur = cfg;
-        for p in path {
-            cur = cur.get(p)?;
-        }
-        match cur {
-            Value::String(s) if !s.trim().is_empty() => Some(s.clone()),
-            _ => None,
-        }
-    };
-    let map_at = |path: &[&str]| -> Option<String> {
-        let mut cur = cfg;
-        for p in path {
-            cur = cur.get(p)?;
-        }
-        match cur {
-            Value::Object(m) if !m.is_empty() => Some(cur.to_string()),
-            _ => None,
-        }
-    };
     let mut out = Vec::new();
-    for (path, id, is_map) in [
-        (&["apiKey"][..], "llm:apiKey", false),
-        (&["apiKeys"][..], "llm:apiKeys", true),
-        (&["voice", "apiKey"][..], "tts:voice", false),
-        (&["voice", "minimax", "apiKey"][..], "tts:minimax", false),
-        (&["voice", "asr", "apiKey"][..], "asr:siliconflow", false),
-        (&["videoGen", "apiKeys"][..], "video:apiKeys", true),
-        (&["ocr", "apiKey"][..], "ocr:apiKey", false),
-        (&["live", "cookie"][..], "live:cookie", false),
-    ] {
-        let picked = if is_map { map_at(path) } else { str_at(path) };
+    for (path, id, is_map) in SECRET_PATHS {
+        let picked = match value_at(cfg, path) {
+            Some(v @ Value::Object(m)) if *is_map && !m.is_empty() => Some(v.to_string()),
+            Some(Value::String(s)) if !is_map && !s.trim().is_empty() => Some(s.clone()),
+            _ => None,
+        };
         if let Some(v) = picked {
-            out.push((id.to_string(), v));
+            out.push(((*id).to_string(), v));
         }
     }
     out
 }
 
-/// 从配置对象剥离全部明文密钥字段(map 型整体删除),其余字段原样保留
-fn strip_secrets(cfg: &mut Value) {
-    let Some(obj) = cfg.as_object_mut() else {
-        return;
-    };
-    obj.remove("apiKey");
-    obj.remove("apiKeys");
-    if let Some(voice) = obj.get_mut("voice").and_then(Value::as_object_mut) {
-        voice.remove("apiKey");
-        if let Some(mm) = voice.get_mut("minimax").and_then(Value::as_object_mut) {
-            mm.remove("apiKey");
+/// 从配置对象剥离全部密钥字段(map 型整体删除),其余字段原样保留
+pub fn strip_secrets(cfg: &mut Value) {
+    for (path, _, _) in SECRET_PATHS {
+        let mut cur: Option<&mut Value> = Some(cfg);
+        for key in &path[..path.len() - 1] {
+            cur = cur.and_then(|v| v.get_mut(key));
         }
-        if let Some(asr) = voice.get_mut("asr").and_then(Value::as_object_mut) {
-            asr.remove("apiKey");
+        if let Some(Value::Object(map)) = cur {
+            map.remove(path[path.len() - 1]);
         }
     }
-    if let Some(video) = obj.get_mut("videoGen").and_then(Value::as_object_mut) {
-        video.remove("apiKeys");
-    }
-    if let Some(ocr) = obj.get_mut("ocr").and_then(Value::as_object_mut) {
-        ocr.remove("apiKey");
-    }
-    if let Some(live) = obj.get_mut("live").and_then(Value::as_object_mut) {
-        live.remove("cookie");
+}
+
+/// 读取末尾回填(统一状态中心 config_get 用):凭据库有条目则覆盖进内存配置;
+/// 无条目保留文件里的值(迁移失败的兜底);凭据损坏/读取失败保留原值不打挂读取。
+pub fn resolve_secrets(cfg: &mut Value) {
+    for (path, id, is_map) in SECRET_PATHS {
+        let stored = match read_secret(id) {
+            Ok(Some(v)) => v,
+            _ => continue,
+        };
+        let value = if *is_map {
+            serde_json::from_str::<Value>(&stored).unwrap_or(Value::Null)
+        } else {
+            Value::String(stored)
+        };
+        if value.is_null() {
+            continue;
+        }
+        set_at_path(cfg, path, value);
     }
 }
 

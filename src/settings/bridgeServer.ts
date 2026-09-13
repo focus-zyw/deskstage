@@ -1,9 +1,15 @@
-// 主窗侧的设置桥服务端:监听设置窗发来的动作与配置保存请求。
-// 配置单写入口:设置窗不再直写 config.json,统一由主窗读-改-写并广播
-// config-changed(主窗自己的 saveConfig 也广播),两端快照从此不漂移。
-// 请求串行化:设置页连发 config-save 时按序应用,避免交错读改写互相覆盖。
+// 主窗侧的设置桥服务端:监听设置窗发来的动作(回放/复位/群聊发送等)与退出/关闭信号。
+// 配置保存不再经过这里:两个窗口都经 Rust 统一状态中心(config_service)读写,
+// 进程锁串行化 + config-changed 广播。主窗对配置变化的响应(快捷键换绑/捕获排除/
+// 环境轮询/人设采纳)统一由 initConfigEffects 差分驱动——写者无关,任何来源的
+// 保存(设置窗/主窗功能/未来预览)都汇入同一条快照流。
 import { emitTo, listen, type UnlistenFn } from '@tauri-apps/api/event'
-import { saveConfig, type AppConfig } from '../storage/configStore'
+import { invoke } from '@tauri-apps/api/core'
+import {
+  getConfigSnapshot,
+  subscribeConfig,
+  type AppConfig,
+} from '../storage/configStore'
 import {
   setCharacterGenders,
   setCharacterNames,
@@ -12,30 +18,36 @@ import {
 import { startEnvPolling, stopEnvPolling } from '../engine/envAware'
 import { applyScreenshotHotkey } from '../capture'
 import { applyAppHotkeys } from '../hotkeys'
-import { invoke } from '@tauri-apps/api/core'
 import type { SettingsBridge } from './useSettingsSession'
 
-/** 主窗代设置窗落盘一批配置并执行关联副作用(原 useSettingsSession.commitSettings 的主窗半边) */
-export async function applyRemoteConfigSave(partial: Partial<AppConfig>): Promise<AppConfig> {
-  const next = await saveConfig(partial)
-  void applyScreenshotHotkey() // 快捷键按新配置换绑
-  void applyAppHotkeys() // 演出动作快捷键同理换绑
-  void invoke('set_capture_excluded', { enable: next.screenshot.hideSelf }).catch(() => {})
-  // 环境感知或久坐提醒任一开启都需要轮询(久坐依赖键鼠空闲传感器,与环境感知解耦)
-  if (next.envSense || next.breakReminder.enabled) startEnvPolling()
-  else stopEnvPolling()
-  if (partial.persona) setPersonaOverride(partial.persona.a, partial.persona.b, partial.persona.c) // 新人设立即采纳
-  if (partial.names) setCharacterNames(partial.names.a, partial.names.b, partial.names.c)
-  if (partial.genders) setCharacterGenders(partial.genders.a, partial.genders.b, partial.genders.c) // 性别纪律立即采纳
-  return next
-}
-
-/** 主窗需要即时感知的设置窗写型 store:收到 store-changed 后强制重读磁盘 */
-const STORE_REFRESH: Record<string, () => Promise<void>> = {}
-
-/** store 注册自己的跨窗刷新(bubble 工坊/模式工坊/记忆等设置窗可写的 store 调用) */
-export function registerStoreRefresh(store: string, refresh: () => Promise<void>): void {
-  STORE_REFRESH[store] = refresh
+/** 配置副作用:差分驱动。快照每次发布都与上一版逐字段比对,变化的才触发——
+ *  首次回调只建立基线(启动初始化仍由各模块自行完成,避免双跑) */
+export function initConfigEffects(): void {
+  let prev: AppConfig | null = null
+  subscribeConfig(() => {
+    const next = getConfigSnapshot()
+    const base = prev
+    prev = next
+    if (!base) return
+    if (base.hotkeys !== next.hotkeys || base.screenshot.hotkey !== next.screenshot.hotkey) {
+      void applyScreenshotHotkey() // 快捷键按新配置换绑
+      void applyAppHotkeys() // 演出动作快捷键同理换绑
+    }
+    if (base.screenshot.hideSelf !== next.screenshot.hideSelf) {
+      void invoke('set_capture_excluded', { enable: next.screenshot.hideSelf }).catch(() => {})
+    }
+    // 环境感知或久坐提醒任一开启都需要轮询(久坐依赖键鼠空闲传感器,与环境感知解耦)
+    if (base.envSense !== next.envSense || base.breakReminder !== next.breakReminder) {
+      if (next.envSense || next.breakReminder.enabled) startEnvPolling()
+      else stopEnvPolling()
+    }
+    if (base.persona !== next.persona) {
+      const p = next.persona // 空串 = 还原内置人设(persona 模块内回落)
+      setPersonaOverride(p.a, p.b, p.c)
+    }
+    if (base.names !== next.names) setCharacterNames(next.names.a, next.names.b, next.names.c)
+    if (base.genders !== next.genders) setCharacterGenders(next.genders.a, next.genders.b, next.genders.c) // 性别纪律立即采纳
+  })
 }
 
 export interface SettingsBridgeServerRefs {
@@ -47,15 +59,9 @@ export interface SettingsBridgeServerRefs {
   onClosed(): void
 }
 
-/** 初始化主窗侧监听;返回卸载函数(App 卸载时清理) */
+/** 初始化主窗侧监听与配置副作用;返回卸载函数(App 卸载时清理) */
 export function initSettingsBridgeServer(refs: SettingsBridgeServerRefs): Promise<UnlistenFn[]> {
-  // 串行化处理设置窗请求:handler 内部有 await,直接并发会交错读改写
-  let task: Promise<unknown> = Promise.resolve()
-  const serial = <T>(fn: () => Promise<T>): Promise<T> => {
-    const next = task.then(fn, fn)
-    task = next.catch(() => undefined)
-    return next
-  }
+  initConfigEffects()
   return Promise.all([
     listen<{
       kind: 'replay' | 'reset-layout' | 'reset-c' | 'privacy-tip' | 'support-thanks' | 'group-send'
@@ -75,24 +81,14 @@ export function initSettingsBridgeServer(refs: SettingsBridgeServerRefs): Promis
       if (p.kind === 'privacy-tip') return void bridge.onPrivacyTip()
       if (p.kind === 'support-thanks' && p.content) return void bridge.onSupportThanks(p.content)
       if (p.kind === 'group-send' && typeof p.text === 'string' && p.requestId) {
-        void serial(async () => {
-          const result = await bridge.onGroupSend(p.text!)
-          await emitTo('settings', 'settings-action-reply', { requestId: p.requestId, result })
-        })
+        void bridge
+          .onGroupSend(p.text)
+          .then((result) =>
+            emitTo('settings', 'settings-action-reply', { requestId: p.requestId, result }).catch(() => {}),
+          )
       }
-    }),
-    listen<Partial<AppConfig>>('config-save', (e) => {
-      void serial(async () => {
-        const next = await applyRemoteConfigSave(e.payload)
-        // 回执同时兼作设置窗的保存完成信号(其 commitSettings 在等它)
-        await emitTo('settings', 'config-changed', { config: next })
-      })
     }),
     listen('settings-closed', () => refs.onClosed()),
     listen('app-exit-request', () => refs.onExitRequest()),
-    // 设置窗写型 store 的跨窗刷新登记(见各 store 的 notifyMainStoreChanged)
-    listen<{ store: string }>('store-changed', (e) => {
-      STORE_REFRESH[e.payload.store]?.()
-    }),
   ])
 }

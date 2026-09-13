@@ -7,17 +7,11 @@ import { createContext, useContext } from 'react'
 import {
   DEFAULT_CONFIG,
   getConfig,
-  inTauri,
+  getConfigSnapshot,
   saveConfig,
   type AppConfig,
 } from '../storage/configStore'
-import { defaultPersonaText, setCharacterGenders, setCharacterNames, setPersonaOverride } from '../engine/persona'
-import { startEnvPolling, stopEnvPolling } from '../engine/envAware'
-import { applyScreenshotHotkey } from '../capture'
-import { applyAppHotkeys } from '../hotkeys'
-import { invoke } from '@tauri-apps/api/core'
-import { emitTo } from '@tauri-apps/api/event'
-import { getCurrentWindow } from '@tauri-apps/api/window'
+import { defaultPersonaText } from '../engine/persona'
 import { listCustomVoices, type ClonedVoice } from '../engine/tts'
 import type { VoiceConfig } from '../storage/configStore'
 import { CUSTOM_VENDOR_ID, vendorIdOfBaseUrl } from '../engine/vendors'
@@ -154,32 +148,26 @@ export function useSettingsSession(): SettingsSessionState {
     }
   }, [])
 
-  /** 落盘一批字段并执行关联副作用(快捷键换绑/角色排除/环境轮询/人设采纳) */
+  /** 落盘一批字段。统一状态中心:直接 invoke Rust(config_set,进程锁串行化),
+   *  广播回本窗后表单外的快照消费(如标题栏状态)自动对齐;关联副作用(快捷键
+   *  换绑/环境轮询/人设采纳)由主窗的差分驱动统一执行,本窗只亮"已保存" */
   async function commitSettings(partial: Partial<AppConfig>) {
     try {
-      // 窗口拆分后,设置窗是唯一运行本会话的窗口:配置统一由主窗落盘
-      // (bridgeServer.applyRemoteConfigSave,副作用也在主窗执行),
-      // 本地只发请求并亮"已保存";快照更新由 config-changed 广播驱动
-      if (inTauri && getCurrentWindow().label === 'settings') {
-        await emitTo('main', 'config-save', partial)
-        setSavedTick(Date.now())
-        window.setTimeout(() => setSavedTick(0), 2500)
-        return
-      }
-      const next = await saveConfig(partial)
-      void applyScreenshotHotkey() // 快捷键按新配置换绑
-      void applyAppHotkeys() // 演出动作快捷键同理换绑
-      void invoke('set_capture_excluded', { enable: next.screenshot.hideSelf }).catch(() => {})
-      // 环境感知或久坐提醒任一开启都需要轮询(久坐依赖键鼠空闲传感器,与环境感知解耦)
-      if (next.envSense || next.breakReminder.enabled) startEnvPolling()
-      else stopEnvPolling()
-      if (partial.persona) setPersonaOverride(partial.persona.a, partial.persona.b, partial.persona.c) // 新人设立即采纳
-      if (partial.names) setCharacterNames(partial.names.a, partial.names.b, partial.names.c)
-      if (partial.genders) setCharacterGenders(partial.genders.a, partial.genders.b, partial.genders.c) // 性别纪律立即采纳
+      await saveConfig(partial)
       setSavedTick(Date.now())
       window.setTimeout(() => setSavedTick(0), 2500)
     } catch (e) {
       console.error('配置保存失败', e)
+      // 回滚:草稿对齐最近一次广播快照,失败的字段不留在草稿里反复重试
+      const cfg = getConfigSnapshot()
+      setForm({
+        ...cfg,
+        persona: {
+          a: cfg.persona.a || defaultPersonaText('A'),
+          b: cfg.persona.b || defaultPersonaText('B'),
+          c: cfg.persona.c || defaultPersonaText('C'),
+        },
+      })
       setSaveError(true)
       window.setTimeout(() => setSaveError(false), 2500)
     }
