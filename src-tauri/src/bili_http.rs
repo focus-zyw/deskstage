@@ -17,6 +17,9 @@ pub async fn bili_http_request(
     method: Option<String>,
     cookie: Option<String>,
     referer: Option<String>,
+    // 表单体(msg/send 发弹幕等 POST 接口)。仅接受 urlencoded 文本,域名校验与
+    // 重定向复核照旧——不因此变成通用代理面
+    body: Option<String>,
 ) -> Result<serde_json::Value, String> {
     if !ALLOWED_PREFIXES.iter().any(|p| url.starts_with(p)) {
         return Err(format!("非B站接口:{}", &url[..url.len().min(64)]));
@@ -53,6 +56,11 @@ pub async fn bili_http_request(
     );
     if let Some(c) = cookie.filter(|c| !c.trim().is_empty()) {
         req = req.header("Cookie", c);
+    }
+    if let Some(form) = body.filter(|b| !b.trim().is_empty()) {
+        req = req
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .body(form);
     }
     let resp = req.send().await.map_err(|e| e.to_string())?;
     let status = resp.status().as_u16();

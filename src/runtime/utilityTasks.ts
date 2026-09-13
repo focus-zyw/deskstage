@@ -3,14 +3,14 @@
 // 卡片负责结果,角色气泡只负责外围吐槽(ui/UtilityCard 渲染)。
 import { useSyncExternalStore } from 'react'
 
-export type UtilityKind = 'translate' | 'ocr' | 'capture-translate' | 'save' | 'live'
+export type UtilityKind = 'translate' | 'ocr' | 'capture-translate' | 'save' | 'live' | 'tool'
 
 export interface UtilityTask {
   id: string
   kind: UtilityKind
   label: string
-  /** 任务由哪个角色表演(道具桥用:工具卡片道具挂在该角色旁) */
-  actor: 'A' | 'B'
+  /** 任务由哪个角色表演(道具桥用:工具卡片道具挂在该角色旁);工具系统会指派 C */
+  actor: 'A' | 'B' | 'C'
   status: 'running' | 'done' | 'error'
   detail: string
   error?: string
@@ -96,5 +96,34 @@ export async function runUtilityTask(
   } finally {
     // 无论成败都要收尾:end 漏发会让"工作姿势"永远不还原
     notifyLifecycle({ phase: 'end', kind, id })
+  }
+}
+
+/** 手柄式任务卡(工具系统用):协调器不知道任务何时结束,拿句柄推进度/落定,
+ *  生命周期语义与 runUtilityTask 完全一致(done 卡 6s 后自动消失;end 必发) */
+export interface UtilityTaskHandle {
+  report(detail: string): void
+  succeed(detail: string): void
+  fail(error: string): void
+}
+
+export function beginUtilityTask(label: string, actor: 'A' | 'B' | 'C' = 'C'): UtilityTaskHandle {
+  seq += 1
+  const id = `ut-${seq}`
+  tasks = [...tasks.slice(-3), { id, kind: 'tool', label, actor, status: 'running', detail: '处理中…', ts: Date.now() }]
+  emit()
+  notifyLifecycle({ phase: 'start', kind: 'tool', id })
+  let settled = false
+  const settle = (p: Partial<UtilityTask>, autoRemove: boolean): void => {
+    if (settled) return
+    settled = true
+    patch(id, p)
+    if (autoRemove) window.setTimeout(() => removeTask(id), 6000)
+    notifyLifecycle({ phase: 'end', kind: 'tool', id })
+  }
+  return {
+    report: (detail) => patch(id, { detail }),
+    succeed: (detail) => settle({ status: 'done', detail }, true),
+    fail: (error) => settle({ status: 'error', error: error.slice(0, 100) }, false),
   }
 }
