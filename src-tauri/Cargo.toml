@@ -33,6 +33,11 @@ wasapi = "0.24.0"
 sysinfo = "0.36.1"
 windows = { version = "0.61.3", features = ["Win32_UI_WindowsAndMessaging", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_System_Power", "Win32_System_Threading", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_Com", "ApplicationModel_DataTransfer", "Foundation", "Globalization", "Graphics_Imaging", "Media_Ocr", "Storage_Streams"] }
 tauri-plugin-single-instance = "2.4.4"
+# CDP 驱动:网页版生成通道全链路移入 Rust,前端只剩 invoke 薄封装。
+# 纯 WS 实现(浏览器级 Target 域替代 HTTP /json 端点),无需 HTTP 客户端依赖
+tokio = { version = "1", default-features = false, features = ["net", "time"] }
+tokio-tungstenite = "0.24"
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 # 敏感值(API Key/B站 Cookie)存 Windows Credential Manager;v3 平台后端需显式 feature
 keyring = { version = "3", default-features = false, features = ["windows-native"] }
 # 截图工具条"另存为"对话框

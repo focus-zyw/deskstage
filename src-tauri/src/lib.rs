@@ -119,6 +119,7 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .manage(audio_capture::CaptureState::default())
+        .manage(webchat::AskState::default())
         .invoke_handler(tauri::generate_handler![
             set_noactivate,
             pointer_hook::set_native_pointer_regions,
@@ -131,8 +132,10 @@ pub fn run() {
             capture::capture_cleanup,
             capture::set_capture_excluded,
             env::env_snapshot,
-            webchat::webchat_edge_launch,
-            webchat::webchat_edge_kill,
+            webchat::webchat_ask,
+            webchat::webchat_cancel,
+            webchat::webchat_login,
+            webchat::webchat_probe,
             webchat::webchat_main_visible,
             ocr::ocr_clipboard,
             ocr::clipboard_image_base64,
@@ -157,6 +160,12 @@ pub fn run() {
             spawn_topmost_watchdog(app.handle().clone());
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app, event| {
+            // 退出时清掉专用 profile 的后台调试 Edge(线程里跑:powershell 枚举约 1s,别拖住退出)
+            if let tauri::RunEvent::Exit = event {
+                std::thread::spawn(webchat::kill_profile_edge);
+            }
+        });
 }
