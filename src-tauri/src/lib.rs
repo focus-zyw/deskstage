@@ -1,4 +1,5 @@
 use mouse_position::mouse_position::Mouse;
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 use tauri::Emitter;
@@ -137,7 +138,9 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .manage(audio_capture::CaptureState::default())
-        .manage(webchat::AskState::default())
+        .manage(Arc::new(webchat::WebchatHub::new(Arc::new(
+            webchat::RealCdpOps,
+        ))))
         .manage(endpoint_proxy::ProxyState::default())
         .manage(mic_capture::MicState::default())
         .manage(config_service::ConfigState::default())
@@ -160,6 +163,8 @@ pub fn run() {
             capture::set_capture_excluded,
             env::env_snapshot,
             webchat::webchat_ask,
+            webchat::webchat_ask_conversation,
+            webchat::webchat_release_conversation,
             webchat::webchat_cancel,
             webchat::webchat_login,
             webchat::webchat_probe,
@@ -194,6 +199,18 @@ pub fn run() {
             spawn_cursor_poll(app.handle().clone());
             pointer_hook::spawn(app.handle().clone());
             spawn_topmost_watchdog(app.handle().clone());
+            // 会话闲置清扫兜底:定时关闭超时未用的网页会话标签页(正常路径由
+            // webchat_release_conversation 关闭;这里只兜崩溃/中断残留)
+            {
+                use tauri::Manager;
+                let hub = app.state::<Arc<webchat::WebchatHub>>().inner().clone();
+                tauri::async_runtime::spawn(async move {
+                    loop {
+                        tokio::time::sleep(Duration::from_secs(webchat::HUB_SWEEP_SECS)).await;
+                        hub.sweep_idle().await;
+                    }
+                });
+            }
             Ok(())
         })
         .build(tauri::generate_context!())
