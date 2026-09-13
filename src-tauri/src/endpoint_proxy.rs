@@ -176,6 +176,8 @@ pub async fn proxy_core(req: ProxyRequest<'_>) -> Result<u16, String> {
         return Err("请求体过大".into());
     }
     let target = resolve_target(base, path_and_query)?;
+    let host_for_log = target.host_str().unwrap_or("?").to_string();
+    let has_auth = auth.is_some();
     let mut req = client()
         .post(target)
         .header("Content-Type", "application/json");
@@ -213,7 +215,15 @@ pub async fn proxy_core(req: ProxyRequest<'_>) -> Result<u16, String> {
                     }
                 }
                 Some(Err(e)) => return Err(format!("响应读取失败: {e}")),
-                None => return Ok(status),
+                None => {
+                    // 空字节哨兵:Channel 内部保序,前端见到它即知 body 已完整,
+                    // 与 invoke 返回值何时不相关(IPC 两条通路间无顺序保证)
+                    let _ = channel.send(InvokeResponseBody::Raw(vec![]));
+                    log::info!(
+                        "端点代理完成: host={host_for_log} status={status} bytes={total} auth={has_auth}"
+                    );
+                    return Ok(status);
+                }
             }
         }
     };

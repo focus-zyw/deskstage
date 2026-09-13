@@ -57,15 +57,22 @@ interface Wire {
   finish(result: { status: number } | Error, okStatus?: boolean): void
 }
 
-/** invoke 的 Channel 事件 ↔ ReadableStream 的双向粘合 */
+/** invoke 的 Channel 事件 ↔ ReadableStream 的双向粘合。
+ *  完成语义:Rust 发完 body 后在同一条 Channel 里追加"空字节哨兵"(Channel 内部
+ *  保序,哨兵到 = body 必然完整);流的正常关闭要求 哨兵已到 且 invoke 已成功结算。
+ *  两者属于不同 IPC 通路,到达顺序无保证——任何一者先行都必须等齐,
+ *  否则会像旧版那样提前关闭拿到空 body("响应不是合法 JSON"事故的根因)。 */
 function wireChannel(): { channel: Channel<unknown>; wire: Wire } {
   const channel = new Channel<unknown>()
   const queue: Uint8Array[] = []
-  let closed = false
+  let upstreamDone = false // 哨兵已到
   let error: Error | null = null
+  let settledOk: boolean | null = null // invoke 结算结果;null = 未结算
   let notify: (() => void) | null = null
   channel.onmessage = (raw) => {
-    queue.push(toBytes(raw))
+    const bytes = toBytes(raw)
+    if (bytes.length === 0) upstreamDone = true
+    else queue.push(bytes)
     notify?.()
     notify = null
   }
@@ -86,8 +93,9 @@ function wireChannel(): { channel: Channel<unknown>; wire: Wire } {
             controller.error(error)
             return
           }
-          if (closed) {
-            controller.close()
+          if (upstreamDone && settledOk !== null) {
+            if (settledOk) controller.close()
+            else controller.error(error ?? new Error('端点请求失败'))
             return
           }
           await new Promise<void>((r) => {
@@ -106,7 +114,7 @@ function wireChannel(): { channel: Channel<unknown>; wire: Wire } {
         ;(err as Error & { serverMsg?: string }).serverMsg = detail
         error = err
       }
-      closed = true
+      settledOk = !(result instanceof Error) && okStatus
       wake()
     },
   }
