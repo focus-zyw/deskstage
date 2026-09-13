@@ -152,8 +152,9 @@ pub fn run() {
       spawn_topmost_watchdog(app.handle().clone());
       // [尖刺|分支 feat/window-split] 验证 WebView2 能否创建第二个窗口:
       // capture.ts 记载历史实测三种参数组合均报 0x8007139F ERROR_INVALID_STATE。
-      // 这里用最普通的参数(不透明/可聚焦/无置顶)在 dev 构建启动 3 秒后自动建一个
-      // "设置窗",成败都写日志——这是舞台/设置拆窗口方案的可行性门槛
+      // 根因已定位:主窗口带 additionalBrowserArgs(自动播放策略),第二窗口
+      // browser args 不同却共享同一 user data folder → WebView2 拒绝创建。
+      // 本轮验证修复:给第二窗口独立 dataDirectory(Tauri 官方文档的明确要求)
       #[cfg(debug_assertions)]
       {
         let handle = app.handle().clone();
@@ -172,7 +173,11 @@ pub fn run() {
           .inner_size(680.0, 700.0)
           .decorations(false)
           .resizable(true)
-          .position(100.0, 150.0);
+          .position(100.0, 150.0)
+          // [尖刺 v3] 与主窗口逐字相同的 additionalBrowserArgs + 同一默认数据目录:
+          // 微软文档约束是"同 user data folder + 环境 option 不同"才拒建,
+          // 参数对齐后应落在允许 case(常规多窗口形态,localStorage 也互通)
+          .additional_browser_args("--autoplay-policy=no-user-gesture-required");
           match builder.build() {
             Ok(win) => {
               let pos = win.outer_position().map(|p| format!("{}x{}", p.x, p.y)).unwrap_or_default();
