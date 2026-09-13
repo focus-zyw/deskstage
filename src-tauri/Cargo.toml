@@ -33,6 +33,8 @@ wasapi = "0.24.0"
 sysinfo = "0.36.1"
 windows = { version = "0.61.3", features = ["Win32_UI_WindowsAndMessaging", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_System_Power", "Win32_System_Threading", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_Com", "ApplicationModel_DataTransfer", "Foundation", "Globalization", "Graphics_Imaging", "Media_Ocr", "Storage_Streams"] }
 tauri-plugin-single-instance = "2.4.4"
+# 敏感值(API Key/B站 Cookie)存 Windows Credential Manager;v3 平台后端需显式 feature
+keyring = { version = "3", default-features = false, features = ["windows-native"] }
 # 截图工具条"另存为"对话框
 tauri-plugin-dialog = "2"
 image = { version = "0.25.6", default-features = false, features = ["png"] }

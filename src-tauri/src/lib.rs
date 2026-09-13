@@ -9,6 +9,7 @@ mod capture;
 mod env;
 mod ocr;
 mod pointer_hook;
+mod secrets;
 mod video_save;
 mod webchat;
 
@@ -137,7 +138,11 @@ pub fn run() {
             ocr::clipboard_image_base64,
             video_save::video_save_from_url,
             video_save::reveal_in_explorer,
-            bili_http::bili_http_request
+            bili_http::bili_http_request,
+            secrets::secret_get,
+            secrets::secret_set,
+            secrets::secret_delete,
+            secrets::secrets_migrate_if_needed
         ])
         .setup(|app| {
             if cfg!(debug_assertions) {
