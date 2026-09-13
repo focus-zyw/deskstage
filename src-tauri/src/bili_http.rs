@@ -6,44 +6,45 @@ use tauri::command;
 
 const UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
 const ALLOWED_PREFIXES: [&str; 3] = [
-  "https://passport.bilibili.com/",
-  "https://api.bilibili.com/",
-  "https://api.live.bilibili.com/",
+    "https://passport.bilibili.com/",
+    "https://api.bilibili.com/",
+    "https://api.live.bilibili.com/",
 ];
 
 #[command]
 pub async fn bili_http_request(
-  url: String,
-  method: Option<String>,
-  cookie: Option<String>,
-  referer: Option<String>,
+    url: String,
+    method: Option<String>,
+    cookie: Option<String>,
+    referer: Option<String>,
 ) -> Result<serde_json::Value, String> {
-  if !ALLOWED_PREFIXES.iter().any(|p| url.starts_with(p)) {
-    return Err(format!("非B站接口:{}", &url[..url.len().min(64)]));
-  }
-  let client = tauri_plugin_http::reqwest::Client::builder()
-    .user_agent(UA)
-    .timeout(std::time::Duration::from_secs(15))
-    .build()
-    .map_err(|e| e.to_string())?;
-  let method = match method.as_deref().unwrap_or("GET").to_uppercase().as_str() {
-    "POST" => tauri_plugin_http::reqwest::Method::POST,
-    _ => tauri_plugin_http::reqwest::Method::GET,
-  };
-  let mut req = client
-    .request(method, &url)
-    .header("Referer", referer.unwrap_or_else(|| "https://live.bilibili.com/".into()));
-  if let Some(c) = cookie.filter(|c| !c.trim().is_empty()) {
-    req = req.header("Cookie", c);
-  }
-  let resp = req.send().await.map_err(|e| e.to_string())?;
-  let status = resp.status().as_u16();
-  let set_cookie: Vec<String> = resp
-    .headers()
-    .get_all(tauri_plugin_http::reqwest::header::SET_COOKIE)
-    .iter()
-    .filter_map(|v| v.to_str().ok().map(String::from))
-    .collect();
-  let body = resp.text().await.map_err(|e| e.to_string())?;
-  Ok(serde_json::json!({ "status": status, "body": body, "set_cookie": set_cookie }))
+    if !ALLOWED_PREFIXES.iter().any(|p| url.starts_with(p)) {
+        return Err(format!("非B站接口:{}", &url[..url.len().min(64)]));
+    }
+    let client = tauri_plugin_http::reqwest::Client::builder()
+        .user_agent(UA)
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let method = match method.as_deref().unwrap_or("GET").to_uppercase().as_str() {
+        "POST" => tauri_plugin_http::reqwest::Method::POST,
+        _ => tauri_plugin_http::reqwest::Method::GET,
+    };
+    let mut req = client.request(method, &url).header(
+        "Referer",
+        referer.unwrap_or_else(|| "https://live.bilibili.com/".into()),
+    );
+    if let Some(c) = cookie.filter(|c| !c.trim().is_empty()) {
+        req = req.header("Cookie", c);
+    }
+    let resp = req.send().await.map_err(|e| e.to_string())?;
+    let status = resp.status().as_u16();
+    let set_cookie: Vec<String> = resp
+        .headers()
+        .get_all(tauri_plugin_http::reqwest::header::SET_COOKIE)
+        .iter()
+        .filter_map(|v| v.to_str().ok().map(String::from))
+        .collect();
+    let body = resp.text().await.map_err(|e| e.to_string())?;
+    Ok(serde_json::json!({ "status": status, "body": body, "set_cookie": set_cookie }))
 }

@@ -47,7 +47,7 @@ pub fn reveal_in_explorer(path: String) -> Result<(), String> {
         use std::os::windows::process::CommandExt;
         // /select 与路径必须是单个参数,带引号防路径含空格被拆
         std::process::Command::new("explorer")
-            .raw_arg(format!("/select,\"{}\"", path))
+            .raw_arg(format!("/select,\"{path}\""))
             .spawn()
             .map_err(|e| format!("打开资源管理器失败:{e}"))?;
     }

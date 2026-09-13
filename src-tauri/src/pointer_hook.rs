@@ -64,67 +64,66 @@ mod platform {
             let info = unsafe { &*(lparam.0 as *const MSLLHOOKSTRUCT) };
             let message = wparam.0 as u32;
             if let Ok(mut hook) = state().lock() {
-                let event =
-                    match message {
-                        WM_LBUTTONDOWN => containing_region(&hook.regions, info.pt.x, info.pt.y)
-                            .map(|id| {
-                                hook.captured_id = Some(id.clone());
-                                NativePointerEvent {
-                                    kind: "down",
-                                    id,
-                                    x: info.pt.x,
-                                    y: info.pt.y,
-                                    delta_y: 0,
-                                    button: 0,
-                                }
-                            }),
-                        WM_LBUTTONUP => hook.captured_id.take().map(|id| NativePointerEvent {
-                            kind: "up",
-                            id,
-                            x: info.pt.x,
-                            y: info.pt.y,
-                            delta_y: 0,
-                            button: 0,
-                        }),
-                        // 右键:区域内按下即吞掉(不给底层应用弹菜单的机会),前端合成 contextmenu
-                        WM_RBUTTONDOWN => containing_region(&hook.regions, info.pt.x, info.pt.y)
-                            .map(|id| {
-                                hook.right_captured_id = Some(id.clone());
-                                NativePointerEvent {
-                                    kind: "down",
-                                    id,
-                                    x: info.pt.x,
-                                    y: info.pt.y,
-                                    delta_y: 0,
-                                    button: 2,
-                                }
-                            }),
-                        WM_RBUTTONUP => hook
-                            .right_captured_id
-                            .take()
-                            .map(|id| NativePointerEvent {
-                                kind: "up",
+                let event = match message {
+                    WM_LBUTTONDOWN => {
+                        containing_region(&hook.regions, info.pt.x, info.pt.y).map(|id| {
+                            hook.captured_id = Some(id.clone());
+                            NativePointerEvent {
+                                kind: "down",
+                                id,
+                                x: info.pt.x,
+                                y: info.pt.y,
+                                delta_y: 0,
+                                button: 0,
+                            }
+                        })
+                    }
+                    WM_LBUTTONUP => hook.captured_id.take().map(|id| NativePointerEvent {
+                        kind: "up",
+                        id,
+                        x: info.pt.x,
+                        y: info.pt.y,
+                        delta_y: 0,
+                        button: 0,
+                    }),
+                    // 右键:区域内按下即吞掉(不给底层应用弹菜单的机会),前端合成 contextmenu
+                    WM_RBUTTONDOWN => {
+                        containing_region(&hook.regions, info.pt.x, info.pt.y).map(|id| {
+                            hook.right_captured_id = Some(id.clone());
+                            NativePointerEvent {
+                                kind: "down",
                                 id,
                                 x: info.pt.x,
                                 y: info.pt.y,
                                 delta_y: 0,
                                 button: 2,
-                            }),
-                        WM_MOUSEWHEEL => containing_region(&hook.regions, info.pt.x, info.pt.y)
-                            .map(|id| {
-                                // Win32 向上滚为正，DOM WheelEvent 向上滚的 deltaY 为负。
-                                let wheel_delta = ((info.mouseData >> 16) as u16 as i16) as i32;
-                                NativePointerEvent {
-                                    kind: "wheel",
-                                    id,
-                                    x: info.pt.x,
-                                    y: info.pt.y,
-                                    delta_y: -wheel_delta,
-                                    button: 0,
-                                }
-                            }),
-                        _ => None,
-                    };
+                            }
+                        })
+                    }
+                    WM_RBUTTONUP => hook.right_captured_id.take().map(|id| NativePointerEvent {
+                        kind: "up",
+                        id,
+                        x: info.pt.x,
+                        y: info.pt.y,
+                        delta_y: 0,
+                        button: 2,
+                    }),
+                    WM_MOUSEWHEEL => {
+                        containing_region(&hook.regions, info.pt.x, info.pt.y).map(|id| {
+                            // Win32 向上滚为正，DOM WheelEvent 向上滚的 deltaY 为负。
+                            let wheel_delta = ((info.mouseData >> 16) as u16 as i16) as i32;
+                            NativePointerEvent {
+                                kind: "wheel",
+                                id,
+                                x: info.pt.x,
+                                y: info.pt.y,
+                                delta_y: -wheel_delta,
+                                button: 0,
+                            }
+                        })
+                    }
+                    _ => None,
+                };
 
                 if let Some(event) = event {
                     if let Some(sender) = &hook.sender {

@@ -33,7 +33,11 @@ pub fn set_capture_excluded(window: tauri::WebviewWindow, enable: bool) -> Resul
             SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE, WDA_NONE,
         };
         let hwnd = window.hwnd().map_err(|e| e.to_string())?;
-        let affinity = if enable { WDA_EXCLUDEFROMCAPTURE } else { WDA_NONE };
+        let affinity = if enable {
+            WDA_EXCLUDEFROMCAPTURE
+        } else {
+            WDA_NONE
+        };
         unsafe { SetWindowDisplayAffinity(hwnd, affinity).map_err(|e| e.to_string())? };
     }
     #[cfg(not(windows))]
@@ -65,7 +69,15 @@ pub fn capture_screen(app: AppHandle) -> Result<String, String> {
 
         // CAPTUREBLT:连带分层窗口(否则半透明元素会缺)
         let blit = BitBlt(
-            hdc_mem, 0, 0, w, h, Some(hdc_screen), 0, 0, SRCCOPY | CAPTUREBLT,
+            hdc_mem,
+            0,
+            0,
+            w,
+            h,
+            Some(hdc_screen),
+            0,
+            0,
+            SRCCOPY | CAPTUREBLT,
         );
 
         // top-down(negative height)逐行 BGRA
@@ -128,7 +140,12 @@ fn crop_frozen(
     }
     let path = temp_capture_path(app)?;
     let img = image::open(&path).map_err(|e| format!("读取冻结图失败:{e}"))?;
-    let img = img.crop_imm(x.max(0) as u32, y.max(0) as u32, width as u32, height as u32);
+    let img = img.crop_imm(
+        x.max(0) as u32,
+        y.max(0) as u32,
+        width as u32,
+        height as u32,
+    );
     Ok(img.to_rgba8())
 }
 

@@ -13,9 +13,14 @@ use std::collections::HashSet;
 
 use serde::Serialize;
 use tauri::{Emitter, Manager, State};
-use windows::Win32::Foundation::{HWND, LPARAM};use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
-use windows::Win32::UI::WindowsAndMessaging::{EnumWindows, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible};
-use wasapi::{AudioClient, DeviceEnumerator, Direction, SampleType, StreamMode, WaveFormat, SessionState};
+use wasapi::{
+    AudioClient, DeviceEnumerator, Direction, SampleType, SessionState, StreamMode, WaveFormat,
+};
+use windows::Win32::Foundation::{HWND, LPARAM};
+use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
+use windows::Win32::UI::WindowsAndMessaging::{
+    EnumWindows, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible,
+};
 
 #[derive(Serialize, Clone)]
 pub struct AudioSessionInfo {
@@ -55,8 +60,12 @@ fn list_audio_sessions_blocking() -> Result<Vec<AudioSessionInfo>, String> {
     let device = enumerator
         .get_default_device(&Direction::Render)
         .map_err(|e| e.to_string())?;
-    let manager = device.get_iaudiosessionmanager().map_err(|e| e.to_string())?;
-    let sessions = manager.get_audiosessionenumerator().map_err(|e| e.to_string())?;
+    let manager = device
+        .get_iaudiosessionmanager()
+        .map_err(|e| e.to_string())?;
+    let sessions = manager
+        .get_audiosessionenumerator()
+        .map_err(|e| e.to_string())?;
     let count = sessions.get_count().map_err(|e| e.to_string())?;
     for i in 0..count {
         let control = match sessions.get_session(i) {
@@ -80,14 +89,41 @@ fn list_audio_sessions_blocking() -> Result<Vec<AudioSessionInfo>, String> {
     // 3. 按进程名去重(多窗口留一条),剔除系统组件;展示标题取第一个窗口
     //    代表 pid:该名下正在发声的窗口进程优先(环回含子进程树,能抓到浏览器的音频子进程)
     const SYSTEM_UI: &[&str] = &[
-        "explorer.exe", "searchhost.exe", "startmenuexperiencehost.exe", "shellexperiencehost.exe",
-        "applicationframehost.exe", "textinputhost.exe", "runtimebroker.exe", "lockapp.exe",
-        "widgets.exe", "widgetservice.exe", "msedgewebview2.exe", "systemsettings.exe",
-        "securityhealthsystray.exe", "securityhealthservice.exe", "sihost.exe", "ctfmon.exe",
-        "svchost.exe", "csrss.exe", "dwm.exe", "winlogon.exe", "wininit.exe", "services.exe",
-        "lsass.exe", "smss.exe", "fontdrvhost.exe", "dllhost.exe", "taskhostw.exe",
-        "conhost.exe", "openconsole.exe", "audiodg.exe", "cmd.exe", "powershell.exe",
-        "windows_terminal.exe", "werfault.exe", "wermgr.exe",
+        "explorer.exe",
+        "searchhost.exe",
+        "startmenuexperiencehost.exe",
+        "shellexperiencehost.exe",
+        "applicationframehost.exe",
+        "textinputhost.exe",
+        "runtimebroker.exe",
+        "lockapp.exe",
+        "widgets.exe",
+        "widgetservice.exe",
+        "msedgewebview2.exe",
+        "systemsettings.exe",
+        "securityhealthsystray.exe",
+        "securityhealthservice.exe",
+        "sihost.exe",
+        "ctfmon.exe",
+        "svchost.exe",
+        "csrss.exe",
+        "dwm.exe",
+        "winlogon.exe",
+        "wininit.exe",
+        "services.exe",
+        "lsass.exe",
+        "smss.exe",
+        "fontdrvhost.exe",
+        "dllhost.exe",
+        "taskhostw.exe",
+        "conhost.exe",
+        "openconsole.exe",
+        "audiodg.exe",
+        "cmd.exe",
+        "powershell.exe",
+        "windows_terminal.exe",
+        "werfault.exe",
+        "wermgr.exe",
     ];
 
     let mut sys = sysinfo::System::new();
@@ -95,7 +131,8 @@ fn list_audio_sessions_blocking() -> Result<Vec<AudioSessionInfo>, String> {
     sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
     let self_pid = std::process::id();
     // key(进程名小写) -> (展示标题, 代表 pid, playing)
-    let mut by_name: std::collections::HashMap<String, (String, u32, bool)> = std::collections::HashMap::new();
+    let mut by_name: std::collections::HashMap<String, (String, u32, bool)> =
+        std::collections::HashMap::new();
     for (pid, title) in wins {
         if pid == self_pid {
             continue;
@@ -126,7 +163,11 @@ fn list_audio_sessions_blocking() -> Result<Vec<AudioSessionInfo>, String> {
             AudioSessionInfo { pid, name, playing }
         })
         .collect();
-    out.sort_by(|a, b| b.playing.cmp(&a.playing).then(a.name.to_lowercase().cmp(&b.name.to_lowercase())));
+    out.sort_by(|a, b| {
+        b.playing
+            .cmp(&a.playing)
+            .then(a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
     Ok(out)
 }
 
@@ -140,7 +181,13 @@ unsafe extern "system" fn collect_window(hwnd: HWND, lparam: LPARAM) -> windows:
         return windows::core::BOOL(1);
     }
     let mut cloaked: u32 = 0;
-    if DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &mut cloaked as *mut _ as _, std::mem::size_of::<u32>() as _).is_ok()
+    if DwmGetWindowAttribute(
+        hwnd,
+        DWMWA_CLOAKED,
+        &mut cloaked as *mut _ as _,
+        std::mem::size_of::<u32>() as _,
+    )
+    .is_ok()
         && cloaked != 0
     {
         return windows::core::BOOL(1);
@@ -287,7 +334,8 @@ fn capture_thread(
     client.stop_stream().map_err(|e| e.to_string())?;
 
     file.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
-    file.write_all(&wav_header(written)).map_err(|e| e.to_string())?;
+    file.write_all(&wav_header(written))
+        .map_err(|e| e.to_string())?;
     file.flush().map_err(|e| e.to_string())?;
     Ok(path)
 }
