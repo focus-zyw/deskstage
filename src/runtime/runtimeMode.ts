@@ -14,6 +14,7 @@ export type RuntimeMode =
   | { type: 'choosing'; choiceId: string } // 中途选边等待
   | { type: 'capturing' } // 框选截图中(动作由松手后的工具条决定)
   | { type: 'recording' } // 音色克隆录音中
+  | { type: 'voice' } // 实时语音对话(独占;listening/thinking/speaking 细分在 voiceSession)
 
 export type OverlayId =
   | 'settings'
@@ -60,6 +61,8 @@ function computeCaps(): RuntimeCaps {
     streaming: s.mode.type === 'streaming',
     capturing: s.mode.type === 'capturing',
     recording: s.mode.type === 'recording',
+    // 语音会话独占演出态:聊天/点播/主动行为全让位;细分 phase 直订 voiceSession
+    voiceActive: s.mode.type === 'voice',
     canStartPerformance: idle,
     canChat: idle,
     // 演出中被戳走 interrupt 分支,其余演出态(choosing)不接戳
@@ -106,6 +109,8 @@ export interface RuntimeCaps {
   streaming: boolean
   capturing: boolean
   recording: boolean
+  /** 实时语音对话进行中(细分 listening/thinking/speaking 在 voiceSession 快照) */
+  voiceActive: boolean
   canStartPerformance: boolean
   canChat: boolean
   canPoke: boolean
@@ -158,6 +163,15 @@ export function beginRecording(): void {
 export function endRecording(): void {
   set({ mode: restoreMode ?? { type: 'idle' } })
   restoreMode = null
+}
+
+/** 进入实时语音对话(独占,不做恢复语义——语音是明确的长驻模式,退出即回空闲) */
+export function beginVoice(): void {
+  setMode({ type: 'voice' })
+}
+
+export function endVoice(): void {
+  setMode({ type: 'idle' })
 }
 
 // ---------- overlays ----------

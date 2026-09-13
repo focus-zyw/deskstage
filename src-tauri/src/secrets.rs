@@ -17,11 +17,12 @@ use tauri::Manager;
 const SERVICE: &str = "dev.virtualcharacter.app";
 
 /// 封闭的 SecretId 白名单(凭据库"账户名"),前端传别的 id 一律拒绝
-const SECRET_IDS: [&str; 7] = [
+const SECRET_IDS: [&str; 8] = [
     "llm:apiKey",
     "llm:apiKeys",
     "tts:voice",
     "tts:minimax",
+    "asr:siliconflow",
     "video:apiKeys",
     "ocr:apiKey",
     "live:cookie",
@@ -173,6 +174,7 @@ fn extract_secrets(cfg: &Value) -> Vec<(String, String)> {
         (&["apiKeys"][..], "llm:apiKeys", true),
         (&["voice", "apiKey"][..], "tts:voice", false),
         (&["voice", "minimax", "apiKey"][..], "tts:minimax", false),
+        (&["voice", "asr", "apiKey"][..], "asr:siliconflow", false),
         (&["videoGen", "apiKeys"][..], "video:apiKeys", true),
         (&["ocr", "apiKey"][..], "ocr:apiKey", false),
         (&["live", "cookie"][..], "live:cookie", false),
@@ -197,6 +199,9 @@ fn strip_secrets(cfg: &mut Value) {
         if let Some(mm) = voice.get_mut("minimax").and_then(Value::as_object_mut) {
             mm.remove("apiKey");
         }
+        if let Some(asr) = voice.get_mut("asr").and_then(Value::as_object_mut) {
+            asr.remove("apiKey");
+        }
     }
     if let Some(video) = obj.get_mut("videoGen").and_then(Value::as_object_mut) {
         video.remove("apiKeys");
@@ -215,11 +220,12 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn extract_picks_all_seven_paths_in_whitelist_order() {
+    fn extract_picks_all_paths_in_whitelist_order() {
         let cfg = json!({
             "apiKey": "sk-main",
             "apiKeys": {"deepseek": "sk-a"},
-            "voice": {"apiKey": "sk-tts", "minimax": {"apiKey": "sk-mm", "groupId": "g"}},
+            "voice": {"apiKey": "sk-tts", "minimax": {"apiKey": "sk-mm", "groupId": "g"},
+                      "asr": {"apiKey": "sk-asr"}},
             "videoGen": {"apiKeys": {"ark": "sk-v"}},
             "ocr": {"apiKey": "sk-ocr"},
             "live": {"cookie": "SESSDATA=xx"}
@@ -233,6 +239,7 @@ mod tests {
                 "llm:apiKeys",
                 "tts:voice",
                 "tts:minimax",
+                "asr:siliconflow",
                 "video:apiKeys",
                 "ocr:apiKey",
                 "live:cookie"
@@ -259,7 +266,8 @@ mod tests {
             "apiKeys": {"deepseek": "sk"},
             "model": "deepseek-chat",
             "voice": {"apiKey": "sk", "provider": "siliconflow",
-                      "minimax": {"apiKey": "sk", "groupId": "g"}},
+                      "minimax": {"apiKey": "sk", "groupId": "g"},
+                      "asr": {"apiKey": "sk", "model": "FunAudioLLM/SenseVoiceSmall"}},
             "videoGen": {"apiKeys": {"ark": "sk"}, "provider": "ark"},
             "ocr": {"apiKey": "sk", "model": "glm-4.6v-flash"},
             "live": {"cookie": "SESSDATA=xx", "roomId": "1"}
@@ -272,6 +280,8 @@ mod tests {
         assert!(obj["voice"].get("apiKey").is_none());
         assert_eq!(obj["voice"]["minimax"]["groupId"], "g");
         assert!(obj["voice"]["minimax"].get("apiKey").is_none());
+        assert_eq!(obj["voice"]["asr"]["model"], "FunAudioLLM/SenseVoiceSmall");
+        assert!(obj["voice"]["asr"].get("apiKey").is_none());
         assert!(obj["videoGen"].get("apiKeys").is_none());
         assert_eq!(obj["videoGen"]["provider"], "ark");
         assert!(obj["ocr"].get("apiKey").is_none());

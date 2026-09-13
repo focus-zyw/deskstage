@@ -83,3 +83,32 @@ test('群聊设置:已有群名保留,非法回落;bg 只认布尔', () => {
   assert.equal(long.name.length, 20)
   assert.equal(long.bg, false)
 })
+
+test('语音对话配置清洗:模式白名单、数值钳位、ASR 模型回落默认', async () => {
+  const cfg = configStore.sanitizeConfig({
+    voice: {
+      voiceChat: {
+        mode: 'hands-free',
+        deviceId: '  {dev-1}  ',
+        vadSensitivityDb: 999, // 越界 → 钳到 24
+        silenceMs: 10, // 越界 → 钳到 400
+        autoInterrupt: true,
+        interruptExtraDb: 3,
+      },
+      asr: { provider: 'siliconflow', model: '   ', apiKey: 'sk-x' },
+    },
+  })
+  assert.equal(cfg.voice.voiceChat.mode, 'hands-free')
+  assert.equal(cfg.voice.voiceChat.deviceId, '{dev-1}')
+  assert.equal(cfg.voice.voiceChat.vadSensitivityDb, 24)
+  assert.equal(cfg.voice.voiceChat.silenceMs, 400)
+  assert.equal(cfg.voice.voiceChat.autoInterrupt, true)
+  assert.equal(cfg.voice.voiceChat.interruptExtraDb, 3)
+  assert.equal(cfg.voice.asr.model, 'FunAudioLLM/SenseVoiceSmall') // 空模型回落默认
+  // 非法模式/越界打断阈值 → 回默认区间;老配置缺字段 → 全默认(平滑升级)
+  const legacy = configStore.sanitizeConfig({ voice: { voiceChat: { mode: 'hack', interruptExtraDb: 99 } } })
+  assert.equal(legacy.voice.voiceChat.mode, 'off')
+  assert.equal(legacy.voice.voiceChat.interruptExtraDb, 12) // 越界钳到上限
+  assert.equal(legacy.voice.voiceChat.silenceMs, 800) // 缺字段回默认
+  assert.equal(legacy.voice.asr.provider, 'siliconflow')
+})

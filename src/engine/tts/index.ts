@@ -52,11 +52,14 @@ registerVoiceIds('minimax', MINIMAX_VOICES.map((v) => v.id))
 // ---------- 通道仲裁(备忘提醒掐掉演出包袱句的历史问题) ----------
 
 /** TTS 通道:低优先级不得打断高优先级在播;同级之间靠 epoch 抢占(后到者胜)。
- *  stream = 主播模式的弹幕回复(权重同演出) */
-export type TtsChannel = 'chat' | 'performance' | 'utility' | 'proactive' | 'stream'
+ *  stream = 主播模式的弹幕回复(权重同演出);voice = 实时语音对话的回复
+ *  (权重同 chat:语音回复本质是聊天回复,不得压过提醒/工具播报;
+ *  句间排队由调用方按 ended 顺序喂,打断走 SpeechHandle.stop 而非全局停声) */
+export type TtsChannel = 'chat' | 'performance' | 'utility' | 'proactive' | 'stream' | 'voice'
 
 const CHANNEL_PRIORITY: Record<TtsChannel, number> = {
   chat: 0,
+  voice: 0,
   performance: 1,
   stream: 1,
   utility: 2,

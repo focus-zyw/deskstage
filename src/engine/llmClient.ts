@@ -1,6 +1,7 @@
 import { getConfig } from '../storage/configStore'
 import type { UserProfile } from '../storage/configStore'
-import { complete } from './llmGateway'
+import { complete, completeStream } from './llmGateway'
+import { createSentenceSplitter } from './sentenceSplitter'
 import { buildMessages, renderAudienceContext, renderViewerBrief, type UserContext } from './promptBuilder'
 import { mergeMessages, webchatAsk } from './webchat'
 import { getMemory, topFacts, tasteSummary, type FactCategory } from '../storage/memoryStore'
@@ -481,7 +482,13 @@ export async function generateDailyLinePack(): Promise<Partial<Record<string, st
  * 聊天通道:观众对指定角色说了一句话,该角色用自己的口吻回一句(15~25 字)。
  * 注入称呼/画像/记忆事实,命中雷区的话题不接。8s 超时、不重试,失败由调用方静默兜底。
  */
-export async function generateUserChatReply(who: Speaker, userText: string): Promise<string> {
+export async function generateUserChatReply(
+  who: Speaker,
+  userText: string,
+  signal?: AbortSignal,
+  /** 工具观察块(工具系统渲染好的不可信资料;原样附加,不解析) */
+  toolNote?: string,
+): Promise<string> {
   const cfg = await getConfig()
   const mem = await getMemory()
   const p: UserProfile = cfg.userProfile
@@ -493,10 +500,13 @@ export async function generateUserChatReply(who: Speaker, userText: string): Pro
       role: 'system',
       content: `桌面双人情景剧互动。你是${persona}。${chatMoodLine ? `${chatMoodLine}。` : ''}观众朋友直接对你说了一句话,用你的口吻回一句。要求:15~25 字,口语化,像真说话;不要引号,不要 JSON。${brief ? `\n${brief}` : ''}\n${soloRescueDiscipline()}`,
     },
-    { role: 'user', content: userText },
+    { role: 'user', content: `${userText}${toolNote ? `\n\n${toolNote}` : ''}` },
   ]
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(new DOMException('超时', 'TimeoutError')), 8_000)
+  // 外部取消(打断/新一轮)与内部超时合流:任一触发即真断请求
+  const onAbort = () => ctrl.abort()
+  signal?.addEventListener('abort', onAbort, { once: true })
   try {
     let raw = (await chatRaw(messages, ctrl.signal, false)).trim()
     if (raw.startsWith('{')) {
@@ -513,6 +523,7 @@ export async function generateUserChatReply(who: Speaker, userText: string): Pro
     return line
   } finally {
     clearTimeout(timer)
+    signal?.removeEventListener('abort', onAbort)
   }
 }
 
@@ -568,6 +579,10 @@ export async function generateTurnBatch(input: {
   window: { who: TurnWho; text: string }[]
   /** 观众明确同时询问三人(如"你们各自怎么看"):放开三人各答一句 */
   groupAsk?: boolean
+  /** 外部取消(打断/退出):与内部超时合流,触发即真断请求 */
+  signal?: AbortSignal
+  /** 工具观察块(工具系统渲染好的不可信资料;原样附加到观众消息后) */
+  toolNote?: string
 }): Promise<DialogLine[]> {
   const cfg = await getConfig()
   const mem = await getMemory()
@@ -599,16 +614,19 @@ ${rescueDiscipline()}`,
     },
     {
       role: 'user',
-      content: `${windowText ? `最近对话:\n${windowText}\n\n` : ''}观众说:${input.userText}`,
+      content: `${windowText ? `最近对话:\n${windowText}\n\n` : ''}观众说:${input.userText}${input.toolNote ? `\n\n${input.toolNote}` : ''}`,
     },
   ]
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(new DOMException('超时', 'TimeoutError')), 12_000)
+  const onAbort = () => ctrl.abort()
+  input.signal?.addEventListener('abort', onAbort, { once: true })
   try {
     const raw = await chatRaw(messages, ctrl.signal)
     return validateTurnBatch(parseDialog(raw, 1).before, input.target, { maxLines: input.groupAsk ? 3 : 2 }) ?? []
   } finally {
     clearTimeout(timer)
+    input.signal?.removeEventListener('abort', onAbort)
   }
 }
 
@@ -1081,4 +1099,94 @@ export async function distillStory(
   } finally {
     clearTimeout(timer)
   }
+}
+
+/** 语音对话流式应答(异步生成器):单角色纯文本流式 + 增量分句,逐句 yield。
+ *  句子在生成器内排队,入队即回调 onQueued(调用方借此在播上一句时预合成下一句);
+ *  消费方逐句说,首句闭合即说、不等后续。
+ *  提交点语义(docs/实时语音对话设计方案.md §4.1):
+ *  · 首句产出前失败 → 排空后抛错(调用方整段回落 turnBatch,重生成安全);
+ *  · 已产出 ≥1 句后失败 → 排空已完成句后抛同一个错(调用方只补提示,不重生成);
+ *  · 网页版生成通道不支持流式 → 首条 delta 前即抛错,同样走整段回落。 */
+export async function* streamVoiceReply(input: {
+  userText: string
+  target: Speaker
+  signal?: AbortSignal
+  /** 工具观察块(与文本路径同源;语音+工具组合时随 user 消息附带) */
+  toolNote?: string
+  /** 句子入队回调(入队时机 = 消费方还在播上一句,正好预合成) */
+  onQueued?(line: DialogLine): void
+}): AsyncGenerator<DialogLine> {
+  const cfg = await getConfig()
+  if (cfg.webchatEnabled) throw new Error('网页版生成通道不支持流式')
+  const mem = await getMemory()
+  const p: UserProfile = cfg.userProfile
+  const persona = soloShortPersona(input.target)
+  const chatMoodLine = moodHintLine(await getMoods(), [input.target])
+  const brief = renderViewerBrief(p, topFacts(mem, 3))
+  const who = p.userName || '观众'
+  const messages: { role: string; content: string }[] = [
+    {
+      role: 'system',
+      content: `桌面双人情景剧互动。你是${persona}。${chatMoodLine ? `${chatMoodLine}。` : ''}${who}面对面和你说了一句话,用你的口吻口头回答。要求:口语化、自然、像真说话,1~3 个短句,每句不超过 25 字;直接说内容,不要引号、不要旁白、不要 JSON。${brief ? `\n${brief}` : ''}\n${soloRescueDiscipline()}`,
+    },
+    {
+      role: 'user',
+      content: `${who}说:${input.userText}${input.toolNote ? `\n\n${input.toolNote}` : ''}`,
+    },
+  ]
+  const splitter = createSentenceSplitter()
+  let sentences = 0
+  const queue: DialogLine[] = []
+  let wake: (() => void) | null = null
+  let done = false
+  let failure: unknown = null
+  const push = (text: string) => {
+    const line: DialogLine = { speaker: input.target, text, action: 'talk' }
+    sentences += 1
+    queue.push(line)
+    input.onQueued?.(line)
+    wake?.()
+    wake = null
+  }
+  const pump = completeStream({
+    messages,
+    temperature: 1.1,
+    maxTokens: 400,
+    timeoutMs: 30_000,
+    signal: input.signal,
+    onDelta: (piece) => {
+      for (const s of splitter.feed(piece)) push(s)
+    },
+  }).then(
+    () => {
+      const tail = splitter.flush()
+      if (tail) push(tail)
+      done = true
+      wake?.()
+      wake = null
+    },
+    (e) => {
+      failure = e
+      done = true
+      wake?.()
+      wake = null
+    },
+  )
+  try {
+    for (;;) {
+      if (queue.length > 0) {
+        yield queue.shift()!
+        continue
+      }
+      if (done) break
+      await new Promise<void>((r) => {
+        wake = r
+      })
+    }
+  } finally {
+    // 消费方提前退出(打断):pump 随 abort 自行收尾,吞掉迟到的拒绝
+    void pump.catch(() => {})
+  }
+  if (failure !== null) throw failure
 }

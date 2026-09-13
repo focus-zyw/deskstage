@@ -30,6 +30,8 @@ const HK = (partial) => ({
   rateUp: '',
   rateDown: '',
   rateFav: '',
+  toggleVoice: '',
+  pushToTalk: '',
   ...partial,
 })
 
@@ -82,4 +84,21 @@ test('评价动作可绑定:rateUp/rateDown/rateFav 走同一解析与冲突规�
     { shortcut: 'CTRL+ALT+U', action: 'rateUp' },
     { shortcut: 'CTRL+ALT+J', action: 'rateDown' },
   ])
+})
+
+test('语音热键:toggleVoice/pushToTalk 正常解析,同键冲突按清单顺序让位', () => {
+  const out = resolveHotkeyBindings(
+    HK({ toggleVoice: 'Ctrl+Alt+V', pushToTalk: 'Ctrl+Shift+V' }),
+    'Ctrl+Alt+A',
+  )
+  assert.deepEqual(out, [
+    { shortcut: 'CTRL+ALT+V', action: 'toggleVoice' },
+    { shortcut: 'CTRL+SHIFT+V', action: 'pushToTalk' },
+  ])
+  // 清单顺序 = 让位顺序:toggleVoice 在 pushToTalk 之前注册
+  const conflict = resolveHotkeyBindings(
+    HK({ toggleVoice: 'Ctrl+Alt+H', pushToTalk: 'ctrl+alt+h' }),
+    '',
+  )
+  assert.deepEqual(conflict, [{ shortcut: 'CTRL+ALT+H', action: 'toggleVoice' }])
 })

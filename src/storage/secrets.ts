@@ -13,6 +13,7 @@ export type SecretId =
   | 'llm:apiKeys'
   | 'tts:voice'
   | 'tts:minimax'
+  | 'asr:siliconflow'
   | 'video:apiKeys'
   | 'ocr:apiKey'
   | 'live:cookie'

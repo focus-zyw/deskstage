@@ -3,6 +3,7 @@ import { PROVIDER_OPTIONS, providerById, previewSample } from '../../engine/tts'
 import { saveConfig, type GptsovitsVoice } from '../../storage/configStore'
 import { useSettings } from '../useSettingsSession'
 import { CloneVoiceRow, SettingsCard, SetField, SetLine, SetSwitch } from '../SettingsPrimitives'
+import { VoiceChatCard } from '../VoiceChatCard'
 
 /** api_v2 支持的语言代码(与 configStore 清洗白名单一致) */
 const GPT_LANGS = ['auto', 'zh', 'en', 'ja', 'ko', 'yue'] as const
@@ -206,6 +207,7 @@ export function VoiceSettings() {
           </>
         )}
       </SettingsCard>
+      <VoiceChatCard />
       {voice.enabled && (
         <SettingsCard card="音色与表现" flash={flashCard} title="音色与表现">
           <SetLine

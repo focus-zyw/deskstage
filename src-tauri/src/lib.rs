@@ -3,11 +3,13 @@ use std::thread;
 use std::time::Duration;
 use tauri::Emitter;
 
+mod asr;
 mod audio_capture;
 mod bili_http;
 mod capture;
 mod endpoint_proxy;
 mod env;
+mod mic_capture;
 mod ocr;
 mod pointer_hook;
 mod secrets;
@@ -136,6 +138,7 @@ pub fn run() {
         .manage(audio_capture::CaptureState::default())
         .manage(webchat::AskState::default())
         .manage(endpoint_proxy::ProxyState::default())
+        .manage(mic_capture::MicState::default())
         .invoke_handler(tauri::generate_handler![
             set_noactivate,
             report_csp_violation,
@@ -144,6 +147,10 @@ pub fn run() {
             audio_capture::list_audio_sessions,
             audio_capture::start_capture,
             audio_capture::stop_capture,
+            mic_capture::list_mic_devices,
+            mic_capture::mic_start,
+            mic_capture::mic_stop,
+            asr::asr_transcribe,
             capture::capture_screen,
             capture::capture_finish,
             capture::capture_save,

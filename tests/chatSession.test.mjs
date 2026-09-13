@@ -202,10 +202,11 @@ test('@解析:点名乙应答乙,groupAsk 关键词放开多句请求', async ()
   const { engine, calls: ecalls } = makeEngine()
   const session = mod.createChatSession(host, engine)
   await session.send('@乙 你怎么看')
-  assert.equal(calls.presentTurn[0].speaker, 'B')
   await session.whenIdle()
+  assert.equal(calls.presentTurn[0].speaker, 'B')
   assert.equal(ecalls.turnBatch[0].groupAsk, false)
   await session.send('你们都说说看法')
+  await session.whenIdle()
   assert.equal(ecalls.turnBatch[1].groupAsk, true)
 })
 
@@ -214,6 +215,7 @@ test('@解析跟随设置里的角色名', async () => {
   const { engine } = makeEngine()
   const session = mod.createChatSession(host, engine)
   await session.send('@阿瓜 讲一个')
+  await session.whenIdle()
   assert.equal(calls.presentTurn[0].speaker, 'B')
 })
 
@@ -228,4 +230,110 @@ test('空文本返回 empty;订阅者在 busy 翻转时收到通知', async () =
   await session.whenIdle()
   un()
   assert.deepEqual(events, [true, false])
+})
+
+// ---------- 语音路径(句级提交 / 流式提交点) ----------
+
+/** 可控语音 TTS:started 恒 audible;ended 立即放行(instant)或手动放行 */
+function makeTtsVoice(instant = true) {
+  const calls = { speakTracked: [], stopped: 0, prefetch: [] }
+  const pendings = []
+  let released = false // finishAll 之后创建的句柄即时放行(回合收尾不该再被挂住)
+  const engine = {
+    tts: {
+      speak: () => {},
+      speakTracked: (who, text) => {
+        calls.speakTracked.push({ who, text })
+        let fire
+        const ended = new Promise((r) => {
+          fire = r
+        })
+        if (instant || released) fire()
+        else pendings.push(fire)
+        return { started: Promise.resolve('audible'), ended, stop: () => { calls.stopped++; fire() } }
+      },
+      prefetch: (who, text) => calls.prefetch.push({ who, text }),
+    },
+  }
+  return { engine, calls, finishAll: () => { released = true; pendings.forEach((f) => f()) } }
+}
+
+test('语音路径:句级提交——播完才落盘', async () => {
+  const { host, calls } = makeHost()
+  const { engine, calls: ecalls } = makeEngine({
+    turnBatch: async () => [
+      { speaker: 'A', text: '第一句', action: 'talk' },
+      { speaker: 'A', text: '第二句', action: 'talk' },
+    ],
+  })
+  const tts = makeTtsVoice(false) // ended 手动放行
+  const session = mod.createChatSession(host, { ...engine, ...tts.engine, streamTurn: undefined })
+  await session.send('讲讲', { voice: true })
+  await new Promise((r) => setTimeout(r, 20))
+  // 两句都已开声,但还没播完:不应提交
+  assert.equal(tts.calls.speakTracked.length, 1) // 第一句在播
+  assert.deepEqual(tts.calls.prefetch, [{ who: 'A', text: '第二句' }]) // 第二句已预合成
+  assert.ok(!ecalls.recordTurn.some((r) => r.text === '第一句'))
+  tts.finishAll()
+  await session.whenIdle()
+  assert.ok(ecalls.recordTurn.some((r) => r.text === '第一句'))
+  assert.ok(ecalls.recordTurn.some((r) => r.text === '第二句'))
+  assert.equal(calls.presentTurn.length, 2)
+})
+
+test('语音路径:打断——在播句不落盘,句柄级停声', async () => {
+  const { host } = makeHost()
+  const { engine, calls: ecalls } = makeEngine({
+    turnBatch: async () => [{ speaker: 'A', text: '会被打断的句子', action: 'talk' }],
+  })
+  const tts = makeTtsVoice(false)
+  const session = mod.createChatSession(host, { ...engine, ...tts.engine, streamTurn: undefined })
+  await session.send('说话', { voice: true })
+  await new Promise((r) => setTimeout(r, 20))
+  session.cancel()
+  await session.whenIdle()
+  assert.equal(tts.calls.stopped, 1, 'cancel 应句柄级停声')
+  assert.ok(!ecalls.recordTurn.some((r) => r.text === '会被打断的句子'), '打断句不提交')
+  assert.equal(session.getSnapshot().busy, false)
+})
+
+test('语音路径·流式:首句前失败 → 整段回落 turnBatch(无轻提示)', async () => {
+  const { host, calls } = makeHost()
+  const { engine, calls: ecalls } = makeEngine()
+  const tts = makeTtsVoice(true)
+  const session = mod.createChatSession(host, {
+    ...engine,
+    ...tts.engine,
+    // 生成器形状是流式依赖的契约;首句产出前即抛错,故无 yield
+    // oxlint-disable-next-line require-yield
+    streamTurn: async function* () {
+      throw new Error('网络炸了')
+    },
+  })
+  await session.send('来一段', { voice: true })
+  await session.whenIdle()
+  assert.equal(calls.presentTurn.length, 1)
+  assert.equal(calls.presentTurn[0].text, '回:来一段')
+  assert.equal(calls.presentFallback.length, 0)
+  assert.equal(ecalls.turnBatch.length, 1)
+})
+
+test('语音路径·流式:已有句后失败 → 保留已完成句 + 轻提示,不重生成', async () => {
+  const { host, calls } = makeHost()
+  const { engine, calls: ecalls } = makeEngine()
+  const tts = makeTtsVoice(true)
+  const session = mod.createChatSession(host, {
+    ...engine,
+    ...tts.engine,
+    streamTurn: async function* (input) {
+      yield { speaker: input.target, text: '前半句', action: 'talk' }
+      throw new Error('中途断了')
+    },
+  })
+  await session.send('继续', { voice: true })
+  await session.whenIdle()
+  assert.equal(ecalls.turnBatch.length, 0, '不整段重生成')
+  assert.ok(ecalls.recordTurn.some((r) => r.text === '前半句'), '已完成句照常提交')
+  assert.equal(calls.presentFallback.length, 1, '只补一句轻提示')
+  assert.equal(calls.presentTurn.length, 1)
 })

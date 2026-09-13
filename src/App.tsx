@@ -29,6 +29,10 @@ import { loadLinePacks, saveLinePack, dayKey } from './storage/linePackStore'
 import { createChatSession } from './session/ChatSession'
 import { pushTurn, type TurnWho } from './dialogue/turnWindow'
 import { appendChatTurns, listChatTurns } from './storage/chatLogStore'
+import { createToolCoordinator } from './tools/coordinator'
+import { TOOLS } from './tools/registry'
+import { createJsonPromptPlanner, defaultPlannerDeps } from './tools/planner/jsonPromptPlanner'
+import { beginUtilityTask, type UtilityTaskHandle } from './runtime/utilityTasks'
 import { FirstRunWizard } from './wizard/FirstRunWizard'
 import { resetDismissals } from './storage/interactionStore'
 import { ensureMoodLoaded } from './storage/moodStore'
@@ -66,12 +70,16 @@ import {
   beginStreaming,
   beginCapture,
   endCapture,
+  beginVoice,
+  endVoice,
   openOverlayExclusive,
   closeOverlay,
   closeAllOverlays,
   setDnd as setRuntimeDnd,
   setCharHidden as setRuntimeCharHidden,
 } from './runtime/runtimeMode'
+import { installVoiceSession, getActiveVoiceSession, getVoiceSnapshot, useVoiceSession } from './session/voiceSession'
+import { VoiceStatusChip } from './ui/VoiceStatusChip'
 import { runUtilityTask, useUtilityTasks, onUtilityTaskLifecycle } from './runtime/utilityTasks'
 import { showProp, dismissProps, clearProps } from './runtime/propEffects'
 import { preloadProps } from './stage/props'
@@ -157,6 +165,8 @@ if (import.meta.env.DEV) {
 function App() {
   // 统一运行状态:phase/面板开关全部派生自它,写入走 setRuntimeMode/openOverlayExclusive 等
   const rt = useRuntime()
+  // 语音会话细分 phase(状态浮标/命令面板标签直接消费;事实源在 voiceSession)
+  const voicePhase = useVoiceSession().phase
   const [hovered, setHovered] = useState<string | null>(null)
   const phase: Phase =
     rt.mode.type === 'generating'
@@ -482,6 +492,15 @@ function App() {
       const info = ratingAskRef.current
       if (info) favoriteCurrentEpisode(info)
     })
+    // 语音对话:toggle 开/关会话;pushToTalk 是 hold 动作(按住收音、松开送识别、
+    // 角色说话时按下 = 打断)。pttDown/pttUp 均幂等,自动重复/丢 Released 无害
+    setHotkeyHandler('toggleVoice', () => toggleVoiceSession())
+    setHotkeyHandler('pushToTalk', (s) => {
+      const vs = getActiveVoiceSession()
+      if (!vs) return
+      if (s === 'down') vs.pttDown()
+      else if (s === 'up') vs.pttUp()
+    })
   })
 
   // 截屏流程:capture-start 进入框选模式(主窗恢复交互,CaptureOverlay 铺满冻结图),
@@ -526,6 +545,7 @@ function App() {
       utilPropSeen.current.set(t.id, t.status)
       if (t.kind === 'capture-translate' && t.status === 'done') continue // 翻译还在跑,接力给面板
       if (t.kind === 'live') continue // 直播是常驻状态卡,不挂道具
+      if (t.actor === 'C') continue // 工具系统指派 C 时她只有工作姿势(props 桥只认 A/B)
       const prop = t.status === 'running' ? 'magnifier' : t.status === 'error' ? 'question' : 'success'
       showProp(t.actor, prop, { key: 'utility', durationMs: t.status === 'running' ? 0 : undefined })
     }
@@ -681,6 +701,7 @@ function App() {
       })),
     { id: 'live', label: '开播(直播弹幕互动,设置里填直播间号)', keywords: ['开播', '直播', '弹幕'], run: () => performNow('live') },
     { id: 'live-stop', label: '下播(结束直播弹幕互动)', keywords: ['下播'], run: () => director.stop() },
+    { id: 'voice', label: voicePhase === 'off' ? '开启语音对话(和角色说话)' : '关闭语音对话', keywords: ['语音', '语音对话', '麦克风', '说话'], run: () => toggleVoiceSession() },
   ]
 
   /** 翻译成功后的角色搭腔:甲吹一句乙拆台,只在空闲时插话,20s 冷却 */
@@ -935,27 +956,99 @@ function App() {
   useEffect(() => {
     noteUserActiveRef.current = noteUserActive
   })
+
+  // ---------- 角色工具系统:协调器(终生一次)+ 宿主桥(确认卡/任务卡/pendingText) ----------
+  // 铁律在协调器里;这里只做呈现适配:确认走角色风格卡(45s 无应答按拒绝),
+  // pendingText 走插话气泡,进度与结果走右上浮层卡
+  const [toolAsk, setToolAsk] = useState<{
+    id: number
+    title: string
+    detail: string
+    rememberable: boolean
+    toolId: string
+    resolve: (allowed: boolean) => void
+  } | null>(null)
+  const toolAskSeq = useRef(0)
+  const toolCards = useRef(new Map<string, UtilityTaskHandle>())
+  const webchatPrefRef = useRef(config.webchatEnabled === true)
+  useEffect(() => {
+    webchatPrefRef.current = config.webchatEnabled === true
+  }, [config.webchatEnabled])
+  const toolCoordinator = useMemo(
+    () =>
+      createToolCoordinator({
+        registry: TOOLS,
+        planner: createJsonPromptPlanner(defaultPlannerDeps(() => webchatPrefRef.current)),
+        settings: async () => (await getConfig()).tools,
+        facts: async () => ({ isLive: modeRef.current === 'live', phase: phaseRef.current }),
+        host: {
+          confirm: (req) =>
+            new Promise<boolean>((resolve) => {
+              const id = ++toolAskSeq.current
+              const timer = window.setTimeout(() => {
+                setToolAsk((cur) => (cur?.id === id ? null : cur))
+                resolve(false) // 久未应答按拒绝:聊天回合不能被一张卡永远挂住
+              }, 45_000)
+              setToolAsk({
+                id,
+                title: req.title,
+                detail: req.detail,
+                rememberable: req.rememberable === true,
+                toolId: req.toolId,
+                resolve: (v) => {
+                  window.clearTimeout(timer)
+                  setToolAsk((cur) => (cur?.id === id ? null : cur))
+                  resolve(v)
+                },
+              })
+            }),
+          presentPending: (m) => {
+            const p = m.presentation
+            if (p) presenterSayRef.current(p.actor, p.pendingText, { action: p.action, ms: 2200, reacting: true })
+          },
+          onToolStart: (m) => {
+            toolCards.current.set(m.id, beginUtilityTask(m.label, m.presentation?.actor ?? 'C'))
+          },
+          onToolProgress: (m, detail) => toolCards.current.get(m.id)?.report(detail),
+          onToolEnd: (m, result) => {
+            const card = toolCards.current.get(m.id)
+            if (!card) return
+            toolCards.current.delete(m.id)
+            if (result.ok) card.succeed(result.summary.split('\n')[0])
+            else card.fail(result.summary)
+          },
+        },
+      }),
+    // 动态事实(阶段/直播态/开关)全部经 ref 与 getConfig 读取:协调器终生一次
+    [],
+  )
+
   const chatSession = useMemo(
     () =>
-      createChatSession({
-        names: () => charNamesRef.current,
-        isPerforming: () => phaseRef.current === 'performing',
-        queueInterjection: (text, who) => directorRef.current.queueInterjection(text, who),
-        presentTurn: ({ speaker, text, holdMs }) => {
-          presenterSayRef.current(speaker, text, { action: 'talk', ms: holdMs, speaking: true })
-          pulseOtherRef.current(speaker)
+      createChatSession(
+        {
+          names: () => charNamesRef.current,
+          isPerforming: () => phaseRef.current === 'performing',
+          queueInterjection: (text, who) => directorRef.current.queueInterjection(text, who),
+          presentTurn: ({ speaker, text, holdMs }) => {
+            presenterSayRef.current(speaker, text, { action: 'talk', ms: holdMs, speaking: true })
+            pulseOtherRef.current(speaker)
+          },
+          presentUser: (text, who) => {
+            setUserBubble(text)
+            if (who) setTopActor(who)
+          },
+          clearUser: (text) => setUserBubble((u) => (u === text ? null : u)),
+          presentFallback: ({ speaker, text }) =>
+            presenterSayRef.current(speaker, text, { ms: 2200 }),
+          onUserActive: () => noteUserActiveRef.current(),
+          onTurnSpeechStart: () => getActiveVoiceSession()?.notifyTurnSpeechStart(),
         },
-        presentUser: (text, who) => {
-          setUserBubble(text)
-          if (who) setTopActor(who)
-        },
-        clearUser: (text) => setUserBubble((u) => (u === text ? null : u)),
-        presentFallback: ({ speaker, text }) =>
-          presenterSayRef.current(speaker, text, { ms: 2200 }),
-        onUserActive: () => noteUserActiveRef.current(),
-      }),
+        // 工具协调挂在引擎侧:用户回合先问一句"这话要不要动手",观察块随生成注入
+        { tools: (input, signal) => toolCoordinator.prepareTurn(input, signal) },
+      ),
     // 两者均为 useState setter(稳定):session 终生只创建一次,其余回调经 ref 取最新
-    [setUserBubble, setTopActor],
+    [setUserBubble, setTopActor, toolCoordinator],
   )
   // busy 消费走外部 store:演出/抉择等待不算忙(session 与导演状态分界)
   const chatBusy = useSyncExternalStore(chatSession.subscribe, () => chatSession.getSnapshot().busy)
@@ -965,6 +1058,62 @@ function App() {
   async function sendUserChatText(raw: string): Promise<'accepted' | 'busy' | 'empty'> {
     return chatSession.send(raw)
   }
+
+  /** 语音对话开关(命令面板/全局热键共用):按设置里的对话模式启动,开着就关 */
+  function toggleVoiceSession() {
+    const vs = getActiveVoiceSession()
+    if (!vs) return
+    if (getVoiceSnapshot().phase !== 'off') {
+      void vs.stop()
+      return
+    }
+    void (async () => {
+      const c = await getConfig()
+      const m = c.voice.voiceChat.mode
+      if (m === 'off') {
+        presenterSayRef.current('A', '语音对话还没配置:到 设置 → 角色语音 → 语音对话 里选「按键说话」或「免按键」', { ms: 5000 })
+        return
+      }
+      await vs.start(m)
+    })()
+  }
+
+  // 语音会话安装(终生一次):真实依赖在此闭合,动态事实经稳定闭包取最新。
+  // phase → 呈现映射:思考 = A/B 想姿势;回到收音 = 闭嘴 + 姿势复位(打断后气泡动画回收)
+  useEffect(() => {
+    installVoiceSession({
+      chat: chatSession,
+      loadConfig: async () => {
+        const c = await getConfig()
+        return { voiceChat: c.voice.voiceChat, asr: c.voice.asr }
+      },
+      mode: {
+        prepare: () => {
+          const caps = getCaps()
+          if (caps.capturing) return false // 框选中不打断截图
+          if (caps.performing || caps.streaming) directorRef.current.stop()
+          return true
+        },
+        enter: () => beginVoice(),
+        exit: () => endVoice(),
+      },
+      onPhase: (p, prev) => {
+        if (p === 'thinking') {
+          setPose('A', 'thinking')
+          setPose('B', 'thinking')
+        } else if (p === 'listening' && (prev === 'speaking' || prev === 'thinking')) {
+          hush('A')
+          hush('B')
+          settle()
+        } else if (p === 'off' || p === 'mic-lost') {
+          settle()
+        }
+      },
+      log: (m) => console.info('[voice]', m),
+    })
+    // chatSession 与 presenter 回调均稳定:终生安装一次
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   /** 主聊天框入口:草稿走核心通道,受理后清空草稿 */
   async function sendUserChat() {
@@ -1238,6 +1387,7 @@ function App() {
         }
       }}
     >
+      <VoiceStatusChip />
       <ControlBar
         pos={ctrlBar}
         onPosChange={applyCtrlBar}
@@ -1588,6 +1738,55 @@ function App() {
             top={Math.min(window.innerHeight - 180, Math.max(12, ctrlBar.top + 46))}
             onPick={director.choose}
           />
+        )}
+
+        {/* 工具确认卡(角色演绎确认):敏感工具执行前问一句;45s 无应答按拒绝 */}
+        {toolAsk && (
+          <div
+            className="settings-panel choice-panel"
+            style={{
+              left: `${Math.min(88, Math.max(12, ctrlBar.xPct))}%`,
+              top: Math.min(window.innerHeight - 200, Math.max(12, ctrlBar.top + 46)),
+            }}
+            role="group"
+            aria-label="工具确认"
+          >
+            <div className="choice-prompt">{toolAsk.title}</div>
+            {toolAsk.detail && (
+              <div style={{ fontSize: 12, opacity: 0.75, whiteSpace: 'pre-wrap', margin: '2px 0 8px' }}>
+                {toolAsk.detail}
+              </div>
+            )}
+            <div className="choice-opts">
+              <button className="panel-btn primary" onClick={() => toolAsk.resolve(true)}>
+                允许
+              </button>
+              {toolAsk.rememberable && (
+                <button
+                  className="panel-btn"
+                  onClick={() => {
+                    // 记住允许:写进配置 autoApproved,此后该工具不再弹确认(设置页可清除)
+                    void getConfig()
+                      .then((c) =>
+                        saveConfig({
+                          tools: {
+                            ...c.tools,
+                            autoApproved: { ...c.tools.autoApproved, [toolAsk.toolId]: true },
+                          },
+                        }),
+                      )
+                      .catch(() => {})
+                    toolAsk.resolve(true)
+                  }}
+                >
+                  允许并不再问
+                </button>
+              )}
+              <button className="panel-btn" onClick={() => toolAsk.resolve(false)}>
+                这次不行
+              </button>
+            </div>
+          </div>
         )}
 
         {/* C 已是常驻身体,台词气泡在角色头顶;仅在设置里禁用 C 时回落画外音横幅 */}

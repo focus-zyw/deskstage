@@ -74,6 +74,34 @@ export interface GptsovitsConfig {
 }
 
 /** 角色语音:开关 + 当前供应商 + 每供应商各自的角色音色分配(切换供应商互不影响) */
+/** 语音对话的识别配置(实时语音闭环用):云端先行,local 留接口给二期 whisper.cpp */
+export interface AsrConfig {
+  provider: 'siliconflow' | 'local'
+  /** OpenAI 兼容转录端点的模型名(官方列表:FunAudioLLM/SenseVoiceSmall、TeleAI/TeleSpeechASR) */
+  model: string
+  /** 硅基流动 API Key,独立于 TTS 的 key(TTS 用 MiniMax 时 ASR 仍可单独用硅基) */
+  apiKey: string
+}
+
+export type VoiceChatMode = 'off' | 'ptt' | 'hands-free'
+
+/** 实时语音对话配置:模式/设备/VAD 调参/打断。VAD 语义见 docs/实时语音对话设计方案.md:
+ *  起声 = 连续 3 帧超 (噪声底 + vadSensitivityDb);止 = 静音 silenceMs;
+ *  打断阈值 = 起声阈值再 + interruptExtraDb(外放回声防护,autoInterrupt 默认关) */
+export interface VoiceChatConfig {
+  mode: VoiceChatMode
+  /** 麦克风设备 id;空串 = 系统默认 */
+  deviceId: string
+  /** 起声灵敏度:阈值相对噪声底高出多少 dB(小=更灵敏) */
+  vadSensitivityDb: number
+  /** 静音多久判定一句结束(ms) */
+  silenceMs: number
+  /** 自动打断(实验项):角色说话时用户开口即打断;外放场景可能误触发,建议耳机 */
+  autoInterrupt: boolean
+  /** 打断阈值在起声阈值基础上再抬多少 dB(回声防护) */
+  interruptExtraDb: number
+}
+
 export interface VoiceConfig {
   enabled: boolean
   /** 当前语音供应商 */
@@ -89,6 +117,10 @@ export interface VoiceConfig {
   assignments: Record<TtsProviderId, { A: string; B: string; C: string }>
   /** 自然语言情感指令:把 deadpan/excited/slow 映射成语气描述(供应商自行表达) */
   emotionHints: boolean
+  /** 语音识别(语音对话用) */
+  asr: AsrConfig
+  /** 实时语音对话 */
+  voiceChat: VoiceChatConfig
 }
 
 /** 视频生成供应商:即梦(火山方舟 Seedance)/ 海螺 MiniMax / 智谱清影 */
@@ -202,6 +234,9 @@ export interface AppConfig {
   /** 首启向导已完成。老配置升级后该字段缺省 false,但向导只对"零痕迹"用户弹出
    *  (无聊天记录且未填称呼),老用户不会被误打扰 */
   wizardDone: boolean
+  /** 角色工具系统:按工具开关与 external 工具的"记住允许"。
+   *  键 = 工具注册表 id(src/tools/registry.ts);开关缺省键 = 各工具 defaultEnabled */
+  tools: ToolPrefsConfig
 }
 
 /** 翻译面板配置 */
@@ -262,6 +297,15 @@ export const DEFAULT_CONFIG: AppConfig = {
       local: { A: '', B: '', C: '' },
     },
     emotionHints: true,
+    asr: { provider: 'siliconflow', model: 'FunAudioLLM/SenseVoiceSmall', apiKey: '' },
+    voiceChat: {
+      mode: 'off',
+      deviceId: '',
+      vadSensitivityDb: 12,
+      silenceMs: 800,
+      autoInterrupt: false,
+      interruptExtraDb: 6,
+    },
   },
   autoReplayMin: 10,
   characters: {
@@ -279,7 +323,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   ctrlBar: { xPct: 50, top: 10, collapsed: false },
   showWatermark: false,
   screenshot: { hotkey: 'Ctrl+Alt+A', enabled: true, hideSelf: true },
-  hotkeys: { generate: '', stop: '', replayRandom: '', toggleChars: '', rateUp: '', rateDown: '', rateFav: '' },
+  hotkeys: { generate: '', stop: '', replayRandom: '', toggleChars: '', rateUp: '', rateDown: '', rateFav: '', toggleVoice: '', pushToTalk: '' },
   userInterests: '',
   userProfile: { userName: '', occupation: '', likes: '', dislikes: '', banTopics: '' },
   // 视频生成:默认即梦(方舟 Seedance)+ 便宜档模型;Key 空 = 未配置,提交前由 missingSetup 拦下
@@ -315,6 +359,31 @@ export const DEFAULT_CONFIG: AppConfig = {
   launchOnBoot: false,
   bubbleStyle: 'comic',
   wizardDone: false,
+  tools: { switches: {}, autoApproved: {} },
+}
+
+/** 角色工具系统偏好 */
+export interface ToolPrefsConfig {
+  /** 按工具开关;缺省键 = 各工具 defaultEnabled(read 默认开 / external 默认关) */
+  switches: Record<string, boolean>
+  /** external 工具的"记住允许"(只能由用户在设置页/确认卡写入;模型输出无法触达) */
+  autoApproved: Record<string, boolean>
+}
+
+/** 清洗工具偏好:只收布尔值,键数封顶(注册表一共个位数工具,32 足够防脏数据膨胀) */
+function sanitizeToolPrefs(v: unknown): ToolPrefsConfig {
+  const pickBools = (raw: unknown): Record<string, boolean> => {
+    const out: Record<string, boolean> = {}
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+      for (const [k, val] of Object.entries(raw as Record<string, unknown>)) {
+        if (typeof val === 'boolean') out[k.slice(0, 40)] = val
+        if (Object.keys(out).length >= 32) break
+      }
+    }
+    return out
+  }
+  const o = (v ?? {}) as Record<string, unknown>
+  return { switches: pickBools(o.switches), autoApproved: pickBools(o.autoApproved) }
 }
 
 /** 清洗使用者画像:逐字段裁剪;likes 为空时回落旧 userInterests 字段(老配置平滑迁移) */
@@ -430,6 +499,33 @@ function sanitizeVoice(v: unknown): VoiceConfig {
       local: slot3('local', rawAssign.local),
     },
     emotionHints: o.emotionHints !== false,
+    asr: sanitizeAsr(o.asr),
+    voiceChat: sanitizeVoiceChat(o.voiceChat),
+  }
+}
+
+/** 清洗语音识别配置:模型名截断回默认;密钥走凭据库映射,这里只做占位字段裁剪 */
+function sanitizeAsr(v: unknown): AsrConfig {
+  const d = DEFAULT_CONFIG.voice.asr
+  const o = (v ?? {}) as Record<string, unknown>
+  return {
+    provider: o.provider === 'local' ? 'local' : 'siliconflow',
+    model: (typeof o.model === 'string' ? o.model.trim().slice(0, 120) : '') || d.model,
+    apiKey: typeof o.apiKey === 'string' ? o.apiKey.slice(0, 200) : d.apiKey,
+  }
+}
+
+/** 清洗语音对话配置:模式白名单,数值钳位(迟滞参数越界 = VAD 语义失效,必须收口) */
+function sanitizeVoiceChat(v: unknown): VoiceChatConfig {
+  const d = DEFAULT_CONFIG.voice.voiceChat
+  const o = (v ?? {}) as Record<string, unknown>
+  return {
+    mode: o.mode === 'ptt' || o.mode === 'hands-free' ? o.mode : 'off',
+    deviceId: typeof o.deviceId === 'string' ? o.deviceId.trim().slice(0, 200) : '',
+    vadSensitivityDb: clampNum(o.vadSensitivityDb, 6, 24, d.vadSensitivityDb),
+    silenceMs: Math.round(clampNum(o.silenceMs, 400, 1500, d.silenceMs)),
+    autoInterrupt: o.autoInterrupt === true,
+    interruptExtraDb: clampNum(o.interruptExtraDb, 3, 12, d.interruptExtraDb),
   }
 }
 
@@ -539,6 +635,10 @@ export interface HotkeysConfig {
   rateDown: string
   /** 收藏最近一集(不会被清理,重放权重更高) */
   rateFav: string
+  /** 开启/关闭语音对话(按下生效) */
+  toggleVoice: string
+  /** 按键说话:按住说话、松开送识别;角色说话时按下 = 打断(hold 语义,吃 Released) */
+  pushToTalk: string
 }
 
 /** 清洗应用动作快捷键:逐字段截断,非法值回空串(= 未设置,不生效) */
@@ -553,6 +653,8 @@ function sanitizeHotkeys(v: unknown): HotkeysConfig {
     rateUp: key(o.rateUp),
     rateDown: key(o.rateDown),
     rateFav: key(o.rateFav),
+    toggleVoice: key(o.toggleVoice),
+    pushToTalk: key(o.pushToTalk),
   }
 }
 
@@ -706,6 +808,7 @@ export function sanitizeConfig(obj: unknown): AppConfig {
     })(),
     launchOnBoot: o.launchOnBoot === true,
     wizardDone: o.wizardDone === true,
+    tools: sanitizeToolPrefs(o.tools),
     // 内置白名单 ∪ 气泡工坊自建主题 id;其他值(手改配置写错)回 comic
     bubbleStyle:
       o.bubbleStyle === 'glass' || o.bubbleStyle === 'comic'
@@ -726,6 +829,7 @@ const SECRET_FIELDS: { path: string[]; id: SecretId; map?: boolean }[] = [
   { path: ['apiKeys'], id: 'llm:apiKeys', map: true },
   { path: ['voice', 'apiKey'], id: 'tts:voice' },
   { path: ['voice', 'minimax', 'apiKey'], id: 'tts:minimax' },
+  { path: ['voice', 'asr', 'apiKey'], id: 'asr:siliconflow' },
   { path: ['videoGen', 'apiKeys'], id: 'video:apiKeys', map: true },
   { path: ['ocr', 'apiKey'], id: 'ocr:apiKey' },
   { path: ['live', 'cookie'], id: 'live:cookie' },

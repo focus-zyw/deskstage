@@ -10,10 +10,16 @@ import { getConfig, type HotkeysConfig } from './storage/configStore'
 /** 可绑定的动作 id;新增动作 = HotkeysConfig 加一字段 + App 侧 setHotkeyHandler 登记 */
 export type HotkeyActionId = keyof HotkeysConfig
 
-/** 动作回调登记表:App 挂载时写入带最新闭包的处理器,快捷键触发时按 id 现查 */
-const handlers = new Map<HotkeyActionId, () => void>()
+/** 动作回调登记表:App 挂载时写入带最新闭包的处理器,快捷键触发时按 id 现查。
+ *  hold 动作(pushToTalk)收 'down'/'up' 双态,普通动作只收 'tap'(与旧签名兼容) */
+export type HotkeySignal = 'tap' | 'down' | 'up'
 
-export function setHotkeyHandler(id: HotkeyActionId, fn: () => void): void {
+const handlers = new Map<HotkeyActionId, (signal: HotkeySignal) => void>()
+
+/** 按住类动作:吃 Pressed/Released 双态(按键说话:按住收音、松开送识别) */
+const HOLD_ACTIONS = new Set<HotkeyActionId>(['pushToTalk'])
+
+export function setHotkeyHandler(id: HotkeyActionId, fn: (signal: HotkeySignal) => void): void {
   handlers.set(id, fn)
 }
 
@@ -47,9 +53,13 @@ export async function applyAppHotkeys(): Promise<void> {
     const desired = resolveHotkeyBindings(cfg.hotkeys, cfg.screenshot.hotkey)
     const same = (a: { shortcut: string; action: HotkeyActionId }, b: typeof a) =>
       a.shortcut === b.shortcut && a.action === b.action
-    // 注销失效绑定:组合键被改/清空,或动作对调(动作 id 不同也算失效)
+    // 注销失效绑定:组合键被改/清空,或动作对调(动作 id 不同也算失效)。
+    // hold 动作注销时强制释放:换绑过程丢 Released 会让"按住"永远挂着
     for (const old of registered) {
-      if (!desired.some((d) => same(d, old))) await unregister(old.shortcut).catch(() => {})
+      if (!desired.some((d) => same(d, old))) {
+        await unregister(old.shortcut).catch(() => {})
+        if (HOLD_ACTIONS.has(old.action)) handlers.get(old.action)?.('up')
+      }
     }
     const kept = registered.filter((b) => desired.some((d) => same(d, b)))
     registered = kept
@@ -58,7 +68,11 @@ export async function applyAppHotkeys(): Promise<void> {
       if (!handlers.has(b.action) || kept.some((k) => same(k, b))) continue
       try {
         await register(b.shortcut, (event) => {
-          if (event.state === 'Pressed') handlers.get(b.action)?.()
+          const h = handlers.get(b.action)
+          if (!h) return
+          // hold 动作派发双态;普通动作只认 Pressed(Released 忽略,行为不变)
+          if (HOLD_ACTIONS.has(b.action)) h(event.state === 'Pressed' ? 'down' : 'up')
+          else if (event.state === 'Pressed') h('tap')
         })
         registered.push(b)
       } catch (e) {

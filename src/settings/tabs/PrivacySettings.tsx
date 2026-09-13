@@ -4,6 +4,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { WEBCHAT_SITES, webchatLogin, webchatProbe, webchatRestoreMain } from '../../engine/webchat'
 import type { AppConfig } from '../../storage/configStore'
+import { toolList } from '../../tools/registry'
 import { useSettings } from '../useSettingsSession'
 import { SettingsCard, SetField, SetLine, SetSwitch } from '../SettingsPrimitives'
 
@@ -137,6 +138,46 @@ export function PrivacySettings() {
             </div>
           </>
         )}
+      </SettingsCard>
+      <SettingsCard card="角色工具" flash={flashCard} title="角色工具" desc="角色按对话自主使用">
+        {toolList().map((t) => {
+          const m = t.manifest
+          const enabled = form.tools.switches[m.id] ?? m.defaultEnabled
+          return (
+            <SetLine
+              key={m.id}
+              title={m.label}
+              hint={`${m.description}${m.risk === 'external' ? '(敏感:每次执行前向你确认)' : ''}`}
+            >
+              <SetSwitch
+                checked={enabled}
+                label={m.label}
+                onChange={(v) => {
+                  const switches = { ...form.tools.switches, [m.id]: v }
+                  setForm({ ...form, tools: { ...form.tools, switches } })
+                  saveField({ tools: { ...form.tools, switches } }, true)
+                }}
+              />
+            </SetLine>
+          )
+        })}
+        {Object.keys(form.tools.autoApproved).length > 0 && (
+          <SetLine title="记住的授权" hint="敏感工具的「不再询问」记录,清除后恢复每次确认">
+            <button
+              className="panel-btn"
+              onClick={() => {
+                setForm({ ...form, tools: { ...form.tools, autoApproved: {} } })
+                saveField({ tools: { ...form.tools, autoApproved: {} } }, true)
+              }}
+            >
+              清除全部
+            </button>
+          </SetLine>
+        )}
+        <div className="set-note">
+          工具调用会先按这句话判断要不要动手,再经过权限确认与超时保护;调用记录只留本机内存(最近
+          50 条),不上传。屏幕/剪贴板内容识别结果只作为当轮回复的资料,不写入长期记忆。
+        </div>
       </SettingsCard>
       <SettingsCard card="隐私与数据" flash={flashCard} title="隐私与数据">
         <div className="set-note">
