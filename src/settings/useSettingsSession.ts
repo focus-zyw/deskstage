@@ -7,6 +7,7 @@ import { createContext, useContext } from 'react'
 import {
   DEFAULT_CONFIG,
   getConfig,
+  inTauri,
   saveConfig,
   type AppConfig,
 } from '../storage/configStore'
@@ -15,6 +16,8 @@ import { startEnvPolling, stopEnvPolling } from '../engine/envAware'
 import { applyScreenshotHotkey } from '../capture'
 import { applyAppHotkeys } from '../hotkeys'
 import { invoke } from '@tauri-apps/api/core'
+import { emitTo } from '@tauri-apps/api/event'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import { listCustomVoices, type ClonedVoice } from '../engine/tts'
 import type { VoiceConfig } from '../storage/configStore'
 import { CUSTOM_VENDOR_ID, vendorIdOfBaseUrl } from '../engine/vendors'
@@ -154,6 +157,15 @@ export function useSettingsSession(): SettingsSessionState {
   /** 落盘一批字段并执行关联副作用(快捷键换绑/角色排除/环境轮询/人设采纳) */
   async function commitSettings(partial: Partial<AppConfig>) {
     try {
+      // 窗口拆分后,设置窗是唯一运行本会话的窗口:配置统一由主窗落盘
+      // (bridgeServer.applyRemoteConfigSave,副作用也在主窗执行),
+      // 本地只发请求并亮"已保存";快照更新由 config-changed 广播驱动
+      if (inTauri && getCurrentWindow().label === 'settings') {
+        await emitTo('main', 'config-save', partial)
+        setSavedTick(Date.now())
+        window.setTimeout(() => setSavedTick(0), 2500)
+        return
+      }
       const next = await saveConfig(partial)
       void applyScreenshotHotkey() // 快捷键按新配置换绑
       void applyAppHotkeys() // 演出动作快捷键同理换绑

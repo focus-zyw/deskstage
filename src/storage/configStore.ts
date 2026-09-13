@@ -4,6 +4,8 @@
 import { useSyncExternalStore } from 'react'
 import { readTextFile, writeTextFile, exists, mkdir } from '@tauri-apps/plugin-fs'
 import { appDataDir, join } from '@tauri-apps/api/path'
+import { emitTo, listen } from '@tauri-apps/api/event'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import { withFileLock } from './writeLock'
 import { LANGUAGES, type TranslationStyle } from '../translation/types'
 
@@ -178,6 +180,8 @@ export interface AppConfig {
   groupChat: { name: string; bg: boolean }
   /** 勿扰:一键全静(TTS 静音 + 主动行为暂停;备忘卡片仍弹) */
   dnd: boolean
+  /** 互动台词每日一换:每天自动生成一整套角色C互动台词(保留最近7天,超出删最早) */
+  dailyLinePack: boolean
   /** 主动程度:角色自发说话的频率档位(安静/平衡/热闹) */
   proactivity: 'quiet' | 'balanced' | 'lively'
   /** 翻译面板:语言方向/风格/自动朗读(与演出模块完全隔离,不进对话与记忆) */
@@ -292,6 +296,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   memo: { advanceMin: 30 },
   groupChat: { name: '我们的群', bg: false },
   dnd: false,
+  dailyLinePack: true,
   proactivity: 'balanced',
   translation: { sourceLanguage: 'auto', targetLanguage: 'zh-CN', style: 'natural', autoSpeak: false },
   ocr: {
@@ -648,6 +653,7 @@ function sanitizeConfig(obj: unknown): AppConfig {
     })(),
     groupChat: sanitizeGroupChat(o.groupChat),
     dnd: o.dnd === true,
+    dailyLinePack: o.dailyLinePack !== false,
     proactivity:
       o.proactivity === 'quiet' || o.proactivity === 'lively' ? o.proactivity : 'balanced',
     translation: ((): TranslationConfig => {
@@ -734,7 +740,10 @@ export function getConfig(): Promise<AppConfig> {
 }
 
 /** 保存配置：先落盘，成功后刷新内存缓存。下一次生成即用新值，无需重启。
- *  读-改-写进锁:布局保存与设置保存并发时不会互相覆盖 */
+ *  读-改-写进锁:布局保存与设置保存并发时不会互相覆盖。
+ *  窗口拆分后主窗是唯一写者:落盘成功即广播 config-changed,设置窗收到后强制
+ *  重读重发布,两端快照不漂移(设置窗的保存经 config-save 事件汇入主窗,
+ *  广播同时兼作它的保存完成回执) */
 export async function saveConfig(update: Partial<AppConfig>): Promise<AppConfig> {
   const next = await withFileLock('config', async () => {
     const current = await getConfig()
@@ -752,7 +761,19 @@ export async function saveConfig(update: Partial<AppConfig>): Promise<AppConfig>
   })
   cache = Promise.resolve(next)
   publishConfig(next)
+  if (inTauri && getCurrentWindow().label === 'main') {
+    void emitTo('settings', 'config-changed', { config: next }).catch(() => {})
+  }
   return next
+}
+
+if (inTauri) {
+  // 收到另一窗的保存广播:丢弃内存缓存强制重读文件并补发通知,
+  // 让本窗所有 useConfigSnapshot 消费者(舞台换肤/布局/模式表)拿到新值
+  void listen<{ config?: AppConfig }>('config-changed', () => {
+    cache = null
+    void getConfig().then(publishConfig)
+  })
 }
 
 // ---------- 订阅:配置作为可观察事实源 ----------

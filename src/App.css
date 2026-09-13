@@ -896,6 +896,13 @@
   color: #8578f2;
 }
 
+/* C 右键点播菜单:复用 mode-menu 底座,锚在右键位置(而非 Dock 下方) */
+.c-menu {
+  width: 176px;
+  max-height: none;
+  z-index: 46;
+}
+
 /* 设置面板：控制栏正下方弹出（限高滚动,防止超出 420 高的悬浮条） */
 /* 配色走面板级 --panel-* 变量(命令/话题/抉择面板共用此底座),.light 覆盖即换浅色;
    变量定义在底座类上,规则里全部带原值兜底——底座之外(翻译面板等)不受影响 */
@@ -975,6 +982,16 @@
 
 /* ---------- 设置窗口:居中独立窗口(约 680px),左侧固定导航 + 右侧内容独立滚动 ---------- */
 /* 配色:深海蓝黑 + 柔和紫 + 薄荷绿。紫色只用于导航选中/开关/分段/焦点,绿色只表示成功,红色只用于退出与删除 */
+/* 独立设置窗口(第二 WebView):铺满自身窗口,不再是主窗内的居中悬浮面板 */
+body.settings-standalone .settings-window {
+  position: fixed;
+  inset: 0;
+  transform: none;
+  width: 100%;
+  height: 100%;
+  border-radius: 0;
+  border: none;
+}
 .settings-window {
   --sw-bg: #0c1222; /* 面板底色 */
   --sw-surface: #121a2d; /* 主内容底色 */

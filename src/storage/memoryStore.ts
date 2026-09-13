@@ -7,6 +7,7 @@
 import { readTextFile, writeTextFile, exists, mkdir } from '@tauri-apps/plugin-fs'
 import { appDataDir, join } from '@tauri-apps/api/path'
 import { withFileLock } from './writeLock'
+import { notifyMainStoreChanged } from './crossWindow'
 import { inTauri } from './configStore'
 
 export type FactCategory = 'identity' | 'preference' | 'habit' | 'people' | 'event' | 'other'
@@ -139,9 +140,15 @@ export async function getMemory(): Promise<MemoryData> {
   return clone(cache)
 }
 
+/** 主窗侧刷新:设置窗改了记忆后经 store-changed 触发,丢弃缓存待下次读取 */
+export function refreshMemoryFromDisk(): void {
+  cache = null
+}
+
 /** 变更落盘(调用方已在锁内完成读改写计算) */
 async function persist(next: MemoryData): Promise<void> {
   cache = next
+  notifyMainStoreChanged('memory')
   if (!inTauri) {
     localStorage.setItem(LS_KEY, JSON.stringify(next))
     return

@@ -7,6 +7,7 @@ import { readTextFile, writeTextFile, exists, mkdir } from '@tauri-apps/plugin-f
 import { appDataDir, join } from '@tauri-apps/api/path'
 import { withFileLock } from './writeLock'
 import { inTauri } from './configStore'
+import { notifyMainStoreChanged } from './crossWindow'
 import { sanitizeDialogLine } from '../performer/dialogSchema'
 import type { DialogLine } from '../performer/player'
 import type { DialogMode } from '../performer/modes'
@@ -140,6 +141,12 @@ export async function ensureCustomModesLoaded(): Promise<void> {
   publish(next)
 }
 
+/** 主窗侧刷新:设置窗改了自定义模式后经 store-changed 触发 */
+export async function refreshCustomModesFromDisk(): Promise<void> {
+  loaded = false
+  await ensureCustomModesLoaded()
+}
+
 /** 新增或更新一个自定义模式(按 id upsert);超限抛错,由调用方提示。返回更新后的全量列表 */
 export async function saveCustomMode(mode: CustomMode): Promise<CustomMode[]> {
   const clean = sanitizeCustomMode(mode)
@@ -166,6 +173,7 @@ export async function saveCustomMode(mode: CustomMode): Promise<CustomMode[]> {
     return merged
   })
   publish(next)
+  notifyMainStoreChanged('custom-modes')
   return next
 }
 
@@ -185,5 +193,6 @@ export async function removeCustomMode(id: string): Promise<CustomMode[]> {
     return merged
   })
   publish(next)
+  notifyMainStoreChanged('custom-modes')
   return next
 }

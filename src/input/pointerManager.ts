@@ -31,6 +31,8 @@ interface NativePointerPayload {
   x: number
   y: number
   deltaY: number
+  /** 0 = 左键,2 = 右键(DOM MouseEvent.button 语义);旧版钩子无此字段视为左键 */
+  button?: number
 }
 
 const regions = new Map<string, HitRegion>()
@@ -51,13 +53,19 @@ let panelsOpen = false
 // Rust 侧设置的 WS_EX_NOACTIVATE；记住期望值，并在每次穿透切换后重新应用。
 let noActivate = true
 let nativeRegionSnapshot = ''
-let settingsWindowCompact: boolean | null = null
-let settingsWindowBoundsTask: Promise<void> = Promise.resolve()
 let nativeCapture: {
   id: string
   target: Element
   startX: number
   startY: number
+} | null = null
+// 右键捕获:不合成 pointer 事件(右键不该启动拖拽/被布局手势消费),
+// 松手时对按下位置的目标补发 contextmenu,角色据此弹点播菜单
+let rightCapture: {
+  id: string
+  target: Element
+  x: number
+  y: number
 } | null = null
 const nativePointerEnabled =
   typeof navigator !== 'undefined' && /Windows/i.test(navigator.userAgent)
@@ -86,6 +94,7 @@ export function setPanelsOpen(on: boolean): void {
   if (panelsOpen === on) return
   panelsOpen = on
   nativeCapture = null
+  rightCapture = null
   syncNativePointerRegions()
 }
 
@@ -113,54 +122,6 @@ async function setInteractive(v: boolean) {
   await getCurrentWindow().setIgnoreCursorEvents(!v)
   // 必须在 setIgnoreCursorEvents 之后：Windows 后端会覆盖 NOACTIVATE 样式位。
   await applyNoActivate()
-}
-
-/**
- * 设置面板需要真实 DOM 输入，但不能让全屏透明 WebView 覆盖正在播放的视频。
- * 打开前先保持穿透，再把宿主窗口缩到面板大小；关闭后恢复全屏舞台。
- * 串行化开合请求，避免快速连点时较慢的旧 resize 最后反压新状态。
- */
-export function setSettingsWindowCompact(on: boolean): Promise<void> {
-  settingsWindowBoundsTask = settingsWindowBoundsTask.then(async () => {
-    if (settingsWindowCompact === on) return
-    const monitor = await currentMonitor()
-    if (!monitor) return
-
-    setWindowNoActivate(true)
-    await setInteractive(false)
-    // 若刚从输入控件离开，setInteractive 会先按旧值恢复窗口样式；再确认一次
-    // NOACTIVATE，避免随后 resize 把透明舞台留成前台窗口。
-    await applyNoActivate()
-
-    const win = getCurrentWindow()
-    const scaleFactor = monitor.scaleFactor
-    const screenWidth = monitor.size.width / scaleFactor
-    const screenHeight = monitor.size.height / scaleFactor
-    const screenX = monitor.position.x / scaleFactor
-    const screenY = monitor.position.y / scaleFactor
-
-    if (on) {
-      const width = Math.min(720, screenWidth)
-      const height = Math.min(740, screenHeight)
-      await win.setSize(new LogicalSize(width, height))
-      await win.setPosition(
-        new LogicalPosition(
-          screenX + Math.max(0, (screenWidth - width) / 2),
-          screenY + Math.max(0, (screenHeight - height) / 2),
-        ),
-      )
-    } else {
-      await win.setPosition(new LogicalPosition(screenX, screenY))
-      await win.setSize(new LogicalSize(screenWidth, screenHeight))
-    }
-
-    const pos = await win.outerPosition()
-    winOrigin = { x: pos.x, y: pos.y }
-    nativeRegionSnapshot = ''
-    syncNativePointerRegions()
-    settingsWindowCompact = on
-  })
-  return settingsWindowBoundsTask
 }
 
 function hitTest(px: number, py: number): string | null {
@@ -242,6 +203,30 @@ function nativeTargetAt(root: HTMLElement, px: number, py: number): Element {
 function onNativePointer(payload: NativePointerPayload): void {
   // 面板打开期间钩子数组已清空,正常不会再收到原生事件;竞态残留下也不合成,防误触
   if (panelsOpen) return
+  if (payload.button === 2) {
+    if (payload.kind === 'down') {
+      const root = regions.get(payload.id)?.nativePointerTarget?.()
+      if (!root) return
+      rightCapture = { id: payload.id, target: nativeTargetAt(root, payload.x, payload.y), x: payload.x, y: payload.y }
+      return
+    }
+    if (payload.kind === 'up') {
+      if (!rightCapture || rightCapture.id !== payload.id) return
+      const capture = rightCapture
+      rightCapture = null
+      const point = toClientPoint(payload.x, payload.y)
+      capture.target.dispatchEvent(
+        new MouseEvent('contextmenu', {
+          bubbles: true,
+          cancelable: true,
+          clientX: point.x,
+          clientY: point.y,
+          button: 2,
+        }),
+      )
+    }
+    return
+  }
   if (payload.kind === 'down') {
     const root = regions.get(payload.id)?.nativePointerTarget?.()
     if (!root) return

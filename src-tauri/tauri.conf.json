@@ -27,6 +27,21 @@
         "focus": false,
         "visible": false,
         "additionalBrowserArgs": "--autoplay-policy=no-user-gesture-required"
+      },
+      {
+        "label": "settings",
+        "title": "设置",
+        "url": "settings.html",
+        "width": 680,
+        "height": 700,
+        "minWidth": 560,
+        "minHeight": 480,
+        "center": true,
+        "visible": false,
+        "decorations": false,
+        "resizable": true,
+        "alwaysOnTop": true,
+        "additionalBrowserArgs": "--autoplay-policy=no-user-gesture-required"
       }
     ],
     "security": {

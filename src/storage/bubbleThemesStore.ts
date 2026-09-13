@@ -8,6 +8,7 @@ import { readTextFile, writeTextFile, exists, mkdir } from '@tauri-apps/plugin-f
 import { appDataDir, join } from '@tauri-apps/api/path'
 import { withFileLock } from './writeLock'
 import { inTauri } from './configStore'
+import { notifyMainStoreChanged } from './crossWindow'
 
 const LS_KEY = 'vc-bubble-themes'
 const FILE_NAME = 'bubble-themes.json'
@@ -165,6 +166,12 @@ export async function ensureBubbleThemesLoaded(): Promise<void> {
   publish(next)
 }
 
+/** 主窗侧刷新:设置窗改了主题后经 store-changed 触发,强制重读磁盘 */
+export async function refreshBubbleThemesFromDisk(): Promise<void> {
+  loaded = false
+  await ensureBubbleThemesLoaded()
+}
+
 /** 新增或更新一个主题(按 id upsert);超限抛错由调用方提示 */
 export async function saveBubbleTheme(theme: BubbleTheme): Promise<BubbleTheme[]> {
   const clean = sanitizeBubbleTheme(theme)
@@ -191,6 +198,7 @@ export async function saveBubbleTheme(theme: BubbleTheme): Promise<BubbleTheme[]
     return merged
   })
   publish(next)
+  notifyMainStoreChanged('bubble-themes')
   return next
 }
 
@@ -210,6 +218,7 @@ export async function removeBubbleTheme(id: string): Promise<BubbleTheme[]> {
     return merged
   })
   publish(next)
+  notifyMainStoreChanged('bubble-themes')
   return next
 }
 

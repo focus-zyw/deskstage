@@ -150,47 +150,6 @@ pub fn run() {
       spawn_cursor_poll(app.handle().clone());
       pointer_hook::spawn(app.handle().clone());
       spawn_topmost_watchdog(app.handle().clone());
-      // [尖刺|分支 feat/window-split] 验证 WebView2 能否创建第二个窗口:
-      // capture.ts 记载历史实测三种参数组合均报 0x8007139F ERROR_INVALID_STATE。
-      // 根因已定位:主窗口带 additionalBrowserArgs(自动播放策略),第二窗口
-      // browser args 不同却共享同一 user data folder → WebView2 拒绝创建。
-      // 本轮验证修复:给第二窗口独立 dataDirectory(Tauri 官方文档的明确要求)
-      #[cfg(debug_assertions)]
-      {
-        let handle = app.handle().clone();
-        thread::spawn(move || {
-          thread::sleep(Duration::from_secs(3));
-          use tauri::{WebviewUrl, WebviewWindowBuilder, Manager};
-          if let Some(_) = handle.get_webview_window("settings") {
-            return;
-          }
-          let builder = WebviewWindowBuilder::new(
-            &handle,
-            "settings",
-            WebviewUrl::App("settings.html".into()),
-          )
-          .title("设置(窗口拆分尖刺)")
-          .inner_size(680.0, 700.0)
-          .decorations(false)
-          .resizable(true)
-          .position(100.0, 150.0)
-          // [尖刺 v3] 与主窗口逐字相同的 additionalBrowserArgs + 同一默认数据目录:
-          // 微软文档约束是"同 user data folder + 环境 option 不同"才拒建,
-          // 参数对齐后应落在允许 case(常规多窗口形态,localStorage 也互通)
-          .additional_browser_args("--autoplay-policy=no-user-gesture-required");
-          match builder.build() {
-            Ok(win) => {
-              let pos = win.outer_position().map(|p| format!("{}x{}", p.x, p.y)).unwrap_or_default();
-              let visible = win.is_visible().unwrap_or(false);
-              log::info!("尖刺:第二窗口创建成功 label={} pos={pos} visible={visible}", win.label());
-              let _ = win.set_focus();
-              let visible2 = win.is_visible().unwrap_or(false);
-              log::info!("尖刺:set_focus 后 visible={visible2}");
-            }
-            Err(e) => log::error!("尖刺:第二窗口创建失败:{e}"),
-          }
-        });
-      }
       Ok(())
     })
     .run(tauri::generate_context!())

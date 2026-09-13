@@ -1,6 +1,8 @@
-// 设置窗口:680px 居中独立窗口的框架——左栏导航+搜索、标题栏(保存状态/退出)、
-// 右侧内容区分发到各分页组件。会话(草稿/即存)经 SettingsContext 下发。
+// 设置窗口:独立 WebView 的表单窗口——左栏导航+搜索、标题栏(保存状态/完成/退出)、
+// 右侧内容区分发到各分页组件。会话(草稿/即存)经 SettingsContext 下发;
+// 跨窗口行为经事件桥:动作/配置保存发往主窗,分页跳转由主窗 settings-goto 驱动。
 import { useEffect, useRef, useState } from 'react'
+import { listen } from '@tauri-apps/api/event'
 import {
   SettingsContext,
   useSettingsSession,
@@ -27,13 +29,13 @@ import { ChatLogSettings } from './tabs/ChatLogSettings'
 import { SupportSettings } from './tabs/SupportSettings'
 
 export interface SettingsWindowProps {
-  /** 命中区注册用:App 需要拿到窗口根元素的屏幕矩形 */
-  innerRef: React.RefObject<HTMLDivElement | null>
-  /** 跨模块行为:回放历史 / 复位布局 / 备忘隐私插话 */
+  /** 独立窗口形态下无命中区注册,保留参数兼容旧调用(可传 null ref) */
+  innerRef?: React.RefObject<HTMLDivElement | null>
+  /** 跨模块行为:回放历史 / 复位布局 / 备忘隐私插话(独立窗口下为事件桥实现) */
   bridge: SettingsBridge
-  /** 本次打开要落到的分页(命令面板"添加提醒"直达备忘页用);仅在挂载时生效 */
+  /** 挂载时的初始分页;之后由主窗 settings-goto 事件驱动跳转 */
   initialTab?: SettingsTab
-  /** 关闭设置并恢复全屏舞台 */
+  /** 关闭设置窗(隐藏,不销毁;Esc / 「完成」按钮触发) */
   onClose(): void
   /** 退出程序(真正关窗在 App 侧;两段确认只服务这里的按钮) */
   onExit(): void
@@ -71,6 +73,26 @@ export function SettingsWindow({ innerRef, bridge, initialTab = 'general', onClo
   const [flashCard, setFlashCard] = useState<string | null>(null)
   const flashTimer = useRef(0)
   const setBodyRef = useRef<HTMLDivElement>(null)
+
+  // 主窗驱动的分页跳转(工具栏/命令面板直达某分页):窗口常驻隐藏,show 后按事件切页
+  const onCloseRef = useRef(onClose)
+  onCloseRef.current = onClose
+  useEffect(() => {
+    if (!('__TAURI_INTERNALS__' in window)) return
+    const un = listen<{ tab: SettingsTab }>('settings-goto', (e) => {
+      setSettingsQuery('')
+      setSettingsTab(e.payload.tab)
+    })
+    // Esc 关闭设置窗(搜索框/快捷键录入器等局部 Esc 已 stopPropagation,不会漏到这里)
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onCloseRef.current()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => {
+      void un.then((f) => f())
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [])
 
   /** 退出程序:3 秒内再点一次才真正关闭 */
   function requestExit() {
@@ -177,7 +199,8 @@ export function SettingsWindow({ innerRef, bridge, initialTab = 'general', onClo
           <div className="set-side-note">所有设置自动保存,仅保存在本机。</div>
         </aside>
         <section className="set-main">
-          <header className="set-head">
+          {/* 无边框窗口:标题栏空隙可拖动移动窗口(按钮各自拦截,不受影响) */}
+          <header className="set-head" data-tauri-drag-region>
             <div className="set-head-title">
               <span className="set-eyebrow">{TAB_GROUP[settingsTab]}</span>
               <h1>{currentTabLabel}</h1>

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import { listen } from '@tauri-apps/api/event'
+import { listen, emitTo } from '@tauri-apps/api/event'
+import { WebviewWindow } from '@tauri-apps/api/webviewWindow'
 import { invoke } from '@tauri-apps/api/core'
 import { CharacterSprite } from './stage/CharacterSprite'
 import { Bubble } from './stage/Bubble'
@@ -14,15 +15,15 @@ import {
   registerHitRegion,
   onHoverChange,
   setPanelsOpen,
-  setSettingsWindowCompact,
 } from './input/pointerManager'
 import { CaptureOverlay } from './CaptureOverlay'
 import { SPRITE_SETS, preloadSprites } from './stage/spriteSets'
 import { ResidentActor } from './stage/resident/ResidentActor'
-import { preloadResident } from './stage/resident/residentManifest'
+import { preloadResident, snackActionNow } from './stage/resident/residentManifest'
 import type { DialogLine, Speaker } from './performer/player'
 import { useAllModes, type Mode } from './performer/modes'
-import { generateShortChat, generateTurnBatch, improvPokeLine, generateUserChatReply, extractFacts, memoReminderLine } from './engine/llmClient'
+import { generateShortChat, generateTurnBatch, improvPokeLine, generateUserChatReply, extractFacts, memoReminderLine, generateDailyLinePack } from './engine/llmClient'
+import { loadLinePacks, saveLinePack, takePackLine, dayKey, type LineKind } from './storage/linePackStore'
 import { pushTurn, chatWindow, type TurnWho } from './dialogue/turnWindow'
 import { appendChatTurns } from './storage/chatLogStore'
 import { react } from './engine/interactionRules'
@@ -82,7 +83,7 @@ import {
 import { applyBubbleThemeTo, useBubbleThemes } from './storage/bubbleThemesStore'
 import { applyLaunchOnBoot } from './runtime/launchOnBoot'
 import { useOverlayHitRegions } from './runtime/useOverlayHitRegion'
-import { SettingsWindow } from './settings/SettingsWindow'
+import { initSettingsBridgeServer } from './settings/bridgeServer'
 import type { SettingsBridge } from './settings/useSettingsSession'
 import type { SettingsTab } from './settings/settingsCatalog'
 import type { Rarity } from './features/support/pool'
@@ -128,6 +129,65 @@ const cAngryLines = () => [
   `（叉腰）再戳就把${nameOf('A')}${nameOf('B')}的零食全部收缴！`,
   '（转身背对，肩膀微微在抖）不理你们了！',
 ]
+/** 摸头(长按)反应池:受用又不好意思,与"被戳"的惊讶语气区分 */
+const cHeadpatLines = () => [
+  '（眯眼）唔…再摸一下也不是不可以…',
+  '（咯咯笑）痒、痒啦！',
+  `（蹭了蹭）${nameOf('C')}的头很神奇吧`,
+  '（耳朵红了）谢、谢谢夸奖…？',
+  '（开心到冒泡）今天的头也是甲级！',
+]
+const cHeadpatShyLines = () => [
+  `（脸鼓成包子）再摸要摸秃啦！${nameOf('C')}头发量有限的！`,
+  '（捂头蹲下）呜哇，头要被摸平了啦…',
+  '（小声）其实…可以再摸一小会儿…',
+]
+/** 投喂反应池:按时段端出的点心各配一句通用感谢 */
+const cFeedLines = () => [
+  '（双手接过）开动啦！',
+  '（眼睛发亮）哇——是给我的？！',
+  `（小口小口）${nameOf('C')}会好好吃完的！`,
+  '（腮帮鼓鼓）唔唔…好吃…',
+  '（认真）点心和快乐一起收下了！',
+]
+/** 连喂吃撑:中性撒娇,不进账本不记仇 */
+const cStuffedLines = () => [
+  '（抱着圆滚滚的肚子）唔…吃不下了，剩下的存起来…',
+  '（瘫住）肚子已经变成方形了…让我缓缓…',
+  '（摆手）再喂就要滚着走路了！',
+]
+/** 右键点播台词池:台词包(每日一换)优先,这里只做兜底 */
+const cJokeLines = () => [
+  '从前有座山，山里…啊忘了，总之很好笑！',
+  '为什么小管家不会累？因为一直在待机呀。',
+  '（一本正经）我的笑话保质期只有三秒，笑晚了作废。',
+  '桌面上最勤快的是谁？——是鼠标指针。',
+]
+const cNapLines = () => [
+  '（打哈欠）那…就睡五分钟…',
+  '（找了个太阳晒到的位置躺下）Zzz…',
+  '（小声）帮我盯着点锅…',
+]
+const cWorkLines = () => [
+  `（撸袖子）包在${nameOf('C')}身上！`,
+  '（掏出小本本）今日份勤劳，开始！',
+  '（认真）桌面卫生，管家尽责！',
+]
+const cDanceLines = () => [
+  '（活动手腕）音乐呢？没有音乐也要跳！',
+  '（转圈）看好了，这是管家特训舞！',
+  '（抖肩膀）这支舞叫《 今天也元气满满 》！',
+]
+const cTrickLines = () => [
+  '（神秘兮兮）接下来就是见证奇迹的时刻！',
+  '（深吸一口气）绝活有风险，观看请鼓掌。',
+  '（搓手）这个绝活，一天只演一次！',
+  '（叉腰）看好了，全程高能！',
+]
+/** 台词包优先取句:今日包/存档里有就弹一句(不重复),没有回内置池 */
+function packLine(kind: LineKind, pool: string[]): string {
+  return takePackLine(kind) ?? pool[Math.floor(Math.random() * pool.length)]
+}
 /** 戳团宠时另一角色起哄的概率:三人舞台感(甲乙是"同伙") */
 const TEASE_HYPE_CHANCE = 0.3
 const teaseHypeLines = () => {
@@ -215,16 +275,63 @@ function App() {
     if (modeMenuOpen) closeOverlay('mode-menu')
     else openOverlayExclusive('mode-menu')
   }
-  const settingsOpen = rt.overlays.includes('settings')
-  const settingsWasOpenRef = useRef(false)
-  // 设置关闭后恢复全屏舞台；打开前的缩窗在 openSettings 中 await，避免全屏透明层
-  // 先绘制一帧设置面板，触发底层视频的硬件合成切换。
-  useEffect(() => {
-    if (settingsWasOpenRef.current && !settingsOpen) {
-      void setSettingsWindowCompact(false).catch((e) => console.warn('恢复全屏舞台失败', e))
+  // C 右键菜单:轻交互浮层(mode-menu 同机制,不激活窗口)。
+  // 声明在组件顶部:hit region 注册表(useOverlayHitRegions)要读 cMenuOpen/cMenuRef
+  const cMenuOpen = rt.overlays.includes('c-menu')
+  const cMenuPos = useRef({ x: 0, y: 0 })
+  const cMenuRef = useRef<HTMLDivElement>(null)
+  function openCMenu(x: number, y: number) {
+    // 限位:176 宽菜单贴边不裁切
+    cMenuPos.current = {
+      x: Math.max(8, Math.min(window.innerWidth - 184, x)),
+      y: Math.max(8, Math.min(window.innerHeight - 260, y)),
     }
-    settingsWasOpenRef.current = settingsOpen
-  }, [settingsOpen])
+    openOverlayExclusive('c-menu')
+  }
+  /** 菜单项动作:演出/生成期间只应一句,不动演出;空闲时执行 */
+  function runCMenuAction(run: () => void) {
+    if (phaseRef.current !== 'idle' || director.isPlaying()) {
+      showPoke('C', '（摆手）等这集演完再来点我~', 'talk', 1800)
+      return
+    }
+    noteUserActive() // 点播也是主动互动:重置空闲/降频计时
+    run()
+  }
+  const cMenuActions: { id: string; label: string; run: () => void }[] = [
+    {
+      id: 'joke',
+      label: '😆 讲个笑话',
+      run: () => showPoke('C', packLine('joke', cJokeLines()), 'happy', 3600),
+    },
+    {
+      id: 'nap',
+      label: '😴 睡午觉',
+      run: () => showPoke('C', packLine('nap', cNapLines()), 'nap', 3600),
+    },
+    {
+      id: 'work',
+      label: '🧹 干点活',
+      run: () => showPoke('C', packLine('work', cWorkLines()), 'working', 8000),
+    },
+    {
+      id: 'dance',
+      label: '💃 跳个舞',
+      run: () => showPoke('C', packLine('dance', cDanceLines()), 'dance', 6000),
+    },
+    {
+      id: 'trick',
+      label: '🎪 来个绝活',
+      run: () => showPoke('C', packLine('trick', cTrickLines()), 'trick', 8000),
+    },
+    {
+      id: 'feed',
+      label: '🍪 投喂零食',
+      run: feedC,
+    },
+  ]
+  // 设置窗:独立 WebView(tauri.conf 预建 label=settings,启动隐藏),主窗只管 show/hide
+  // 与开关态同步;窗内表单、保存、Esc/关闭按钮都由设置窗自理(经 settings 事件桥回报)
+  const [settingsOpen, setSettingsOpen] = useState(false)
   // 配置事实源:读同一份已落盘配置(任何 saveConfig 成功后即时发布),不再各自维护镜像
   const config = useConfigSnapshot()
   const charNames = { A: config.names.a, B: config.names.b, C: config.names.c }
@@ -277,7 +384,8 @@ function App() {
   const overlaysOpen = rt.overlays.length > 0
   // 模式菜单没有输入框，仍由原生钩子派发点击；只有真正的输入面板才让
   // 全屏 WebView 恢复交互，否则展开小菜单也会让底层视频退出硬件合成。
-  const interactivePanelsOpen = rt.overlays.some((overlay) => overlay !== 'mode-menu')
+  // C 右键菜单同理(轻交互按钮列表)。
+  const interactivePanelsOpen = rt.overlays.some((overlay) => overlay !== 'mode-menu' && overlay !== 'c-menu')
   useEffect(() => {
     setPanelsOpen(interactivePanelsOpen)
   }, [interactivePanelsOpen])
@@ -298,13 +406,8 @@ function App() {
     void resetDismissals()
   }
   const charHidden = rt.charHidden
-  // 设置打开期间宿主窗口已缩至面板尺寸(pointerManager.setSettingsWindowCompact):
-  // 舞台按窗口宽度百分比定位,会整体挤进设置区还叠在面板上层。面板物理上盖不住
-  // 角色原本的桌面位置,无处安放——隐藏整个舞台,关闭设置后原地恢复
-  const stageHidden = charHidden || settingsOpen
   // C 的启用开关独立于全局隐藏:enabled=false 时 C 完全退场(台词回落画外音横幅)
   const cEnabled = config.characters.C.enabled
-  const panelRef = useRef<HTMLDivElement>(null)
   // 备忘提醒卡容器:热区 getter 用;声明在使用(useMemo 依赖)之前,避免 TDZ
   const memoAlertsRef = useRef<HTMLDivElement>(null)
   const memoAlertsCountRef = useRef(0)
@@ -334,6 +437,12 @@ function App() {
     isIdle: () => phaseRef.current === 'idle',
     present: showPoke,
     onPoke: poke,
+    onLongPress: (who) => {
+      // 摸头长按目前只给团宠;甲乙长按回落戳一戳——长按后松手不再走 onPoke,
+      // 若这里也不响应,慢速点按(>600ms)就会两头落空
+      if (who === 'C') headpatC()
+      else poke(who)
+    },
   })
 
   // 角色呈现器:气泡/动作/说话态的唯一归属(演出回调、插话、聊天、直播统一走它)
@@ -672,6 +781,7 @@ function App() {
     preloadResident() // 预热 C 的 WebM 片段,首次切换零等待
     preloadProps() // 预热道具 SVG,首次礼物/工具流程不闪
     void ensureMoodLoaded() // 情绪档预载:presenter 待机染色要同步读
+    void loadLinePacks() // 台词包存档预载:takePackLine 同步取句前必须先载入
     void getConfig().then((c) => {
       applyChars(c.characters)
       setRuntimeCharHidden(c.charactersHidden)
@@ -741,13 +851,6 @@ function App() {
             choicePanelRef.current?.getBoundingClientRect() ?? new DOMRect(0, 0, 0, 0),
         },
         {
-          id: 'panel',
-          active: settingsOpen,
-          activatesWindow: true,
-          getRect: () =>
-            panelRef.current?.getBoundingClientRect() ?? new DOMRect(0, 0, 0, 0),
-        },
-        {
           id: 'topic-panel',
           active: topicOpen,
           activatesWindow: true,
@@ -784,6 +887,14 @@ function App() {
           nativePointerTarget: () => modeMenuRef.current,
         },
         {
+          // C 右键点播菜单:同 mode-menu 的轻交互机制,穿透窗口下按钮可点
+          id: 'c-menu',
+          active: cMenuOpen,
+          getRect: () =>
+            cMenuRef.current?.getBoundingClientRect() ?? new DOMRect(0, 0, 0, 0),
+          nativePointerTarget: () => cMenuRef.current,
+        },
+        {
           // 备忘提醒卡:右下角弹窗,不注册则点击穿透桌面,"知道了"永远点不到。
           // active 经 ref 读(声明在使用之后,直接进依赖数组会 TDZ 崩溃整个 App)
           id: 'memo-alert',
@@ -797,14 +908,14 @@ function App() {
           id: 'outside',
           active: overlaysOpen,
           getRect: () => new DOMRect(0, 0, window.innerWidth, window.innerHeight),
-          // 模式菜单单独打开时，兜底区也走原生事件；点击空白处只负责收起菜单，
+          // 模式菜单/C菜单单独打开时，兜底区也走原生事件；点击空白处只负责收起菜单，
           // 不把整个透明 WebView 切成可点击窗口。
-          nativePointerTarget: modeMenuOpen
+          nativePointerTarget: modeMenuOpen || cMenuOpen
             ? () => document.querySelector<HTMLElement>('.stage')
             : undefined,
         },
       ],
-      [settingsOpen, topicOpen, chatOpen, translationOpen, toolsOpen, choice, overlaysOpen, modeMenuOpen],
+      [settingsOpen, topicOpen, chatOpen, translationOpen, toolsOpen, choice, overlaysOpen, modeMenuOpen, cMenuOpen],
     ),
   )
 
@@ -821,8 +932,42 @@ function App() {
     return () => window.removeEventListener('keydown', onKey)
   }, [overlaysOpen, settingsOpen])
 
+  // ---------- 每日台词包:后台生成调度 ----------
+  // 开关开启时,启动约 1 分钟后(idle 预热完)生成今日包;失败 10 分钟后重试;
+  // 每 30 分钟对一次日期,应用跨天开着也能换新。生成不阻塞任何交互,失败全程静默。
+  useEffect(() => {
+    if (!config.dailyLinePack) return
+    let stopped = false
+    let retry = 0
+    const attempt = () => {
+      if (stopped) return
+      void (async () => {
+        const today = dayKey()
+        const packs = await loadLinePacks()
+        if (packs.some((p) => p.date === today)) return
+        try {
+          const lines = await generateDailyLinePack()
+          if (stopped) return
+          // 生成成功才落盘:失败明天再试,今天用内置/存档兜底
+          if (lines) await saveLinePack({ date: today, lines })
+        } catch {
+          retry = window.setTimeout(attempt, 10 * 60_000)
+        }
+      })()
+    }
+    const first = window.setTimeout(attempt, 60_000)
+    const tick = window.setInterval(attempt, 30 * 60_000)
+    return () => {
+      stopped = true
+      window.clearTimeout(first)
+      window.clearInterval(tick)
+      window.clearTimeout(retry)
+    }
+  }, [config.dailyLinePack])
+
   function replayFromHistory(ep: Episode) {
-    closeOverlay('settings')
+    void WebviewWindow.getByLabel('settings').then((w) => w?.hide().catch(() => {}))
+    setSettingsOpen(false)
     director.replay(ep, 'manual')
   }
 
@@ -894,7 +1039,7 @@ function App() {
     void (async () => {
       try {
         // TurnBatch:默认只由被@角色回答;明确同时问三人才放开三句。生成失败回落单句应答(原行为)
-        const groupAsk = /你们|大家|各位|三位|每人|每个人|各自|都怎么|都说说/.test(text)
+        const groupAsk = /你们|大家|各位|三位|每人|各自|都怎么|都说说/.test(text)
         let batch: DialogLine[] | null = null
         try {
           batch = await generateTurnBatch({ userText: text, target: who, window: chatWindow(), groupAsk })
@@ -942,18 +1087,21 @@ function App() {
     if (res === 'accepted') setChatDraft('')
   }
 
-  // 命令直达的分页请求(窗口挂载时读取一次;关闭后复位)
-  const [settingsTabRequest, setSettingsTabRequest] = useState<SettingsTab>('general')
-
-  /** 打开设置(tab 直达某分页):草稿回填与各页数据由 SettingsWindow 挂载时自取 */
+  /** 打开设置(tab 直达某分页):show 常驻设置窗并通知其切页;设置窗自居舞台之上 */
   async function openSettings(tab?: SettingsTab) {
-    setSettingsTabRequest(tab ?? 'general')
-    await setSettingsWindowCompact(true).catch((e) => console.warn('设置窗口缩放失败', e))
-    openOverlayExclusive('settings')
+    const win = await WebviewWindow.getByLabel('settings')
+    if (!win) return
+    await win.show().catch(() => {})
+    await win.setFocus().catch(() => {})
+    await emitTo('settings', 'settings-goto', { tab: tab ?? 'general' }).catch(() => {})
+    setSettingsOpen(true)
   }
-  useEffect(() => {
-    if (!settingsOpen) setSettingsTabRequest('general')
-  }, [settingsOpen])
+
+  /** 隐藏设置窗(不销毁;窗内 Esc/关闭按钮同样只隐藏,经 settings-closed 事件同步到这里) */
+  function closeSettings() {
+    setSettingsOpen(false)
+    void WebviewWindow.getByLabel('settings').then((w) => w?.hide().catch(() => {}))
+  }
 
   /** 恢复 C 的默认位置(设置-基础设置入口);A/B 布局不动 */
   function resetResidentLayout() {
@@ -969,6 +1117,24 @@ function App() {
     onSupportThanks: showSupportThanks,
     onGroupSend: (text) => sendUserChatText(text),
   }
+  // 设置窗(独立 WebView)的事件桥服务端:动作回放/复位/群聊发送、代落盘配置、
+  // 退出请求、关闭同步。bridge 与退出流程随渲染重建,监听只注册一次,经 ref 取最新
+  const settingsBridgeRef = useRef(settingsBridge)
+  settingsBridgeRef.current = settingsBridge
+  const exitRequestRef = useRef<() => void>(requestExit)
+  exitRequestRef.current = requestExit
+  const settingsClosedRef = useRef(setSettingsOpen)
+  settingsClosedRef.current = setSettingsOpen
+  useEffect(() => {
+    const un = initSettingsBridgeServer({
+      getBridge: () => settingsBridgeRef.current,
+      onExitRequest: () => exitRequestRef.current(),
+      onClosed: () => settingsClosedRef.current(false),
+    })
+    return () => {
+      void un.then((fns) => fns.forEach((f) => f()))
+    }
+  }, [])
 
   // ---------- 备忘录:调度与常驻提醒 ----------
   const [memoAlerts, setMemoAlerts] = useState<{ id: string; text: string }[]>([])
@@ -1114,9 +1280,9 @@ function App() {
       (t) => now - t < POKE_WINDOW_MS,
     ))
     const count = arr.length + 1
-    // 丙走团宠专属池,甲乙保持互怼语气池
+    // 丙走团宠专属池(台词包优先),甲乙保持互怼语气池
     const pools = who === 'C'
-      ? { poke: cPokeLines(), shy: cShyLines(), angry: cAngryLines() }
+      ? { poke: [packLine('poke', cPokeLines())], shy: cShyLines(), angry: cAngryLines() }
       : { poke: POKE_LINES, shy: SHY_LINES, angry: ANGRY_LINES }
     if (count >= ANGRY_AT) {
       arr.push(now)
@@ -1131,8 +1297,10 @@ function App() {
       : pools.poke[Math.floor(Math.random() * pools.poke.length)]
     const fallbackAction = shy ? 'shy' : Math.random() < 0.3 ? 'laugh' : 'talk'
 
-    // 轻戳小概率走 LLM 即兴(冷却内/演出生成中不触发);失败静默用固定台词
+    // 轻戳小概率走 LLM 即兴(冷却内/演出生成中不触发);失败静默用固定台词。
+    // C 不参与即兴:她的台词由每日台词包+存档+预置池闭环供给,来源可预期
     if (
+      who !== 'C' &&
       !shy &&
       phase === 'idle' &&
       Math.random() < IMPROV_CHANCE &&
@@ -1170,6 +1338,53 @@ function App() {
     }, 1100)
   }
 
+  // ---------- 角色C 互动:摸头长按 / 右键点播 / 投喂 ----------
+  // 都是轻量即时反应(本地动画+台词),不进 interactionStore 账本(与"拖拽不是冒犯"
+  // 同一原则);台词包(dailyLinePack)优先,内置池兜底。
+
+  /** 摸头连摸窗口(60s):第 3 次起害羞 */
+  const HEADPAT_SHY_AT = 3
+  const headpatTimes = useRef<number[]>([])
+  function headpatC() {
+    noteUserActive()
+    setTopActor('C')
+    bumpPoke()
+    const now = Date.now()
+    const arr = headpatTimes.current = headpatTimes.current.filter((t) => now - t < POKE_WINDOW_MS)
+    arr.push(now)
+    const shy = arr.length >= HEADPAT_SHY_AT
+    const line = shy
+      ? cHeadpatShyLines()[Math.floor(Math.random() * cHeadpatShyLines().length)]
+      : packLine('headpat', cHeadpatLines())
+    showPoke('C', line, 'headpat', 2200)
+  }
+
+  /** 投喂:5 分钟窗口内喂 3 次即吃撑,冷却 60s(冷却期内再点仍是撑) */
+  const FEED_WINDOW_MS = 5 * 60_000
+  const FEED_FULL_AT = 3
+  const FEED_FULL_COOLDOWN_MS = 60_000
+  const feedTimes = useRef<number[]>([])
+  const feedFullUntil = useRef(0)
+  function feedC() {
+    noteUserActive()
+    setTopActor('C')
+    bumpPoke()
+    const now = Date.now()
+    if (now < feedFullUntil.current) {
+      showPoke('C', cStuffedLines()[Math.floor(Math.random() * cStuffedLines().length)], 'stuffed', 2200)
+      return
+    }
+    const arr = feedTimes.current = feedTimes.current.filter((t) => now - t < FEED_WINDOW_MS)
+    arr.push(now)
+    if (arr.length >= FEED_FULL_AT) {
+      feedFullUntil.current = now + FEED_FULL_COOLDOWN_MS
+      showPoke('C', cStuffedLines()[Math.floor(Math.random() * cStuffedLines().length)], 'stuffed', 2400)
+      return
+    }
+    // 按当下时段/季节端点心:早上早餐、午间午餐、夏天冷饮、冬天火锅(与待机时段池同口味)
+    showPoke('C', packLine('feed', cFeedLines()), snackActionNow(), 2600)
+  }
+
   // 空闲 3 分钟无互动 → 角色打瞌睡(sleepy);任何互动/演出/面板恢复
   const [sleepyOn, setSleepyOn] = useState(false)
   useEffect(() => {
@@ -1196,6 +1411,15 @@ function App() {
         // 录音中点击外部不收面板(防止丢失停止入口)
         if (rt.mode.type === 'recording' && settingsOpen) return
         if (e.target === e.currentTarget) closeAllOverlays()
+        // 点在C菜单外(其他角色/工具)也收起C菜单;但点在菜单项上绝不能在
+        // pointerdown 就收起——原生钩子的 click 补发在 pointerup 之后,
+        // 菜单先卸载会让 click 落在游离节点上,onClick 永远不触发(菜单关了、动作没了)
+        else if (
+          cMenuOpen &&
+          !(cMenuRef.current && cMenuRef.current.contains(e.target as Node))
+        ) {
+          closeOverlay('c-menu')
+        }
       }}
     >
       <ControlBar
@@ -1220,8 +1444,8 @@ function App() {
         settingsOpen={settingsOpen}
         onSettings={() => {
           if (settingsOpen && rt.mode.type === 'recording') return // 录音中锁定
-          if (settingsOpen) closeOverlay('settings')
-          else openSettings()
+          if (settingsOpen) closeSettings()
+          else void openSettings()
         }}
         modeMenuOpen={modeMenuOpen}
         onModeMenuToggle={toggleModeMenu}
@@ -1259,14 +1483,26 @@ function App() {
         </div>
       )}
 
-      {settingsOpen && (
-        <SettingsWindow
-          innerRef={panelRef}
-          bridge={settingsBridge}
-          initialTab={settingsTabRequest}
-          onClose={() => closeOverlay('settings')}
-          onExit={requestExit}
-        />
+      {/* C 右键点播菜单:锚在右键位置,轻交互浮层(点击项经原生钩子派发) */}
+      {cMenuOpen && !charHidden && cEnabled && (
+        <div
+          ref={cMenuRef}
+          className="mode-menu c-menu"
+          style={{ left: cMenuPos.current.x, top: cMenuPos.current.y }}
+        >
+          {cMenuActions.map((a) => (
+            <button
+              key={a.id}
+              className="mode-menu-item"
+              onClick={() => {
+                closeOverlay('c-menu')
+                runCMenuAction(a.run)
+              }}
+            >
+              <span className="mode-menu-label">{a.label}</span>
+            </button>
+          ))}
+        </div>
       )}
 
       {topicOpen && (
@@ -1321,12 +1557,13 @@ function App() {
           left: `${charCfg.A.xPct}%`,
           bottom: charCfg.A.bottom,
           zIndex: topActor === 'A' ? 2 : 1,
-          display: stageHidden ? 'none' : undefined,
+          display: charHidden ? 'none' : undefined,
         }}
         onPointerDown={(e) => onCharPointerDown(e, 'A')}
         onPointerMove={(e) => onCharPointerMove(e, 'A')}
         onPointerUp={() => onCharPointerUp('A')}
         onWheel={(e) => onCharWheel(e)}
+        onContextMenu={(e) => e.preventDefault()}
       >
         <Bubble
           text={bubble.A}
@@ -1371,12 +1608,13 @@ function App() {
           left: `${charCfg.B.xPct}%`,
           bottom: charCfg.B.bottom,
           zIndex: topActor === 'B' ? 2 : 1,
-          display: stageHidden ? 'none' : undefined,
+          display: charHidden ? 'none' : undefined,
         }}
         onPointerDown={(e) => onCharPointerDown(e, 'B')}
         onPointerMove={(e) => onCharPointerMove(e, 'B')}
         onPointerUp={() => onCharPointerUp('B')}
         onWheel={(e) => onCharWheel(e)}
+        onContextMenu={(e) => e.preventDefault()}
       >
         <Bubble
           text={bubble.B}
@@ -1422,12 +1660,16 @@ function App() {
           left: `${charCfg.C.xPct}%`,
           bottom: charCfg.C.bottom,
           zIndex: topActor === 'C' ? 2 : 1,
-          display: stageHidden || !cEnabled ? 'none' : undefined,
+          display: charHidden || !cEnabled ? 'none' : undefined,
         }}
         onPointerDown={(e) => onCharPointerDown(e, 'C')}
         onPointerMove={(e) => onCharPointerMove(e, 'C')}
         onPointerUp={() => onCharPointerUp('C')}
         onWheel={(e) => onResidentWheel(e)}
+        onContextMenu={(e) => {
+          e.preventDefault()
+          openCMenu(e.clientX, e.clientY)
+        }}
       >
         <ResidentActor
           hitBoxRef={residentHitBox}
@@ -1436,9 +1678,9 @@ function App() {
           loud={loudBubble.C}
           speaking={speaking === 'C'}
           dragging={dragUi === 'C'}
-          active={cEnabled && !stageHidden}
+          active={cEnabled && !charHidden}
           calm={rt.dnd}
-          hidden={stageHidden || !cEnabled}
+          hidden={charHidden || !cEnabled}
           width={charCfg.C.width}
           below={charCfg.C.bottom + charCfg.C.width * 0.5625 > window.innerHeight - 110}
           xPct={charCfg.C.xPct}

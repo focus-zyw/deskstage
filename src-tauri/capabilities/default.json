@@ -4,13 +4,16 @@
   "description": "窗口控制与数据目录读写权限",
   "windows": [
     "main",
-    "capture"
+    "capture",
+    "settings"
   ],
   "permissions": [
     "core:default",
     "autostart:default",
     "core:window:allow-set-ignore-cursor-events",
     "core:window:allow-set-size",
+    "core:window:allow-set-focus",
+    "core:window:allow-start-dragging",
     "core:window:allow-set-position",
     "core:window:allow-outer-position",
     "core:window:allow-current-monitor",
