@@ -4,7 +4,16 @@ import { complete, completeStream } from './llmGateway'
 import { createSentenceSplitter } from './sentenceSplitter'
 import { buildMessages, renderAudienceContext, renderViewerBrief, type UserContext } from './promptBuilder'
 import { mergeMessages, webchatAsk } from './webchat'
-import { getMemory, topFacts, tasteSummary, type FactCategory } from '../storage/memoryStore'
+import {
+  getMemory,
+  prepareTurnMemory,
+  topFacts,
+  tasteSummary,
+  type FactCandidate,
+  type FactCategory,
+  type TurnMemoryContext,
+} from '../storage/memoryStore'
+import { MEMORY_SLOTS } from '../storage/memorySlots'
 import {
   storyContext,
   previewStoryContext,
@@ -139,7 +148,7 @@ export async function generateDialog(
   opts: { deferContextAdoption?: boolean } = {},
 ): Promise<PerformanceScript> {
   const cfg = await getConfig()
-  const mem = await getMemory()
+  const memory = await prepareTurnMemory({ query: topic, n: 8 })
   // 每集掷骰是否包含观众抉择点(概率用户可配,默认 30%;重试保持一致)
   const allowChoice = Math.random() < (cfg.choiceChance ?? 0.3)
   // 丙(C)是常驻正式角色,随 prompt 永久参与,不再走随机客串掷骰
@@ -149,7 +158,7 @@ export async function generateDialog(
   const userCtx: UserContext = {
     profile: cfg.userProfile,
     taste: await tasteSummary(3) || undefined,
-    facts: topFacts(mem, 8),
+    facts: memory.promptFacts,
   }
   // 50% 概率注入与本轮主题相关、且已按冷却时间轮换的角色世界素材;
   // 预生成模式只预览不消费,冷却与 recap 的持久副作用推迟到开播采纳
@@ -303,14 +312,14 @@ export async function generateShortChat(
   memoText?: string,
 ): Promise<DialogLine[]> {
   const cfg = await getConfig()
-  const mem = await getMemory()
+  const memory = await prepareTurnMemory({ query: '', n: 3 })
   const slot = currentTimeSlot()
   const persona = duoShortPersona()
   const moodLine = moodHintLine(await getMoods(), ['A', 'B'])
   const userCtx: UserContext = {
     profile: cfg.userProfile,
     taste: (await tasteSummary(3)) || undefined,
-    facts: topFacts(mem, 3),
+    facts: memory.promptFacts,
   }
   const profileBits = renderAudienceContext(userCtx).trim()
   const interests = profileBits ? `${profileBits}\n` : ''
@@ -488,13 +497,15 @@ export async function generateUserChatReply(
   signal?: AbortSignal,
   /** 工具观察块(工具系统渲染好的不可信资料;原样附加,不解析) */
   toolNote?: string,
+  /** 回合记忆上下文(显式传入;缺省才自取——"注入即所见"的单一来源) */
+  memory?: TurnMemoryContext,
 ): Promise<string> {
   const cfg = await getConfig()
-  const mem = await getMemory()
+  const factList = memory ? memory.promptFacts : (await prepareTurnMemory({ query: userText, n: 3 })).promptFacts
   const p: UserProfile = cfg.userProfile
   const persona = soloShortPersona(who)
   const chatMoodLine = moodHintLine(await getMoods(), [who])
-  const brief = renderViewerBrief(p, topFacts(mem, 3))
+  const brief = renderViewerBrief(p, factList)
   const messages: { role: string; content: string }[] = [
     {
       role: 'system',
@@ -583,13 +594,15 @@ export async function generateTurnBatch(input: {
   signal?: AbortSignal
   /** 工具观察块(工具系统渲染好的不可信资料;原样附加到观众消息后) */
   toolNote?: string
+  /** 回合记忆上下文(显式传入;缺省才自取) */
+  memory?: TurnMemoryContext
 }): Promise<DialogLine[]> {
   const cfg = await getConfig()
-  const mem = await getMemory()
+  const factList = input.memory ? input.memory.promptFacts : (await prepareTurnMemory({ query: input.userText, n: 3 })).promptFacts
   const persona = `${duoShortPersona()};${soloShortPersona('C')}`
   const chatMoodLine = moodHintLine(await getMoods(), ['A', 'B', 'C'])
   const p: UserProfile = cfg.userProfile
-  const brief = renderViewerBrief(p, topFacts(mem, 3))
+  const brief = renderViewerBrief(p, factList)
   const windowText = windowTrimCurrent(input.window, input.userText).length
     ? windowTrimCurrent(input.window, input.userText)
         .map((t) => `${t.who === 'user' ? p.userName || '观众' : nameOf(t.who)}:${t.text}`)
@@ -649,7 +662,7 @@ export async function generateInterjectionBatch(input: {
   const persona = `${duoShortPersona()};${soloShortPersona('C')}`
   const interjectMoodLine = moodHintLine(await getMoods(), ['A', 'B', 'C'])
   const p: UserProfile = cfg.userProfile
-  const brief = renderViewerBrief(p, [])
+  const brief = renderViewerBrief(p, (await prepareTurnMemory({ query: input.userText, n: 3 })).promptFacts)
   const targetName = nameOf(input.target)
   const windowText = windowTrimCurrent(input.window, input.userText).length
     ? windowTrimCurrent(input.window, input.userText)
@@ -763,9 +776,9 @@ export async function generateLiveReplyBatch(
   deps: { webchatAsk: typeof webchatAsk } = { webchatAsk },
 ): Promise<LiveBatchReply[]> {
   const cfg = await getConfig()
-  const mem = await getMemory()
+  const memory = await prepareTurnMemory({ query: batch.map((d) => d.content).join(' '), n: 3 })
   const p: UserProfile = cfg.userProfile
-  const brief = renderViewerBrief(p, topFacts(mem, 3))
+  const brief = renderViewerBrief(p, memory.promptFacts)
   const liveMoodLine = moodHintLine(await getMoods(), ['A', 'B', 'C'])
 
   const danmakuList = batch.map((d, i) => `${i}. ${d.username}:${d.content}`).join('\n')
@@ -818,12 +831,19 @@ export function sanitizeLiveReplyBatch(raw: string, batchLength: number): LiveBa
 export async function extractFacts(
   userText: string,
   known: string[],
-): Promise<{ content: string; category: FactCategory }[]> {
+): Promise<FactCandidate[]> {
   const cats: FactCategory[] = ['identity', 'preference', 'habit', 'people', 'event', 'other']
+  // slot 白名单 = memorySlots 的封闭词表;白名单外的 slot 由清洗归 undefined
+  const slotList = MEMORY_SLOTS.join('|')
+  // 第一道隐私闸:禁止规则在提取 prompt 就生效(第二道在 mergeFacts 入库前)
+  const { rules } = await getMemory()
+  const ruleText = rules.length
+    ? `以下内容用户已禁止自动保存,命中就不要提取:${rules.map((r) => `${r.scope}:${r.value}`).join(';')}。`
+    : ''
   const messages: { role: string; content: string }[] = [
     {
       role: 'system',
-      content: `从观众说的话里提取"关于观众本人的长期事实"(身份/喜好/习惯/身边人/重要事件)。已知事实(不要重复提取):${known.length ? known.join(';') : '(无)'}。只输出一个 JSON 对象:{"facts":[{"content":"事实","category":"identity|preference|habit|people|event|other"}]}。只提取观众明确透露的信息,不要推测;没有新事实就输出 {"facts":[]}。`,
+      content: `从观众说的话里提取"关于观众本人的长期事实"(身份/喜好/习惯/身边人/重要事件)。已知事实(不要重复提取):${known.length ? known.join(';') : '(无)'}。${ruleText}只输出一个 JSON 对象:{"facts":[{"content":"事实","category":"identity|preference|habit|people|event|other","slot":"${slotList} 之一或省略","value":"槽位当前值","sensitivity":"normal|private|restricted","volatility":"stable|changeable|historical"}]}。slot 只在能对上白名单时给(住址/常居城市=profile.currentResidence,过敏=health.allergy,当前职业=profile.currentJob,姓名=profile.name 等);sensitivity:过敏/疾病/药物/证件/银行卡=restricted,住址/收入/联系方式=private;volatility:历史事件=historical,姓名/家乡=stable,其余=changeable。只提取观众明确透露的信息,不要推测;没有新事实就输出 {"facts":[]}。`,
     },
     { role: 'user', content: userText },
   ]
@@ -836,14 +856,24 @@ export async function extractFacts(
     const obj = JSON.parse(m[0]) as { facts?: unknown }
     if (!Array.isArray(obj.facts)) return []
     return obj.facts
-      .map((f) => (f && typeof f === 'object' ? (f as { content?: unknown; category?: unknown }) : null))
+      .map((f) => (f && typeof f === 'object' ? (f as Record<string, unknown>) : null))
       .filter(
-        (f): f is { content: string; category: string } =>
+        (f): f is { content: string; category: string; slot?: unknown; value?: unknown; sensitivity?: unknown; volatility?: unknown } =>
           typeof f?.content === 'string' && f.content.trim().length > 1,
       )
       .map((f) => ({
         content: f.content.trim().slice(0, 120),
         category: (cats.includes(f.category as FactCategory) ? f.category : 'other') as FactCategory,
+        slot: typeof f.slot === 'string' && (MEMORY_SLOTS as readonly string[]).includes(f.slot) ? (f.slot as FactCandidate['slot']) : undefined,
+        value: typeof f.value === 'string' ? f.value.slice(0, 80) : undefined,
+        sensitivity:
+          f.sensitivity === 'private' || f.sensitivity === 'restricted' || f.sensitivity === 'normal'
+            ? f.sensitivity
+            : undefined,
+        volatility:
+          f.volatility === 'stable' || f.volatility === 'historical' || f.volatility === 'changeable'
+            ? f.volatility
+            : undefined,
       }))
   } finally {
     clearTimeout(timer)
@@ -1114,16 +1144,18 @@ export async function* streamVoiceReply(input: {
   signal?: AbortSignal
   /** 工具观察块(与文本路径同源;语音+工具组合时随 user 消息附带) */
   toolNote?: string
+  /** 回合记忆上下文(显式传入;缺省才自取) */
+  memory?: TurnMemoryContext
   /** 句子入队回调(入队时机 = 消费方还在播上一句,正好预合成) */
   onQueued?(line: DialogLine): void
 }): AsyncGenerator<DialogLine> {
   const cfg = await getConfig()
   if (cfg.webchatEnabled) throw new Error('网页版生成通道不支持流式')
-  const mem = await getMemory()
+  const factList = input.memory ? input.memory.promptFacts : (await prepareTurnMemory({ query: input.userText, n: 3 })).promptFacts
   const p: UserProfile = cfg.userProfile
   const persona = soloShortPersona(input.target)
   const chatMoodLine = moodHintLine(await getMoods(), [input.target])
-  const brief = renderViewerBrief(p, topFacts(mem, 3))
+  const brief = renderViewerBrief(p, factList)
   const who = p.userName || '观众'
   const messages: { role: string; content: string }[] = [
     {

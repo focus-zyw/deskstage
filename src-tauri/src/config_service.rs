@@ -52,6 +52,10 @@ struct Inner {
     config: Option<Value>,
     /// 数据文件缓存:store 名 → 已解析 JSON(Null = 文件不存在)
     data: HashMap<String, Value>,
+    /// 数据 revision:每 store 独立计数,首次加载记 1,成功写入 +1。
+    /// CAS 提交用——"读(revision)→改→条件写"整体在前端,memory 这类读改写密集
+    /// 的 store 靠 revision 对比防双窗互相覆盖(data_set 全量替换只串行了写入本身)
+    data_revisions: HashMap<String, u64>,
 }
 
 fn data_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
@@ -229,24 +233,66 @@ fn store_file(store: &str) -> Result<&'static str, String> {
         .ok_or_else(|| format!("未知的 store: {store}"))
 }
 
+/// 惰性加载单 store:返回 (revision, 值)。首次加载(含文件不存在)revision 记 1。
+/// 锁内调用。
+fn ensure_data_loaded(
+    app: &AppHandle,
+    inner: &mut Inner,
+    store: &str,
+) -> Result<(u64, Value), String> {
+    if let Some(rev) = inner.data_revisions.get(store) {
+        let value = inner.data.get(store).cloned().unwrap_or(Value::Null);
+        return Ok((*rev, value));
+    }
+    let file_name = store_file(store)?;
+    let file = data_dir(app)?.join(file_name);
+    let v = match std::fs::read_to_string(&file) {
+        // 手改坏数据按不存在处理:返回 Null(前端清洗成空仓),下次保存即修复
+        Ok(raw) => serde_json::from_str(&raw).unwrap_or(Value::Null),
+        Err(_) => Value::Null,
+    };
+    inner.data.insert(store.to_string(), v.clone());
+    inner.data_revisions.insert(store.to_string(), 1);
+    Ok((1, v))
+}
+
 #[tauri::command]
 pub fn data_get(app: AppHandle, state: State<'_, ConfigState>, store: String) -> Result<Value, String> {
-    let file_name = store_file(&store)?;
+    store_file(&store)?;
     let mut inner = state.inner.lock().map_err(|e| e.to_string())?;
-    if !inner.data.contains_key(&store) {
-        let file = data_dir(&app)?.join(file_name);
-        let v = match std::fs::read_to_string(&file) {
-            // 手改坏数据按不存在处理:返回 Null(前端清洗成空仓),下次保存即修复
-            Ok(raw) => serde_json::from_str(&raw).unwrap_or(Value::Null),
-            Err(_) => Value::Null,
-        };
-        inner.data.insert(store.clone(), v);
+    let (_, value) = ensure_data_loaded(&app, &mut inner, &store)?;
+    Ok(value)
+}
+
+/// 带版本读取:前端 CAS"读→改→条件写"的第一步。
+#[tauri::command]
+pub fn data_get_with_revision(
+    app: AppHandle,
+    state: State<'_, ConfigState>,
+    store: String,
+) -> Result<Value, String> {
+    store_file(&store)?;
+    let mut inner = state.inner.lock().map_err(|e| e.to_string())?;
+    let (revision, value) = ensure_data_loaded(&app, &mut inner, &store)?;
+    Ok(json!({ "revision": revision, "value": value }))
+}
+
+/// CAS 提交的内存侧(无 IO):expected 不符返回 Err((当前 revision, 当前值))。
+/// 相符则更新内存缓存并推进 revision,返回新 revision。调用方负责先做磁盘原子写。
+fn cas_commit(inner: &mut Inner, store: &str, expected: u64, value: Value) -> Result<u64, (u64, Value)> {
+    let current = inner.data_revisions.get(store).copied().unwrap_or(0);
+    let current_value = inner.data.get(store).cloned().unwrap_or(Value::Null);
+    if current != expected {
+        return Err((current, current_value));
     }
-    Ok(inner.data.get(&store).cloned().unwrap_or(Value::Null))
+    let new_rev = current + 1;
+    inner.data.insert(store.to_string(), value.clone());
+    inner.data_revisions.insert(store.to_string(), new_rev);
+    Ok(new_rev)
 }
 
 /// 全量替换写:前端清洗后的完整 store 状态 → 原子落盘 → 广播(载荷带新值,
-/// 两窗直接采纳,不再"通知后回磁盘重读")。
+/// 两窗直接采纳,不再"通知后回磁盘重读")。revision 推进 +1(与 CAS 通路共用计数)。
 #[tauri::command]
 pub fn data_set(
     app: AppHandle,
@@ -254,21 +300,77 @@ pub fn data_set(
     store: String,
     value: Value,
 ) -> Result<Value, String> {
-    let file_name = store_file(&store)?;
+    store_file(&store)?;
     let mut inner = state.inner.lock().map_err(|e| e.to_string())?;
     let dir = data_dir(&app)?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("创建数据目录失败: {e}"))?;
     let body = serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?;
-    atomic_write(&dir.join(file_name), &body)?;
+    atomic_write(&dir.join(store_file(&store)?), &body)?;
+    let current = inner.data_revisions.entry(store.clone()).or_insert(1);
+    let revision = *current + 1;
+    *current = revision;
     inner.data.insert(store.clone(), value.clone());
-    let _ = app.emit("store-changed", json!({ "store": store, "value": value }));
+    let _ = app.emit(
+        "store-changed",
+        json!({ "store": store, "value": value, "revision": revision }),
+    );
     Ok(value)
+}
+
+/// CAS 条件写:expected_revision 与当前不符 → {status:"conflict", revision, value=当前值},
+/// 前端取最新值重放 mutation 再提交;相符 → 原子落盘 + 内存提交 + 广播。
+/// 让"读→改→写"整体原子的是这套协议本身,进程锁只保证判定与提交不分隔。
+#[tauri::command]
+pub fn data_set_if_revision(
+    app: AppHandle,
+    state: State<'_, ConfigState>,
+    store: String,
+    expected_revision: u64,
+    value: Value,
+) -> Result<Value, String> {
+    store_file(&store)?;
+    let mut inner = state.inner.lock().map_err(|e| e.to_string())?;
+    let (current_rev, current) = ensure_data_loaded(&app, &mut inner, &store)?;
+    if current_rev != expected_revision {
+        return Ok(json!({
+            "status": "conflict",
+            "revision": current_rev,
+            "value": current,
+        }));
+    }
+    let dir = data_dir(&app)?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("创建数据目录失败: {e}"))?;
+    let body = serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?;
+    atomic_write(&dir.join(store_file(&store)?), &body)?;
+    let new_rev = cas_commit(&mut inner, &store, expected_revision, value.clone())
+        .map_err(|_| "CAS 提交状态不一致(判定已通过,理论不可达)".to_string())?;
+    let _ = app.emit(
+        "store-changed",
+        json!({ "store": store, "value": value, "revision": new_rev }),
+    );
+    Ok(json!({ "status": "ok", "revision": new_rev, "value": value }))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn cas_commit_rejects_stale_and_advances_on_match() {
+        let mut inner = Inner::default();
+        inner.data.insert("memory".into(), json!({ "a": 1 }));
+        inner.data_revisions.insert("memory".into(), 1);
+        // 旧 revision:拒绝并带回当前值(前端据此重放 mutation)
+        let err = cas_commit(&mut inner, "memory", 0, json!({ "a": 9 })).unwrap_err();
+        assert_eq!(err.0, 1);
+        assert_eq!(err.1["a"], 1);
+        // 匹配:提交并推进 revision
+        let rev = cas_commit(&mut inner, "memory", 1, json!({ "a": 2 })).unwrap();
+        assert_eq!(rev, 2);
+        assert_eq!(inner.data["memory"]["a"], 2);
+        assert_eq!(inner.data_revisions["memory"], 2);
+    }
 
     #[test]
     fn merge_shallow_overrides_top_level_keys_only() {

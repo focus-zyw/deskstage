@@ -15,6 +15,7 @@ const NO_BUBBLE: Record<Speaker, string | null> = { A: null, B: null, C: null }
 const IDLE_POSE: Record<Speaker, string> = { A: 'idle', B: 'idle', C: 'idle' }
 const NO_DELIVERY: Record<Speaker, string | undefined> = { A: undefined, B: undefined, C: undefined }
 const NO_FLAGS: Record<Speaker, boolean> = { A: false, B: false, C: false }
+const NO_MEM: Record<Speaker, number> = { A: 0, B: 0, C: 0 }
 
 export interface SayOptions {
   /** 伴随动作;不传则保持当前动作 */
@@ -27,6 +28,8 @@ export interface SayOptions {
   reacting?: boolean
   /** 同时置为说话态(聊天/弹幕回复走 TTS 时);到期一并熄灯 */
   speaking?: boolean
+  /** 参考记忆条数(透明档 🧠 徽标;聊天回复专用,演出/直播不传即不显示) */
+  memoryCount?: number
 }
 
 export function useActorPresenter() {
@@ -37,6 +40,7 @@ export function useActorPresenter() {
   const [pulseFor, setPulseFor] = useState<Speaker | null>(null)
   const [reacting, setReacting] = useState<Record<Speaker, boolean>>(NO_FLAGS)
   const [loudBubble, setLoudBubble] = useState<Record<Speaker, boolean>>(NO_FLAGS)
+  const [memBadge, setMemBadge] = useState<Record<Speaker, number>>(NO_MEM)
   // 回收守卫用的镜像(setBubble 函数式更新读不到当前值);经 effect 同步避免渲染期写 ref
   const bubbleRef = useRef(bubble)
   const speakingRef = useRef(speaking)
@@ -87,6 +91,7 @@ export function useActorPresenter() {
     if (act !== undefined) setAction((a) => ({ ...a, [who]: act }))
     setLoudBubble((l) => ({ ...l, [who]: loud }))
     setReacting((r) => ({ ...r, [who]: react }))
+    setMemBadge((m) => ({ ...m, [who]: opts.memoryCount ?? 0 }))
     if (talk) setSpeaking(who)
     timers.current[who] = window.setTimeout(() => {
       if (bubbleRef.current[who] !== text) return // 已被新话顶掉
@@ -94,6 +99,7 @@ export function useActorPresenter() {
       setAction((a) => ({ ...a, [who]: 'idle' }))
       setReacting((r) => ({ ...r, [who]: false }))
       setLoudBubble((l) => ({ ...l, [who]: false }))
+      setMemBadge((m) => ({ ...m, [who]: 0 }))
       if (talk && speakingRef.current === who) setSpeaking(null)
     }, ms)
   }
@@ -107,6 +113,7 @@ export function useActorPresenter() {
     setBubble((b) => ({ ...b, [line.speaker]: line.text }))
     setAction((a) => ({ ...a, [line.speaker]: act }))
     setSpeaking(line.speaker)
+    setMemBadge((m) => ({ ...m, [line.speaker]: 0 })) // 演出台词不显示记忆标记
     setDelivery((d) => ({ ...d, [line.speaker]: line.delivery }))
     // 各角色同步无声反应:reactions(三人协议,A 说话时 B 害羞/C 惊讶可同帧)优先,
     // 缺省按旧协议从 listenerAction 按 target 转换——转换逻辑收在 dialogSchema
@@ -172,10 +179,11 @@ export function useActorPresenter() {
     setAction(IDLE_POSE)
     setSpeaking(null)
     setDelivery(NO_DELIVERY)
+    setMemBadge(NO_MEM)
   }
 
   return {
-    bubble, action, delivery, speaking, pulseFor, reacting, loudBubble,
+    bubble, action, delivery, speaking, pulseFor, reacting, loudBubble, memBadge,
     say, showTalk, hush, endLine, pulse, settle, setPose, reset,
   }
 }

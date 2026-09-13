@@ -90,6 +90,8 @@ export interface ToolObservation {
   /** 已截断的摘要(截断发生在进这里之前,见 truncateForObservation) */
   summary: string
   errorCode?: string
+  /** 检索类工具命中的记忆引用(search_memory;只含 id,不含正文) */
+  memoryRefs?: { id: string; source: 'passive' | 'search-tool' }[]
 }
 
 /** 一回合的工具准备结果:上层(ChatSession)拿它决定怎么继续生成 */
@@ -101,6 +103,8 @@ export interface TurnPreparation {
   clarify?: string
   /** 观察块的渲染成品(renderObservationBlock 的输出):上层原样注入 prompt,
    *  不需要知道防注入纪律的细节。observations 为空时为 undefined */
+  /** search_memory 命中的记忆引用(并入回合总注入集合;只含 id) */
+  memoryRefs?: { id: string; source: 'passive' | 'search-tool' }[]
   note?: string
 }
 

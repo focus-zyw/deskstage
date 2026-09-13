@@ -1,26 +1,76 @@
-// 使用者记忆:appData/data/memory.json。三块内容——
-// facts[]:从聊天里自动提取的"关于观众的事实"(LLM 后台提取,本模块只管存取合并);
-// topicStats:话题种子的 seen/favored/replays 计数,驱动 pickTopic 偏好加权;
-// counters:戳/模式使用等行为计数。
-// 文件读写统一走 Rust 状态中心(data_get/data_set:进程锁串行化 + 原子写 +
-// store-changed 广播到两窗,广播载荷直接采纳进缓存)。浏览器预览降级 localStorage。
-// 失败静默不影响演出。
+// 使用者记忆库:appData/data/memory.json(v2)。三块内容——
+// facts[]:从聊天里自动提取的"关于观众的事实",带完整元数据(confidence/volatility/
+//   sensitivity/slot/来源 evidence/状态机,语义决策在 memoryPolicy);
+// rules[]:禁止自动保存规则(结构化 scope:slot/category/sensitivity/phrase);
+// topicStats/counters:话题种子计数与行为计数(与 facts 共库但语义独立)。
+// 读写统一走 Rust 状态中心;**变更走 mutateMemory CAS 循环**(读 revision→应用纯
+// mutation→data_set_if_revision 条件提交,conflict 则取最新值重放)——双窗并发
+// (主窗后台提取 × 设置窗编辑)靠 revision 对比不丢更新,进程锁只串行化判定本身。
+// 浏览器预览降级 localStorage(单窗,无 CAS 语义)。失败静默不影响演出。
 
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { withFileLock } from './writeLock'
 import { inTauri } from './configStore'
+import {
+  detectSensitivity,
+  maxSensitivity,
+  queryMemory,
+  relevance,
+  ruleMatches,
+  classifyIncoming,
+  defaultVolatility,
+  type MemoryCandidateTrace,
+  type MemoryPurpose,
+  type MemorySensitivity,
+  type MemoryTrace,
+  type MemoryVolatility,
+  type SelectedMemory,
+} from './memoryPolicy'
+import { isMemorySlot, normalizeSlotValue, SLOT_POLICY, type MemorySlot } from './memorySlots'
 
 export type FactCategory = 'identity' | 'preference' | 'habit' | 'people' | 'event' | 'other'
+export type { MemorySensitivity, MemoryVolatility, MemorySlot }
+
+/** 来源证据种类(封闭白名单);evidence[0]=首次来源,末条=最近更新 */
+export type MemoryEvidenceKind = 'extracted' | 'user-edited' | 'user-confirmed' | 'legacy'
+
+export interface MemoryEvidence {
+  turnId: string | null
+  excerpt: string
+  at: number
+  kind: MemoryEvidenceKind
+}
 
 export interface MemoryFact {
   id: string
   content: string
   category: FactCategory
-  ts: number
+  /** 受控语义槽位(白名单见 memorySlots);冲突替代只在同 slot 间成立 */
+  slot?: MemorySlot
+  value?: string
+  /** 提取可靠性 0~1:系统是否正确理解了用户原话(时间衰减不看它,看 confirmWindow) */
+  confidence: number
+  volatility: MemoryVolatility
+  sensitivity: MemorySensitivity
+  /** 持久化仅两态;needs_confirmation 由 policy 按 status+时间戳动态派生,不落盘 */
+  status: 'active' | 'superseded'
+  sourceTurnId: string | null
+  sourceExcerpt: string
+  createdAt: number
   lastSeen: number
-  hits: number
+  /** 最近一次被用户确认(编辑/明确重申/手动确认);机器提取命中不算。null=从未确认 */
+  lastConfirmedAt: number | null
   pinned: boolean
+  hits: number
+  evidence: MemoryEvidence[]
+}
+
+export interface MemoryRule {
+  id: string
+  scope: 'slot' | 'category' | 'sensitivity' | 'phrase'
+  value: string
+  createdAt: number
 }
 
 export interface TopicStat {
@@ -38,16 +88,20 @@ export interface TopicStat {
 }
 
 export interface MemoryData {
-  version: 1
+  version: 2
   facts: MemoryFact[]
+  rules: MemoryRule[]
   topicStats: Record<string, TopicStat>
   counters: { pokes: number; modeUses: Record<string, number> }
 }
 
 const MAX_FACTS = 200
+const MAX_EVIDENCE = 4
+/** pinned 软上限:不强制淘汰,超出时 UI 提示 */
+export const MAX_PINNED_SOFT = 30
 const LS_KEY = 'vc-memory'
 
-const EMPTY: MemoryData = { version: 1, facts: [], topicStats: {}, counters: { pokes: 0, modeUses: {} } }
+const EMPTY: MemoryData = { version: 2, facts: [], rules: [], topicStats: {}, counters: { pokes: 0, modeUses: {} } }
 
 let cache: MemoryData | null = null
 
@@ -55,23 +109,95 @@ function clone(data: MemoryData): MemoryData {
   return JSON.parse(JSON.stringify(data)) as MemoryData
 }
 
-/** 清洗一条来自文件/LLM 的事实,非法返回 null */
-function sanitizeFact(raw: unknown): MemoryFact | null {
+function sanitizeEvidence(raw: unknown, createdAt: number, legacyTurnId: string | null, legacyExcerpt: string): MemoryEvidence[] {
+  const kinds: MemoryEvidenceKind[] = ['extracted', 'user-edited', 'user-confirmed', 'legacy']
+  if (Array.isArray(raw)) {
+    const list = raw
+      .slice(0, MAX_EVIDENCE)
+      .map((e) => {
+        const o = (e ?? {}) as Record<string, unknown>
+        const kind = kinds.includes(o.kind as MemoryEvidenceKind) ? (o.kind as MemoryEvidenceKind) : 'legacy'
+        return {
+          turnId: typeof o.turnId === 'string' ? o.turnId.slice(0, 64) : null,
+          excerpt: typeof o.excerpt === 'string' ? o.excerpt.slice(0, 120) : '',
+          at: Number(o.at) || createdAt,
+          kind,
+        }
+      })
+    if (list.length > 0) return list
+  }
+  return [{ turnId: legacyTurnId, excerpt: legacyExcerpt.slice(0, 120), at: createdAt, kind: 'legacy' }]
+}
+
+/** 清洗一条来自文件/迁移的事实(v1 旧形状按 ts 识别并迁 v2),非法返回 null */
+export function sanitizeFact(raw: unknown): MemoryFact | null {
   const o = (raw ?? {}) as Record<string, unknown>
   const content = typeof o.content === 'string' ? o.content.trim().slice(0, 120) : ''
   if (!content) return null
   const cats: FactCategory[] = ['identity', 'preference', 'habit', 'people', 'event', 'other']
   const category = cats.includes(o.category as FactCategory) ? (o.category as FactCategory) : 'other'
   const now = Date.now()
+  const slot = isMemorySlot(o.slot) ? o.slot : undefined
+  const value = slot && typeof o.value === 'string' ? normalizeSlotValue(slot, o.value) : undefined
+  const createdAt = Number(o.createdAt ?? o.ts) || now
+  const modelSensitivity: MemorySensitivity | undefined =
+    o.sensitivity === 'private' || o.sensitivity === 'restricted' || o.sensitivity === 'normal'
+      ? o.sensitivity
+      : undefined
+  // 敏感度三源取严:模型标注 ∨ 确定性检测 ∨ slot 注册表
+  const sensitivity = maxSensitivity(
+    modelSensitivity,
+    detectSensitivity(content),
+    slot ? SLOT_POLICY[slot].sensitivity : undefined,
+  )
+  const volatility: MemoryVolatility =
+    o.volatility === 'stable' || o.volatility === 'historical' || o.volatility === 'changeable'
+      ? o.volatility
+      : slot
+        ? SLOT_POLICY[slot].volatility
+        : defaultVolatility(category)
+  const legacyTurnId = typeof o.sourceTurnId === 'string' ? o.sourceTurnId.slice(0, 64) : null
+  const legacyExcerpt = typeof o.sourceExcerpt === 'string' ? o.sourceExcerpt : ''
+  const lastConfirmedAt = o.lastConfirmedAt === null ? null : Number(o.lastConfirmedAt) || null
   return {
     id: typeof o.id === 'string' && o.id ? o.id.slice(0, 40) : `f${now}${Math.random().toString(36).slice(2, 8)}`,
     content,
     category,
-    ts: Number(o.ts) || now,
-    lastSeen: Number(o.lastSeen) || Number(o.ts) || now,
-    hits: Math.max(0, Number(o.hits) || 0),
+    slot,
+    value,
+    confidence: Math.min(1, Math.max(0, Number(o.confidence) || 0.6)),
+    volatility,
+    sensitivity,
+    status: o.status === 'superseded' ? 'superseded' : 'active',
+    sourceTurnId: legacyTurnId,
+    sourceExcerpt: legacyExcerpt.slice(0, 120),
+    createdAt,
+    lastSeen: Number(o.lastSeen) || createdAt,
+    lastConfirmedAt,
     pinned: o.pinned === true,
+    hits: Math.max(0, Number(o.hits) || 0),
+    evidence: sanitizeEvidence(o.evidence, createdAt, legacyTurnId, legacyExcerpt),
   }
+}
+
+function sanitizeRules(raw: unknown): MemoryRule[] {
+  if (!Array.isArray(raw)) return []
+  const scopes = ['slot', 'category', 'sensitivity', 'phrase']
+  return raw
+    .slice(0, 100)
+    .map((r) => {
+      const o = (r ?? {}) as Record<string, unknown>
+      const scope = scopes.includes(o.scope as string) ? (o.scope as MemoryRule['scope']) : null
+      const value = typeof o.value === 'string' ? o.value.trim().slice(0, 80) : ''
+      if (!scope || !value) return null
+      return {
+        id: typeof o.id === 'string' && o.id ? o.id.slice(0, 40) : `r${Date.now()}${Math.random().toString(36).slice(2, 8)}`,
+        scope,
+        value,
+        createdAt: Number(o.createdAt) || Date.now(),
+      }
+    })
+    .filter((r): r is MemoryRule => r !== null)
 }
 
 function sanitize(data: unknown): MemoryData {
@@ -102,8 +228,9 @@ function sanitize(data: unknown): MemoryData {
     }
   }
   return {
-    version: 1,
+    version: 2,
     facts: facts.slice(0, MAX_FACTS),
+    rules: sanitizeRules(o.rules),
     topicStats,
     counters: { pokes: Math.max(0, Number(counters.pokes) || 0), modeUses },
   }
@@ -121,112 +248,355 @@ async function loadRaw(): Promise<MemoryData> {
   }
   try {
     // Rust 状态中心:进程锁串行 + 内存缓存,坏数据/缺文件按空仓处理
-    return sanitize(await invoke<unknown>('data_get', { store: 'memory' }))
+    const res = await invoke<{ revision: number; value: unknown }>('data_get_with_revision', { store: 'memory' })
+    return sanitize(res.value)
   } catch (e) {
     console.warn('记忆读取失败', e)
   }
   return clone(EMPTY)
 }
 
-/** 读全部记忆(内存缓存) */
+/** 回合记忆上下文:selected 是唯一事实源,promptFacts/refs 由它派生(结构保证
+ *  "实际注入 = 界面显示"的同构,不靠两份数组人工对齐) */
+export interface TurnMemoryContext {
+  selected: SelectedMemory[]
+  candidates: MemoryCandidateTrace[]
+  queriedAt: number
+  promptFacts: string[]
+  refs: { id: string; source: 'passive' | 'search-tool' }[]
+}
+
+export function emptyTurnMemory(): TurnMemoryContext {
+  return { selected: [], candidates: [], queriedAt: 0, promptFacts: [], refs: [] }
+}
+
+/** 唯一检索入口:被动注入与显式搜索(search_memory)都走这里,策略只在 memoryPolicy 一处 */
+export async function prepareTurnMemory(opts: {
+  query: string
+  n?: number
+  purpose?: MemoryPurpose
+}): Promise<TurnMemoryContext> {
+  const mem = await getMemory()
+  const r = queryMemory(mem.facts, {
+    query: opts.query,
+    purpose: opts.purpose ?? 'passive-context',
+    now: Date.now(),
+    n: opts.n ?? 3,
+    rules: mem.rules,
+  })
+  return {
+    selected: r.selected,
+    candidates: r.candidates,
+    queriedAt: r.queriedAt,
+    promptFacts: r.selected.map((s) => s.text),
+    refs: r.selected.map((s) => ({ id: s.id, source: s.source })),
+  }
+}
+
+/** 回合检索的完整 trace(仅 id/分数/枚举,无正文);debug 显示档才落盘到聊天日志 */
+export function traceOf(ctx: TurnMemoryContext): MemoryTrace {
+  return {
+    queriedAt: ctx.queriedAt,
+    used: ctx.selected.map((s) => ({ id: s.id, source: s.source, score: s.score })),
+    candidates: ctx.candidates,
+  }
+}
+
+/** 读全部记忆(内存缓存;store-changed 广播保持两窗一致) */
 export async function getMemory(): Promise<MemoryData> {
   if (!cache) cache = await loadRaw()
   return clone(cache)
 }
 
-/** 变更落盘(Rust 原子写 + store-changed 广播,两窗缓存经广播采纳保持一致) */
-async function persist(next: MemoryData): Promise<void> {
-  cache = next
-  if (!inTauri) {
-    localStorage.setItem(LS_KEY, JSON.stringify(next))
-    return
-  }
-  await invoke<unknown>('data_set', { store: 'memory', value: next })
+/**
+ * CAS 变更循环:读(带 revision)→ 应用纯 mutation → 条件提交。
+ * conflict = 另一窗先写了:采纳返回的最新值,重放本 mutation(≤3 次,仍冲突则报错——
+ * 说明竞争极烈,由调用方的静默降级兜底)。withFileLock 串行化本窗并发,减少无谓重放。
+ */
+async function mutateMemory<T>(fn: (data: MemoryData) => { data: MemoryData; result: T }): Promise<T> {
+  return withFileLock('memory', async () => {
+    if (!inTauri) {
+      const cur = cache ?? (await loadRaw())
+      const { data, result } = fn(cur)
+      cache = sanitize(data)
+      localStorage.setItem(LS_KEY, JSON.stringify(cache))
+      return result
+    }
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const cur = await invoke<{ revision: number; value: unknown }>('data_get_with_revision', { store: 'memory' })
+      const fresh = sanitize(cur.value)
+      cache = fresh
+      const { data, result } = fn(fresh)
+      const res = await invoke<{ status: 'ok' | 'conflict'; revision?: number; value?: unknown }>(
+        'data_set_if_revision',
+        { store: 'memory', expectedRevision: cur.revision, value: data },
+      )
+      if (res.status === 'ok') {
+        cache = sanitize(res.value)
+        return result
+      }
+      // conflict:采纳最新值,下一圈重放 mutation
+      cache = sanitize(res.value)
+    }
+    throw new Error('记忆写入冲突:连续 3 次版本过期')
+  })
 }
 
 if (inTauri) {
-  // Rust 状态中心的广播(data_set 成功后发给全部窗口,含写者,幂等采纳):
-  // 任一窗改了记忆(设置页删改/主窗提取合并),两窗缓存即时对齐
-  void listen<{ store?: string; value?: unknown }>('store-changed', (e) => {
+  // Rust 状态中心的广播(data_set / data_set_if_revision 成功后发给全部窗口,含写者,
+  // 幂等采纳):任一窗改了记忆,两窗缓存与 revision 即时对齐
+  void listen<{ store?: string; value?: unknown; revision?: number }>('store-changed', (e) => {
     if (e.payload?.store !== 'memory' || e.payload.value === undefined) return
     cache = sanitize(e.payload.value)
   })
 }
 
-/** 淘汰排序:非置顶优先丢,lastSeen 旧者优先 */
-function evict(facts: MemoryFact[]): MemoryFact[] {
+// ---------- 淘汰 ----------
+
+/** 淘汰:超 200 条时按 superseded(保留最近 5 条历史)→ 非固定低置信最旧 → 固定最旧
+ *  的顺序丢;pinned 不豁免总量(软上限由 UI 提示,不在此强制) */
+export function evict(facts: MemoryFact[]): MemoryFact[] {
   if (facts.length <= MAX_FACTS) return facts
   const overflow = facts.length - MAX_FACTS
-  const droppable = facts
-    .filter((f) => !f.pinned)
-    .sort((a, b) => a.lastSeen - b.lastSeen || a.hits - b.hits)
-    .slice(0, overflow)
-    .map((f) => f.id)
-  return facts.filter((f) => f.pinned || !droppable.includes(f.id))
+  const supersededOldFirst = facts
+    .filter((f) => f.status === 'superseded')
+    .sort((a, b) => a.lastSeen - b.lastSeen)
+  const dropOrder = [
+    ...supersededOldFirst.slice(0, Math.max(0, supersededOldFirst.length - 5)), // 最近 5 条历史保留
+    ...facts
+      .filter((f) => f.status !== 'superseded')
+      .sort(
+        (a, b) => Number(a.pinned) - Number(b.pinned) || a.confidence - b.confidence || a.lastSeen - b.lastSeen,
+      ),
+  ]
+  const drop = new Set<string>()
+  for (const f of dropOrder) {
+    if (drop.size >= overflow) break
+    drop.add(f.id)
+  }
+  return facts.filter((f) => !drop.has(f.id))
 }
 
-/** 批量合并事实:内容完全一致视为同一条(刷新 lastSeen/hits),否则新增。返回新增/更新数 */
-export async function mergeFacts(
-  candidates: { content: string; category?: FactCategory }[],
-): Promise<number> {
+// ---------- 变更 API(全部经 mutateMemory) ----------
+
+export interface FactCandidate {
+  content: string
+  category?: FactCategory
+  slot?: string
+  value?: string
+  volatility?: MemoryVolatility
+  sensitivity?: MemorySensitivity
+  /** 来源用户轮 id(贯穿 chatLog/提取);null = 无稳定来源 */
+  turnId?: string | null
+  /** 用户原句摘录(来源证据) */
+  excerpt?: string
+}
+
+function pushEvidence(fact: MemoryFact, ev: MemoryEvidence): void {
+  fact.evidence = [...fact.evidence, ev].slice(-MAX_EVIDENCE)
+  if (fact.evidence[0] && fact.evidence.length >= MAX_EVIDENCE && fact.evidence[0].kind !== 'legacy') {
+    // 保留首次来源:第二条起才允许被挤掉——首条换到前面保住
+    const [origin, ...rest] = fact.evidence
+    fact.evidence = [origin, ...rest.slice(0, MAX_EVIDENCE - 1)]
+  }
+}
+
+/** 批量合并提取候选:规则闸 → 近似/槽位去重 → slot 冲突替代 → 新建。
+ *  命中规则的候选直接丢弃(第二道闸,第一道在提取 prompt)。返回处理数 */
+export async function mergeFacts(candidates: FactCandidate[]): Promise<number> {
   if (candidates.length === 0) return 0
-  return withFileLock('memory', async () => {
-    const mem = await getMemory()
+  return mutateMemory((mem) => {
     const now = Date.now()
     let changed = 0
     for (const c of candidates) {
       const content = c.content.trim().slice(0, 120)
       if (!content) continue
-      const existing = mem.facts.find((f) => f.content === content)
+      const slot = isMemorySlot(c.slot) ? c.slot : undefined
+      const value = slot && c.value ? normalizeSlotValue(slot, c.value) : undefined
+      const sensitivity = maxSensitivity(
+        c.sensitivity,
+        detectSensitivity(content),
+        slot ? SLOT_POLICY[slot].sensitivity : undefined,
+      )
+      const volatility: MemoryVolatility =
+        c.volatility ?? (slot ? SLOT_POLICY[slot].volatility : defaultVolatility(c.category ?? 'other'))
+      // 规则闸:命中禁止规则的内容永不入库
+      if (mem.rules.some((r) => ruleMatches({ content, slot, category: c.category ?? 'other', sensitivity }, r))) {
+        continue
+      }
+      // 定位既有条目:优先同 slot 同值,其次精确同文,最后 2-gram 近似(≥0.85 双向)
+      let existing = slot
+        ? mem.facts.find((f) => f.status === 'active' && f.slot === slot && f.value === value && f.slot !== undefined)
+        : undefined
+      existing =
+        existing ??
+        mem.facts.find((f) => f.status === 'active' && f.content === content) ??
+        mem.facts.find(
+          (f) =>
+            f.status === 'active' &&
+            f.slot === undefined &&
+            Math.min(relevance(f.content, content), relevance(content, f.content)) >= 0.85,
+        )
       if (existing) {
+        // slot 重申:同 slot 同值且来自新的用户轮 → 视为用户再次确认
+        const verdict = slot ? classifyIncoming(existing, { slot, value, turnId: c.turnId ?? null }) : 'none'
         existing.lastSeen = now
         existing.hits += 1
-      } else {
-        mem.facts.push({
-          id: `f${now}${Math.random().toString(36).slice(2, 8)}`,
-          content,
-          category: c.category ?? 'other',
-          ts: now,
-          lastSeen: now,
-          hits: 0,
-          pinned: false,
-        })
+        existing.confidence = Math.min(0.9, existing.confidence + 0.05)
+        if (verdict === 'reaffirm') {
+          existing.lastConfirmedAt = now
+        } else if (verdict === 'supersede') {
+          existing.status = 'superseded'
+          mem.facts.push(newFact({ ...c, content, category: c.category ?? existing.category, slot, value, sensitivity, volatility }, now))
+        } else {
+          pushEvidence(existing, {
+            turnId: c.turnId ?? null,
+            excerpt: (c.excerpt ?? '').slice(0, 120),
+            at: now,
+            kind: 'extracted',
+          })
+        }
+        changed++
+        continue
       }
+      mem.facts.push(newFact({ ...c, content, category: c.category ?? 'other', slot, value, sensitivity, volatility }, now))
       changed++
     }
     mem.facts = evict(mem.facts)
-    await persist(mem)
-    return changed
+    return { data: mem, result: changed }
   })
+
+  function newFact(
+    c: FactCandidate & { category: FactCategory; slot?: MemorySlot; value?: string; sensitivity: MemorySensitivity; volatility: MemoryVolatility },
+    now: number,
+  ): MemoryFact {
+    return {
+      id: `f${now}${Math.random().toString(36).slice(2, 8)}`,
+      content: c.content,
+      category: c.category,
+      slot: c.slot,
+      value: c.value,
+      confidence: 0.7,
+      volatility: c.volatility,
+      sensitivity: c.sensitivity,
+      status: 'active',
+      sourceTurnId: c.turnId ?? null,
+      sourceExcerpt: (c.excerpt ?? '').slice(0, 120),
+      createdAt: now,
+      lastSeen: now,
+      lastConfirmedAt: null,
+      pinned: false,
+      hits: 0,
+      evidence: [
+        { turnId: c.turnId ?? null, excerpt: (c.excerpt ?? '').slice(0, 120), at: now, kind: 'extracted' },
+      ],
+    }
+  }
 }
 
 export async function deleteFact(id: string): Promise<void> {
-  await withFileLock('memory', async () => {
-    const mem = await getMemory()
+  await mutateMemory((mem) => {
     mem.facts = mem.facts.filter((f) => f.id !== id)
-    await persist(mem)
+    return { data: mem, result: undefined as void }
   })
 }
 
 export async function togglePinFact(id: string): Promise<void> {
-  await withFileLock('memory', async () => {
-    const mem = await getMemory()
+  await mutateMemory((mem) => {
     const f = mem.facts.find((x) => x.id === id)
     if (f) f.pinned = !f.pinned
-    await persist(mem)
+    return { data: mem, result: undefined as void }
   })
 }
 
-/** 清空全部记忆(含话题统计与计数) */
+/** 用户编辑内容 = 明确确认:confidence 1、lastConfirmedAt=now、evidence 记 user-edited */
+export async function editFact(id: string, content: string): Promise<void> {
+  const text = content.trim().slice(0, 120)
+  if (!text) return
+  await mutateMemory((mem) => {
+    const f = mem.facts.find((x) => x.id === id)
+    if (!f) return { data: mem, result: undefined as void }
+    const now = Date.now()
+    f.content = text
+    f.confidence = 1
+    f.lastConfirmedAt = now
+    pushEvidence(f, { turnId: null, excerpt: text.slice(0, 120), at: now, kind: 'user-edited' })
+    f.sensitivity = maxSensitivity(f.sensitivity, detectSensitivity(text), f.slot ? SLOT_POLICY[f.slot].sensitivity : undefined)
+    return { data: mem, result: undefined as void }
+  })
+}
+
+/** 手动"仍然有效":只更新 lastConfirmedAt(status 不动——needs_confirmation 是派生态) */
+export async function confirmFact(id: string): Promise<void> {
+  await mutateMemory((mem) => {
+    const f = mem.facts.find((x) => x.id === id)
+    if (!f) return { data: mem, result: undefined as void }
+    const now = Date.now()
+    f.lastConfirmedAt = now
+    pushEvidence(f, { turnId: null, excerpt: '', at: now, kind: 'user-confirmed' })
+    return { data: mem, result: undefined as void }
+  })
+}
+
+export async function addRule(rule: { scope: MemoryRule['scope']; value: string }): Promise<MemoryRule | null> {
+  const value = rule.value.trim().slice(0, 80)
+  if (!value) return null
+  return mutateMemory((mem) => {
+    if (mem.rules.some((r) => r.scope === rule.scope && r.value === value)) {
+      return { data: mem, result: mem.rules.find((r) => r.scope === rule.scope && r.value === value) ?? null }
+    }
+    const created: MemoryRule = {
+      id: `r${Date.now()}${Math.random().toString(36).slice(2, 8)}`,
+      scope: rule.scope,
+      value,
+      createdAt: Date.now(),
+    }
+    mem.rules.push(created)
+    return { data: mem, result: created }
+  })
+}
+
+export async function removeRule(id: string): Promise<void> {
+  await mutateMemory((mem) => {
+    mem.rules = mem.rules.filter((r) => r.id !== id)
+    return { data: mem, result: undefined as void }
+  })
+}
+
+/** 清空自动记忆:只清 facts,保留禁止规则/话题统计/画像——"删干净"不等于解除隐私偏好 */
+export async function clearAutoMemory(): Promise<void> {
+  await mutateMemory((mem) => {
+    mem.facts = []
+    return { data: mem, result: undefined as void }
+  })
+}
+
+/** 重置整个记忆系统:facts+rules+topicStats+counters 全清(二次确认入口) */
+export async function resetAllMemory(): Promise<void> {
+  await mutateMemory((mem) => {
+    mem.facts = []
+    mem.rules = []
+    mem.topicStats = {}
+    mem.counters = { pokes: 0, modeUses: {} }
+    return { data: mem, result: undefined as void }
+  })
+}
+
+/** 兼容旧 UI:等价 resetAllMemory(完整清空) */
 export async function clearMemory(): Promise<void> {
-  await withFileLock('memory', async () => {
-    await persist(clone(EMPTY))
-  })
+  await resetAllMemory()
 }
 
-/** 摘要 facts:pinned 优先,再按 lastSeen/hits 取前 n 条内容 */
+/** 导出记忆数据(显式动作;不含凭据,含 facts/rules/统计) */
+export async function exportMemory(): Promise<string> {
+  const mem = await getMemory()
+  return JSON.stringify(mem, null, 2)
+}
+
+/** 摘要 facts:pinned 优先,再按 lastSeen/hits 取前 n 条内容(遗留接口;策略检索见 memoryPolicy) */
 export function topFacts(mem: MemoryData, n: number): string[] {
   return [...mem.facts]
+    .filter((f) => f.status === 'active')
     .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.lastSeen - a.lastSeen || b.hits - a.hits)
     .slice(0, n)
     .map((f) => f.content)
@@ -247,8 +617,7 @@ async function bumpTopic(
 ): Promise<void> {
   const seed = stripAngle(topic)
   if (!seed || !Number.isFinite(delta) || delta === 0) return
-  await withFileLock('memory', async () => {
-    const mem = await getMemory()
+  await mutateMemory((mem) => {
     // 七个键必须齐:漏键会让 stat[key] += 1 从 undefined 起步算出 NaN,污染权重
     const stat = mem.topicStats[seed] ?? {
       seen: 0,
@@ -261,7 +630,7 @@ async function bumpTopic(
     }
     stat[key] = Math.max(0, stat[key] + delta)
     mem.topicStats[seed] = stat
-    await persist(mem)
+    return { data: mem, result: undefined as void }
   })
 }
 
@@ -292,18 +661,16 @@ export function bumpTopicRated(
 }
 
 export function bumpPoke(): void {
-  void withFileLock('memory', async () => {
-    const mem = await getMemory()
+  void mutateMemory((mem) => {
     mem.counters.pokes += 1
-    await persist(mem)
+    return { data: mem, result: undefined as void }
   }).catch(() => {})
 }
 
 export function bumpMode(mode: string): void {
-  void withFileLock('memory', async () => {
-    const mem = await getMemory()
+  void mutateMemory((mem) => {
     mem.counters.modeUses[mode] = (mem.counters.modeUses[mode] ?? 0) + 1
-    await persist(mem)
+    return { data: mem, result: undefined as void }
   }).catch(() => {})
 }
 

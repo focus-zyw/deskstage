@@ -377,7 +377,7 @@ function App() {
   // 角色呈现器:气泡/动作/说话态的唯一归属(演出回调、插话、聊天、直播统一走它)
   const {
     bubble, action, delivery, speaking, pulseFor, reacting, loudBubble,
-    showTalk, hush, endLine, pulse, settle, setPose, reset: resetStage,
+    showTalk, hush, endLine, pulse, settle, setPose, reset: resetStage, memBadge,
     say: presenterSay,
   } = useActorPresenter()
 
@@ -1030,8 +1030,13 @@ function App() {
           names: () => charNamesRef.current,
           isPerforming: () => phaseRef.current === 'performing',
           queueInterjection: (text, who) => directorRef.current.queueInterjection(text, who),
-          presentTurn: ({ speaker, text, holdMs }) => {
-            presenterSayRef.current(speaker, text, { action: 'talk', ms: holdMs, speaking: true })
+          presentTurn: ({ speaker, text, holdMs, memoryRefs }) => {
+            presenterSayRef.current(speaker, text, {
+              action: 'talk',
+              ms: holdMs,
+              speaking: true,
+              memoryCount: memoryRefs?.length ?? 0,
+            })
             pulseOtherRef.current(speaker)
           },
           presentUser: (text, who) => {
@@ -1539,6 +1544,7 @@ function App() {
           tailSide={aFacesLeft ? 'left' : 'right'}
           action={displayAction('A')}
           delivery={delivery.A}
+          memoryCount={memBadge.A}
         />
         <CharacterSprite
           ref={charA}
@@ -1590,6 +1596,7 @@ function App() {
           tailSide={bFacesLeft ? 'left' : 'right'}
           action={displayAction('B')}
           delivery={delivery.B}
+          memoryCount={memBadge.B}
         />
         <CharacterSprite
           ref={charB}

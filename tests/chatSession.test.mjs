@@ -21,6 +21,15 @@ after(async () => {
   await server?.close()
 })
 
+/** 轮询等待异步流程推进到某断言点(受理后 turnBatch 在数个 await 之后才发起) */
+async function waitFor(fn, timeoutMs = 2000) {
+  const start = Date.now()
+  while (!fn()) {
+    if (Date.now() - start > timeoutMs) throw new Error('waitFor 超时')
+    await new Promise((r) => setTimeout(r, 5))
+  }
+}
+
 function makeHost(over = {}) {
   const calls = {
     presentTurn: [],
@@ -65,8 +74,11 @@ function makeEngine(over = {}) {
       calls.singleReply.push({ target, userText })
       return over.singleReply ? over.singleReply(target, userText) : `单:${userText}`
     },
-    recordTurn: (who, text) => calls.recordTurn.push({ who, text }),
+    recordTurn: (who, text, meta) => calls.recordTurn.push({ who, text, meta }),
     historyWindow: () => [],
+    prepareMemory: async () =>
+      over.memory ?? { selected: [], candidates: [], queriedAt: 0, promptFacts: [], refs: [] },
+    includeTrace: async () => false,
     facts: {
       known: async () => ['已知:喜欢 Rust'],
       extract: async (text, known) => {
@@ -125,7 +137,7 @@ test('TurnBatch 失败静默回落单句应答', async () => {
 test('取消后迟到响应不再呈现,busy 立即回落', async () => {
   const { host, calls } = makeHost()
   let resolveBatch
-  const { engine } = makeEngine({
+  const { engine, calls: ecalls } = makeEngine({
     turnBatch: () =>
       new Promise((r) => {
         resolveBatch = r
@@ -135,6 +147,7 @@ test('取消后迟到响应不再呈现,busy 立即回落', async () => {
   const res = await session.send('慢问题')
   assert.equal(res, 'accepted')
   assert.equal(session.getSnapshot().busy, true)
+  await waitFor(() => ecalls.turnBatch.length > 0) // 等 turnBatch 真正在飞
   session.cancel()
   assert.equal(session.getSnapshot().busy, false)
   resolveBatch([{ speaker: 'A', text: '迟到内容', action: 'talk' }])
@@ -180,6 +193,7 @@ test('连续快发:第一发受理,第二发 busy,空闲后恢复受理', async 
   const second = await session.send('第二句')
   assert.equal(first, 'accepted')
   assert.equal(second, 'busy')
+  await waitFor(() => typeof releaseBatch === 'function')
   releaseBatch([{ speaker: 'A', text: '答', action: 'talk' }])
   await session.whenIdle()
   assert.equal(await session.send('第三句'), 'accepted')
@@ -336,4 +350,39 @@ test('语音路径·流式:已有句后失败 → 保留已完成句 + 轻提示
   assert.ok(ecalls.recordTurn.some((r) => r.text === '前半句'), '已完成句照常提交')
   assert.equal(calls.presentFallback.length, 1, '只补一句轻提示')
   assert.equal(calls.presentTurn.length, 1)
+})
+
+test('记忆不变量:present 的 refs = record 的 refs = 传给生成的 promptFacts(同源派生)', async () => {
+  const { host, calls } = makeHost()
+  const ctx = {
+    selected: [
+      { id: 'm1', text: '用户喜欢川菜', source: 'passive', score: 0.8, effectiveStatus: 'active' },
+      { id: 'm2', text: '用户住在北京', source: 'passive', score: 0.6, effectiveStatus: 'active' },
+    ],
+    candidates: [],
+    queriedAt: 1,
+    promptFacts: ['用户喜欢川菜', '用户住在北京'],
+    refs: [
+      { id: 'm1', source: 'passive' },
+      { id: 'm2', source: 'passive' },
+    ],
+  }
+  const { engine, calls: ecalls } = makeEngine({ memory: ctx })
+  const session = mod.createChatSession(host, engine)
+  const res = await session.send('随便聊聊')
+  assert.equal(res, 'accepted')
+  await waitFor(() => calls.presentTurn.length > 0)
+  await session.whenIdle()
+
+  // ① 传给生成函数的就是这份上下文(引用相等,非复制)
+  assert.equal(ecalls.turnBatch[0].memory, ctx)
+  // ② 首句呈现携带 refs;record 的回复首条携带同一组 refs
+  assert.deepEqual(calls.presentTurn[0].memoryRefs, ctx.refs)
+  const userRec = ecalls.recordTurn.find((r) => r.who === 'user')
+  const replyRecs = ecalls.recordTurn.filter((r) => r.who !== 'user')
+  assert.ok(userRec.meta?.entryId, '用户轮有稳定 id')
+  assert.equal(replyRecs[0].meta?.parentTurnId, userRec.meta.entryId, '回复回链用户轮')
+  assert.deepEqual(replyRecs[0].meta?.memoryRefs, ctx.refs)
+  // ③ 结构性:refs 与 promptFacts 由同一 selected 派生(改 ctx 即同步变化)
+  assert.equal(ctx.promptFacts.length, ctx.refs.length)
 })

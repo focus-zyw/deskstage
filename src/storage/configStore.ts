@@ -231,6 +231,8 @@ export interface AppConfig {
   /** 舞台气泡风格:comic=柔彩角色主题(默认,历史 key 保持兼容);glass=夜色半透明;
    *  custom_ 开头 = 气泡工坊自建主题 id(选中的主题被删除时运行时回退 comic) */
   bubbleStyle: 'comic' | 'glass' | (string & {})
+  /** 记忆显示档:off=气泡不显示(聊天记录详情可查)/subtle=气泡底部 🧠N/debug=详情含检索分数与候选 */
+  memoryDisplay: 'off' | 'subtle' | 'debug'
   /** 首启向导已完成。老配置升级后该字段缺省 false,但向导只对"零痕迹"用户弹出
    *  (无聊天记录且未填称呼),老用户不会被误打扰 */
   wizardDone: boolean
@@ -358,6 +360,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   live: { platform: 'bilibili', roomId: '', cookie: '', giftReactionsEnabled: true },
   launchOnBoot: false,
   bubbleStyle: 'comic',
+  memoryDisplay: 'off',
   wizardDone: false,
   tools: { switches: {}, autoApproved: {} },
 }
@@ -841,6 +844,7 @@ const FIELD_SANITIZERS: { [K in keyof AppConfig]: (v: unknown, all: Record<strin
   wizardDone: (v) => v === true,
   tools: sanitizeToolPrefs,
   bubbleStyle: sanitizeBubbleStyle,
+  memoryDisplay: (v) => (v === 'subtle' || v === 'debug' ? v : 'off'),
 }
 
 /** 从任意 JSON 对象构造合法配置(全量套清洗器表;文件与 localStorage 共用;导出供测试) */

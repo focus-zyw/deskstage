@@ -1,7 +1,7 @@
 // search_memory 工具:在既有记忆(facts)里查找使用者相关信息(read 级)。
 // 与 topFacts 的被动注入不同,这是模型主动查询——"我还记得你说过什么"由它兜底,
 // 避免每轮把全部记忆塞 prompt。打分用 2-gram(中文无词边界),命中多者靠前。
-import { getMemory, type MemoryData } from '../../storage/memoryStore'
+import { prepareTurnMemory, type MemoryData } from '../../storage/memoryStore'
 import { scoreByRules } from '../candidateGate'
 import { validateToolInput, type ToolInputSchema } from '../schema'
 import type { CharacterTool, ToolManifest } from '../types'
@@ -57,8 +57,17 @@ export const searchMemoryTool: CharacterTool = {
   async execute(input) {
     const v = validateToolInput(inputSchema, input)
     if (!v.ok) return { ok: false, summary: v.reason, errorCode: 'invalid' }
-    const hits = searchFacts(await getMemory(), String(v.value.query))
-    if (hits.length === 0) return { ok: true, summary: '记忆里没有找到相关内容' }
-    return { ok: true, summary: `记忆里找到 ${hits.length} 条相关:\n${hits.join('\n')}`, data: hits }
+    // 统一策略入口(explicit-search 比被动注入宽:过期/待确认可见但带标记,
+    // 隐私规则照样拦截);refs 随 result.data 穿透,并入回合总注入集合
+    const ctx = await prepareTurnMemory({ query: String(v.value.query), purpose: 'explicit-search', n: 5 })
+    if (ctx.selected.length === 0) return { ok: true, summary: '记忆里没有找到相关内容' }
+    const hits = ctx.selected.map((s) =>
+      s.effectiveStatus === 'needs_confirmation' ? `${s.text}(待确认:这条信息可能已过期)` : s.text,
+    )
+    return {
+      ok: true,
+      summary: `记忆里找到 ${hits.length} 条相关:\n${hits.join('\n')}`,
+      data: { hits, memoryRefs: ctx.refs },
+    }
   },
 }

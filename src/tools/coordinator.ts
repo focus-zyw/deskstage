@@ -90,6 +90,23 @@ export function createToolCoordinator(deps: ToolCoordinatorDeps): ToolCoordinato
   }
 
   /** 策略闸 + 可用性 + 确认 + 执行 + 落账,产出统一的观察 */
+  /** 从工具结果提取记忆引用(search_memory 的 data.memoryRefs;只收 id/来源) */
+  function memoryRefsOf(result: ToolResult): TurnPreparation['memoryRefs'] {
+    const refs = (result.data as { memoryRefs?: unknown } | undefined)?.memoryRefs
+    if (!Array.isArray(refs)) return undefined
+    const out = refs
+      .map((r) => {
+        const o = (r ?? {}) as Record<string, unknown>
+        if (typeof o.id !== 'string' || !o.id) return null
+        return {
+          id: o.id.slice(0, 64),
+          source: o.source === 'search-tool' ? ('search-tool' as const) : ('passive' as const),
+        }
+      })
+      .filter((r): r is { id: string; source: 'passive' | 'search-tool' } => r !== null)
+    return out.length > 0 ? out.slice(0, 20) : undefined
+  }
+
   async function gatedRun(
     tool: CharacterTool,
     input: unknown,
@@ -116,6 +133,7 @@ export function createToolCoordinator(deps: ToolCoordinatorDeps): ToolCoordinato
           ok: result.ok,
           summary: truncateForObservation(result.summary),
           errorCode: result.errorCode,
+          ...(memoryRefsOf(result) ? { memoryRefs: memoryRefsOf(result) } : {}),
         },
       }
     }
@@ -208,7 +226,12 @@ export function createToolCoordinator(deps: ToolCoordinatorDeps): ToolCoordinato
         }
         const { observation } = await gatedRun(tool, v.value, 'planner', signal, facts)
         const observations = [observation]
-        return { userText, observations, note: renderObservationBlock(observations) }
+        return {
+          userText,
+          observations,
+          note: renderObservationBlock(observations),
+          memoryRefs: observations.flatMap((o) => o.memoryRefs ?? []),
+        }
       } catch (e) {
         if (signal?.aborted) throw e
         // 协调器自身异常不阻塞聊天(工具系统的失败不许变成聊天的失败)

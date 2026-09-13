@@ -177,6 +177,8 @@ pub fn run() {
             config_service::config_set,
             config_service::data_get,
             config_service::data_set,
+            config_service::data_get_with_revision,
+            config_service::data_set_if_revision,
             endpoint_proxy::endpoint_request,
             endpoint_proxy::endpoint_cancel
         ])

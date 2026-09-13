@@ -12,10 +12,24 @@ import { withFileLock } from './writeLock'
 /** 消息来源:user = 用户在聊天框打的字;A/B/C = 角色的聊天应答 */
 export type ChatWho = 'user' | 'A' | 'B' | 'C'
 
+/** 记忆引用(只存 id 与来源,绝不存正文——删除记忆后聊天日志不残留内容) */
+export interface ChatMemoryRef {
+  id: string
+  source: 'passive' | 'search-tool'
+}
+
 export interface ChatLogEntry {
   ts: number
   who: ChatWho
   text: string
+  /** 稳定轮 id:用户消息 = requestId,角色句各自的 entry id(应用生成一次,贯穿提取) */
+  id?: string
+  /** 角色句回链本次请求的用户消息 id(多句应答共享一份参考记忆) */
+  parentTurnId?: string
+  /** 本轮实际注入模型的记忆引用(与 presentTurn 的 memoryRefs 同源) */
+  memoryRefs?: ChatMemoryRef[]
+  /** 调试档完整检索 trace(仅 id/分数/枚举,无正文;默认档不落) */
+  trace?: unknown
 }
 
 const WHO_SET = new Set<ChatWho>(['user', 'A', 'B', 'C'])
@@ -48,7 +62,7 @@ export function useChatLogVersion(): number {
   return useSyncExternalStore(subscribeChatLog, getChatLogVersion)
 }
 
-/** 单条清洗:who/text/ts 任一非法整条拒收 */
+/** 单条清洗:who/text/ts 任一非法整条拒收;记忆相关字段只收 id/枚举/数字,不收正文 */
 export function sanitizeChatEntry(o: unknown): ChatLogEntry | null {
   if (!o || typeof o !== 'object') return null
   const rec = o as Record<string, unknown>
@@ -58,7 +72,21 @@ export function sanitizeChatEntry(o: unknown): ChatLogEntry | null {
   if (!text) return null
   const ts = Number(rec.ts) || 0
   if (!ts) return null
-  return { ts, who: who as ChatWho, text }
+  const out: ChatLogEntry = { ts, who: who as ChatWho, text }
+  if (typeof rec.id === 'string' && rec.id) out.id = rec.id.slice(0, 64)
+  if (typeof rec.parentTurnId === 'string' && rec.parentTurnId) out.parentTurnId = rec.parentTurnId.slice(0, 64)
+  if (Array.isArray(rec.memoryRefs)) {
+    const refs = rec.memoryRefs
+      .map((r) => {
+        const m = (r ?? {}) as Record<string, unknown>
+        if (typeof m.id !== 'string' || !m.id) return null
+        return { id: m.id.slice(0, 64), source: m.source === 'search-tool' ? 'search-tool' : 'passive' } as ChatMemoryRef
+      })
+      .filter((r): r is ChatMemoryRef => r !== null)
+    if (refs.length > 0) out.memoryRefs = refs.slice(0, 20)
+  }
+  if (rec.trace && typeof rec.trace === 'object') out.trace = rec.trace
+  return out
 }
 
 let filePromise: Promise<string> | null = null
@@ -76,10 +104,13 @@ function getLogFile(): Promise<string> {
   return filePromise
 }
 
-/** 一批消息一次性落盘(同一时刻的整批:用户一句或角色一次应答) */
-export async function appendChatTurns(turns: Array<{ who: ChatWho; text: string }>): Promise<void> {
+/** 一批消息一次性落盘。角色应答可带 id/parentTurnId/memoryRefs/trace;
+ *  ts 缺省 = 现在,但调用方应显式传入受理时刻的 ts(与 turn.id 同源,保证可对照) */
+export async function appendChatTurns(
+  turns: Array<{ id?: string; parentTurnId?: string; who: ChatWho; text: string; ts?: number; memoryRefs?: ChatMemoryRef[]; trace?: unknown }>,
+): Promise<void> {
   const valid = turns
-    .map((t) => sanitizeChatEntry({ ...t, ts: Date.now() }))
+    .map((t) => sanitizeChatEntry({ ...t, ts: t.ts ?? Date.now() }))
     .filter((t): t is ChatLogEntry => t !== null)
   if (valid.length === 0) return
   try {

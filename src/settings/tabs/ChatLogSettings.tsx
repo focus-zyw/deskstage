@@ -28,6 +28,11 @@ import {
 } from '../../storage/avatarStore'
 import { modeOf } from '../../performer/modes'
 import { useConfigSnapshot } from '../../storage/configStore'
+import { getMemory, type MemoryFact } from '../../storage/memoryStore'
+import { effectiveStatus } from '../../storage/memoryPolicy'
+
+const MEM_SENS_LABEL: Record<string, string> = { normal: '普通', private: '私密', restricted: '高敏' }
+const SENS_LABEL_OR = (s: string | undefined): string => (s ? MEM_SENS_LABEL[s] ?? s : '')
 import type { Speaker } from '../../performer/dialogSchema'
 import {
   applyMention,
@@ -161,6 +166,8 @@ type MsgRow = {
   deliveryLabel?: string
   /** 非空 = 悬停 ▶ 从该句回放(角色消息;用户消息不可回放) */
   replay?: Episode
+  /** 原始日志条目(带 memoryRefs/trace 时渲染"参考记忆"折叠块) */
+  entry?: ChatLogEntry
 }
 type Row =
   | { kind: 'day'; key: string; label: string }
@@ -226,6 +233,7 @@ function buildRows(visibleEps: Episode[], turns: ChatLogEntry[], expandedEps: Se
         text: e.text,
         ts: e.ts,
         header,
+        entry: e,
         replay:
           who === 'user'
             ? undefined
@@ -245,7 +253,11 @@ export function ChatLogSettings() {
   const group = config.groupChat
   const [allEps, setAllEps] = useState<Episode[]>([])
   const [budget, setBudget] = useState(PAGE_LINES)
+  const cfg = useConfigSnapshot()
   const [turns, setTurns] = useState<ChatLogEntry[]>([])
+  /** 参考记忆 id → 事实(打开详情时解析;已删除的 id 解析不到 → 显示"已删除") */
+  const [memFacts, setMemFacts] = useState<Map<string, MemoryFact>>(new Map())
+  const [memOpen, setMemOpen] = useState<Set<string>>(new Set())
   const [loading, setLoading] = useState(true)
   const [clearArmed, setClearArmed] = useState(false)
   // 群设置抽屉 / 背景图 / 头像 / 长演出展开
@@ -289,6 +301,9 @@ export function ChatLogSettings() {
     let alive = true
     void listChatTurns(MAX_TURNS).then((ts) => {
       if (alive) setTurns(ts)
+    })
+    void getMemory().then((m) => {
+      if (alive) setMemFacts(new Map(m.facts.map((f) => [f.id, f])))
     })
     return () => {
       alive = false
@@ -690,7 +705,46 @@ export function ChatLogSettings() {
                       ▶
                     </button>
                   )}
+                  {row.entry?.memoryRefs && row.entry.memoryRefs.length > 0 && !isMe && (
+                    <button
+                      className="bubble-play"
+                      title="参考记忆"
+                      style={{ right: undefined, position: 'static', marginLeft: 6 }}
+                      onClick={() =>
+                        setMemOpen((prev) => {
+                          const next = new Set(prev)
+                          if (next.has(row.key)) next.delete(row.key)
+                          else next.add(row.key)
+                          return next
+                        })
+                      }
+                    >
+                      🧠 {row.entry.memoryRefs.length}{memOpen.has(row.key) ? ' ▾' : ' ▸'}
+                    </button>
+                  )}
                 </div>
+                {memOpen.has(row.key) && row.entry?.memoryRefs && (
+                  <div className="set-note" style={{ margin: '2px 0 6px 46px' }}>
+                    参考了 {row.entry.memoryRefs.length} 条自动记忆:
+                    {row.entry.memoryRefs.map((r) => {
+                      const f = memFacts.get(r.id)
+                      const eff = f ? effectiveStatus(f, Date.now()) : null
+                      const debug = cfg.memoryDisplay === 'debug'
+                      const tr = debug ? (row.entry?.trace as { candidates?: { id: string; score: number; outcome: string }[] } | undefined) : undefined
+                      const cand = tr?.candidates?.find((c) => c.id === r.id)
+                      return (
+                        <div key={r.id}>
+                          {f ? `"${f.content}"` : '该记忆已删除'}
+                          {f ? ` · ${SENS_LABEL_OR(f.sensitivity)} · 首次 ${f.createdAt ? new Date(f.createdAt).toLocaleDateString() : ''}` : ''}
+                          {eff === 'needs_confirmation' && ' · 待确认'}
+                          {f?.status === 'superseded' && ' · 已被替代'}
+                          {cand && ` · 检索分 ${cand.score.toFixed(2)}(${cand.outcome})`}
+                          {r.source === 'search-tool' && ' · 经查记忆工具'}
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
               </div>
             </div>
           )

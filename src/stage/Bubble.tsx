@@ -27,6 +27,7 @@ export function Bubble({
   tailSide = 'center',
   action,
   delivery,
+  memoryCount = 0,
 }: {
   text?: string | null
   below?: boolean
@@ -35,6 +36,8 @@ export function Bubble({
   tailSide?: BubbleTailSide
   action?: string
   delivery?: string
+  /** 参考记忆条数(透明档 🧠 徽标;0/缺省不显示) */
+  memoryCount?: number
 }) {
   // 退场期间保留最后一句文本播淡出;below/loud/speaker 始终用实时 props(拖动翻面即时生效)
   const [keptText, setKeptText] = useState<string | null>(text ?? null)
@@ -67,6 +70,11 @@ export function Bubble({
     >
       {name && <span className="b-name"><i />{name}</span>}
       <span key={shown} className="b-text">{shown}</span>
+      {memoryCount > 0 && (
+        <span className="b-mem" title="本句回答参考的自动记忆条数(聊天记录详情可查看)">
+          🧠 参考了 {memoryCount} 条自动记忆
+        </span>
+      )}
     </div>
   )
 }

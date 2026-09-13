@@ -550,6 +550,24 @@
 .bubble[data-mood='shy'] { --bubble-mood-mark: '♡'; }
 .bubble[data-mood='excited'] { --bubble-mood-mark: '✦'; }
 .bubble.long { font-size: calc(var(--bubble-font-size, 16px) - 2px); line-height: 1.52; }
+
+/* 参考记忆徽标(透明档):流内小 chip,纯装饰(pointer-events:none 随穿透语义),
+   随气泡退场一起消失;演出/直播路径不传 memoryCount,天然不渲染 */
+.bubble .b-mem {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 2px 8px 4px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 16px;
+  opacity: 0.78;
+  background: rgba(124, 92, 255, 0.16);
+  border: 1px solid rgba(124, 92, 255, 0.35);
+  pointer-events: none;
+  user-select: none;
+}
 .bubble.out {
   animation: bubble-out 0.16s ease forwards;
   pointer-events: none;
