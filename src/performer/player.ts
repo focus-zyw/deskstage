@@ -75,6 +75,9 @@ export class PerformancePlayer {
   private cbs: PlayerCallbacks
   /** 本次播放中真实开播过的台词(开播即计入,中止时按前缀上报) */
   private played: DialogLine[] = []
+  /** 流式播放的在途迭代器:stop() 时 best-effort return()(generator finally
+   *  释放网页会话等后台资源),UI 清场不等待它 */
+  private streamIterator: AsyncGenerator<DialogLine, unknown, void> | null = null
 
   constructor(cbs: PlayerCallbacks) {
     this.cbs = cbs
@@ -84,9 +87,40 @@ export class PerformancePlayer {
     return this.ctrl !== null
   }
 
+  /** 逐句节奏(公共辅法):句前蓄势 → 开播 → 最短可读 → 闭嘴 → 句尾留白 →
+   *  非末句的句间 gap。返回 false = 中止(播放循环按前缀上报退出) */
+  private async playOne(
+    line: DialogLine,
+    index: number,
+    ctrl: AbortController,
+    opts: { gap: number; isLast: boolean; endLine?: boolean },
+  ): Promise<boolean> {
+    // 句前蓄势:包袱抖出来之前先停一拍,停顿本身就是笑点的一部分
+    const before = clampPauseMs(line.pauseBefore)
+    if (before) await sleep(before, ctrl.signal)
+    if (ctrl.signal.aborted) return false
+    // 推进时机由语音层决定(语音真正结束/纯文本估时);最短可读时间防气泡闪烁
+    this.played.push(line)
+    const { speechPhase } = this.cbs.onLineStart(line, index)
+    await Promise.all([speechPhase, sleep(MIN_READABLE_MS, ctrl.signal)])
+    if (ctrl.signal.aborted) return false
+    // 声音一停立即闭嘴;气泡与听者反应留进句尾留白,响底包袱有笑的时间
+    this.cbs.onSpeechEnd(line.speaker)
+    const after = clampPauseMs(line.pauseAfter)
+    if (after) await sleep(after, ctrl.signal)
+    if (ctrl.signal.aborted) return false
+    // 最后一句跳过 onLineEnd:气泡定格给观众笑的时间(收底拍由 onDone 侧统一清理);
+    // endLine:false = 调用方(流式)自己等 lookahead 后决定是否清气泡
+    if (!opts.isLast && opts.endLine !== false) {
+      this.cbs.onLineEnd(line.speaker)
+      await sleep(opts.gap, ctrl.signal)
+    }
+    return !ctrl.signal.aborted
+  }
+
   /** 播放一段脚本；重复调用会先停掉上一段(其 onStopped 会先同步触发)。
    *  choice+after 同时提供时:播完 before 后触发 onChoice 暂停,
-   *  等 resume(branchId) 播对应分支 */
+   *  等 resume(branchId) 继续 */
   play(
     lines: DialogLine[],
     opts: { gap?: number; choice?: ChoicePoint; after?: Record<string, DialogLine[]> } = {},
@@ -99,27 +133,11 @@ export class PerformancePlayer {
     void (async () => {
       if (lines.length > 0) this.cbs.onStart?.(lines[0])
       for (let i = 0; i < lines.length; i++) {
-        const line = lines[i]
-        if (ctrl.signal.aborted) break
-        // 句前蓄势:包袱抖出来之前先停一拍,停顿本身就是笑点的一部分
-        const before = clampPauseMs(line.pauseBefore)
-        if (before) await sleep(before, ctrl.signal)
-        if (ctrl.signal.aborted) break
-        // 推进时机由语音层决定(语音真正结束/纯文本估时);最短可读时间防气泡闪烁
-        this.played.push(line)
-        const { speechPhase } = this.cbs.onLineStart(line, i)
-        await Promise.all([speechPhase, sleep(MIN_READABLE_MS, ctrl.signal)])
-        if (ctrl.signal.aborted) break
-        // 声音一停立即闭嘴;气泡与听者反应留进句尾留白,响底包袱有笑的时间
-        this.cbs.onSpeechEnd(line.speaker)
-        const after = clampPauseMs(line.pauseAfter)
-        if (after) await sleep(after, ctrl.signal)
-        if (ctrl.signal.aborted) break
-        // 最后一句跳过 onLineEnd:气泡定格给观众笑的时间(收底拍由 onDone 侧统一清理)
-        if (i < lines.length - 1) {
-          this.cbs.onLineEnd(line.speaker)
-          await sleep(gap, ctrl.signal)
-        }
+        const keep = await this.playOne(lines[i], i, ctrl, {
+          gap,
+          isLast: i === lines.length - 1,
+        })
+        if (!keep) break
       }
       // 观众抉择点:暂停推进,窗体侧弹按钮;resume(branchId) 后播对应分支
       if (!ctrl.signal.aborted && opts.choice && opts.after) {
@@ -136,28 +154,93 @@ export class PerformancePlayer {
         const afterLines = branchId === '__aborted__' ? [] : opts.after[branchId] ?? []
         if (afterLines.length > 0) this.cbs.onStart?.(afterLines[0])
         for (let i = 0; i < afterLines.length; i++) {
-          const line = afterLines[i]
-          if (ctrl.signal.aborted) break
-          const before = clampPauseMs(line.pauseBefore)
-          if (before) await sleep(before, ctrl.signal)
-          if (ctrl.signal.aborted) break
-          this.played.push(line)
-          const { speechPhase } = this.cbs.onLineStart(line, i)
-          await Promise.all([speechPhase, sleep(MIN_READABLE_MS, ctrl.signal)])
-          if (ctrl.signal.aborted) break
-          this.cbs.onSpeechEnd(line.speaker)
-          const after = clampPauseMs(line.pauseAfter)
-          if (after) await sleep(after, ctrl.signal)
-          if (ctrl.signal.aborted) break
-          if (i < afterLines.length - 1) {
-            this.cbs.onLineEnd(line.speaker)
-            await sleep(gap, ctrl.signal)
-          }
+          const keep = await this.playOne(afterLines[i], i, ctrl, {
+            gap,
+            isLast: i === afterLines.length - 1,
+          })
+          if (!keep) break
         }
       }
       if (!ctrl.signal.aborted) {
         this.ctrl = null
         this.cbs.onDone()
+      }
+    })()
+  }
+
+  /** 流式播放(多 AI 剧场):逐句消费异步生成器,单句 lookahead——
+   *  播当前句时立即恢复 generator(下一句的网页请求已在飞),等下一句期间
+   *  当前气泡保留;确认 done 才把当前句当最后一句(不清气泡,onSourceEnd
+   *  先于 onDone 交还生成结果供提交语义定 naturalness)。
+   *  停止契约:stop() 立即同步 onStopped(已播前缀),iterator.return() 是
+   *  best-effort 异步尾随(UI 不等待;generator finally 负责后台释放会话)。
+   *  首句之前 source 抛错 → onSourceError(played 为空,调用方回退兜底) */
+  playStream<TResult>(
+    source: AsyncGenerator<DialogLine, TResult, void>,
+    opts: {
+      gap?: number
+      /** 已在播放器外产出的第一句(relay 的 prepareRelay 交付) */
+      initial?: DialogLine
+      onSourceEnd?(result: TResult): void
+      onSourceError?(error: unknown, played: DialogLine[]): void
+    } = {},
+  ) {
+    this.stop()
+    this.played = []
+    const ctrl = new AbortController()
+    this.ctrl = ctrl
+    this.streamIterator = source
+    const gap = opts.gap ?? 400
+    const { onSourceEnd, onSourceError } = opts
+    void (async () => {
+      try {
+        let current: DialogLine | null = null
+        let nextPromise: Promise<IteratorResult<DialogLine, TResult>> | null = null
+        if (opts.initial) {
+          current = opts.initial
+          nextPromise = source.next()
+        } else {
+          const first = await source.next()
+          if (first.done) {
+            this.ctrl = null
+            this.cbs.onDone()
+            return
+          }
+          current = first.value
+          nextPromise = source.next()
+        }
+        while (current) {
+          // 单句 lookahead:立即恢复 generator,下一句的网页请求已在飞
+          const followingPromise = nextPromise ?? source.next()
+          // endLine:false:是否清当前气泡要等 lookahead 结果(最后一句定格)
+          const keep = await this.playOne(current, this.played.length, ctrl, {
+            gap,
+            isLast: false,
+            endLine: false,
+          })
+          if (!keep) break
+          const following = await followingPromise
+          if (following.done) {
+            this.ctrl = null
+            this.streamIterator = null
+            onSourceEnd?.(following.value)
+            this.cbs.onDone()
+            return
+          }
+          this.cbs.onLineEnd(current.speaker)
+          await sleep(gap, ctrl.signal)
+          if (ctrl.signal.aborted) break
+          current = following.value
+          nextPromise = source.next()
+        }
+        if (!ctrl.signal.aborted) {
+          this.ctrl = null
+          this.cbs.onDone()
+        }
+      } catch (e) {
+        this.ctrl = null
+        this.streamIterator = null
+        onSourceError?.(e, [...this.played])
       }
     })()
   }
@@ -171,8 +254,8 @@ export class PerformancePlayer {
   private choiceWaiter: ((branchId: string) => void) | null = null
 
   stop() {
-    // 确实在播(或停在选择点)才上报中止前缀;防御性空停不打扰
-    if (this.ctrl !== null || this.choiceWaiter !== null) {
+    // 确实在播(或停在选择点/流式在途)才上报中止前缀;防御性空停不打扰
+    if (this.ctrl !== null || this.choiceWaiter !== null || this.streamIterator !== null) {
       this.cbs.onStopped?.([...this.played])
     }
     this.played = []
@@ -182,5 +265,10 @@ export class PerformancePlayer {
     this.pausedCtrl = null
     this.ctrl?.abort()
     this.ctrl = null
+    // 流式收尾:best-effort 异步 return()(generator finally 释放网页会话),
+    // UI 清场与停声不等待它
+    const it = this.streamIterator
+    this.streamIterator = null
+    if (it) void it.return(undefined as never).catch(() => {})
   }
 }
