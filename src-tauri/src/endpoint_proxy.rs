@@ -102,7 +102,11 @@ fn kind_spec(kind: &str) -> Result<(&'static str, bool), String> {
 fn configured_base(app: &AppHandle, kind: &str) -> Result<String, String> {
     let (pointer, _) = kind_spec(kind)?;
     let pick = |v: &Value| -> Result<String, String> {
-        let s = v.pointer(pointer).and_then(Value::as_str).unwrap_or("").trim();
+        let s = v
+            .pointer(pointer)
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
         if s.is_empty() {
             Err("未配置端点地址(请在设置里填写后重试)".into())
         } else {

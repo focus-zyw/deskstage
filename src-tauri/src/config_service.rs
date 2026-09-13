@@ -96,7 +96,9 @@ fn write_stub(file: &std::path::Path) -> Result<Value, String> {
 fn migrate_version(cfg: &mut Value, file: &std::path::Path) -> Result<(), String> {
     let from = cfg.get("version").and_then(Value::as_u64).unwrap_or(0);
     if from > CURRENT_VERSION as u64 {
-        return Err(format!("配置版本过新({from} > {CURRENT_VERSION}),请升级应用"));
+        return Err(format!(
+            "配置版本过新({from} > {CURRENT_VERSION}),请升级应用"
+        ));
     }
     if from == CURRENT_VERSION as u64 {
         return Ok(());
@@ -258,7 +260,11 @@ fn ensure_data_loaded(
 }
 
 #[tauri::command]
-pub fn data_get(app: AppHandle, state: State<'_, ConfigState>, store: String) -> Result<Value, String> {
+pub fn data_get(
+    app: AppHandle,
+    state: State<'_, ConfigState>,
+    store: String,
+) -> Result<Value, String> {
     store_file(&store)?;
     let mut inner = state.inner.lock().map_err(|e| e.to_string())?;
     let (_, value) = ensure_data_loaded(&app, &mut inner, &store)?;
@@ -280,7 +286,12 @@ pub fn data_get_with_revision(
 
 /// CAS 提交的内存侧(无 IO):expected 不符返回 Err((当前 revision, 当前值))。
 /// 相符则更新内存缓存并推进 revision,返回新 revision。调用方负责先做磁盘原子写。
-fn cas_commit(inner: &mut Inner, store: &str, expected: u64, value: Value) -> Result<u64, (u64, Value)> {
+fn cas_commit(
+    inner: &mut Inner,
+    store: &str,
+    expected: u64,
+    value: Value,
+) -> Result<u64, (u64, Value)> {
     let current = inner.data_revisions.get(store).copied().unwrap_or(0);
     let current_value = inner.data.get(store).cloned().unwrap_or(Value::Null);
     if current != expected {
