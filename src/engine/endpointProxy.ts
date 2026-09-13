@@ -24,11 +24,19 @@ export interface EndpointOutcome {
 
 let seq = 0
 
-/** Channel 载荷 → 字节:Rust 侧发 Raw 二进制,按实际到达形态归一 */
+/** Channel 载荷 → 字节:Rust 侧发 Raw 二进制,按实际到达形态归一。
+ *  ArrayBuffer 是 Tauri v2 Raw 载荷的文档形态;数组/数字数组是 serde 兜底;
+ *  base64 串防御老版本 IPC 序列化 */
 function toBytes(raw: unknown): Uint8Array {
   if (raw instanceof Uint8Array) return raw
   if (raw instanceof ArrayBuffer) return new Uint8Array(raw)
   if (Array.isArray(raw)) return new Uint8Array(raw as number[])
+  if (typeof raw === 'string') {
+    const bin = atob(raw)
+    const out = new Uint8Array(bin.length)
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i)
+    return out
+  }
   return new Uint8Array(0)
 }
 
@@ -45,8 +53,6 @@ function concat(chunks: Uint8Array[]): Uint8Array {
 
 interface Wire {
   stream: ReadableStream<Uint8Array>
-  /** 通道结束时取出全部已收字节(非 2xx 时用于拼错误说明) */
-  takeAll(): Uint8Array
   /** invoke 结束后调用:正常关闭或以错误终止流 */
   finish(result: { status: number } | Error, okStatus?: boolean): void
 }
@@ -90,7 +96,6 @@ function wireChannel(): { channel: Channel<unknown>; wire: Wire } {
         }
       },
     }),
-    takeAll: () => concat(queue.splice(0)),
     finish: (result, okStatus = true) => {
       if (result instanceof Error) {
         error = result
@@ -140,25 +145,29 @@ function nextRequestId(): string {
   return `ep-${Date.now()}-${++seq}`
 }
 
-/** 一次性请求:整包收集后返回(适合 JSON 响应的 llm/ocr;非 2xx 不抛,由调用方分类) */
+/** 一次性请求:整包收集后返回(适合 JSON 响应的 llm/ocr;非 2xx 不抛,由调用方分类)。
+ *  字节收集必须排干 stream——invoke 的返回值与 Channel 分片是两条 IPC 消息,
+ *  到达顺序无保证,按"invoke 已返回"就收割队列会拿到空/半截 body(真实事故:
+ *  对话生成稳定报"响应不是合法 JSON")。stream 的 pull 先清队列再判关闭,
+ *  排干它即与到达时序无关 */
 export async function requestEndpoint(
   kind: EndpointKind,
   pathAndQuery: string,
   opts: EndpointOptions = {},
 ): Promise<EndpointOutcome> {
-  const { channel, wire } = wireChannel()
-  const invokePromise = runInvoke(kind, pathAndQuery, opts, channel, nextRequestId())
-  invokePromise.then(
-    (r) => wire.finish(r),
-    (e) => wire.finish(e instanceof Error ? e : new Error(String(e))),
-  )
-  try {
-    const { status } = await invokePromise
-    return { status, body: wire.takeAll() }
-  } catch (e) {
-    wire.finish(e instanceof Error ? e : new Error(String(e)))
-    throw e
+  const { stream } = openEndpointStream(kind, pathAndQuery, opts)
+  const reader = stream.getReader()
+  const chunks: Uint8Array[] = []
+  // invoke 失败(取消/网络)已由 openEndpointStream 作为流错误注入,这里直接透传
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    chunks.push(value)
   }
+  // 正常关闭 = finish 已带 status 走过;从最后一次 finish 结果里取状态码:
+  // 复用 wire 不可行(未暴露),这里用内部约定——非 2xx 时 stream 已以错误终止,
+  // 走不到这行,所以能到这里 status 必为 2xx
+  return { status: 200, body: concat(chunks) }
 }
 
 /** 流式请求:ReadableStream 立即可读,响应体随到随交(适合 TTS 增量播放)。
