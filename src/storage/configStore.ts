@@ -1,12 +1,15 @@
-// 配置外置：appData/data/config.json。首次运行写入默认值，之后读文件。
+// 配置外置:appData/data/config.json。首次运行写入默认值,之后读文件。
 // 改配置两条路：编辑该文件后重启，或在应用内设置面板保存（立即生效）。
+// API Key / B站 Cookie 等敏感值不在此文件——只进系统凭据库(见 ./secrets.ts)。
 // 浏览器预览(无 Tauri 运行时)降级为 localStorage,保证 dev 调试可用。
 import { useSyncExternalStore } from 'react'
 import { readTextFile, writeTextFile, exists, mkdir } from '@tauri-apps/plugin-fs'
 import { appDataDir, join } from '@tauri-apps/api/path'
 import { emitTo, listen } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
+import { invoke } from '@tauri-apps/api/core'
 import { withFileLock } from './writeLock'
+import { readSecret, writeSecret, type SecretId } from './secrets'
 import { LANGUAGES, type TranslationStyle } from '../translation/types'
 
 /** 是否运行在 Tauri 窗口内(浏览器 dev 预览为 false,文件系统相关 API 不可用) */
@@ -590,8 +593,8 @@ export function sanitizeCharacters(v: unknown): CharactersConfig {
 
 let cache: Promise<AppConfig> | null = null
 
-/** 从任意 JSON 对象构造合法配置(字段级清洗,文件与 localStorage 共用) */
-function sanitizeConfig(obj: unknown): AppConfig {
+/** 从任意 JSON 对象构造合法配置(字段级清洗,文件与 localStorage 共用;导出供测试) */
+export function sanitizeConfig(obj: unknown): AppConfig {
   const o = (obj ?? {}) as Record<string, unknown>
   return {
     apiKey: String(o.apiKey || DEFAULT_CONFIG.apiKey),
@@ -708,6 +711,79 @@ function sanitizeConfig(obj: unknown): AppConfig {
   }
 }
 
+// ---------- 密钥通道:配置文件不落明文,敏感值只进系统凭据库 ----------
+// 内存快照(AppConfig)里仍是真实值:所有 cfg.apiKey.trim() 判空与设置页回显
+// 行为不变;变化只在两处——读取末尾经 resolveSecrets 回填,落盘前经 stripSecrets 剥离。
+
+/** 密钥字段 → SecretId(与 src-tauri/src/secrets.rs 白名单一致);map = 整组 JSON 一条 */
+const SECRET_FIELDS: { path: string[]; id: SecretId; map?: boolean }[] = [
+  { path: ['apiKey'], id: 'llm:apiKey' },
+  { path: ['apiKeys'], id: 'llm:apiKeys', map: true },
+  { path: ['voice', 'apiKey'], id: 'tts:voice' },
+  { path: ['voice', 'minimax', 'apiKey'], id: 'tts:minimax' },
+  { path: ['videoGen', 'apiKeys'], id: 'video:apiKeys', map: true },
+  { path: ['ocr', 'apiKey'], id: 'ocr:apiKey' },
+  { path: ['live', 'cookie'], id: 'live:cookie' },
+]
+
+function getByPath(obj: unknown, path: string[]): unknown {
+  let cur: unknown = obj
+  for (const key of path) {
+    if (!cur || typeof cur !== 'object') return undefined
+    cur = (cur as Record<string, unknown>)[key]
+  }
+  return cur
+}
+
+function setByPath(obj: unknown, path: string[], value: unknown): void {
+  let cur = obj as Record<string, unknown>
+  for (let i = 0; i < path.length - 1; i++) {
+    const key = path[i]
+    if (!cur[key] || typeof cur[key] !== 'object') cur[key] = {}
+    cur = cur[key] as Record<string, unknown>
+  }
+  cur[path[path.length - 1]] = value
+}
+
+function removeByPath(obj: unknown, path: string[]): void {
+  let cur: unknown = obj
+  for (let i = 0; i < path.length - 1; i++) {
+    if (!cur || typeof cur !== 'object') return
+    cur = (cur as Record<string, unknown>)[path[i]]
+  }
+  if (!cur || typeof cur !== 'object') return
+  delete (cur as Record<string, unknown>)[path[path.length - 1]]
+}
+
+/** 落盘前剥离全部密钥字段(导出供测试):config.json 与 localStorage 永不存明文 */
+export function stripSecrets<T>(obj: T): T {
+  const out = structuredClone(obj) as unknown as Record<string, unknown>
+  for (const f of SECRET_FIELDS) removeByPath(out, f.path)
+  return out as T
+}
+
+/** 读取末尾回填:凭据库有条目则覆盖(空串 = 已清除);无条目则保留 sanitize
+ *  读到的历史值——迁移失败或浏览器预览下的兜底路径,不因缺条目而丢配置 */
+async function resolveSecrets(source: AppConfig): Promise<AppConfig> {
+  const cfg = structuredClone(source) as unknown as Record<string, unknown>
+  await Promise.all(
+    SECRET_FIELDS.map(async (f) => {
+      const stored = await readSecret(f.id)
+      if (stored === null) return
+      if (!f.map) {
+        setByPath(cfg, f.path, stored)
+        return
+      }
+      try {
+        setByPath(cfg, f.path, JSON.parse(stored))
+      } catch {
+        /* 凭据内容损坏:保留原值,别把整份配置打挂 */
+      }
+    }),
+  )
+  return cfg as unknown as AppConfig
+}
+
 export function getConfig(): Promise<AppConfig> {
   if (!cache) {
     cache = (async () => {
@@ -715,25 +791,30 @@ export function getConfig(): Promise<AppConfig> {
         // 浏览器预览:localStorage 有则用,否则默认
         try {
           const raw = localStorage.getItem(LS_KEY)
-          if (raw) return sanitizeConfig(JSON.parse(raw))
+          if (raw) return resolveSecrets(sanitizeConfig(JSON.parse(raw)))
         } catch (e) {
           console.warn('浏览器配置读取失败，使用默认', e)
         }
-        return DEFAULT_CONFIG
+        return resolveSecrets(DEFAULT_CONFIG)
       }
       try {
+        // 首次读取前把历史明文迁进凭据库(Rust 进程级单飞,双窗并发安全)。
+        // 失败不阻塞读取:文件里的旧明文经 sanitize 照常可用,下次启动重试
+        await invoke('secrets_migrate_if_needed').catch((e) => {
+          console.warn('明文密钥迁移未完成,下次启动重试', e)
+        })
         const base = await appDataDir()
         const dir = await join(base, 'data')
         if (!(await exists(dir))) await mkdir(dir, { recursive: true })
         const file = await join(dir, 'config.json')
         if (await exists(file)) {
-          return sanitizeConfig(JSON.parse(await readTextFile(file)))
+          return resolveSecrets(sanitizeConfig(JSON.parse(await readTextFile(file))))
         }
-        await writeTextFile(file, JSON.stringify(DEFAULT_CONFIG, null, 2))
+        await writeTextFile(file, JSON.stringify(stripSecrets(DEFAULT_CONFIG), null, 2))
       } catch (e) {
         console.warn('配置读取失败，使用默认', e)
       }
-      return DEFAULT_CONFIG
+      return resolveSecrets(DEFAULT_CONFIG)
     })()
   }
   return cache
@@ -745,19 +826,29 @@ export function getConfig(): Promise<AppConfig> {
  *  重读重发布,两端快照不漂移(设置窗的保存经 config-save 事件汇入主窗,
  *  广播同时兼作它的保存完成回执) */
 export async function saveConfig(update: Partial<AppConfig>): Promise<AppConfig> {
+  // 密钥字段改道凭据库:update 触及的密钥先写库,成功才落盘其余字段;
+  // 写库失败整次保存报错,不产生"配置已变、凭据未变"的半态。空串 = 清除凭据。
+  await Promise.all(
+    SECRET_FIELDS.map(async (f) => {
+      const v = getByPath(update, f.path)
+      if (v === undefined) return
+      await writeSecret(f.id, f.map ? JSON.stringify(v ?? {}) : String(v ?? ''))
+    }),
+  )
   const next = await withFileLock('config', async () => {
     const current = await getConfig()
-    const merged = { ...current, ...update }
+    // 快照含真实密钥值(订阅方与返回值照常可读);落盘副本经 stripSecrets 剥离
+    const snapshot = { ...current, ...update }
     if (!inTauri) {
-      localStorage.setItem(LS_KEY, JSON.stringify(merged))
-      return merged
+      localStorage.setItem(LS_KEY, JSON.stringify(stripSecrets(snapshot)))
+      return snapshot
     }
     const base = await appDataDir()
     const dir = await join(base, 'data')
     if (!(await exists(dir))) await mkdir(dir, { recursive: true })
     const file = await join(dir, 'config.json')
-    await writeTextFile(file, JSON.stringify(merged, null, 2))
-    return merged
+    await writeTextFile(file, JSON.stringify(stripSecrets(snapshot), null, 2))
+    return snapshot
   })
   cache = Promise.resolve(next)
   publishConfig(next)

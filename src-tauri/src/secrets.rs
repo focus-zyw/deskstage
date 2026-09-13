@@ -279,4 +279,15 @@ mod tests {
         assert!(obj["live"].get("cookie").is_none());
         assert_eq!(obj["live"]["roomId"], "1");
     }
+
+    #[test]
+    #[ignore = "真机凭据库冒烟:写/读/删一条测试凭据;CI 跳过,本机 cargo test -- --ignored 验证"]
+    fn credential_manager_roundtrip() {
+        // 用独立 service 名,不碰真实凭据
+        let entry = keyring::Entry::new("dev.virtualcharacter.app.test", "smoke").unwrap();
+        entry.set_password("v1").unwrap();
+        assert_eq!(entry.get_password().unwrap(), "v1");
+        entry.delete_credential().unwrap();
+        assert!(matches!(entry.get_password(), Err(keyring::Error::NoEntry)));
+    }
 }
