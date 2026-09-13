@@ -103,6 +103,13 @@ fn spawn_topmost_watchdog(handle: tauri::AppHandle) {
     let _ = handle;
 }
 
+// CSP 违规上报(前端 cspMonitor 转发):CSP 收紧后靠这条通路在 dev 终端
+// 立即看到被拦的资源,防"人工开页面漏掉延迟任务/回退路径"
+#[tauri::command]
+fn report_csp_violation(directive: String, blocked: String, source: String) {
+    log::warn!("CSP 违规: directive={directive} blocked={blocked} source={source}");
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -124,6 +131,7 @@ pub fn run() {
         .manage(endpoint_proxy::ProxyState::default())
         .invoke_handler(tauri::generate_handler![
             set_noactivate,
+            report_csp_violation,
             pointer_hook::set_native_pointer_regions,
             audio_capture::list_audio_sessions,
             audio_capture::start_capture,
