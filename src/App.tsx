@@ -915,7 +915,8 @@ function App() {
             : undefined,
         },
       ],
-      [settingsOpen, topicOpen, chatOpen, translationOpen, toolsOpen, choice, overlaysOpen, modeMenuOpen, cMenuOpen],
+      // settingsOpen 不进依赖:设置已是独立 WebView,主窗命中区不随它变化
+      [topicOpen, chatOpen, translationOpen, toolsOpen, choice, overlaysOpen, modeMenuOpen, cMenuOpen],
     ),
   )
 

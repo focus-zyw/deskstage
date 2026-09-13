@@ -76,7 +76,10 @@ export function SettingsWindow({ innerRef, bridge, initialTab = 'general', onClo
 
   // 主窗驱动的分页跳转(工具栏/命令面板直达某分页):窗口常驻隐藏,show 后按事件切页
   const onCloseRef = useRef(onClose)
-  onCloseRef.current = onClose
+  // ref 不得在渲染期写入:移入每次渲染后的 effect;Esc 处理器在事件期读取,恒取最新 onClose
+  useEffect(() => {
+    onCloseRef.current = onClose
+  })
   useEffect(() => {
     if (!('__TAURI_INTERNALS__' in window)) return
     const un = listen<{ tab: SettingsTab }>('settings-goto', (e) => {
