@@ -24,6 +24,23 @@ pub async fn bili_http_request(
     let client = tauri_plugin_http::reqwest::Client::builder()
         .user_agent(UA)
         .timeout(std::time::Duration::from_secs(15))
+        // 重定向逐跳重校验:默认跟随会绕出域名白名单(SSRF 跳板)
+        .redirect(tauri_plugin_http::reqwest::redirect::Policy::custom(
+            |attempt| {
+                if attempt.previous().len() > 3 {
+                    return attempt.error("重定向次数过多");
+                }
+                let url = attempt.url();
+                let host_ok = url
+                    .host_str()
+                    .is_some_and(|h| h == "bilibili.com" || h.ends_with(".bilibili.com"));
+                if url.scheme() == "https" && host_ok {
+                    attempt.follow()
+                } else {
+                    attempt.error("重定向目标越出 B站域名")
+                }
+            },
+        ))
         .build()
         .map_err(|e| e.to_string())?;
     let method = match method.as_deref().unwrap_or("GET").to_uppercase().as_str() {

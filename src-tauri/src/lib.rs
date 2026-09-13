@@ -6,6 +6,7 @@ use tauri::Emitter;
 mod audio_capture;
 mod bili_http;
 mod capture;
+mod endpoint_proxy;
 mod env;
 mod ocr;
 mod pointer_hook;
@@ -120,6 +121,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(audio_capture::CaptureState::default())
         .manage(webchat::AskState::default())
+        .manage(endpoint_proxy::ProxyState::default())
         .invoke_handler(tauri::generate_handler![
             set_noactivate,
             pointer_hook::set_native_pointer_regions,
@@ -145,7 +147,9 @@ pub fn run() {
             secrets::secret_get,
             secrets::secret_set,
             secrets::secret_delete,
-            secrets::secrets_migrate_if_needed
+            secrets::secrets_migrate_if_needed,
+            endpoint_proxy::endpoint_request,
+            endpoint_proxy::endpoint_cancel
         ])
         .setup(|app| {
             if cfg!(debug_assertions) {

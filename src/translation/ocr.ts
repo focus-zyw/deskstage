@@ -111,8 +111,7 @@ async function apiOcrLines(ocr: OcrConfig): Promise<string[]> {
         ],
       },
     ],
-    baseUrl: ocr.baseUrl,
-    apiKey: ocr.apiKey,
+    kind: 'ocr', // 视觉端点与主 LLM 分离:origin/密钥由 Rust 按 ocr 配置解析
     model: ocr.model,
     jsonMode: false, // 要纯文本,不要 response_format(免费视觉模型可能不支持)
     ...OCR_PARAMS,

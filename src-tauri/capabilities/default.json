@@ -51,8 +51,7 @@
         { "url": "https://api.openai.com/*" },
         { "url": "https://api.live.bilibili.com/*" },
         { "url": "https://api.bilibili.com/*" },
-        { "url": "https://passport.bilibili.com/*" },
-        { "url": "http://*" }
+        { "url": "https://passport.bilibili.com/*" }
       ]
     }
   ]

@@ -2,7 +2,9 @@
 // 流式契约:streaming_mode=1/2/3 时响应 = 44 字节 RIFF 头(数据长度占位 0)+ 逐段裸 Int16LE PCM。
 // 本层攒出头后剥掉,按头的真实采样率以 pcm 元信息交付(采样率随模型版本 32k/24k 变且
 // 不在 HTTP 头里,声明错会变调);详见 openWavStream。无情感指令通道,语气差异仅由语速表达。
-import { fetch } from '@tauri-apps/plugin-http'
+// 网络走配置端点代理(服务地址用户可配,任意 http 均可,不再依赖静态 scope):
+// Rust 侧转发响应字节流,这里重组为 ReadableStream,增量播放契约不变。
+import { openEndpointStream } from '../endpointProxy'
 import { parseWavFront } from './wav'
 import type { AppConfig } from '../../storage/configStore'
 import type { SynthRequest, TtsCredentials, TtsProvider, TtsStream, VoiceOption } from './types'
@@ -113,10 +115,7 @@ export const gptsovitsProvider: TtsProvider = {
     const gpt = creds.gptsovits
     const def = gpt?.voices.find((v) => v.id === req.voice)
     if (!gpt || !def) throw new Error('gpt-sovits 音色不存在(参考音色表里找不到)')
-    const base = gpt.url.trim().replace(/\/+$/, '')
-    const resp = await fetch(`${base}/tts`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+    const { stream } = openEndpointStream('gptsovits', '/tts', {
       body: JSON.stringify({
         text: req.text,
         text_lang: gpt.textLang || 'auto',
@@ -128,12 +127,9 @@ export const gptsovitsProvider: TtsProvider = {
         streaming_mode: gpt.streamMode,
         speed_factor: clampSpeed(req.speed),
       }),
+      // 长句合成可能远慢于普通 API:总超时给足,首包延迟由服务端流式保证
+      timeoutMs: 120_000,
     })
-    if (!resp.ok) {
-      const body = await resp.text().catch(() => '')
-      throw new Error(`gpt-sovits http ${resp.status}: ${body.slice(0, 200)}`)
-    }
-    if (!resp.body) throw new Error('gpt-sovits 无响应流')
-    return openWavStream(resp.body)
+    return openWavStream(stream)
   },
 }
