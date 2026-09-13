@@ -20,11 +20,12 @@ import {
   type MemoryFact,
   type MemoryRule,
 } from '../../storage/memoryStore'
-import { effectiveStatus, scoreFact, type MemorySensitivity, type MemoryVolatility } from '../../storage/memoryPolicy'
+import { effectiveStatus, scoreFact, type MemorySensitivity } from '../../storage/memoryPolicy'
 import { getBond, getStory, removeArc, removeStoryItem, type StoryData } from '../../storage/storyStore'
 import { bondTierOf } from '../../engine/interactionRules'
 import { useSettings } from '../useSettingsSession'
-import { SettingsCard, SetField } from '../SettingsPrimitives'
+import { SettingsCard, SetField, SetLine, SetSwitch } from '../SettingsPrimitives'
+import { maybeRestockTopicCandidates } from '../../topic/discovery'
 
 /** 记忆事实分类的中文标签 */
 const MEM_CAT_LABEL: Record<string, string> = {
@@ -37,7 +38,6 @@ const MEM_CAT_LABEL: Record<string, string> = {
 }
 
 const SENS_LABEL: Record<MemorySensitivity, string> = { normal: '普通', private: '私密', restricted: '高敏' }
-const VOL_LABEL: Record<MemoryVolatility, string> = { stable: '稳定', changeable: '可变', historical: '历史' }
 const RULE_SCOPE_LABEL: Record<MemoryRule['scope'], string> = {
   slot: '指定事项',
   category: '整类记忆',
@@ -152,7 +152,7 @@ export function MemorySettings() {
 
   const renderFactRow = (f: MemoryFact, eff: string) => (
     <div className="mem-fact" key={f.id} style={eff === 'needs_confirmation' ? { opacity: 0.85 } : undefined}>
-      <span className="mem-cat">{MEM_CAT_LABEL[f.category]}{f.slot ? `·${f.slot}` : ''}</span>
+      <span className="mem-cat">{MEM_CAT_LABEL[f.category]}</span>
       {editingId === f.id ? (
         <span className="mem-content" style={{ display: 'flex', gap: 6 }}>
           <input
@@ -169,7 +169,7 @@ export function MemorySettings() {
           <button className="mem-btn" title="取消" onClick={() => setEditingId(null)}>↩</button>
         </span>
       ) : (
-        <span className="mem-content">
+        <span className="mem-content" title={f.content}>
           {f.content}
           {f.status === 'superseded' && ' (已被新信息替代)'}
         </span>
@@ -212,12 +212,11 @@ export function MemorySettings() {
       >
         ✕
       </button>
-      <div className="set-note">
-        置信 {f.confidence.toFixed(2)} · {SENS_LABEL[f.sensitivity]} · {VOL_LABEL[f.volatility]}
-        {eff === 'needs_confirmation' && ' · 待确认(过期后已不主动使用)'}
-        {f.status === 'superseded' && ' · 已被替代'}
-        {' · '}首次 {dayLabel(f.createdAt)}
-        {' · '}{f.lastConfirmedAt ? `确认 ${dayLabel(f.lastConfirmedAt)}` : '未经你确认'}
+      <div className="mem-meta">
+        {dayLabel(f.createdAt)} 从聊天记下
+        {f.lastConfirmedAt ? ` · 确认于 ${dayLabel(f.lastConfirmedAt)}` : ' · 尚未经你确认'}
+        {eff === 'needs_confirmation' && ' · 可能已过期(暂时不用)'}
+        {f.sensitivity !== 'normal' && ` · ${SENS_LABEL[f.sensitivity]}`}
         {f.sourceExcerpt && ` · 来源:"${f.sourceExcerpt.slice(0, 40)}"`}
       </div>
     </div>
@@ -286,6 +285,26 @@ export function MemorySettings() {
             }}
           />
         </SetField>
+      </SettingsCard>
+
+      <SettingsCard card="话题发现" flash={flashCard} title="话题发现">
+        <SetLine
+          title="AI 后台发现候选话题"
+          hint="候选话题不足时,后台让模型批量想新题,经本地雷区与查重清洗后入池;只在开启后工作,会产生少量模型调用费用"
+        >
+          <SetSwitch
+            checked={form.topicPrefs.aiDiscover}
+            label="AI 后台发现候选话题"
+            onChange={(v) => {
+              setForm({ ...form, topicPrefs: { ...form.topicPrefs, aiDiscover: v } })
+              saveField({ topicPrefs: { ...form.topicPrefs, aiDiscover: v } }, true)
+              if (v) void maybeRestockTopicCandidates()
+            }}
+          />
+        </SetLine>
+        <div className="set-note">
+          输入只有兴趣关键词与最近话题标题,不含屏幕内容;关闭后完全不调用。节奏:池子快见底才补,每小时最多一单
+        </div>
       </SettingsCard>
 
       {needsConfirm.length > 0 && (

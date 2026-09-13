@@ -7,6 +7,31 @@ import { readTextFile, writeTextFile, exists, mkdir, readDir, remove } from '@ta
 import { appDataDir, join } from '@tauri-apps/api/path'
 import { sanitizeDialogLine, sanitizeSceneCard, type DialogLine, type SceneCard } from '../performer/dialogSchema'
 import { withFileLock } from './writeLock'
+import { TOPIC_CATEGORIES, TOPIC_SOURCES, type TopicCategory, type TopicSource } from '../topic/types'
+
+/** 话题引用:新历史带话题分类/来源/指纹,老历史读取时由标题生成兼容指纹(不批量迁移) */
+export interface TopicRef {
+  fingerprint: string
+  category: TopicCategory
+  source: TopicSource
+}
+
+/** 话题引用清洗:非法分类/来源兜底,指纹缺失返回 undefined(老数据无此字段) */
+function sanitizeTopicRef(raw: unknown): TopicRef | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const o = raw as Record<string, unknown>
+  const fingerprint = typeof o.fingerprint === 'string' && o.fingerprint ? o.fingerprint.slice(0, 32) : ''
+  if (!fingerprint) return undefined
+  return {
+    fingerprint,
+    category: (TOPIC_CATEGORIES as readonly string[]).includes(o.category as string)
+      ? (o.category as TopicCategory)
+      : 'life',
+    source: (TOPIC_SOURCES as readonly string[]).includes(o.source as string)
+      ? (o.source as TopicSource)
+      : 'curated',
+  }
+}
 
 /** 一条历史 = 台词 + 集元数据;台词字段(含可选演出信息)整体继承。
  *  card(场景卡)与 eid(稳定集 id)是集级元数据,eid 随本集每一行落盘 */
@@ -14,6 +39,7 @@ export interface HistoryEntry extends DialogLine {
   ts: number
   mode: string
   topic?: string
+  topicRef?: TopicRef
   card?: SceneCard
   eid?: string
 }
@@ -25,6 +51,7 @@ export interface Episode {
   lines: DialogLine[]
   fav: boolean
   topic?: string
+  topicRef?: TopicRef
   card?: SceneCard
   eid?: string
 }
@@ -62,9 +89,11 @@ function todayFileId(): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
 }
 
-/** 集提交元数据:topic(手动锁定主题时记录)、card(场景卡)与稳定集 id */
+/** 集提交元数据:topic(手动锁定主题时记录)、topicRef(话题分类/来源/指纹)、
+ *  card(场景卡)与稳定集 id */
 export interface EpisodeCommitMeta {
   topic?: string
+  topicRef?: TopicRef
   card?: SceneCard
   /** 同一集的所有行共享;缺省自动生成 */
   eid?: string
@@ -84,6 +113,8 @@ function entryToLine(e: HistoryEntry): string {
     text: e.text,
     action: e.action,
     topic: e.topic,
+    // 话题引用:集级元数据,只随本集第一行落盘(旧文件无此字段,读取天然兼容)
+    topicRef: e.topicRef,
     // 场景卡:集级元数据,只随本集第一行落盘(旧文件无此字段,读取天然兼容)
     card: e.card,
     // 演出信息:停顿/听者动作/语气,回放时还原节奏
@@ -111,6 +142,7 @@ function parseEntries(raw: string): HistoryEntry[] {
         mode: String(obj.mode || 'daily'),
         eid: typeof obj.eid === 'string' && obj.eid ? obj.eid.slice(0, 48) : undefined,
         topic: typeof obj.topic === 'string' && obj.topic ? obj.topic : undefined,
+        topicRef: sanitizeTopicRef(obj.topicRef),
         card: sanitizeSceneCard(obj.card),
       })
     } catch {
@@ -152,6 +184,7 @@ export async function appendHistory(
               mode,
               eid,
               topic: meta.topic,
+              ...(i === 0 && meta.topicRef ? { topicRef: meta.topicRef } : {}),
               ...(i === 0 && meta.card ? { card: meta.card } : {}),
             }),
           )
@@ -231,7 +264,7 @@ export async function toggleFavorite(ep: FavRecord): Promise<boolean> {
         await writeFavorites(favs)
         return false
       }
-      favs.push({ ts: ep.ts, mode: ep.mode, lines: ep.lines, topic: ep.topic, card: ep.card })
+      favs.push({ ts: ep.ts, mode: ep.mode, lines: ep.lines, topic: ep.topic, topicRef: ep.topicRef, card: ep.card })
       await writeFavorites(favs)
       return true
     })
@@ -247,7 +280,7 @@ export async function toggleFavorite(ep: FavRecord): Promise<boolean> {
 export async function listFavorites(): Promise<Episode[]> {
   try {
     return (await readFavorites())
-      .map((f) => ({ ts: f.ts, mode: f.mode, lines: f.lines, fav: true, topic: f.topic, card: f.card }))
+      .map((f) => ({ ts: f.ts, mode: f.mode, lines: f.lines, fav: true, topic: f.topic, topicRef: f.topicRef, card: f.card }))
       .sort((a, b) => b.ts - a.ts)
   } catch (e) {
     console.warn('收藏列表读取失败', e)
@@ -266,10 +299,11 @@ export function aggregateEpisodes(entries: HistoryEntry[]): Episode[] {
     const key = e.eid ?? `ts:${e.ts}`
     let ep = byKey.get(key)
     if (!ep) {
-      ep = { ts: e.ts, mode: e.mode, lines: [], fav: false, topic: e.topic, eid: e.eid }
+      ep = { ts: e.ts, mode: e.mode, lines: [], fav: false, topic: e.topic, topicRef: e.topicRef, eid: e.eid }
       byKey.set(key, ep)
     }
     if (!ep.topic && e.topic) ep.topic = e.topic
+    if (!ep.topicRef && e.topicRef) ep.topicRef = e.topicRef
     if (!ep.card && e.card) ep.card = sanitizeSceneCard(e.card)
     const { ts: _t, mode: _m, topic: _tp, card: _c, eid: _e, ...line } = e
     ep.lines.push(line)
@@ -292,7 +326,7 @@ export async function listEpisodes(limit = 50): Promise<Episode[]> {
     for (const f of await readFavorites()) {
       const ep = byTs.get(f.ts)
       if (ep) ep.fav = true
-      else byTs.set(f.ts, { ts: f.ts, mode: f.mode, lines: f.lines, fav: true, topic: f.topic, card: f.card })
+      else byTs.set(f.ts, { ts: f.ts, mode: f.mode, lines: f.lines, fav: true, topic: f.topic, topicRef: f.topicRef, card: f.card })
     }
     return [...byTs.values()].sort((a, b) => b.ts - a.ts).slice(0, limit)
   } catch (e) {

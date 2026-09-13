@@ -36,6 +36,13 @@ export function isFullscreenApp(): boolean {
   return !!last?.fullscreenApp
 }
 
+/** 前台应用类别(editor/browser/terminal/media;null=自己在前台或未感知)。
+ *  话题候选的环境源用:只取类别级标签,不含任何原始窗口/屏幕内容 */
+export function envForegroundCategory(): string | null {
+  const fg = last?.foreground ?? null
+  return fg && fg !== 'other' ? fg : null
+}
+
 async function poll(): Promise<void> {
   try {
     last = await invoke<EnvSnapshot>('env_snapshot')

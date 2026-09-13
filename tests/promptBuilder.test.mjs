@@ -41,15 +41,42 @@ const story = (gags, threads = []) => ({
   bond: { trust: 1, rivalry: 0, updatedAt: 0 },
 })
 
+// 最小合法 TopicPlan(新话题契约:buildMessages 只认话题计划,不再收 topic/topicFixed)
+const tp = (title) => ({
+  planId: `tp-${title}`,
+  createdAt: 0,
+  expiresAt: 9e15,
+  baseRevision: 0,
+  lane: 'dynamic',
+  mode: 'daily',
+  intent: 'new',
+  card: {
+    id: `tc-${title}`,
+    title,
+    hook: title,
+    category: 'life',
+    tags: [],
+    source: 'curated',
+    fingerprint: `fp-${title}`,
+    sensitivity: 'normal',
+    generatedAt: 0,
+  },
+  policy: 'guided',
+  stage: 'open',
+  episodeFocus: title,
+  allowedBranches: [],
+  avoid: [],
+  duration: 'once',
+  compatibility: { sessionRevision: 0, banHash: '', modeHash: '', plannerVersion: 1 },
+})
+
 function finalPrompt({ recentLines = [], storyContext, continueFromPrevious = false, moodNote } = {}) {
   return buildMessages(
     'crosstalk',
-    '周报到底写给谁看',
+    tp('周报到底写给谁看'),
     recentLines,
-    false,
     undefined,
     storyContext ? { story: storyContext } : undefined,
-    undefined,
     undefined,
     undefined,
     undefined,
@@ -215,7 +242,7 @@ test('C 分工规则:非喜剧骨架与相声默认分支各归各', () => {
 })
 
 test('日常模式非喜剧化:无喜剧件,句数 8~16,喜剧动态不注入', () => {
-  const sys = buildMessages('daily', '点外卖还是自己做饭', [])[0].content
+  const sys = buildMessages('daily', tp('点外卖还是自己做饭'), [])[0].content
   assert.doesNotMatch(sys, /资深喜剧编剧/)
   assert.doesNotMatch(sys, /这是喜剧/)
   assert.doesNotMatch(sys, /好笑比什么都重要/)
@@ -242,7 +269,7 @@ test('renderStoryContext:非喜剧只带共同经历,不注入老梗与笑点素
 })
 
 test('相声模式丙只占 0~2 句,保留逗哏-捧哏主轴', () => {
-  const prompt = buildMessages('crosstalk', '周报到底写给谁看', [])
+  const prompt = buildMessages('crosstalk', tp('周报到底写给谁看'), [])
     .map((message) => message.content)
     .join('\n')
   assert.match(prompt, /本场只占 0~2 句/)
@@ -251,7 +278,7 @@ test('相声模式丙只占 0~2 句,保留逗哏-捧哏主轴', () => {
 })
 
 test('使用者称呼纪律:注入用户名时明确禁止加"们"等后缀', () => {
-  const prompt = buildMessages('daily', '点外卖还是自己做饭', [], false, undefined, {
+  const prompt = buildMessages('daily', tp('点外卖还是自己做饭'), [], undefined, {
     profile: { userName: '小张', occupation: '', likes: '', dislikes: '', banTopics: '' },
   })
     .map((message) => message.content)
@@ -263,9 +290,8 @@ test('使用者称呼纪律:注入用户名时明确禁止加"们"等后缀', ()
 test('抉择点分档:喜剧中段站队收同底,非喜剧自然停顿征询各自收束', () => {
   const xtChoice = buildMessages(
     'crosstalk',
-    '周报到底写给谁看',
+    tp('周报到底写给谁看'),
     [],
-    false,
     undefined,
     undefined,
     undefined,
@@ -279,9 +305,8 @@ test('抉择点分档:喜剧中段站队收同底,非喜剧自然停顿征询各
 
   const dailyChoice = buildMessages(
     'daily',
-    '点外卖还是自己做饭',
+    tp('点外卖还是自己做饭'),
     [],
-    false,
     undefined,
     undefined,
     undefined,
@@ -298,9 +323,8 @@ test('抉择点分档:喜剧中段站队收同底,非喜剧自然停顿征询各
 
   const withLast = buildMessages(
     'daily',
-    '点外卖还是自己做饭',
+    tp('点外卖还是自己做饭'),
     [],
-    false,
     undefined,
     undefined,
     undefined,
@@ -315,7 +339,7 @@ test('抉择点分档:喜剧中段站队收同底,非喜剧自然停顿征询各
 })
 
 test('互动回执中性化:不责怪观众,可提可不提', () => {
-  const msgs = buildMessages('daily', '点外卖还是自己做饭', [], false, undefined, undefined, undefined, '观众戳了甲 3 次')
+  const msgs = buildMessages('daily', tp('点外卖还是自己做饭'), [], undefined, undefined, undefined, '观众戳了甲 3 次')
   const user = msgs[1].content
   assert.match(user, /最近有过一次观众互动/)
   assert.match(user, /不得责怪观众/)

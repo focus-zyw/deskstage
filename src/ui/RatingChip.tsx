@@ -1,16 +1,20 @@
-// 演出完播评价条:自然完播后浮现"这集怎么样?",👍/👎/★ 一键完成,不追问原因。
-// 穿透窗口约束:三个按钮必须各自注册热区(与 ControlBar 同款),悬停高亮走
+// 演出完播评价条:自然完播后浮现"这集怎么样?",👍/👎/★ 一键完成,不追问原因;
+// 附话题轻操作(继续聊这个/换个切口/不想再听这类),直接驱动下一集的行动意图。
+// 穿透窗口约束:每个按钮必须各自注册热区(与 ControlBar 同款),悬停高亮走
 // onHoverChange(CSS :hover 在合成指针下不可靠)。弹出/撤下时机由 App 决定,
 // 这里只负责 10s 无操作自动收起与提交后的短暂致谢。
 import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import { registerHitRegion, onHoverChange } from '../input/pointerManager'
 import { ThumbsUpIcon, ThumbsDownIcon } from '../stage/icons'
+import type { TopicPlan } from '../topic/types'
 
-/** 一次评价邀请:自然完播的那一集(eid 是评价/收藏的主键) */
+/** 一次评价邀请:自然完播的那一集(eid 是评价/收藏的主键);plan 供话题轻操作定位 */
 export interface RatingAsk {
   eid: string
   mode: string
   topic: string
+  /** 产出本集的话题计划(动态话题系统;回放/旧集没有) */
+  plan?: TopicPlan
 }
 
 interface Props {
@@ -19,13 +23,20 @@ interface Props {
   style?: CSSProperties
   onRate: (rating: 'up' | 'down') => void
   onFav: () => void
+  /** 话题轻操作:继续聊这个 / 换个切口(都触发新一集演出);不想再听这类(负反馈收起) */
+  onContinueTopic: () => void
+  onChangeAngle: () => void
+  onBanTopic: () => void
   onDismiss: () => void
 }
 
 const AUTO_DISMISS_MS = 10_000
 const THANKS_MS = 1400
 
-export function RatingChip({ ask, style, onRate, onFav, onDismiss }: Props) {
+/** 话题轻操作按钮表:统一注册热区 id 与悬停高亮,防漂移(文件内常量,热区测试按源码断言) */
+const TOPIC_ACTION_IDS = ['rate-continue', 'rate-angle', 'rate-ban'] as const
+
+export function RatingChip({ ask, style, onRate, onFav, onContinueTopic, onChangeAngle, onBanTopic, onDismiss }: Props) {
   const [hovered, setHovered] = useState<string | null>(null)
   // 致谢态按 eid 派生而非独立 state:新一轮邀请(eid 变化)自动回到提问态,免重置副作用
   const [thankedEid, setThankedEid] = useState<string | null>(null)
@@ -33,11 +44,19 @@ export function RatingChip({ ask, style, onRate, onFav, onDismiss }: Props) {
   const btnUp = useRef<HTMLButtonElement>(null)
   const btnDown = useRef<HTMLButtonElement>(null)
   const btnFav = useRef<HTMLButtonElement>(null)
+  const btnContinue = useRef<HTMLButtonElement>(null)
+  const btnAngle = useRef<HTMLButtonElement>(null)
+  const btnBan = useRef<HTMLButtonElement>(null)
 
-  // 悬停高亮:只关心本条内三个按钮
+  // 悬停高亮:关心本条内全部按钮
   useEffect(() => {
     return onHoverChange((id) => {
-      setHovered(id === 'rate-up' || id === 'rate-down' || id === 'rate-fav' ? id : null)
+      setHovered(
+        id !== null &&
+          (id === 'rate-up' || id === 'rate-down' || id === 'rate-fav' || (TOPIC_ACTION_IDS as readonly string[]).includes(id))
+          ? id
+          : null,
+      )
     })
   }, [])
 
@@ -58,6 +77,18 @@ export function RatingChip({ ask, style, onRate, onFav, onDismiss }: Props) {
       registerHitRegion('rate-fav', {
         getRect: () => btnFav.current?.getBoundingClientRect() ?? empty(),
         nativePointerTarget: () => btnFav.current,
+      }),
+      registerHitRegion('rate-continue', {
+        getRect: () => btnContinue.current?.getBoundingClientRect() ?? empty(),
+        nativePointerTarget: () => btnContinue.current,
+      }),
+      registerHitRegion('rate-angle', {
+        getRect: () => btnAngle.current?.getBoundingClientRect() ?? empty(),
+        nativePointerTarget: () => btnAngle.current,
+      }),
+      registerHitRegion('rate-ban', {
+        getRect: () => btnBan.current?.getBoundingClientRect() ?? empty(),
+        nativePointerTarget: () => btnBan.current,
       }),
     ]
     return () => unsubs.forEach((u) => u())
@@ -113,6 +144,40 @@ export function RatingChip({ ask, style, onRate, onFav, onDismiss }: Props) {
             }}
           >
             ★
+          </button>
+          <span className="rate-chip-sep" aria-hidden />
+          <button
+            ref={btnContinue}
+            className={`rate-btn text${hovered === 'rate-continue' ? ' hot' : ''}`}
+            title="同一话题接着演一集"
+            onClick={() => {
+              markThanks()
+              onContinueTopic()
+            }}
+          >
+            继续聊
+          </button>
+          <button
+            ref={btnAngle}
+            className={`rate-btn text${hovered === 'rate-angle' ? ' hot' : ''}`}
+            title="还是这个话题,换个切口"
+            onClick={() => {
+              markThanks()
+              onChangeAngle()
+            }}
+          >
+            换切口
+          </button>
+          <button
+            ref={btnBan}
+            className={`rate-btn text${hovered === 'rate-ban' ? ' hot' : ''}`}
+            title="不想再听这类（当踩处理）"
+            onClick={() => {
+              markThanks()
+              onBanTopic()
+            }}
+          >
+            不想听
           </button>
         </>
       )}

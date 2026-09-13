@@ -13,9 +13,9 @@
 // 广播:config-changed / store-changed 由 Rust emit 到全部窗口(含写者,前端幂等
 // 采纳),替代旧"主窗写完 emitTo 设置窗"的单向通知。
 //
-// 数据文件(data_get/data_set):设置窗可写的 3 个 store(bubble-themes/
-// custom-modes/memory)。它们的 version 与清洗本就在前端,保持 TS 单源;
-// 这里只提供串行化 + 原子写 + 广播。
+// 数据文件(data_get/data_set):设置窗可写的共享 store(bubble-themes/
+// custom-modes/memory/topic-state)。它们的 version 与清洗本就在前端,保持
+// TS 单源;这里只提供串行化 + 原子写 + 广播。
 
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -32,11 +32,12 @@ type Migration = fn(&mut Value);
 /// 未来 schema 变更:在此追加步骤并 CURRENT_VERSION +1,老文件启动时自动补迁。
 const MIGRATIONS: &[Migration] = &[];
 
-/// 共享数据文件白名单:store 名 ↔ 文件名(与前端三个 store 的 FILE_NAME 一致)。
+/// 共享数据文件白名单:store 名 ↔ 文件名(与前端各 store 的 FILE_NAME 一致)。
 const DATA_STORES: &[(&str, &str)] = &[
     ("bubble-themes", "bubble-themes.json"),
     ("custom-modes", "custom-modes.json"),
     ("memory", "memory.json"),
+    ("topic-state", "topic-state.json"),
 ];
 
 /// 进程级配置状态:一把锁串行化全部读写(单写者的机制化)。
@@ -444,6 +445,7 @@ mod tests {
     fn store_file_whitelist_only() {
         assert_eq!(store_file("bubble-themes").unwrap(), "bubble-themes.json");
         assert_eq!(store_file("memory").unwrap(), "memory.json");
+        assert_eq!(store_file("topic-state").unwrap(), "topic-state.json");
         assert!(store_file("history").is_err());
         assert!(store_file("../config").is_err());
     }

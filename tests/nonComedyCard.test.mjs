@@ -21,6 +21,46 @@ const card = {
 
 const line = (speaker, text) => ({ speaker, text, action: 'talk' })
 
+// 最小合法 TopicPlan / 兼容令牌(预取新契约:条目必须携带话题计划)
+let planSeq = 0
+const fakePlan = (title) => ({
+  planId: `tp-${++planSeq}`,
+  createdAt: 0,
+  expiresAt: 9e15,
+  baseRevision: 0,
+  lane: 'manual',
+  mode: 'daily',
+  intent: 'new',
+  card: {
+    id: `tc-${title}`,
+    title,
+    hook: title,
+    category: 'life',
+    tags: [],
+    source: 'manual',
+    fingerprint: `fp-${title}`,
+    sensitivity: 'normal',
+    generatedAt: 0,
+  },
+  policy: 'guided',
+  stage: 'open',
+  episodeFocus: title,
+  allowedBranches: [],
+  avoid: [],
+  duration: 'once',
+  compatibility: { sessionRevision: 0, banHash: '', modeHash: '', plannerVersion: 1 },
+})
+const check = (over = {}) => ({
+  intent: 'new',
+  sessionRevision: 0,
+  banHash: '',
+  modeHash: '',
+  plannerVersion: 1,
+  recentFingerprints: [],
+  now: 1e12,
+  ...over,
+})
+
 before(async () => {
   const values = new Map()
   globalThis.localStorage = {
@@ -87,6 +127,7 @@ test('预取缓存:无 secret 卡的剧本存→取往返后卡保留', async ()
   await prefetch.savePrefetchEntry({
     mode: 'daily',
     topic: '泡茶',
+    topicPlan: fakePlan('泡茶'),
     script: {
       before: [line('A', '一'), line('B', '二'), line('A', '三'), line('B', '四')],
       card,
@@ -94,9 +135,8 @@ test('预取缓存:无 secret 卡的剧本存→取往返后卡保留', async ()
       after: {},
     },
   })
-  const taken = await prefetch.takePrefetch('daily', '泡茶')
-  assert.ok(taken, '预取条目取回')
-  assert.ok(taken.script.card, '往返后卡保留')
-  assert.equal(taken.script.card.secret, undefined)
-  assert.equal(taken.script.card.scene, '周末的客厅')
+  const hit = await prefetch.peekCompatiblePrefetch('daily', check({ manualFingerprint: fakePlan('泡茶').card.fingerprint }))
+  assert.ok(hit, '预取条目命中')
+  assert.equal(hit.script.card.secret, undefined)
+  assert.equal(hit.script.card.scene, '周末的客厅')
 })

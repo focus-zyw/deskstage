@@ -38,8 +38,11 @@ import { resetDismissals } from './storage/interactionStore'
 import { ensureMoodLoaded } from './storage/moodStore'
 import { noteActivity } from './runtime/proactiveScheduler'
 import { speak } from './engine/tts'
-import { TOPIC_SEEDS } from './engine/topicSeeds'
-import { bumpTopicFavored } from './storage/memoryStore'
+import { topicDirector } from './topic/director'
+import { maybeRestockTopicCandidates, cancelDiscovery } from './topic/discovery'
+import { useTopicSnapshot } from './topic'
+import { CURATED_CARDS } from './topic/catalog'
+import type { TopicCategory, TopicDistance, TopicDuration, TopicIntent } from './topic/types'
 import { getDueMemos, addMemo, updateMemo } from './storage/memoStore'
 import { findEpisodeByEid, toggleFavorite, type Episode } from './storage/historyStore'
 import { rateEpisode } from './storage/feedbackStore'
@@ -322,10 +325,11 @@ function App() {
   const trPanelRef = useRef<HTMLDivElement>(null)
   const trQuipAt = useRef(0)
   // 最近打开的面板由 runtime overlays 栈决定(escapeTarget),不再单独记 ref
-  // 手动锁定主题;null = 随机。主题面板弹/收与搜索词
-  const [topicOverride, setTopicOverride] = useState<string | null>(null)
+  // 话题面板:读模型快照(useTopicSnapshot)+ 面板本地态(搜索词/严格围绕/推荐分类)
   const topicOpen = rt.overlays.includes('topic')
   const [topicQuery, setTopicQuery] = useState('')
+  const [strictTopic, setStrictTopic] = useState(false)
+  const [suggestCat, setSuggestCat] = useState<TopicCategory | null>(null)
   // 空闲自动重放:频率来自配置,activeTick 用于用户互动后重置计时
   const [activeTick, setActiveTick] = useState(0)
   /** 用户主动互动:重置空闲/自动重放计时 + 清降频连击(还在陪玩的观众不该被降频) */
@@ -385,12 +389,6 @@ function App() {
   const director = usePerformanceDirector({
     presenter: { say: presenterSay, showTalk, hush, endLine, settle, reset: resetStage, setPose },
     isIdle: () => phaseRef.current === 'idle',
-    getTopicOverride: () => topicOverride,
-    getInterests: () =>
-      config.userProfile.likes
-        .split(/[,，、;；\n]/)
-        .map((x) => x.trim())
-        .filter(Boolean),
     onLive: () => startStreaming(),
     teardown: () => {
       liveStopRef.current?.()
@@ -406,10 +404,27 @@ function App() {
   })
   const { choice } = director
 
-  /** 显式评价提交(评价条/快捷键共用):落盘 feedback.json + 口味权重 ± 记账 */
+  // 话题系统启动:预热 topic-state 快照 + 旧 config.topicOverride 幂等迁移(一次性);
+  // 两分钟后视池量决定是否后台补货(AI 发现默认关,纪律全在 discovery 内)
+  useEffect(() => {
+    void topicDirector.init()
+    const restockTimer = window.setTimeout(() => void maybeRestockTopicCandidates(), 120_000)
+    return () => window.clearTimeout(restockTimer)
+  }, [])
+  // 话题读模型快照:面板渲染专用(纯查询,不耗随机数/不建预约)
+  const topicSnap = useTopicSnapshot()
+
+  /** 话题面板的行动按钮:四类动作直接触发下一集演出 */
+  function playTopicAction(intent: TopicIntent, distance?: TopicDistance) {
+    closeOverlay('topic')
+    director.play(mode, distance ? { intent, distance } : { intent })
+  }
+
+  /** 显式评价提交(评价条/快捷键共用):落盘 feedback.json + 话题事件(唯一写入口) */
   function submitRating(info: RatingAsk, rating: 'up' | 'down') {
     if (ratingAskRef.current?.eid === info.eid) setRatingAsk(null)
     void rateEpisode(info.eid, { ts: Date.now(), mode: info.mode, topic: info.topic }, rating).catch(() => {})
+    void topicDirector.record({ type: 'rating-changed', eid: info.eid, value: rating })
   }
 
   /** 收藏刚完播的这集:按 eid 找回整集,走与历史页 ★ 同一条收藏通道 */
@@ -418,7 +433,9 @@ function App() {
       const ep = await findEpisodeByEid(info.eid)
       if (!ep) return
       const nowFav = await toggleFavorite(ep)
-      if (nowFav) bumpTopicFavored(ep.topic)
+      if (nowFav) {
+        await topicDirector.record({ type: 'favorite-changed', eid: ep.eid ?? info.eid, favored: true })
+      }
     })().catch(() => {})
   }
 
@@ -728,7 +745,6 @@ function App() {
       applyChars(c.characters)
       setRuntimeCharHidden(c.charactersHidden)
       setRuntimeDnd(c.dnd) // 勿扰状态进运行时(工具栏按钮/TTS 同步)
-      setTopicOverride(c.topicOverride)
       applyCtrlBar(c.ctrlBar)
       // 截屏:应用全局快捷键 + 按配置把本窗口从系统级屏幕捕获中排除
       void applyScreenshotHotkey()
@@ -1272,27 +1288,32 @@ function App() {
     saveConfig({ charactersHidden: v }).catch((e) => console.warn('显示开关保存失败(静默)', e))
   }
 
-  /** 手动锁定主题:立即落盘 + 按新主题预生成一单(旧缓冲保留,无主题时照常消费) */
-  function applyTopic(topic: string) {
+  /** 手动话题即点即演:一次性(或按面板时长选项建会话),不再有"锁定直到清除"的全局态 */
+  function playManualTopic(topic: string) {
     const norm = topic.trim()
-    setTopicOverride(norm)
+    if (!norm) return
     closeOverlay('topic')
-    void saveConfig({ topicOverride: norm }).catch((e) => console.warn('主题保存失败(静默)', e))
-    if (norm) director.rearmPrefetch(mode, norm)
+    director.play(mode, { topic: norm, strict: strictTopic, duration: config.topicPrefs.duration })
+    setTopicQuery('')
   }
 
-  /** 清除主题,回到话题池随机 */
-  function clearTopic() {
-    setTopicOverride(null)
-    closeOverlay('topic')
-    void saveConfig({ topicOverride: null }).catch((e) => console.warn('主题清除失败(静默)', e))
-    director.rearmPrefetch(mode, null) // 重新随机补一单
+  /** 面板"清除当前话题":结束活跃会话,回到动态选题(旧预生成缓存随之作废) */
+  function clearTopicSession() {
+    void topicDirector.clearSession()
+  }
+
+  /** 话题偏好(持续时间/跳跃距离/AI 发现):写 config.topicPrefs,作用于下一次手动话题 */
+  function saveTopicPrefs(patch: Partial<{ duration: TopicDuration; distance: TopicDistance; aiDiscover: boolean }>) {
+    void saveConfig({ topicPrefs: { ...config.topicPrefs, ...patch } }).catch((e) =>
+      console.warn('话题偏好保存失败(静默)', e),
+    )
   }
 
   /** 退出程序:两段确认的"已武装"态在 SettingsWindow 内,这里真正退干净。
    *  必须先销毁设置窗再销毁主窗——只关主窗会留下孤儿设置窗,进程不退出
    *  (角色消失但应用还活着,真实事故);全部窗口关闭后 Tauri 才会退出进程 */
   async function requestExit() {
+    cancelDiscovery() // 在途的话题发现请求一并中止
     const settings = await WebviewWindow.getByLabel('settings')
     await settings?.destroy().catch(() => {})
     await getCurrentWindow().destroy().catch(() => {})
@@ -1483,41 +1504,162 @@ function App() {
           style={{ left: `${Math.min(88, Math.max(12, ctrlBar.xPct))}%`, top: ctrlBar.top + 46 }}
         >
           <div className="panel-head">
-            <span>聊天主题</span>
-            {topicOverride && (
-              <button className="panel-btn" onClick={clearTopic}>
-                清除主题（回到随机）
+            <span>当前话题</span>
+            {(topicSnap.session || topicSnap.currentTitle) && (
+              <button className="panel-btn" onClick={clearTopicSession}>
+                清除当前话题
               </button>
             )}
           </div>
+          <div className="topic-current">
+            <div className="topic-current-title">
+              {topicSnap.currentTitle || '暂无锁定话题，点「来一段演出」随机开讲'}
+            </div>
+            {topicSnap.session && (
+              <div className="topic-current-meta">
+                {topicSnap.session.duration === 'until-cleared'
+                  ? '持续'
+                  : `还剩 ${topicSnap.session.remainingEpisodes ?? 0} 集`}
+                {' · '}
+                {topicSnap.session.stage === 'open'
+                  ? '开场'
+                  : topicSnap.session.stage === 'deepen'
+                    ? '深化'
+                    : topicSnap.session.stage === 'escalate'
+                      ? '升级'
+                      : '收尾'}
+                {topicSnap.currentHook ? ` · ${topicSnap.currentHook}` : ''}
+              </div>
+            )}
+          </div>
+          <div className="topic-actions">
+            <button
+              className="panel-btn"
+              disabled={!topicSnap.currentTitle}
+              onClick={() => playTopicAction('continue')}
+            >
+              继续
+            </button>
+            <button
+              className="panel-btn"
+              disabled={!topicSnap.currentTitle}
+              onClick={() => playTopicAction('change-angle')}
+            >
+              换个角度
+            </button>
+            <button className="panel-btn" onClick={() => playTopicAction('pivot', 'medium')}>
+              顺着联想
+            </button>
+            <button className="panel-btn" onClick={() => playTopicAction('pivot', 'far')}>
+              完全换台
+            </button>
+          </div>
+          <div className="topic-opts">
+            <span className="topic-opts-label">持续时间</span>
+            {(
+              [
+                ['once', '只聊一集'],
+                ['three-episodes', '三集'],
+                ['until-cleared', '持续'],
+              ] as const
+            ).map(([v, label]) => (
+              <label key={v} className="topic-opt">
+                <input
+                  type="radio"
+                  name="topic-duration"
+                  checked={config.topicPrefs.duration === v}
+                  onChange={() => saveTopicPrefs({ duration: v })}
+                />
+                {label}
+              </label>
+            ))}
+          </div>
+          <div className="topic-opts">
+            <span className="topic-opts-label">跳跃距离</span>
+            {(
+              [
+                ['near', '相近'],
+                ['medium', '有点意外'],
+                ['far', '天马行空'],
+              ] as const
+            ).map(([v, label]) => (
+              <label key={v} className="topic-opt">
+                <input
+                  type="radio"
+                  name="topic-distance"
+                  checked={config.topicPrefs.distance === v}
+                  onChange={() => saveTopicPrefs({ distance: v })}
+                />
+                {label}
+              </label>
+            ))}
+          </div>
+          <div className="topic-opts">
+            <span className="topic-opts-label">推荐</span>
+            {(
+              [
+                ['life', '生活'],
+                ['work', '职场'],
+                ['emotion', '情绪'],
+                ['imagination', '脑洞'],
+                ['character-history', '角色往事'],
+              ] as const
+            ).map(([cat, label]) => (
+              <button
+                key={cat}
+                className={`panel-btn${suggestCat === cat ? ' on' : ''}`}
+                onClick={() => setSuggestCat(suggestCat === cat ? null : cat)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          {suggestCat && (
+            <div className="topic-list">
+              {CURATED_CARDS.filter((c) => c.category === suggestCat)
+                .slice(0, 4)
+                .map((c) => (
+                  <button
+                    key={c.id}
+                    className="topic-item"
+                    title={c.hook}
+                    onClick={() => playManualTopic(c.title)}
+                  >
+                    {c.title}
+                  </button>
+                ))}
+            </div>
+          )}
           <input
             className="topic-search"
             value={topicQuery}
-            placeholder="搜索内置话题,或输入自定义主题…"
+            placeholder="搜索话题,或输入自定义主题,回车开演…"
             onChange={(e) => setTopicQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') playManualTopic(topicQuery)
+            }}
           />
+          <label className="topic-strict">
+            <input type="checkbox" checked={strictTopic} onChange={(e) => setStrictTopic(e.target.checked)} />
+            严格围绕该话题（不要偏题）
+          </label>
           <div className="topic-list">
             {topicQuery.trim() === '' && (
-              <div className="topic-empty">输入关键词搜索,或直接点下方话题</div>
+              <div className="topic-empty">输入关键词搜索,回车即以此话题开演</div>
             )}
             {topicQuery.trim() !== '' &&
-              !TOPIC_SEEDS.some((t) => t.includes(topicQuery.trim())) && (
-                <button
-                  className="topic-item"
-                  onClick={() => applyTopic(topicQuery)}
-                >
+              !CURATED_CARDS.some((t) => t.title.includes(topicQuery.trim())) && (
+                <button className="topic-item" onClick={() => playManualTopic(topicQuery)}>
                   用『{topicQuery.trim()}』作为话题
                 </button>
               )}
-            {TOPIC_SEEDS.filter((t) => t.includes(topicQuery.trim())).map((t) => (
-              <button
-                key={t}
-                className={`topic-item${topicOverride === t ? ' on' : ''}`}
-                onClick={() => applyTopic(t)}
-              >
-                {t}
-              </button>
-            ))}
+            {CURATED_CARDS.filter((t) => t.title.includes(topicQuery.trim()))
+              .slice(0, 8)
+              .map((t) => (
+                <button key={t.id} className="topic-item" title={t.hook} onClick={() => playManualTopic(t.title)}>
+                  {t.title}
+                </button>
+              ))}
           </div>
         </div>
       )}
@@ -1821,7 +1963,7 @@ function App() {
           </div>
         )}
 
-        {/* 完播评价条:锚在工具栏正上方,一键 👍/👎/★。面板开着时不现身——
+        {/* 完播评价条:锚在工具栏正上方,一键 👍/👎/★ + 话题轻操作。面板开着时不现身——
             全屏 outside 热区(点外部收面板)会抢走点击,等面板关掉再弹出并从头计时 */}
         <RatingChip
           ask={overlaysOpen ? null : ratingAsk}
@@ -1833,6 +1975,27 @@ function App() {
           onFav={() => {
             const info = ratingAskRef.current
             if (info) favoriteCurrentEpisode(info)
+          }}
+          onContinueTopic={() => {
+            const info = ratingAskRef.current
+            if (info) {
+              setRatingAsk(null)
+              director.play(info.mode, { intent: 'continue' })
+            }
+          }}
+          onChangeAngle={() => {
+            const info = ratingAskRef.current
+            if (info) {
+              setRatingAsk(null)
+              director.play(info.mode, { intent: 'change-angle' })
+            }
+          }}
+          onBanTopic={() => {
+            const info = ratingAskRef.current
+            if (info) {
+              void topicDirector.record({ type: 'rating-changed', eid: info.eid, value: 'down' })
+              setRatingAsk(null)
+            }
           }}
           onDismiss={dismissRating}
         />

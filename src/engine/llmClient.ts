@@ -48,6 +48,7 @@ import {
   type Speaker,
 } from '../performer/dialogSchema'
 import type { Mode } from '../performer/modes'
+import type { TopicPlan } from '../topic/types'
 
 /** 把底层错误归类成用户能懂的短句;附带 HTTP body 里的服务端说明(截断) */
 export async function describeLlmError(e: unknown): Promise<string> {
@@ -129,24 +130,26 @@ export function bondNoteFor(
   return undefined
 }
 
+/** 一集生成的完整请求:话题计划是唯一话题来源(动态话题系统产出) */
+export interface GenerateDialogRequest {
+  mode: Mode
+  topicPlan: TopicPlan
+  recentLines: DialogLine[]
+  signal?: AbortSignal
+  /** 只有显式续聊时才带上一段原始台词；普通新主题与连续剧情都靠各自结构化上下文 */
+  continueFromPrevious?: boolean
+  /** 预生成模式:上下文只预览不消费——注入冷却/recap 消费挂到 script.adoption,
+   *  真正开播时由播放侧调 adoptDeferredContext 一次性提交(预生成零副作用) */
+  deferContextAdoption?: boolean
+}
+
 /**
  * 生成一整段对话（单次点播）。
  * 失败自动重试 1 次（含 JSON 不合规），仍失败抛错，由调用方兜底。
  */
-export async function generateDialog(
-  mode: Mode,
-  topic: string,
-  recentLines: DialogLine[],
-  signal?: AbortSignal,
-  topicFixed?: boolean,
-  /** 连续剧情节拍(可选):本集演剧情线的一拍,prompt 话题让位 */
-  arc?: { title: string; hook: string; stage: number },
-  /** 只有显式续聊时才带上一段原始台词；普通新主题与连续剧情都靠各自结构化上下文 */
-  continueFromPrevious = false,
-  /** 预生成模式:上下文只预览不消费——注入冷却/recap 消费挂到 script.adoption,
-   *  真正开播时由播放侧调 adoptDeferredContext 一次性提交(预生成零副作用) */
-  opts: { deferContextAdoption?: boolean } = {},
-): Promise<PerformanceScript> {
+export async function generateDialog(req: GenerateDialogRequest): Promise<PerformanceScript> {
+  const { mode, topicPlan, recentLines, signal, continueFromPrevious = false, deferContextAdoption } = req
+  const topic = topicPlan.card.title
   const cfg = await getConfig()
   const memory = await prepareTurnMemory({ query: topic, n: 8 })
   // 每集掷骰是否包含观众抉择点(概率用户可配,默认 30%;重试保持一致)
@@ -165,7 +168,7 @@ export async function generateDialog(
   const injectStory = Math.random() < 0.5
   let adoption: ContextAdoption | null = null
   let interactionRecap: string | undefined
-  if (opts.deferContextAdoption) {
+  if (deferContextAdoption) {
     const preview = injectStory
       ? await previewStoryContext(topic, 2)
       : { gags: [] as string[], threads: [] as string[], gagIds: [] as string[], threadIds: [] as string[] }
@@ -186,7 +189,7 @@ export async function generateDialog(
   // 心情余波:跨集情绪惯性(上集蒸馏入库的余波 + 观众互动小步),只影响开场姿态与前几句语气
   const moods = await getMoods()
   const moodNote = moodPromptBlock(moods) || undefined
-  const messages = buildMessages(mode, topic, recentLines, topicFixed, cfg.userInterests, userCtx, relationship, interactionRecap, allowChoice, lastChoice ?? undefined, arc, envNote, bondNote, moodNote, continueFromPrevious)
+  const messages = buildMessages(mode, topicPlan, recentLines, cfg.userInterests, userCtx, relationship, interactionRecap, allowChoice, lastChoice ?? undefined, envNote, bondNote, moodNote, continueFromPrevious)
   // 网页版生成(设置里开启):主演出改经隐藏网页窗口由网页模型生成。
   // 网页端没有 json_mode/temperature,格式服从度靠协议本身(手动验证 6/6 通过,
   // 见 docs/webchat-prompt-test.md)。生成慢(几十秒级),点播与预生成都有耐心等;

@@ -1,65 +1,61 @@
 // 预生成编排:后台静默生成"下一轮"对话并存入 prefetchStore。
-// 失败一律静默(console.warn),绝不影响演出/交互状态;
-// 与用户主动请求相互独立、可并行(90s 超时由 llmClient 兜底)。
+// 失败一律静默(console.warn),绝不影响演出/交互状态;与用户主动请求相互独立。
+// 话题来源:topicDirector.plan()(零副作用规划,约 30% 概率规划出连续剧情拍,
+// 与点播同概率维持 7:3 混合);手动话题经 request.manualTopic 强约束。
+// 生成后把话题计划连同剧本一起入库(缓存消费时按计划兼容令牌校验),并释放故事
+// 进程内预约——缓存中的 arcId 接管持久占用,防止跨模式重复预生成同一拍。
 import { addPerformanceCues } from './llmClient'
 import { dialogue } from '../dialogue/director'
-import { pickTopic } from './topicSeeds'
-import { modeOf, type Mode } from '../performer/modes'
-import { getStory } from '../storage/storyStore'
-import { listPrefetchedArcIds, savePrefetchEntry } from '../storage/prefetchStore'
+import type { Mode } from '../performer/modes'
+import { savePrefetchEntry } from '../storage/prefetchStore'
 import type { DialogLine } from '../performer/player'
-import { reserveArcBeat } from './arcReservation'
+import { topicDirector } from '../topic/director'
+import type { TopicIntent, TopicRequest } from '../topic/types'
 
 const inFlightModes = new Set<string>()
 
 /** 后台预生成一轮并存盘;同模式同时在飞的最多一个。
  *  生成后追加一次轻量演出节奏标注(独立二遍调用,失败不影响入库)。
- *  约 30% 概率抽中连续剧情节拍(与点播同概率,维持 7:3 混合)。
- *  topic 可选:传入则是手动锁定的主题,用强约束 prompt 并绕过话题池与剧情线;
- *  不传则 30% 剧情线 / 70% 随机话题(池级防重复) */
+ *  request 缺省 = 普通动态下一集(intent new);传 manualTopic 则是手动锁定主题的强约束单 */
 export async function prefetchNext(
   mode: Mode,
   recentLines: DialogLine[],
-  topic?: string,
-  /** 当前正在播放、尚未完成推进的剧情不能被下一轮预生成再次选中 */
-  excludeArcIds: readonly string[] = [],
+  request: { intent?: TopicIntent; manualTopic?: string; excludeArcIds?: readonly string[] } = {},
 ): Promise<void> {
   if (inFlightModes.has(mode)) return
   inFlightModes.add(mode)
-  const occupiedArcIds = await listPrefetchedArcIds()
-  for (const id of excludeArcIds) occupiedArcIds.add(id)
-  const arcReservation = topic?.trim()
-    ? null
-    : reserveArcBeat((await getStory()).arcs, occupiedArcIds)
-  const arcBeat = arcReservation?.beat
-  const actualTopic =
-    topic?.trim() ||
-    (arcBeat ? `连续剧情《${arcBeat.title}》:${arcBeat.hook}` : pickTopic(modeOf(mode)))
-  // 预生成零副作用:上下文只预览,注入冷却/recap 消费随 script.adoption 推迟到开播采纳
-  void dialogue
-    .prepareEpisode({
+  let planId: string | null = null
+  try {
+    // 规划零副作用:不建会话、不记 recent、不动统计(预生成不得改变话题阶段)
+    const req: TopicRequest = { mode, intent: request.intent ?? 'new', speculative: true }
+    if (request.manualTopic?.trim()) {
+      req.manualTopic = request.manualTopic
+      req.strict = true
+      req.duration = 'until-cleared'
+    }
+    if (request.excludeArcIds?.length) req.excludeArcIds = request.excludeArcIds
+    const plan = await topicDirector.plan(req)
+    planId = plan.planId
+    // 预生成零副作用:上下文只预览,注入冷却/recap 消费随 script.adoption 推迟到开播采纳
+    const { script } = await dialogue.prepareEpisode({
       mode,
-      topic: actualTopic,
+      topicPlan: plan,
       recentLines,
-      topicFixed: !!topic?.trim(),
-      arc: arcBeat ?? undefined,
       deferContextAdoption: true,
     })
-    .then(async ({ script }) => ({
-      ...script,
-      before: await addPerformanceCues(script.before),
-    }))
-    .then((script) =>
-      savePrefetchEntry({
-        mode,
-        topic: actualTopic,
-        script,
-        arc: arcBeat ? { id: arcBeat.id, stage: arcBeat.stage } : undefined,
-      }),
-    )
-    .catch((e) => console.warn('预生成失败(静默)', e))
-    .finally(() => {
-      arcReservation?.release()
-      inFlightModes.delete(mode)
+    const cued: typeof script = { ...script, before: await addPerformanceCues(script.before) }
+    await savePrefetchEntry({
+      mode,
+      topic: plan.card.title,
+      topicPlan: plan,
+      script: cued,
+      arc: plan.story ? { id: plan.story.arcId, stage: plan.story.stage } : undefined,
     })
+  } catch (e) {
+    console.warn('预生成失败(静默)', e)
+  } finally {
+    // 入库成功:缓存里的 arcId 接管持久占用,进程内 lease 即刻收束;失败同样收束
+    if (planId) topicDirector.release(planId)
+    inFlightModes.delete(mode)
+  }
 }

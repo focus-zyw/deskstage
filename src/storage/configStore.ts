@@ -175,8 +175,10 @@ export interface AppConfig {
   characters: CharactersConfig
   /** 隐藏角色开关 */
   charactersHidden: boolean
-  /** 手动锁定的聊天主题;null = 从话题池随机 */
+  /** 手动锁定的聊天主题;null = 从话题池随机(动态话题系统接管后仅作迁移遗留字段) */
   topicOverride: string | null
+  /** 话题系统偏好:手动话题默认持续时间/跳跃距离 + AI 后台发现开关(默认关,涉费用) */
+  topicPrefs: TopicPrefsConfig
   /** 界面主题:作用于设置窗口与命令/话题/抉择悬浮面板;角色舞台与工具栏不受影响 */
   theme: 'dark' | 'light'
   /** 观众抉择点出现概率:每集演出掷骰 0~1;0 = 不出抉择点(默认 0.3) */
@@ -319,6 +321,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   },
   charactersHidden: false,
   topicOverride: null,
+  topicPrefs: { duration: 'once', distance: 'medium', aiDiscover: false },
   theme: 'dark',
   choiceChance: 0.3,
   genders: { a: '女', b: '男', c: '女' },
@@ -371,6 +374,27 @@ export interface ToolPrefsConfig {
   switches: Record<string, boolean>
   /** external 工具的"记住允许"(只能由用户在设置页/确认卡写入;模型输出无法触达) */
   autoApproved: Record<string, boolean>
+}
+
+/** 话题系统偏好(动态话题系统) */
+export interface TopicPrefsConfig {
+  /** 手动话题默认持续时间;once 不建长期会话 */
+  duration: 'once' | 'three-episodes' | 'until-cleared'
+  /** 默认跳跃距离(相近/有点意外/天马行空) */
+  distance: 'near' | 'medium' | 'far'
+  /** AI 后台发现候选开关:默认关(会产生模型调用费用),开启后也只在空闲后台跑 */
+  aiDiscover: boolean
+}
+
+/** 清洗话题偏好:非法值回落默认 once/medium/false(涉费用的开关必须显式开启) */
+function sanitizeTopicPrefs(v: unknown): TopicPrefsConfig {
+  const o = (v ?? {}) as Record<string, unknown>
+  return {
+    duration:
+      o.duration === 'three-episodes' || o.duration === 'until-cleared' ? o.duration : 'once',
+    distance: o.distance === 'near' || o.distance === 'far' ? o.distance : 'medium',
+    aiDiscover: o.aiDiscover === true,
+  }
 }
 
 /** 清洗工具偏好:只收布尔值,键数封顶(注册表一共个位数工具,32 足够防脏数据膨胀) */
@@ -817,6 +841,7 @@ const FIELD_SANITIZERS: { [K in keyof AppConfig]: (v: unknown, all: Record<strin
   characters: sanitizeCharacters,
   charactersHidden: (v) => v === true,
   topicOverride: sanitizeTopicOverride,
+  topicPrefs: sanitizeTopicPrefs,
   theme: (v) => (v === 'light' ? 'light' : 'dark'),
   choiceChance: (v) => clampNum(v, 0, 1, DEFAULT_CONFIG.choiceChance),
   genders: sanitizeGenders,

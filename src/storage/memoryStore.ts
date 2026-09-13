@@ -674,8 +674,9 @@ export function bumpMode(mode: string): void {
   }).catch(() => {})
 }
 
-/** 话题权重表:正信号(收藏×2/手动重放/看完×0.3/显式赞×1)与负信号(跳过×1.5/显式踩×1.5)
- *  合成,≤0 表示该主题已被负信号打穿,由 pickTopic 剔除出随机池 */
+/** 话题权重表(legacy,只读):正信号(收藏×2/手动重放/看完×0.3/显式赞×1)与负信号
+ *  (跳过×1.5/显式踩×1.5)合成。动态话题系统的评分把它并入 relevance 作为历史口味;
+ *  新反馈不再写 topicStats(改走 TopicDirector.record → episodeSignals) */
 export async function getTopicWeights(): Promise<Record<string, number>> {
   const mem = await getMemory()
   const out: Record<string, number> = {}

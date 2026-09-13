@@ -29,23 +29,28 @@ import { nameOf } from '../engine/persona'
 import { recentMoodHint } from '../engine/moodState'
 import { noteEpisodeAbandoned } from '../storage/moodStore'
 import type { CurateReport } from '../engine/storyCurator'
-import { listEpisodes, loadRecentHistory, type Episode } from '../storage/historyStore'
-import { takePrefetch, listPrefetchedArcIds } from '../storage/prefetchStore'
-import { reserveArcBeat } from '../engine/arcReservation'
-import { getStory } from '../storage/storyStore'
+import { listEpisodes, loadRecentHistory, type Episode, type TopicRef } from '../storage/historyStore'
 import {
-  bumpTopicSeen,
-  bumpTopicReplays,
-  bumpTopicWatched,
-  bumpTopicSkipped,
-  bumpMode,
-  getTopicWeights,
-} from '../storage/memoryStore'
+  peekCompatiblePrefetch,
+  dropPrefetchEntry,
+  type PrefetchCheck,
+} from '../storage/prefetchStore'
+import { getStory } from '../storage/storyStore'
+import { bumpMode } from '../storage/memoryStore'
 import { logDismiss, type DismissableKind } from '../storage/interactionStore'
 import { getConfig } from '../storage/configStore'
 import { prefetchNext } from '../engine/dialogPrefetch'
-import { pickTopic } from '../engine/topicSeeds'
 import { isFullscreenApp } from '../engine/envAware'
+import { topicDirector } from '../topic/director'
+import {
+  banHashOf,
+  fingerprintOf,
+  modeHashOf,
+  PLANNER_VERSION,
+} from '../topic/planner'
+import { getTopicState } from '../topic/store'
+import { maybeRestockTopicCandidates } from '../topic/discovery'
+import type { TopicDuration, TopicIntent, TopicPlan, TopicRequest, TopicDistance } from '../topic/types'
 import {
   beginPerforming,
   setMode as setRuntimeMode,
@@ -70,10 +75,6 @@ export interface PerformanceDirectorDeps {
   presenter: Pick<ActorPresenter, 'say' | 'showTalk' | 'hush' | 'endLine' | 'settle' | 'reset' | 'setPose'>
   /** 此刻是否空闲(异步回调里判断是否仍空闲的守卫) */
   isIdle(): boolean
-  /** 手动锁定的聊天主题(null = 随机) */
-  getTopicOverride(): string | null
-  /** 使用者画像兴趣分割后的候选(点播抽题用) */
-  getInterests(): string[]
   /** 点播 'live' 模式时转交主播模式(连接弹幕源) */
   onLive(): void
   /** 停止时的外围清场:下播、道具清空、用户气泡等 */
@@ -82,9 +83,18 @@ export interface PerformanceDirectorDeps {
   onEpisodeCommitted?(report: CurateReport): void
   /** 新生成的集自然播完(完播信号,不等蒸馏完成):供 App 弹"这集怎么样"评价条。
    *  回放/中止不触发——中途退场还问好不好很讨嫌 */
-  onEpisodeEnd?(info: { eid: string; mode: Mode; topic: string }): void
+  onEpisodeEnd?(info: { eid: string; mode: Mode; topic: string; plan?: TopicPlan }): void
   /** 到点备忘扫描(调度器每 tick 调,幂等) */
   sweepMemos(): Promise<void>
+}
+
+/** 点播请求:一次性话题/会话动作/跳跃距离/持续时间(缺省走导演自动决策) */
+export interface PlayRequest {
+  topic?: string
+  intent?: TopicIntent
+  distance?: TopicDistance
+  duration?: TopicDuration
+  strict?: boolean
 }
 
 /** 正在播出的集:话题/台词/进度/信号来源,供完播/跳过记账 */
@@ -101,7 +111,7 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
   const choiceTimer = useRef(0)
   // 已开播待提交的集:单次落盘——完播提交完整真实路径(playedAccum,含插话反应),
   // 中止提交已播前缀。choice/after 留存以便"插话接回"后继续未消费的抉择点
-  const pendingEpisode = useRef<{ eid: string; card?: SceneCard; before: DialogLine[]; after: Record<string, DialogLine[]>; choice?: ChoicePoint; playedAccum: DialogLine[]; mode: Mode; topic: string; chosen?: string } | null>(null)
+  const pendingEpisode = useRef<{ eid: string; card?: SceneCard; before: DialogLine[]; after: Record<string, DialogLine[]>; choice?: ChoicePoint; playedAccum: DialogLine[]; mode: Mode; topic: string; topicRef?: TopicRef; plan?: TopicPlan; chosen?: string } | null>(null)
   // 演出中的用户插话队列:onLineEnd 安全缝处消费(反应回合后接回原剧本)
   const interjectionQueue = useRef<{ text: string; target?: Speaker }[]>([])
   const handoff = useRef(false) // 接回换场中:onStopped 跳过中止提交
@@ -176,9 +186,9 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
         }
         if (p && fullPath && fullPath.length > 0) {
           lastLines.current = fullPath // 续播衔接上下文升级为完整路径(选边集原先是前半段)
-          deps.onEpisodeEnd?.({ eid: p.eid, mode: p.mode, topic: p.topic })
+          deps.onEpisodeEnd?.({ eid: p.eid, mode: p.mode, topic: p.topic, plan: p.plan })
           void dialogue
-            .commitEpisode({ eid: p.eid, mode: p.mode, topic: p.topic, card: p.card, played: fullPath, natural: true })
+            .commitEpisode({ eid: p.eid, mode: p.mode, topic: p.topic, card: p.card, played: fullPath, natural: true, topicRef: p.topicRef })
             .then((report) => {
               if (report) deps.onEpisodeCommitted?.(report)
             })
@@ -186,9 +196,12 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
         pendingEpisode.current = null
         proactiveAct.current = null // 自然播完不算忽略
         setRuntimeMode({ type: 'idle' })
-        // 看完一集 = 弱正信号;自动重放是系统行为不计偏好,防"系统自播→自我强化"污染
-        const np = nowPlaying.current
-        if (np && np.source !== 'auto') bumpTopicWatched(np.topic)
+        // 看完一集 = 话题正信号(唯一写入口 TopicDirector.record;eid 无信号则自动 no-op,
+        // 自动重放/回放没有 started 信号,天然不记)。完播后后台视池量补货(AI 发现默认关)
+        if (p) {
+          void topicDirector.record({ type: 'completed', eid: p.eid })
+          void maybeRestockTopicCandidates()
+        }
         nowPlaying.current = null
         // 收底拍:响底台词与表情定格 2.6s 给观众笑的时间,然后全员放松回 idle
         deps.presenter.settle(2600)
@@ -200,7 +213,7 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
         // 回放/短聊天被打断时 pendingEpisode 为空,自然跳过
         const p = pendingEpisode.current
         if (p && p.playedAccum.length > 0) {
-          void dialogue.commitEpisode({ eid: p.eid, mode: p.mode, topic: p.topic, card: p.card, played: p.playedAccum, natural: false })
+          void dialogue.commitEpisode({ eid: p.eid, mode: p.mode, topic: p.topic, card: p.card, played: p.playedAccum, natural: false, topicRef: p.topicRef })
           lastLines.current = p.playedAccum
         }
         pendingEpisode.current = null
@@ -226,15 +239,14 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
     deps.presenter.reset()
   }
 
-  /** 播放指定的一集(自动重放与历史行点击共用):不调 LLM、不写历史 */
+  /** 播放指定的一集(自动重放与历史行点击共用):不调 LLM、不写历史。
+   *  回放是旧集重演,不进话题账(V2:回放信号退役,口味只看新集反馈) */
   function replay(ep: Episode, source: 'auto' | 'manual') {
     generateAbort.current?.abort() // 若有生成在途,直接作废
     player.current!.stop()
     stopSpeaking()
     lastReplayTs.current = ep.ts
     lastLines.current = ep.lines // 衔接后续手动生成
-    // 仅手动回放是口味正反馈;空闲自动重放是系统行为,计进去会让权重自我强化
-    if (source === 'manual') bumpTopicReplays(ep.topic)
     nowPlaying.current = { topic: ep.topic, lines: ep.lines, total: ep.lines.length, index: -1, source }
     deps.presenter.reset()
     beginPerforming()
@@ -459,10 +471,40 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
     })
   }, [])
 
-  /** 单次点播：优先消费预生成(秒开,使用后移入 history);
-   *  未命中则生成当前轮,开播后后台再静默预生成下一轮(共两轮)。
-   *  topicArg = 一次性话题(命令面板"来一段关于X的相声"),不落盘不锁主题 */
-  async function play(m: Mode, topicArg?: string) {
+  /** 缓存兼容令牌:话题域 revision/雷区/模式内容/最近指纹/剧情拍号共同决定旧缓存可否消费 */
+  async function buildPrefetchCheck(
+    cfg: Awaited<ReturnType<typeof getConfig>>,
+    mode: Mode,
+    manualTopic?: string,
+    intent?: TopicIntent,
+  ): Promise<PrefetchCheck> {
+    const state = await getTopicState()
+    const arcStages: Record<string, number> = {}
+    try {
+      const story = await getStory()
+      for (const a of story.arcs) {
+        if (a.status === 'active') arcStages[a.id] = a.stage
+      }
+    } catch {
+      // 故事读取失败:剧情缓存条目自然不兼容,不影响普通条目
+    }
+    return {
+      intent: intent ?? 'new',
+      ...(manualTopic ? { manualFingerprint: fingerprintOf(manualTopic) } : {}),
+      sessionRevision: state.revision,
+      banHash: banHashOf(cfg.userProfile.banTopics),
+      modeHash: modeHashOf(modeOf(mode)),
+      plannerVersion: PLANNER_VERSION,
+      recentFingerprints: state.recent.map((r) => r.fingerprint),
+      arcStages,
+      now: Date.now(),
+    }
+  }
+
+  /** 单次点播:先采纳兼容预生成缓存(秒开,CAS 成功才消费),未命中则
+   *  规划(plan 零副作用)→ 生成 → 采纳(adopt CAS)→ 开播 → 后台预生成下一轮。
+   *  arg = 一次性话题字符串(命令面板"来一段关于X的相声")或完整点播请求 */
+  async function play(m: Mode, arg?: string | PlayRequest) {
     // 主播模式不走剧本链路:开播 = 连弹幕源 + 事件驱动单句回复
     if (m === 'live') {
       deps.onLive()
@@ -481,86 +523,118 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
     stopSpeaking()
     deps.presenter.reset()
 
-    // 主题:一次性话题(参数) > 手动锁定 > 连续剧情 > 使用者兴趣 > 话题池随机。
-    // 先消费预生成再选新题，避免抽到一条剧情拍后却因缓存命中而白占用。
-    const fixedTopic = topicArg ?? deps.getTopicOverride()
-    const interests = deps.getInterests()
+    const req0: PlayRequest = typeof arg === 'string' ? { topic: arg } : (arg ?? {})
     bumpMode(m)
 
-    // 预生成命中:有主题时只取同主题条目,无主题时 FIFO 任意条目
-    const hit = await takePrefetch(m, fixedTopic ?? undefined)
-    if (hit) {
-      const hitScript = hit.script
-      if (!hit.topic.startsWith('连续剧情')) {
-        bumpTopicSeen(hit.topic) // 口味记账对齐实际播出的主题(命中缓冲时≠本次抽中的主题)
+    // ① 缓存优先:peek 兼容条目 → adopt(topicPlan) CAS → adopted 才删缓存开播;
+    //    stale 丢弃缓存(永久作废)走下方规划,绝不误播旧计划
+    const manualTopic = req0.topic
+    const check = await buildPrefetchCheck(cfg, m, manualTopic, req0.intent)
+    const entry = await peekCompatiblePrefetch(m, check)
+    if (entry) {
+      const adoptRes = await topicDirector.adopt(entry.topicPlan)
+      if (adoptRes.status === 'adopted') {
+        await dropPrefetchEntry(entry)
+        const hitScript = entry.script
+        const hitPlan = entry.topicPlan
+        const eid = newEpisodeId()
+        // 开播记账:started = 旧"seen"(剧情拍不入话题账;反馈唯一写入口)
+        if (hitPlan.lane !== 'story') void topicDirector.record({ type: 'started', eid, plan: hitPlan })
+        // 真正开播:采纳预生成时暂缓的上下文副作用(注入冷却补记/recap 消费)
+        dialogue.adoptDeferred(hitScript)
+        nowPlaying.current = { topic: hitPlan.card.title, lines: hitScript.before, total: hitScript.before.length, index: -1, source: 'gen' }
+        lastLines.current = hitScript.before
+        // 使用后即移出预取缓存;历史在完播/中止时按 eid 一次性提交(onDone/onStopped)
+        pendingEpisode.current = {
+          eid,
+          card: hitScript.card,
+          before: hitScript.before,
+          after: hitScript.after,
+          choice: hitScript.choice,
+          playedAccum: [],
+          mode: m,
+          topic: hitPlan.card.title,
+          plan: hitPlan,
+          topicRef: {
+            fingerprint: hitPlan.card.fingerprint,
+            category: hitPlan.card.category,
+            source: hitPlan.card.source,
+          },
+        }
+        beginPerforming()
+        playingLines.current = hitScript.before
+        player.current!.play(withFinalePause(hitScript.before), {
+          gap: modeOf(entry.mode).gap,
+          choice: hitScript.choice,
+          after: Object.fromEntries(
+            Object.entries(hitScript.after).map(([id, seg]) => [id, withFinalePause(seg)]),
+          ),
+        })
+        // 当前剧情拍在完播蒸馏前仍占用,补货时不能再次生成同一拍
+        void prefetchNext(m, hitScript.before, {
+          excludeArcIds: entry.arc ? [entry.arc.id] : [],
+        })
+        return
       }
-      // 真正开播:采纳预生成时暂缓的上下文副作用(注入冷却补记/recap 消费)
-      dialogue.adoptDeferred(hitScript)
-      nowPlaying.current = { topic: hit.topic, lines: hitScript.before, total: hitScript.before.length, index: -1, source: 'gen' }
-      lastLines.current = hitScript.before
-      // 使用后即移出预取缓存;历史在完播/中止时按 eid 一次性提交(onDone/onStopped)
-      pendingEpisode.current = {
-        eid: newEpisodeId(),
-        card: hitScript.card,
-        before: hitScript.before,
-        after: hitScript.after,
-        choice: hitScript.choice,
-        playedAccum: [],
-        mode: m,
-        topic: hit.topic,
-      }
-      beginPerforming()
-      playingLines.current = hitScript.before
-      player.current!.play(withFinalePause(hitScript.before), {
-        gap: modeOf(hit.mode).gap,
-        choice: hitScript.choice,
-        after: Object.fromEntries(
-          Object.entries(hitScript.after).map(([id, seg]) => [id, withFinalePause(seg)]),
-        ),
-      })
-      // 当前剧情拍在完播蒸馏前仍占用，补货时不能再次生成同一拍。
-      void prefetchNext(m, hitScript.before, fixedTopic ?? undefined, hit.arc ? [hit.arc.id] : [])
-      return
+      // stale:该条永久失效,丢弃(缓存至多消费一次:冲突允许浪费,不允许误播)
+      await dropPrefetchEntry(entry)
     }
 
-    // 约 30% 概率演出连续剧情的一拍；生成中与其他模式缓存里的剧情 ID 都视为占用。
-    const arcReservation = fixedTopic
-      ? null
-      : reserveArcBeat((await getStory()).arcs, new Set(await listPrefetchedArcIds()))
-    const arcBeat = arcReservation?.beat ?? null
-    const actualTopic = arcBeat
-      ? `连续剧情《${arcBeat.title}》:${arcBeat.hook}`
-      : fixedTopic ??
-        (interests.length > 0 && Math.random() < (modeOf(m).interestTopicChance ?? 0)
-          ? `使用者感兴趣的事:${interests[Math.floor(Math.random() * interests.length)]}`
-          : pickTopic(modeOf(m), {
-              ban: cfg.userProfile.banTopics,
-              weights: await getTopicWeights(),
-            }))
+    // ② 规划(零副作用):手动话题 > 会话推进 > 剧情拍 30% > 动态评分,全在 director 内
+    const topicRequest: TopicRequest = { mode: m }
+    if (req0.intent) topicRequest.intent = req0.intent
+    if (req0.distance) topicRequest.distance = req0.distance
+    if (req0.duration) topicRequest.duration = req0.duration
+    if (manualTopic) {
+      topicRequest.manualTopic = manualTopic
+      if (req0.strict) topicRequest.strict = true
+    }
+    const plan = await topicDirector.plan(topicRequest)
 
-    // 未命中：生成当前轮(等待期三人进入思考姿势)
+    // 未命中:生成当前轮(等待期三人进入思考姿势)
     deps.presenter.setPose('A', 'thinking')
     deps.presenter.setPose('B', 'thinking')
     deps.presenter.setPose('C', 'thinking')
     setRuntimeMode({ type: 'generating' })
     const ctrl = new AbortController()
     generateAbort.current = ctrl
-    const topic = actualTopic
     try {
       const { script, eid } = await dialogue.prepareEpisode({
         mode: m,
-        topic,
+        topicPlan: plan,
         recentLines: lastLines.current,
         signal: ctrl.signal,
-        topicFixed: fixedTopic != null,
-        arc: arcBeat ?? undefined,
       })
-      if (ctrl.signal.aborted) return
-      if (!arcBeat) bumpTopicSeen(topic) // 这轮真的播出了才记 seen;剧情线拍不入话题账
-      nowPlaying.current = { topic, lines: script.before, total: script.before.length, index: -1, source: 'gen' }
+      if (ctrl.signal.aborted) {
+        topicDirector.release(plan.planId) // 中止:剧本没播,不采纳不留幽灵话题
+        return
+      }
+      // 采纳在剧本通过校验之后、开播之前:CAS 推进会话/recent;stale = 并发已接管
+      const adoptRes = await topicDirector.adopt(plan)
+      if (adoptRes.status === 'stale') {
+        topicDirector.release(plan.planId) // 幂等(adopt 已收束)
+        return
+      }
+      if (plan.lane !== 'story') void topicDirector.record({ type: 'started', eid, plan })
+      nowPlaying.current = { topic: plan.card.title, lines: script.before, total: script.before.length, index: -1, source: 'gen' }
       lastLines.current = script.before
       // 单次落盘:不再生成时先记前半段;完播提交完整路径,中止提交已播前缀(onDone/onStopped)
-      pendingEpisode.current = { eid, card: script.card, before: script.before, after: script.after, choice: script.choice, playedAccum: [], mode: m, topic }
+      pendingEpisode.current = {
+        eid,
+        card: script.card,
+        before: script.before,
+        after: script.after,
+        choice: script.choice,
+        playedAccum: [],
+        mode: m,
+        topic: plan.card.title,
+        plan,
+        topicRef: {
+          fingerprint: plan.card.fingerprint,
+          category: plan.card.category,
+          source: plan.card.source,
+        },
+      }
       beginPerforming()
       playingLines.current = script.before
       player.current!.play(withFinalePause(script.before), {
@@ -570,13 +644,11 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
           Object.entries(script.after).map(([id, seg]) => [id, withFinalePause(seg)]),
         ),
       })
-      void prefetchNext(
-        m,
-        script.before,
-        fixedTopic ?? undefined,
-        arcBeat ? [arcBeat.id] : [],
-      ) // 请求生成两轮：当前轮 + 后台预生成
+      void prefetchNext(m, script.before, {
+        excludeArcIds: plan.story ? [plan.story.arcId] : [],
+      }) // 请求生成两轮：当前轮 + 后台预生成
     } catch (e) {
+      topicDirector.release(plan.planId) // 生成失败:释放故事预约,不采纳(无幽灵话题)
       if (ctrl.signal.aborted) return
       console.error('LLM 生成失败，回退硬编码脚本', e)
       lastLines.current = modeOf(m).script
@@ -592,21 +664,24 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
         playingLines.current = modeOf(m).script
         player.current!.play(modeOf(m).script, { gap: modeOf(m).gap })
       }, 1800)
-    } finally {
-      arcReservation?.release()
     }
   }
 
   /** 停止一切:外围清场(下播/道具)→ 记账(跳过/忽略)→ 中止生成 → 停播 → 停语音 → 复位 */
   function stop() {
     deps.teardown()
-    // 中途按停止 = 负反馈(演过 80% 以上视为看完,不罚);正在生成时无账可记
+    // 中途按停止 = 负反馈事件(唯一写入口 TopicDirector.record;≥80% 由其内部视为看完,不罚);
+    // 正在生成时无账可记
     const np = nowPlaying.current
-    if (np && np.total > 0 && np.index / np.total < 0.8) {
-      bumpTopicSkipped(np.topic)
+    const pe = pendingEpisode.current
+    if (np && pe && np.total > 0) {
+      const progress = np.index / np.total
+      void topicDirector.record({ type: 'skipped', eid: pe.eid, progress })
       // 没看完就走:台上最后说话的角色心情小幅变差(确定性小步,失败静默)
-      const lastLine = np.lines?.[Math.min(np.index, np.lines.length - 1)]
-      if (lastLine) void noteEpisodeAbandoned(lastLine.speaker)
+      if (progress < 0.8) {
+        const lastLine = np.lines?.[Math.min(np.index, np.lines.length - 1)]
+        if (lastLine) void noteEpisodeAbandoned(lastLine.speaker)
+      }
     }
     // 主动行为(重放/自发/久坐提醒)开播 15s 内就被掐 → 记一次忽略;连续 3 次该类冷却翻倍
     const act = proactiveAct.current
@@ -621,11 +696,6 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
     setChoice(null)
     window.clearTimeout(choiceTimer.current)
     deps.presenter.reset()
-  }
-
-  /** 手动锁定主题后按新主题重新预生成一单(旧缓冲保留,无主题时照常随机补) */
-  function rearmPrefetch(m: Mode, topic: string | null): void {
-    void prefetchNext(m, lastLines.current, topic ?? undefined)
   }
 
   return {
@@ -643,7 +713,6 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
     queueInterjection,
     isPlaying,
     recentLines,
-    rearmPrefetch,
   }
 }
 

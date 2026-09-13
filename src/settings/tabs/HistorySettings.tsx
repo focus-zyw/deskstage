@@ -1,7 +1,7 @@
 // 演出历史:回放(经 bridge 交回应用)、收藏、删除、赞/踩补评。列表挂载时拉取
 import { useEffect, useState } from 'react'
 import { listEpisodes, deleteEpisodes, toggleFavorite, type Episode } from '../../storage/historyStore'
-import { bumpTopicFavored } from '../../storage/memoryStore'
+import { topicDirector } from '../../topic/director'
 import { rateEpisode, removeRatings, getRatings, type Rating, type FeedbackTable } from '../../storage/feedbackStore'
 import { modeOf } from '../../performer/modes'
 import { useSettings } from '../useSettingsSession'
@@ -34,15 +34,17 @@ export function HistorySettings() {
 
   async function onToggleFav(ep: Episode) {
     const nowFav = await toggleFavorite(ep)
-    if (nowFav) bumpTopicFavored(ep.topic) // 收藏 = 口味正信号
+    // 收藏切换 = 话题事件(可逆;唯一写入口 TopicDirector.record)
+    if (nowFav && ep.eid) await topicDirector.record({ type: 'favorite-changed', eid: ep.eid, favored: true })
     await refreshEpisodes()
   }
 
-  /** 赞/踩补评(再点同键撤销);权重 ± 记账在 rateEpisode 内,改评自动回退旧信号 */
+  /** 赞/踩补评(再点同键撤销);话题口味由 TopicDirector.record 事件记账,改评自动覆盖 */
   async function onRate(ep: Episode, rating: Rating) {
     if (!ep.eid) return
     const next = ratings[ep.eid]?.rating === rating ? null : rating
     await rateEpisode(ep.eid, { ts: ep.ts, mode: ep.mode, topic: ep.topic }, next)
+    await topicDirector.record({ type: 'rating-changed', eid: ep.eid, value: next })
     setRatings(await getRatings())
   }
 

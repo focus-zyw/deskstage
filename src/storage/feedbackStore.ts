@@ -7,7 +7,6 @@ import { readTextFile, writeTextFile, exists, mkdir } from '@tauri-apps/plugin-f
 import { appDataDir, join } from '@tauri-apps/api/path'
 import { withFileLock } from './writeLock'
 import { inTauri } from './configStore'
-import { bumpTopicRated } from './memoryStore'
 
 export type Rating = 'up' | 'down'
 
@@ -131,9 +130,7 @@ export async function rateEpisode(
     return prev
   })
   if (prev === rating) return
-  // 等权重记账完成:调用方(HistorySettings 刷新/测试读权重)依赖完成语义
-  if (prev) await bumpTopicRated(meta.topic, prev, -1)
-  if (rating) await bumpTopicRated(meta.topic, rating, 1)
+  // 口味记账已收口到 TopicDirector.record(rating-changed 事件),此处只管 feedback.json
 }
 
 /** 删除集时联动清理评价(旧数据无 eid 的集本来就没有评价) */

@@ -1752,7 +1752,9 @@ body.settings-standalone .settings-window {
 /* 记忆/备忘列表行 */
 .settings-window .mem-fact {
   display: flex;
+  flex-wrap: wrap; /* 正文一行放不下时元数据落到第二行,不挤压正文 */
   align-items: center;
+  row-gap: 2px;
   gap: 6px;
   padding: 7px 9px;
   border: 1px solid var(--sw-border-soft);
@@ -1779,6 +1781,11 @@ body.settings-standalone .settings-window {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--sw-text-1);
+}
+.settings-window .mem-meta {
+  flex: 1 1 100%; /* 独占第二行:弱色小字的人话元信息,不与正文抢宽度 */
+  font-size: 11px;
+  color: var(--sw-text-3);
 }
 .settings-window .mem-btn {
   flex: none;
@@ -1990,6 +1997,65 @@ body.settings-standalone .settings-window {
 .topic-item.on {
   background: var(--accent-strong);
   color: var(--panel-text-strong, #fff);
+}
+
+/* 动态话题面板:当前话题卡 + 行动按钮 + 时长/距离/推荐行 + 严格围绕勾选 */
+.topic-current {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 7px 10px;
+  border-radius: var(--radius-input);
+  background: var(--panel-item-bg, rgba(255, 255, 255, 0.05));
+}
+.topic-current-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--panel-text-strong, #fff);
+}
+.topic-current-meta {
+  font-size: 11px;
+  color: var(--panel-text-faint, rgba(255, 255, 255, 0.45));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.topic-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.topic-actions .panel-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.topic-opts {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--panel-text-faint, rgba(255, 255, 255, 0.5));
+  flex-wrap: wrap;
+}
+.topic-opts-label {
+  flex: none;
+  width: 52px;
+}
+.topic-opt {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--panel-text, rgba(255, 255, 255, 0.85));
+  cursor: pointer;
+  white-space: nowrap;
+}
+.topic-strict {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--panel-text, rgba(255, 255, 255, 0.7));
+  cursor: pointer;
 }
 
 /* 音色克隆行:字段竖排在小面板里 */
@@ -2248,6 +2314,21 @@ body.settings-standalone .settings-window {
 }
 .rate-btn.star {
   font-size: 15px;
+}
+/* 话题轻操作文字按钮:胶囊形(区别于圆形图标钮),同热区纪律 */
+.rate-btn.text {
+  width: auto;
+  min-width: 44px;
+  padding: 0 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.rate-chip-sep {
+  flex: none;
+  width: 1px;
+  height: 16px;
+  background: rgba(255, 255, 255, 0.22);
 }
 .rate-chip.thanks {
   padding: 8px 16px;

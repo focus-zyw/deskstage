@@ -1,6 +1,8 @@
 // 预生成对话持久化:data/prefetch.json,与 history/ 完全独立。
-// 预生成的集按 模式+主题 区分暂存在此;真正播出时由调用方 appendHistory
+// 预生成的集按 话题计划(TopicPlan) 暂存在此;真正开播时由调用方 appendHistory
 // 写入历史并从这里移除("移入")。历史删除只碰 history/,永不波及本文件。
+// 消费语义(动态话题系统):peekCompatiblePrefetch 按缓存兼容令牌挑选 → 采纳成功后才
+// dropPrefetchEntry 删除——"缓存至多消费一次":CAS 冲突允许浪费缓存,绝不误播旧计划。
 // 所有操作静默容错——失败不影响演出主流程。
 import { readTextFile, writeTextFile, exists, mkdir } from '@tauri-apps/plugin-fs'
 import { appDataDir, join } from '@tauri-apps/api/path'
@@ -13,12 +15,17 @@ import {
 } from '../performer/dialogSchema'
 import { withFileLock } from './writeLock'
 import { inTauri } from './configStore'
+import { sanitizeTopicCard } from '../topic/store'
+import type { TopicPlan } from '../topic/types'
 
 export interface PrefetchEntry {
   mode: string
+  /** 话题快照(展示与 legacy 记账用):等于 topicPlan.card.title */
   topic: string
+  /** 产出该剧本的话题计划(缓存兼容令牌在其中) */
+  topicPlan: TopicPlan
   script: PerformanceScript
-  /** 连续剧情预生成项携带剧情 ID/拍数，供跨模式去重；普通话题没有此字段 */
+  /** 连续剧情预生成项携带剧情 ID/拍数,供跨模式去重;普通话题没有此字段 */
   arc?: { id: string; stage: number }
 }
 
@@ -50,12 +57,13 @@ function sanitizeEntries(v: unknown): PrefetchEntry[] {
   const out: PrefetchEntry[] = []
   for (const it of v) {
     const mode = typeof it?.mode === 'string' ? it.mode : ''
-    const topic = typeof it?.topic === 'string' ? it.topic : ''
+    // 旧格式(只有 topic 字符串、无 topicPlan)直接失效丢弃:缓存是临时数据,重新生成
+    if (!it?.topicPlan || typeof it.topicPlan !== 'object') continue
+    const topicPlan = it.topicPlan as TopicPlan
     const rawArc = it?.arc && typeof it.arc === 'object' ? it.arc : null
     const arcId = typeof rawArc?.id === 'string' ? rawArc.id.slice(0, 40) : ''
     const arcStage = Math.max(1, Number(rawArc?.stage) || 0)
     const arc = arcId && arcStage ? { id: arcId, stage: arcStage } : undefined
-    // 旧格式只有 lines[]，choice/after 已不可恢复；缓存是临时数据，直接失效并重新生成。
     const rawScript = it?.script && typeof it.script === 'object' ? it.script : null
     if (!rawScript) continue
     const before = sanitizeDialog(rawScript.before)
@@ -79,7 +87,10 @@ function sanitizeEntries(v: unknown): PrefetchEntry[] {
       after: completeChoice ? after : {},
       adoption: sanitizeAdoption(rawScript.adoption),
     }
-    if (mode && topic && before.length > 0) out.push({ mode, topic, script, arc })
+    const card = sanitizeTopicCard(topicPlan.card)
+    if (mode && card && before.length > 0) {
+      out.push({ mode, topic: card.title, topicPlan: { ...topicPlan, card }, script, arc })
+    }
   }
   return out
 }
@@ -109,10 +120,10 @@ async function writeAll(entries: PrefetchEntry[]): Promise<void> {
 }
 
 const entryKey = (e: PrefetchEntry) =>
-  e.arc ? `arc\n${e.arc.id}\n${e.arc.stage}` : `${e.mode}\n${e.topic}`
+  e.arc ? `arc\n${e.arc.id}\n${e.arc.stage}` : `plan\n${e.mode}\n${e.topicPlan.card.fingerprint}\n${e.topicPlan.intent}`
 
-/** 保存一条预生成:按 模式+主题 去重(同主题只留最新),超出上限丢最旧。
- *  读-改-写进锁,与 takePrefetch(同为读-改-写)互斥 */
+/** 保存一条预生成:按 剧情拍 / 模式+计划指纹 去重(同计划只留最新),超出上限丢最旧。
+ *  读-改-写进锁,与 peek/drop(同为读-改-写)互斥 */
 export async function savePrefetchEntry(entry: PrefetchEntry): Promise<void> {
   try {
     await withFileLock('prefetch', async () => {
@@ -126,22 +137,69 @@ export async function savePrefetchEntry(entry: PrefetchEntry): Promise<void> {
   }
 }
 
-/** 取出该模式的一条预生成并从文件移除;没有则 null。
- *  topic 传入时只取 mode+topic 都匹配的条目(手动主题);
- *  不传时维持 FIFO,任意条目都合法(随机主题) */
-export async function takePrefetch(mode: string, topic?: string): Promise<PrefetchEntry | null> {
+/** 缓存兼容令牌(动态话题系统构建;十条检查的数据面) */
+export interface PrefetchCheck {
+  /** 请求意图与计划意图必须一致(同 revision 下同世界状态,意图天然对齐) */
+  intent: string
+  /** 手动请求:计划卡指纹必须一致;自动请求:手动计划的卡不可消费 */
+  manualFingerprint?: string
+  sessionRevision: number
+  banHash: string
+  modeHash: string
+  plannerVersion: number
+  /** 最近话题指纹:计划卡若已在 recent(如另一窗刚播过)则不可消费 */
+  recentFingerprints: readonly string[]
+  /** arcId → 剧情线当前拍号:缓存拍与当前拍不一致(他窗推进/完结)则不可消费 */
+  arcStages?: Record<string, number>
+  now: number
+}
+
+function compatible(entry: PrefetchEntry, mode: string, check: PrefetchCheck): boolean {
+  const p = entry.topicPlan
+  if (entry.mode !== mode) return false
+  if (!p?.card || !p.compatibility) return false
+  if (p.expiresAt < check.now) return false
+  const c = p.compatibility
+  if (c.sessionRevision !== check.sessionRevision) return false
+  if (c.banHash !== check.banHash) return false
+  if (c.modeHash !== check.modeHash) return false
+  if (c.plannerVersion !== check.plannerVersion) return false
+  // 意图兼容:普通点播(intent new)可消费会话推进条目(intent continue)——同 revision
+  // 下两者解析为同一"下一集";换角度/换台/惊喜必须意图严格一致
+  if (p.intent !== check.intent && !(check.intent === 'new' && p.intent === 'continue')) return false
+  if (check.manualFingerprint !== undefined) {
+    if (p.card.fingerprint !== check.manualFingerprint) return false
+  } else if (p.card.source === 'manual') {
+    return false
+  }
+  if (check.recentFingerprints.includes(p.card.fingerprint)) return false
+  if (entry.arc) {
+    if (!check.arcStages || check.arcStages[entry.arc.id] !== entry.arc.stage) return false
+  }
+  return true
+}
+
+/** 查看该模式下第一条兼容预生成(不删除):采纳成功后才由 dropPrefetchEntry 消费 */
+export async function peekCompatiblePrefetch(mode: string, check: PrefetchCheck): Promise<PrefetchEntry | null> {
   try {
-    return await withFileLock('prefetch', async () => {
-      const entries = await readAll()
-      const idx = topic ? entries.findIndex((e) => e.mode === mode && e.topic === topic) : entries.findIndex((e) => e.mode === mode)
-      if (idx < 0) return null
-      const [hit] = entries.splice(idx, 1)
+    return await withFileLock('prefetch', async () =>
+      (await readAll()).find((e) => compatible(e, mode, check)) ?? null,
+    )
+  } catch (e) {
+    console.warn('预生成兼容查询失败(静默)', e)
+    return null
+  }
+}
+
+/** 删除一条预生成(采纳成功后消费;stale 丢弃也走这里)。找不到视为已清理 */
+export async function dropPrefetchEntry(entry: PrefetchEntry): Promise<void> {
+  try {
+    await withFileLock('prefetch', async () => {
+      const entries = (await readAll()).filter((e) => entryKey(e) !== entryKey(entry))
       await writeAll(entries)
-      return hit ?? null
     })
   } catch (e) {
-    console.warn('预生成取出失败(静默)', e)
-    return null
+    console.warn('预生成移除失败(静默)', e)
   }
 }
 

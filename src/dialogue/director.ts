@@ -8,21 +8,20 @@ import {
   generateDialog,
   adoptDeferredContext,
 } from '../engine/llmClient'
-import { appendHistory, newEpisodeId } from '../storage/historyStore'
+import { appendHistory, newEpisodeId, type TopicRef } from '../storage/historyStore'
 import { curateEpisode, type CurateReport } from '../engine/storyCurator'
 import type { DialogLine, PerformanceScript, SceneCard } from '../performer/dialogSchema'
 import type { Mode } from '../performer/modes'
+import type { TopicPlan } from '../topic/types'
 
 export { newEpisodeId }
 
 export interface EpisodeRequest {
   mode: Mode
-  topic: string
+  /** 话题计划:中心话题/本集切口/阶段/延伸边界/转场/约束强度(动态话题系统产出) */
+  topicPlan: TopicPlan
   recentLines: DialogLine[]
   signal?: AbortSignal
-  topicFixed?: boolean
-  /** 连续剧情节拍:本集演剧情线的一拍 */
-  arc?: { title: string; hook: string; stage: number }
   continueFromPrevious?: boolean
   /** 预生成:上下文只预览,副作用推迟到开播采纳(adoptDeferred) */
   deferContextAdoption?: boolean
@@ -38,6 +37,8 @@ export interface EpisodeCommit {
   eid: string
   mode: Mode
   topic?: string
+  /** 话题引用(分类/来源/指纹):新历史写入,老历史按标题生成兼容指纹 */
+  topicRef?: TopicRef
   card?: SceneCard
   /** 完整真实已播路径:自然完播=铺垫+分支(+反应回合);中止=已播前缀 */
   played: DialogLine[]
@@ -62,16 +63,14 @@ export function createDialogueDirector(deps: DialogueDirectorDeps = {}) {
 
   /** 准备一集:冻结调用时上下文并生成剧本,同时分配本集稳定 eid */
   async function prepareEpisode(req: EpisodeRequest): Promise<PreparedEpisode> {
-    const script = await generate(
-      req.mode,
-      req.topic,
-      req.recentLines,
-      req.signal,
-      req.topicFixed,
-      req.arc,
-      req.continueFromPrevious ?? false,
-      req.deferContextAdoption ? { deferContextAdoption: true } : undefined,
-    )
+    const script = await generate({
+      mode: req.mode,
+      topicPlan: req.topicPlan,
+      recentLines: req.recentLines,
+      signal: req.signal,
+      continueFromPrevious: req.continueFromPrevious ?? false,
+      deferContextAdoption: req.deferContextAdoption,
+    })
     return { script, eid: newId() }
   }
 
@@ -84,6 +83,7 @@ export function createDialogueDirector(deps: DialogueDirectorDeps = {}) {
   async function commitEpisode(commit: EpisodeCommit): Promise<CurateReport | null> {
     await append(commit.played, commit.mode, {
       topic: commit.topic,
+      topicRef: commit.topicRef,
       card: commit.card,
       eid: commit.eid,
     })

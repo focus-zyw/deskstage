@@ -4,6 +4,7 @@ import type { Relationship } from '../performer/modes/relationships'
 import { currentTimeSlot } from './timeAware'
 import { fullPersona, isPersonaCustomized, nameOf, pronounOf } from './persona'
 import type { UserProfile } from '../storage/configStore'
+import type { TopicPlan, TopicStage } from '../topic/types'
 
 const ACTIONS = 'idle, talk, happy, laugh, shy, sleepy, wave, thinking, angry, sad, surprise, shake, jump'
 
@@ -142,25 +143,57 @@ ${tease ? `${tease}\n` : ''}${literal}
 - 若模式风格指令与本节冲突,以模式风格为准:模式要的不是默认喜剧件时,${nameOf('C')}按模式风格参与`
 }
 
-/** 组装 prompt：人设 + 使用者画像 + 输出协议 + 模式指令 + 可选续聊上下文 + 话题。
+/** 话题计划渲染:TopicPlan 是编剧拿到的唯一话题指令(替代旧 topic/topicFixed 布尔组合)。
+ *  本集只处理 plan.episodeFocus 这个切口;约束强度按 policy 分三档 */
+export function renderTopicPlan(plan: TopicPlan): string {
+  const policyText =
+    plan.policy === 'strict'
+      ? '严格（必须全程围绕中心话题展开，不要偏题）'
+      : plan.policy === 'exploratory'
+        ? '探索（允许跨域跳到远处的话题，但必须用转场线索完成衔接，不许硬切）'
+        : '引导（可沿"允许自然延伸"的范围发挥，不跑出中心话题域）'
+  const stageText: Record<TopicStage, string> = {
+    open: '开场(建立具体场景与分歧)',
+    deepen: '深化(把分歧推深,不复述前集论点)',
+    escalate: '升级(推向极端/荒诞案例)',
+    payoff: '收尾(反转并回收前集伏笔)',
+    pivot: '新题(换新话题,按转场线索衔接)',
+  }
+  return `本段话题计划：
+- 中心话题：${plan.card.title}
+- 本集切口：${plan.episodeFocus}
+- 话题阶段：${stageText[plan.stage]}
+- 允许自然延伸：${plan.allowedBranches.length ? plan.allowedBranches.join('、') : '无'}
+- 最近已聊过、不得重复：${plan.avoid.length ? plan.avoid.join('、') : '无'}
+- 转场线索：${plan.card.bridge ?? '无'}
+- 约束强度：${policyText}`
+}
+
+/** 从话题计划推导连续剧情语境:剧情拍的计划带 story 进度,场景/话题让位于它 */
+function arcCtxFromPlan(plan: TopicPlan): string {
+  if (plan.lane !== 'story' || !plan.story) return ''
+  return `
+
+
+连续剧情（本集属于多集剧情线的一拍,话题铺垫让位于它）：《${plan.card.title}》已演出 ${plan.story.stage} 拍。本拍必须演出的进展：${plan.card.hook}。结尾不收死,留下引向下一拍的新悬念/新进展。`
+}
+
+/** 组装 prompt：人设 + 使用者画像 + 输出协议 + 模式指令 + 可选续聊上下文 + 话题计划。
  *  人设/协议是所有模式共享的"父类公共代码"，模式差异来自 DialogMode.prompt。
- *  topicFixed = 用户手动锁定的主题:措辞升级为硬约束,防跑题。
+ *  topicPlan = 话题计划(动态话题系统产出):中心话题/本集切口/阶段/延伸边界/转场/约束强度。
  *  relationship = 本集临时关系(可选):决定双方攻守姿态,写进场景卡
  *  interactionRecap = 互动账本摘录(可选):最近一次观众互动,可由一名角色开场轻提
  *  allowChoice/lastChoice = 观众抉择点开关与上集观众的选择(可选) */
 export function buildMessages(
   mode: Mode,
-  topic: string,
+  topicPlan: TopicPlan,
   recentLines: DialogLine[],
-  topicFixed?: boolean,
   userInterests?: string,
   userCtx?: UserContext,
   relationship?: Relationship,
   interactionRecap?: string,
   allowChoice?: boolean,
   lastChoice?: string,
-  /** 连续剧情节拍(可选):本集是多集剧情线的一拍,其他话题铺垫让位于它 */
-  arc?: { title: string; hook: string; stage: number },
   /** 环境感知语境(可选):电量/前台应用/连续工作时长,已在引擎侧做过冷却 */
   envNote?: string,
   /** 长期关系底色(可选):信任/摩擦的当前状态描述 */
@@ -227,13 +260,8 @@ ${moodNote.trim()}` : ''
 本集关系状态（必须遵守,写进场景卡的 relationship 字段）：${relationship.label}——${relationship.desc}。关系只改变本集攻守,${nameOf('A')}和${nameOf('B')}的基础性格与说话风格不变。`
     : ''
 
-  // 连续剧情节拍:本集是多集剧情线的一拍,话题让位,结尾留下一拍的钩子
-  const arcCtx = arc
-    ? `
-
-
-连续剧情（本集属于多集剧情线的一拍,话题铺垫让位于它）：《${arc.title}》已演出 ${arc.stage} 拍。本拍必须演出的进展：${arc.hook}。结尾不收死,留下引向下一拍的新悬念/新进展。`
-    : ''
+  // 连续剧情节拍:本集是多集剧情线的一拍,话题让位,结尾留下一拍的钩子(语境由话题计划推导)
+  const arcCtx = arcCtxFromPlan(topicPlan)
 
   const cRule = cRuleFor({
     isComedy,
@@ -282,9 +310,7 @@ ${moodNote.trim()}` : ''
         .join('\n')}\n\n`
     : ''
 
-  const topicText = topicFixed
-    ? `本段话题（必须全程围绕此话题展开，不要偏题）：${topic}`
-    : `本段话题：${topic}`
+  const topicText = renderTopicPlan(topicPlan)
 
   return [
     {

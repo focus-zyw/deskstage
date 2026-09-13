@@ -22,6 +22,34 @@ after(async () => {
 
 const line = (speaker, text) => ({ speaker, text, action: '' })
 const script = () => ({ before: [line('A', '1'), line('B', '2')], after: {} })
+// 最小合法 TopicPlan(新契约:prepareEpisode 只收话题计划)
+const fakePlan = (title) => ({
+  planId: `tp-${title}`,
+  createdAt: 0,
+  expiresAt: 9e15,
+  baseRevision: 0,
+  lane: 'manual',
+  mode: 'daily',
+  intent: 'new',
+  card: {
+    id: `tc-${title}`,
+    title,
+    hook: title,
+    category: 'life',
+    tags: [],
+    source: 'manual',
+    fingerprint: `fp-${title}`,
+    sensitivity: 'normal',
+    generatedAt: 0,
+  },
+  policy: 'strict',
+  stage: 'open',
+  episodeFocus: title,
+  allowedBranches: [],
+  avoid: [],
+  duration: 'once',
+  compatibility: { sessionRevision: 0, banHash: '', modeHash: '', plannerVersion: 1 },
+})
 
 test('prepareEpisode:请求参数透传给生成器,并分配稳定 eid', async () => {
   const calls = []
@@ -32,23 +60,20 @@ test('prepareEpisode:请求参数透传给生成器,并分配稳定 eid', async 
     },
     newId: () => 'e-1',
   })
+  const plan = fakePlan('泡面')
   const { script: s, eid } = await d.prepareEpisode({
     mode: 'daily',
-    topic: '泡面',
+    topicPlan: plan,
     recentLines: [],
-    topicFixed: true,
-    arc: { title: 't', hook: 'h', stage: 2 },
     deferContextAdoption: true,
   })
   assert.equal(eid, 'e-1')
   assert.equal(s.before.length, 2)
-  const args = calls[0]
-  assert.equal(args[0], 'daily')
-  assert.equal(args[1], '泡面')
-  assert.equal(args[4], true) // topicFixed
-  assert.deepEqual(args[5], { title: 't', hook: 'h', stage: 2 }) // arc
-  assert.equal(args[6], false) // continueFromPrevious
-  assert.deepEqual(args[7], { deferContextAdoption: true }) // 预生成零副作用
+  const req = calls[0][0]
+  assert.equal(req.mode, 'daily')
+  assert.equal(req.topicPlan, plan, '话题计划原样透传')
+  assert.equal(req.continueFromPrevious, false)
+  assert.equal(req.deferContextAdoption, true) // 预生成零副作用
 })
 
 test('commitEpisode 自然完播:历史全路径 + 蒸馏带 eid,报告透传', async () => {

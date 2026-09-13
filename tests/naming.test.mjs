@@ -28,6 +28,35 @@ before(async () => {
   ;({ getConfig, DEFAULT_CONFIG } = await server.ssrLoadModule('/src/storage/configStore.ts'))
 })
 
+// 最小合法 TopicPlan(新话题契约:buildMessages 只认话题计划,不再收 topic/topicFixed)
+const tp = (title) => ({
+  planId: `tp-${title}`,
+  createdAt: 0,
+  expiresAt: 9e15,
+  baseRevision: 0,
+  lane: 'dynamic',
+  mode: 'daily',
+  intent: 'new',
+  card: {
+    id: `tc-${title}`,
+    title,
+    hook: title,
+    category: 'life',
+    tags: [],
+    source: 'curated',
+    fingerprint: `fp-${title}`,
+    sensitivity: 'normal',
+    generatedAt: 0,
+  },
+  policy: 'guided',
+  stage: 'open',
+  episodeFocus: title,
+  allowedBranches: [],
+  avoid: [],
+  duration: 'once',
+  compatibility: { sessionRevision: 0, banHash: '', modeHash: '', plannerVersion: 1 },
+})
+
 after(async () => {
   // 还原默认名系,避免模块级状态影响同文件后续断言的可读性
   setCharacterNames('甲', '乙', '丙')
@@ -62,7 +91,7 @@ test('buildMessages:protocol/cRule 用真名,模式指令的甲乙丙由映射�
   setCharacterNames('小红', '阿强', '妞妞')
   setCharacterGenders('女', '男', '女')
   // 相声(喜剧):协议与 cRule 都用配置名
-  const xt = buildMessages('crosstalk', '周报到底写给谁看', [])
+  const xt = buildMessages('crosstalk', tp('周报到底写给谁看'), [])
     .map((m) => m.content)
     .join('\n')
   assert.match(xt, /goalA":"小红想要什么/)
@@ -72,7 +101,7 @@ test('buildMessages:protocol/cRule 用真名,模式指令的甲乙丙由映射�
   assert.match(xt, /甲是逗哏/)
   assert.match(xt, /"甲\/乙\/丙"就是 小红\/阿强\/妞妞/)
   // 日常(非喜剧):承担主要对话,参与骨架用配置名,无默认逗弄示例
-  const daily = buildMessages('daily', '周报到底写给谁看', [])
+  const daily = buildMessages('daily', tp('周报到底写给谁看'), [])
     .map((m) => m.content)
     .join('\n')
   assert.match(daily, /小红和阿强承担主要对话/)
@@ -82,7 +111,7 @@ test('buildMessages:protocol/cRule 用真名,模式指令的甲乙丙由映射�
 
 test('模式风格最高优先级块:冲突让位条款在场(自定义风格不被默认协议压制)', () => {
   setCharacterNames('甲', '乙', '丙')
-  const xt = buildMessages('crosstalk', '周报到底写给谁看', [])[0].content
+  const xt = buildMessages('crosstalk', tp('周报到底写给谁看'), [])[0].content
   assert.match(xt, /【模式风格（本集最高创作优先级）】/)
   assert.match(xt, /一律以模式风格为准/)
   assert.match(xt, /若模式风格指令与本节/, 'cRule 逗弄规则带让位条款')
@@ -90,7 +119,7 @@ test('模式风格最高优先级块:冲突让位条款在场(自定义风格不
   const idx = xt.indexOf('【模式风格（本集最高创作优先级）】')
   assert.ok(xt.slice(idx, idx + 200).includes('相声'), '块内紧跟模式指令本体')
   // 非喜剧:让位条款换成"主旋律"措辞,同样压制默认喜剧件
-  const daily = buildMessages('daily', '周报到底写给谁看', [])[0].content
+  const daily = buildMessages('daily', tp('周报到底写给谁看'), [])[0].content
   assert.match(daily, /模式风格是本集的主旋律/)
   assert.doesNotMatch(daily, /一律以模式风格为准/)
 })
@@ -138,7 +167,7 @@ async function seedNonComedyMode() {
 test('非喜剧分支:prompt 裁掉默认喜剧件,tone 注入为基调语境', async () => {
   setCharacterNames('甲', '乙', '丙')
   await seedNonComedyMode()
-  const sys = buildMessages('custom_praise', '今天做成的一件小事', [])[0].content
+  const sys = buildMessages('custom_praise', tp('今天做成的一件小事'), [])[0].content
   // 开场定位不再是喜剧编剧;基调值注入
   assert.doesNotMatch(sys, /资深喜剧编剧/)
   assert.match(sys, /本集基调:温暖治愈/)
@@ -152,7 +181,7 @@ test('非喜剧分支:prompt 裁掉默认喜剧件,tone 注入为基调语境', 
   assert.doesNotMatch(sys, /callback 必须回收/)
   // 互怼关系卡不注入:即使调用方传了 relationship,非喜剧分支也裁掉
   const rel = { label: '欢喜冤家', desc: '互怼但默契' }
-  const praiseWithRel = buildMessages('custom_praise', '今天做成的一件小事', [], false, undefined, undefined, rel)[0].content
+  const praiseWithRel = buildMessages('custom_praise', tp('今天做成的一件小事'), [], undefined, undefined, rel)[0].content
   assert.doesNotMatch(praiseWithRel, /关系只改变本集攻守/, '非喜剧模式连传参的关系卡也不注入')
   // cRule 只留骨架:无逗弄叙述,有按模式风格参与
   assert.doesNotMatch(sys, /把我咖啡变成冰的/)
@@ -168,7 +197,7 @@ test('内建回归锁:crosstalk 恒走喜剧分支,daily 固定走非喜剧闲�
   assert.equal(MODES.daily.tone, '日常闲聊', '日常是非喜剧闲聊,不再套用互怼喜剧骨架')
   assert.equal(MODES.live.tone, undefined, 'live 不锁死,弹幕回复按其 tone 声明走')
 
-  const xt = buildMessages('crosstalk', '周报到底写给谁看', [])[0].content
+  const xt = buildMessages('crosstalk', tp('周报到底写给谁看'), [])[0].content
   assert.match(xt, /资深喜剧编剧/, '相声开场仍是喜剧编剧')
   assert.match(xt, /这是喜剧/)
   assert.match(xt, /secret 在结尾反转揭晓/)
@@ -176,7 +205,7 @@ test('内建回归锁:crosstalk 恒走喜剧分支,daily 固定走非喜剧闲�
   assert.match(xt, /14~22 句/)
   assert.match(xt, /若模式风格指令与本节/, '保留逗弄让位条款')
 
-  const daily = buildMessages('daily', '周报到底写给谁看', [])[0].content
+  const daily = buildMessages('daily', tp('周报到底写给谁看'), [])[0].content
   assert.doesNotMatch(daily, /资深喜剧编剧/)
   assert.doesNotMatch(daily, /这是喜剧/)
   assert.doesNotMatch(daily, /把我咖啡变成冰的/)
@@ -187,8 +216,8 @@ test('内建回归锁:crosstalk 恒走喜剧分支,daily 固定走非喜剧闲�
 
   // 关系卡:喜剧分支传入 relationship 时注入;非喜剧连传参的关系卡也不注入
   const rel = { label: '欢喜冤家', desc: '互怼但默契' }
-  assert.match(buildMessages('crosstalk', '周报', [], false, undefined, undefined, rel)[0].content, /关系只改变本集攻守/)
-  assert.doesNotMatch(buildMessages('daily', '周报', [], false, undefined, undefined, rel)[0].content, /关系只改变本集攻守/)
+  assert.match(buildMessages('crosstalk', tp('周报'), [], undefined, undefined, rel)[0].content, /关系只改变本集攻守/)
+  assert.doesNotMatch(buildMessages('daily', tp('周报'), [], undefined, undefined, rel)[0].content, /关系只改变本集攻守/)
 })
 
 test('sanitizeCustomMode:tone 透传(非 comedy 保留,comedy/空归 undefined)', async () => {
