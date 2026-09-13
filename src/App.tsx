@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { listen, emitTo } from '@tauri-apps/api/event'
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow'
@@ -20,11 +20,12 @@ import { CaptureOverlay } from './CaptureOverlay'
 import { SPRITE_SETS, preloadSprites } from './stage/spriteSets'
 import { ResidentActor } from './stage/resident/ResidentActor'
 import { preloadResident, snackActionNow } from './stage/resident/residentManifest'
-import type { DialogLine, Speaker } from './performer/player'
+import type { Speaker } from './performer/player'
 import { useAllModes, type Mode } from './performer/modes'
-import { generateShortChat, generateTurnBatch, improvPokeLine, generateUserChatReply, extractFacts, memoReminderLine, generateDailyLinePack } from './engine/llmClient'
+import { generateShortChat, improvPokeLine, memoReminderLine, generateDailyLinePack } from './engine/llmClient'
 import { loadLinePacks, saveLinePack, takePackLine, dayKey, type LineKind } from './storage/linePackStore'
-import { pushTurn, chatWindow, type TurnWho } from './dialogue/turnWindow'
+import { createChatSession } from './session/ChatSession'
+import { pushTurn, type TurnWho } from './dialogue/turnWindow'
 import { appendChatTurns } from './storage/chatLogStore'
 import { react } from './engine/interactionRules'
 import { logInteraction, logInterrupt, resetDismissals } from './storage/interactionStore'
@@ -32,7 +33,7 @@ import { ensureMoodLoaded, notePoked } from './storage/moodStore'
 import { noteActivity } from './runtime/proactiveScheduler'
 import { speak } from './engine/tts'
 import { TOPIC_SEEDS } from './engine/topicSeeds'
-import { bumpPoke, getMemory, topFacts, mergeFacts, bumpTopicFavored } from './storage/memoryStore'
+import { bumpPoke, bumpTopicFavored } from './storage/memoryStore'
 import { getDueMemos, addMemo, updateMemo } from './storage/memoStore'
 import { findEpisodeByEid, toggleFavorite, type Episode } from './storage/historyStore'
 import { rateEpisode } from './storage/feedbackStore'
@@ -359,9 +360,7 @@ function App() {
   // 聊天通道:输入框开合/草稿/应答中;用户气泡(区别于角色气泡)
   const chatOpen = rt.overlays.includes('chat')
   const [chatDraft, setChatDraft] = useState('')
-  const [chatBusy, setChatBusy] = useState(false)
   const [userBubble, setUserBubble] = useState<string | null>(null)
-  const lastChatTarget = useRef<Speaker>('A')
   // @ 补全(QQ/微信式):输入 @ 唤起候选,随已输文本过滤;面板打开时接管回车/方向键/Esc
   const [mention, setMention] = useState<{ query: string } | null>(null)
   const [mentionIdx, setMentionIdx] = useState(0)
@@ -985,101 +984,64 @@ function App() {
     })
   }
 
-  /** 聊天记录双轨:短期窗口入列(内存,喂 LLM)与永久落盘(chatlog.jsonl,供「聊天记录」页回看)同源走这一处;落盘失败静默 */
+  // 落盘双轨(备忘提醒等主动插话链使用;用户聊天链的双轨在 session 内部)
   function recordTurn(who: TurnWho, text: string) {
     pushTurn({ who, text })
     void appendChatTurns([{ who, text }])
   }
 
-  /** 聊天通道核心(主聊天框与群聊页共用,显式文本入列)。返回受理结果供 UI 提示:
-   *  'empty' 空文本 / 'busy' 忙碌(应答在飞,或演出生成/抉择等待;演出进行中不算)/ 'accepted' 已受理。
-   *  解析 @角色 → TurnBatch(被@角色先答,其他人有料才补,共 1~3 句) → 顺序播报;
-   *  短期会话窗口入列(下轮聊天/演出插话共用);无 @ 时在甲乙间轮换(丙需显式点名);
-   *  演出进行中改为入队插话(句尾安全缝反应后接回剧情) */
+  // 聊天会话深模块:用户聊天链路的唯一入口(呈现/演出状态经回调交还,
+  // 行为矩阵见 tests/chatSession.test.mjs)。App 只留 DOM 侧适配器,
+  // LLM/落盘双轨/事实提取/busy 全在 session 内部
+  const presenterSayRef = useRef(presenterSay)
+  useEffect(() => {
+    presenterSayRef.current = presenterSay
+  })
+  const pulseOtherRef = useRef(pulseOther)
+  useEffect(() => {
+    pulseOtherRef.current = pulseOther
+  })
+  const charNamesRef = useRef(charNames)
+  useEffect(() => {
+    charNamesRef.current = charNames
+  })
+  const directorRef = useRef(director)
+  useEffect(() => {
+    directorRef.current = director
+  })
+  const noteUserActiveRef = useRef(noteUserActive)
+  useEffect(() => {
+    noteUserActiveRef.current = noteUserActive
+  })
+  const chatSession = useMemo(
+    () =>
+      createChatSession({
+        names: () => charNamesRef.current,
+        isPerforming: () => phaseRef.current === 'performing',
+        queueInterjection: (text, who) => directorRef.current.queueInterjection(text, who),
+        presentTurn: ({ speaker, text, holdMs }) => {
+          presenterSayRef.current(speaker, text, { action: 'talk', ms: holdMs, speaking: true })
+          pulseOtherRef.current(speaker)
+        },
+        presentUser: (text, who) => {
+          setUserBubble(text)
+          if (who) setTopActor(who)
+        },
+        clearUser: (text) => setUserBubble((u) => (u === text ? null : u)),
+        presentFallback: ({ speaker, text }) =>
+          presenterSayRef.current(speaker, text, { ms: 2200 }),
+        onUserActive: () => noteUserActiveRef.current(),
+      }),
+    // 两者均为 useState setter(稳定):session 终生只创建一次,其余回调经 ref 取最新
+    [setUserBubble, setTopActor],
+  )
+  // busy 消费走外部 store:演出/抉择等待不算忙(session 与导演状态分界)
+  const chatBusy = useSyncExternalStore(chatSession.subscribe, () => chatSession.getSnapshot().busy)
+
+  /** 聊天通道核心(主聊天框与群聊页共用)。返回受理结果供 UI 提示:
+   *  'empty' 空文本 / 'busy' 忙碌 / 'accepted' 已受理;其余见 session/ChatSession.ts */
   async function sendUserChatText(raw: string): Promise<'accepted' | 'busy' | 'empty'> {
-    const text = raw.trim()
-    if (!text) return 'empty'
-    if (chatBusy) return 'busy'
-    const esc = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    const targetOf: Record<string, Speaker> = {
-      [charNames.A]: 'A',
-      [charNames.B]: 'B',
-      [charNames.C]: 'C',
-      甲: 'A',
-      乙: 'B',
-      丙: 'C',
-      A: 'A',
-      B: 'B',
-      C: 'C',
-    }
-    const alt = new RegExp(
-      `^\\s*@?(${esc(charNames.A)}|${esc(charNames.B)}|${esc(charNames.C)}|甲|乙|丙|A|B|C)\\s*`,
-    )
-    const m = text.match(alt)
-    const who: Speaker = m
-      ? (targetOf[m[1]] ?? 'A')
-      : (lastChatTarget.current = lastChatTarget.current === 'A' ? 'B' : 'A')
-    if (phase === 'performing') {
-      // P4 演出中插话:入队,当前句结束的安全缝处反应并接回剧情
-      director.queueInterjection(text, who)
-      setUserBubble(text)
-      noteUserActive()
-      recordTurn('user', text)
-      window.setTimeout(() => {
-        setUserBubble((u) => (u === text ? null : u))
-      }, 6000)
-      return 'accepted'
-    }
-    if (phase !== 'idle') return 'busy'
-    setUserBubble(text)
-    setChatBusy(true)
-    setTopActor(who)
-    noteUserActive()
-    recordTurn('user', text)
-    // 应答全程不阻塞受理返回:调用方发完即清输入,应答靠消息落盘订阅实时冒出
-    void (async () => {
-      try {
-        // TurnBatch:默认只由被@角色回答;明确同时问三人才放开三句。生成失败回落单句应答(原行为)
-        const groupAsk = /你们|大家|各位|三位|每人|各自|都怎么|都说说/.test(text)
-        let batch: DialogLine[] | null = null
-        try {
-          batch = await generateTurnBatch({ userText: text, target: who, window: chatWindow(), groupAsk })
-        } catch {
-          batch = null // 静默回落
-        }
-        if (!batch || batch.length === 0) {
-          const reply = await generateUserChatReply(who, text)
-          batch = [{ speaker: who, text: reply, action: 'talk' }]
-        }
-        for (const l of batch) {
-          presenterSay(l.speaker, l.text, { action: 'talk', ms: 2200 + l.text.length * 160, speaking: true })
-          pulseOther(l.speaker)
-          speak(l.speaker, l.text, undefined, 'chat')
-          recordTurn(l.speaker, l.text)
-          await new Promise((r) => window.setTimeout(r, 2200 + l.text.length * 160))
-        }
-        window.setTimeout(() => {
-          setUserBubble((u) => (u === text ? null : u)) // 应答结束,你说的这句一并收走
-        }, 400)
-      } catch {
-        setUserBubble(null)
-        presenterSay(who, '（信号不好，没听清…再说一遍？）', { ms: 2200 })
-      } finally {
-        setChatBusy(false)
-      }
-      // 后台记忆提取:不阻塞、失败静默
-      void (async () => {
-        try {
-          const mem = await getMemory()
-          const known = topFacts(mem, 8)
-          const candidates = await extractFacts(text, known)
-          if (candidates.length > 0) await mergeFacts(candidates)
-        } catch {
-          // 静默
-        }
-      })()
-    })()
-    return 'accepted'
+    return chatSession.send(raw)
   }
 
   /** 主聊天框入口:草稿走核心通道,受理后清空草稿 */
