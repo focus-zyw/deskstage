@@ -5,7 +5,7 @@
 // 素材缺失静默降级:候选片段加载失败回退 idle,idle 也缺失则整身不渲染。
 // 生命感(随机待机链/点击回应/漫游)全部经 residentMachine 仲裁:
 // 说话与剧情动作永远优先,随机行为只在"真空闲"时发生,不会被高频请求顶掉正式演出。
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Ref } from 'react'
 import { Bubble } from '../Bubble'
 import { residentSrc } from './residentManifest'
@@ -20,6 +20,7 @@ import {
   pokeClipsForMood,
   resolveResidentClip,
   shouldFlip,
+  stableActionPicker,
 } from './residentMachine'
 import { currentTimeSlot } from '../../engine/timeAware'
 import { moodOf } from '../../storage/moodStore'
@@ -126,6 +127,9 @@ export function ResidentActor({
   // "真空闲":没有说话/拖拽/点击回应/剧情动作——随机链与漫游只在这种时候起步
   const idleLike =
     !speaking && !dragging && !pokeClip && (!action || action === 'idle')
+  // 情节内稳定抽取:同一动作的重渲染解析出同一片段(渲染体里逐帧重掷会因
+  // 拖 A/B 的高频重渲染让 C 在多候选变体间抽搐),动作切换时自动重掷保多样性
+  const stablePick = useMemo(() => stableActionPicker(), [])
   const idleRef = useRef(idleLike)
   const xRef = useRef(xPct)
   useEffect(() => {
@@ -134,15 +138,18 @@ export function ResidentActor({
     ambientRef.current = ambient
   })
 
-  const resolved = resolveResidentClip({
-    hidden,
-    dragging,
-    speaking,
-    scripted: action || null,
-    poke: pokeClip,
-    roaming,
-    ambient,
-  })
+  const resolved = resolveResidentClip(
+    {
+      hidden,
+      dragging,
+      speaking,
+      scripted: action || null,
+      poke: pokeClip,
+      roaming,
+      ambient,
+    },
+    stablePick,
+  )
   // scripted 命中判定(scripted 在 resolve 优先级中位于 poke/roaming/ambient 之前,
   // 此布尔成立即 target 由 scripted 提供)
   const scriptedActive = !hidden && !dragging && !speaking && !!action && action !== 'idle'
@@ -438,6 +445,8 @@ export function ResidentActor({
         // 硬切显示:新片段探到首个有效帧的瞬间整体切换——
         // 透明桌面上任何交叉淡化都会让角色经过半透明状态,视觉上就是"变透明一闪"
         const inHas = hasFrame(inVideo)
+        // 回退帧判定惰性:仅前台无有效帧时才检查旧片段
+        const outHas = !inHas && outVideo ? hasFrame(outVideo) : false
         ctx.clearRect(0, 0, W, H)
         ctx.save()
         if (st.flip) {
@@ -446,7 +455,7 @@ export function ResidentActor({
         }
         if (inHas && inVideo) {
           ctx.drawImage(inVideo, 0, 0, W, H)
-        } else if (outVideo && hasFrame(outVideo)) {
+        } else if (outVideo && outHas) {
           // 新片段未就绪(加载/seek 中):继续显示旧片段,无空窗
           ctx.drawImage(outVideo, 0, 0, W, H)
         }

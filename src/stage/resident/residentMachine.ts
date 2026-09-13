@@ -33,11 +33,16 @@ export interface ResidentIntents {
   ambient: ResidentClipId | null
 }
 
-/** 仲裁出当前应播片段;hidden 返回 null(整身不渲染) */
-export function resolveResidentClip(intents: ResidentIntents): ResidentPlayback | null {
+/** 仲裁出当前应播片段;hidden 返回 null(整身不渲染)。
+ *  pick 可注入(组件传情节内稳定抽取器):同一动作的重渲染必须解析出同一片段,
+ *  否则拖拽等高频重渲染会让多候选动作(laugh→happy/wave/cheer)逐帧重掷、画面抽搐 */
+export function resolveResidentClip(
+  intents: ResidentIntents,
+  pick: (action: string) => ResidentClipId = pickClip,
+): ResidentPlayback | null {
   if (intents.hidden) return null
   const decide = (action: string): ResidentPlayback => {
-    const clip = pickClip(action)
+    const clip = pick(action)
     return { clip, loop: isLoopingClip(clip) }
   }
   if (intents.dragging) return decide('drag')
@@ -47,6 +52,19 @@ export function resolveResidentClip(intents: ResidentIntents): ResidentPlayback 
   if (intents.roaming) return decide('walk')
   if (intents.ambient) return { clip: intents.ambient, loop: isLoopingClip(intents.ambient) }
   return decide('idle')
+}
+
+/** 情节内稳定抽取器:同一动作首次出现时掷一次,之后整个情节复用;
+ *  动作切换(含经 idle 离场后再入场)自动重掷——片段变体的多样性保留。
+ *  组件持有一份(ref/useMemo),渲染体内逐帧调用也不会改变结果 */
+export function stableActionPicker(rand: () => number = Math.random): (action: string) => ResidentClipId {
+  let current: { action: string; clip: ResidentClipId } | null = null
+  return (action: string) => {
+    if (!current || current.action !== action) {
+      current = { action, clip: pickClip(action, rand) }
+    }
+    return current.clip
+  }
 }
 
 // ---------- 生命感参数(组件按这些节奏驱动随机链/点击回应/漫游) ----------

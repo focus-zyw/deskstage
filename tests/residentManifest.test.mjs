@@ -13,6 +13,7 @@ let residentSrc
 let nativeFacing
 let resolveResidentClip
 let shouldFlip
+let stableActionPicker
 let snackActionNow
 let RARE_CLIPS
 
@@ -25,7 +26,7 @@ before(async () => {
   ;({ clipsForAction, pickClip, isLoopingClip, residentSrc, nativeFacing, snackActionNow, RARE_CLIPS } = await server.ssrLoadModule(
     '/src/stage/resident/residentManifest.ts',
   ))
-  ;({ resolveResidentClip, shouldFlip } = await server.ssrLoadModule('/src/stage/resident/residentMachine.ts'))
+  ;({ resolveResidentClip, shouldFlip, stableActionPicker } = await server.ssrLoadModule('/src/stage/resident/residentMachine.ts'))
 })
 
 after(async () => {
@@ -173,4 +174,30 @@ test('说话状态固定用循环片段;剧情反应按词表决定循环与否'
   assert.equal(resolveResidentClip(base).loop, true)
   const scripted = { ...base, speaking: false, scripted: 'happy' }
   assert.equal(resolveResidentClip(scripted).loop, false)
+})
+
+// 回归:拖 A/B 时 App 高频重渲染,曾让 C 的多候选动作(laugh→happy/wave/cheer)在
+// 渲染体里逐帧重掷,片段硬切 = C 抽搐。情节内稳定抽取器必须把同一动作钉死。
+test('情节内稳定抽取:同一动作反复解析结果恒定,且落在候选池内', () => {
+  const base = { hidden: false, dragging: false, speaking: false, scripted: null, poke: null, roaming: false, ambient: null }
+  let n = 0
+  const cycling = () => (n++ % 3) / 3 // 逐次变化:模拟旧实现"每次渲染重掷"
+  const pick = stableActionPicker(cycling)
+  const seen = new Set()
+  for (let i = 0; i < 50; i++) {
+    seen.add(resolveResidentClip({ ...base, scripted: 'laugh' }, pick).clip)
+  }
+  assert.equal(seen.size, 1, '同一动作情节内解析结果必须稳定')
+  assert.ok(['happy', 'wave', 'cheer'].includes([...seen][0]), '结果须落在动作候选池内')
+})
+
+test('情节内稳定抽取:动作切换后重新掷出(变体多样性保留)', () => {
+  const seq = [0, 0.5, 0.99]
+  let i = 0
+  const pick = stableActionPicker(() => seq[i++ % 3])
+  const first = pick('laugh') // rand=0 → laugh 池 ['happy','wave','cheer'] → 'happy'
+  const second = pick('happy') // 动作变了 → 重掷:rand=0.5 → happy 池 → 'wave'
+  assert.equal(first, 'happy')
+  assert.equal(second, 'wave')
+  assert.equal(pick('laugh'), 'cheer') // 切回 laugh → 再次重掷:rand=0.99 → 'cheer'
 })
