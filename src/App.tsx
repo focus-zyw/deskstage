@@ -7,7 +7,7 @@ import { CharacterSprite } from './stage/CharacterSprite'
 import { Bubble } from './stage/Bubble'
 import { startScreenshot, applyScreenshotHotkey } from './capture'
 import { applyAppHotkeys, setHotkeyHandler } from './hotkeys'
-import { setCharacterGenders, setCharacterNames, setPersonaOverride, nameOf, pronounOf } from './engine/persona'
+import { setCharacterGenders, setCharacterNames, setPersonaOverride, nameOf } from './engine/persona'
 import { startEnvPolling } from './engine/envAware'
 import {
   setCaptureMode,
@@ -19,21 +19,20 @@ import {
 import { CaptureOverlay } from './CaptureOverlay'
 import { SPRITE_SETS, preloadSprites } from './stage/spriteSets'
 import { ResidentActor } from './stage/resident/ResidentActor'
-import { preloadResident, snackActionNow } from './stage/resident/residentManifest'
+import { preloadResident } from './stage/resident/residentManifest'
 import type { Speaker } from './performer/player'
 import { useAllModes, type Mode } from './performer/modes'
-import { generateShortChat, improvPokeLine, memoReminderLine, generateDailyLinePack } from './engine/llmClient'
-import { loadLinePacks, saveLinePack, takePackLine, dayKey, type LineKind } from './storage/linePackStore'
+import { generateShortChat, memoReminderLine, generateDailyLinePack } from './engine/llmClient'
+import { loadLinePacks, saveLinePack, dayKey } from './storage/linePackStore'
 import { createChatSession } from './session/ChatSession'
 import { pushTurn, type TurnWho } from './dialogue/turnWindow'
 import { appendChatTurns } from './storage/chatLogStore'
-import { react } from './engine/interactionRules'
-import { logInteraction, logInterrupt, resetDismissals } from './storage/interactionStore'
-import { ensureMoodLoaded, notePoked } from './storage/moodStore'
+import { resetDismissals } from './storage/interactionStore'
+import { ensureMoodLoaded } from './storage/moodStore'
 import { noteActivity } from './runtime/proactiveScheduler'
 import { speak } from './engine/tts'
 import { TOPIC_SEEDS } from './engine/topicSeeds'
-import { bumpPoke, bumpTopicFavored } from './storage/memoryStore'
+import { bumpTopicFavored } from './storage/memoryStore'
 import { getDueMemos, addMemo, updateMemo } from './storage/memoStore'
 import { findEpisodeByEid, toggleFavorite, type Episode } from './storage/historyStore'
 import { rateEpisode } from './storage/feedbackStore'
@@ -88,75 +87,9 @@ import { initSettingsBridgeServer } from './settings/bridgeServer'
 import type { SettingsBridge } from './settings/useSettingsSession'
 import type { SettingsTab } from './settings/settingsCatalog'
 import type { Rarity } from './features/support/pool'
+import { createCharInteractions, packLine } from './interaction/charInteractions'
 import './App.css'
 
-// 点击反应台词池,按连戳强度分级(60s 滑动窗口计数)
-const POKE_LINES = [
-  '干嘛点我！',
-  '再点要收费了！',
-  '诶嘿嘿~',
-  '别闹，正聊着呢',
-  '摸鱼被发现了？！',
-  '（默默挪开半步）',
-  '手滑了？再来一次试试',
-  '点我有什么好玩的嘛',
-]
-const SHY_LINES = [
-  '（脸红）别、别一直戳啦…',
-  '呜…突然这样我会不好意思的',
-  '（往后缩了缩）你今天好奇怪',
-]
-const ANGRY_LINES = [
-  '够了！再戳我真的生气了！！',
-  '（拍开你的手）烦不烦！',
-  '再戳一下试试？信不信我下线！',
-]
-/** C(团宠)专属戳反应池:小管家的字面认真语气,与甲乙的互怼语气区分开。
- *  函数化:取用时填当前配置名(模块加载早于 setCharacterNames) */
-const cPokeLines = () => [
-  `（掏出小本本）此人今日戳${nameOf('C')}一次`,
-  `哼，${nameOf('C')}可生气了（并没有）`,
-  '（歪头）你的手…是在打招呼吗？',
-  `（认真脸）再戳${nameOf('C')}就要预约了`,
-  '（被戳得晃了晃）哇啊——',
-]
-const cShyLines = () => [
-  `（鼓脸）再、再戳${nameOf('C')}就把家务全做完了！`,
-  '（往后缩）你们两个都笑话我…',
-  '呜…（小声）其实也没有不开心…',
-]
-const cAngryLines = () => [
-  `（傲娇鼓脸）哼！${nameOf('C')}真的生气了！这次是真的！`,
-  `（叉腰）再戳就把${nameOf('A')}${nameOf('B')}的零食全部收缴！`,
-  '（转身背对，肩膀微微在抖）不理你们了！',
-]
-/** 摸头(长按)反应池:受用又不好意思,与"被戳"的惊讶语气区分 */
-const cHeadpatLines = () => [
-  '（眯眼）唔…再摸一下也不是不可以…',
-  '（咯咯笑）痒、痒啦！',
-  `（蹭了蹭）${nameOf('C')}的头很神奇吧`,
-  '（耳朵红了）谢、谢谢夸奖…？',
-  '（开心到冒泡）今天的头也是甲级！',
-]
-const cHeadpatShyLines = () => [
-  `（脸鼓成包子）再摸要摸秃啦！${nameOf('C')}头发量有限的！`,
-  '（捂头蹲下）呜哇，头要被摸平了啦…',
-  '（小声）其实…可以再摸一小会儿…',
-]
-/** 投喂反应池:按时段端出的点心各配一句通用感谢 */
-const cFeedLines = () => [
-  '（双手接过）开动啦！',
-  '（眼睛发亮）哇——是给我的？！',
-  `（小口小口）${nameOf('C')}会好好吃完的！`,
-  '（腮帮鼓鼓）唔唔…好吃…',
-  '（认真）点心和快乐一起收下了！',
-]
-/** 连喂吃撑:中性撒娇,不进账本不记仇 */
-const cStuffedLines = () => [
-  '（抱着圆滚滚的肚子）唔…吃不下了，剩下的存起来…',
-  '（瘫住）肚子已经变成方形了…让我缓缓…',
-  '（摆手）再喂就要滚着走路了！',
-]
 /** 右键点播台词池:台词包(每日一换)优先,这里只做兜底 */
 const cJokeLines = () => [
   '从前有座山，山里…啊忘了，总之很好笑！',
@@ -185,29 +118,6 @@ const cTrickLines = () => [
   '（搓手）这个绝活，一天只演一次！',
   '（叉腰）看好了，全程高能！',
 ]
-/** 台词包优先取句:今日包/存档里有就弹一句(不重复),没有回内置池 */
-function packLine(kind: LineKind, pool: string[]): string {
-  return takePackLine(kind) ?? pool[Math.floor(Math.random() * pool.length)]
-}
-/** 戳团宠时另一角色起哄的概率:三人舞台感(甲乙是"同伙") */
-const TEASE_HYPE_CHANCE = 0.3
-const teaseHypeLines = () => {
-  const t = pronounOf('C')
-  return [
-    `哈哈，${t}又把小本本掏出来了`,
-    `别逗了，${t}连生气都是圆的`,
-    '（憋笑）你继续，我就看看',
-    '哎哎，团宠被你戳蔫了，赔！',
-  ]
-}
-/** 连戳计数窗口与阈值 */
-const POKE_WINDOW_MS = 60_000
-const SHY_AT = 2 // 窗口内第 2~4 次戳 → 害羞
-const ANGRY_AT = 5 // 第 5 次起 → 生气,并不再响应直到窗口清空
-/** LLM 即兴吐槽:轻戳时的触发概率与冷却 */
-const IMPROV_CHANCE = 0.3
-const IMPROV_COOLDOWN_MS = 30_000
-
 /** 翻译完成后的外围互动(正文保持专业,角色只在外面搭腔);20s 冷却防刷屏 */
 const TRANSLATE_QUIPS = [
   { a: '翻好了,我这水平能去做同传。', b: '你只是负责点了个发送。' },
@@ -1218,134 +1128,44 @@ function App() {
     void getCurrentWindow().close()
   }
 
-  /** 连戳计数(60s 滑动窗口),决定反应强度 */
-  const pokeCounts = useRef<Record<Speaker, number[]>>({ A: [], B: [], C: [] })
-  const improvLastAt = useRef(0)
+  // 角色互动深模块:戳/摸头/投喂的唯一入口(连戳分级/即兴/吃撑冷却全在模块内,
+  // 行为矩阵见 tests/charInteractions.test.mjs)。App 只留舞台事实与呈现适配
+  const speakingRef = useRef(speaking)
+  useEffect(() => {
+    speakingRef.current = speaking
+  })
+  const showPokeRef = useRef(showPoke)
+  useEffect(() => {
+    showPokeRef.current = showPoke
+  })
+  const interactions = useMemo(
+    () =>
+      createCharInteractions({
+        present: (who, line, action, ms) => showPokeRef.current(who, line, action, ms),
+        focus: setTopActor,
+        onUserActive: () => noteUserActiveRef.current(),
+        isSpeaking: (who) => speakingRef.current === who,
+        isPerforming: () => phaseRef.current === 'performing',
+        isIdle: () => phaseRef.current === 'idle',
+        isDirectorBusy: () => directorRef.current.isPlaying(),
+        recentLines: () => directorRef.current.recentLines(),
+      }),
+    [setTopActor],
+  )
 
+  /** 戳任意角色:打断/连戳分级/即兴全在模块内 */
   function poke(who: Speaker) {
-    noteUserActive()
-    setTopActor(who)
-    bumpPoke() // 行为信号:互动频率
-
-    // 正在说话的角色被戳:忘词/指责打断(本地即时,优先于连戳分级)
-    if (phase === 'performing' && speaking === who) {
-      showPoke(who, react(who, 'interrupt'), 'surprise', 2200)
-      void logInterrupt(who)
-      void notePoked(who)
-      return
-    }
-    void logInteraction(who === 'A' ? 'pokeA' : who === 'B' ? 'pokeB' : 'pokeC')
-    void notePoked(who)
-
-    // 连戳分级:滑动窗口计数,生气期内不再响应
-    const now = Date.now()
-    const arr = (pokeCounts.current[who] = pokeCounts.current[who].filter(
-      (t) => now - t < POKE_WINDOW_MS,
-    ))
-    const count = arr.length + 1
-    // 丙走团宠专属池(台词包优先),甲乙保持互怼语气池
-    const pools = who === 'C'
-      ? { poke: [packLine('poke', cPokeLines())], shy: cShyLines(), angry: cAngryLines() }
-      : { poke: POKE_LINES, shy: SHY_LINES, angry: ANGRY_LINES }
-    if (count >= ANGRY_AT) {
-      arr.push(now)
-      showPoke(who, pools.angry[Math.floor(Math.random() * pools.angry.length)], 'angry', 2000)
-      scheduleHype(who)
-      return
-    }
-    arr.push(now)
-    const shy = count >= SHY_AT
-    const fallback = shy
-      ? pools.shy[Math.floor(Math.random() * pools.shy.length)]
-      : pools.poke[Math.floor(Math.random() * pools.poke.length)]
-    const fallbackAction = shy ? 'shy' : Math.random() < 0.3 ? 'laugh' : 'talk'
-
-    // 轻戳小概率走 LLM 即兴(冷却内/演出生成中不触发);失败静默用固定台词。
-    // C 不参与即兴:她的台词由每日台词包+存档+预置池闭环供给,来源可预期
-    if (
-      who !== 'C' &&
-      !shy &&
-      phase === 'idle' &&
-      Math.random() < IMPROV_CHANCE &&
-      now - improvLastAt.current >= IMPROV_COOLDOWN_MS
-    ) {
-      improvLastAt.current = now
-      improvPokeLine(who, director.recentLines())
-        .then((line) => {
-          // 返回时已超窗或开始正式演出 → 丢弃,防止顶掉台词气泡
-          if (Date.now() - now >= 4500) return
-          if (phaseRef.current !== 'idle' || director.isPlaying()) return
-          showPoke(who, line, 'talk', 2200)
-        })
-        .catch(() => {
-          if (phaseRef.current !== 'idle' || director.isPlaying()) return
-          showPoke(who, fallback, fallbackAction)
-        })
-      // 先给一个占位反应,LLM 返回后替换
-      showPoke(who, '（被戳得一激灵）', 'surprise', 1200)
-      scheduleHype(who)
-      return
-    }
-    showPoke(who, fallback, fallbackAction)
-    scheduleHype(who)
+    interactions.poke(who)
   }
 
-  /** 戳团宠时另一角色延迟起哄:甲乙是"同伙",三人舞台感。
-   *  只在空闲时插话,触发时再次校验阶段,不顶掉演出台词 */
-  function scheduleHype(who: Speaker) {
-    if (who !== 'C' || Math.random() >= TEASE_HYPE_CHANCE) return
-    const other: Speaker = Math.random() < 0.5 ? 'A' : 'B'
-    window.setTimeout(() => {
-      if (phaseRef.current !== 'idle' || director.isPlaying()) return
-      showPoke(other, teaseHypeLines()[Math.floor(Math.random() * teaseHypeLines().length)], 'laugh', 2000)
-    }, 1100)
-  }
-
-  // ---------- 角色C 互动:摸头长按 / 右键点播 / 投喂 ----------
-  // 都是轻量即时反应(本地动画+台词),不进 interactionStore 账本(与"拖拽不是冒犯"
-  // 同一原则);台词包(dailyLinePack)优先,内置池兜底。
-
-  /** 摸头连摸窗口(60s):第 3 次起害羞 */
-  const HEADPAT_SHY_AT = 3
-  const headpatTimes = useRef<number[]>([])
+  /** 摸头长按(仅团宠):连摸害羞分级在模块内 */
   function headpatC() {
-    noteUserActive()
-    setTopActor('C')
-    bumpPoke()
-    const now = Date.now()
-    const arr = headpatTimes.current = headpatTimes.current.filter((t) => now - t < POKE_WINDOW_MS)
-    arr.push(now)
-    const shy = arr.length >= HEADPAT_SHY_AT
-    const line = shy
-      ? cHeadpatShyLines()[Math.floor(Math.random() * cHeadpatShyLines().length)]
-      : packLine('headpat', cHeadpatLines())
-    showPoke('C', line, 'headpat', 2200)
+    interactions.headpatC()
   }
 
-  /** 投喂:5 分钟窗口内喂 3 次即吃撑,冷却 60s(冷却期内再点仍是撑) */
-  const FEED_WINDOW_MS = 5 * 60_000
-  const FEED_FULL_AT = 3
-  const FEED_FULL_COOLDOWN_MS = 60_000
-  const feedTimes = useRef<number[]>([])
-  const feedFullUntil = useRef(0)
+  /** 投喂(仅团宠):吃撑窗口与冷却在模块内 */
   function feedC() {
-    noteUserActive()
-    setTopActor('C')
-    bumpPoke()
-    const now = Date.now()
-    if (now < feedFullUntil.current) {
-      showPoke('C', cStuffedLines()[Math.floor(Math.random() * cStuffedLines().length)], 'stuffed', 2200)
-      return
-    }
-    const arr = feedTimes.current = feedTimes.current.filter((t) => now - t < FEED_WINDOW_MS)
-    arr.push(now)
-    if (arr.length >= FEED_FULL_AT) {
-      feedFullUntil.current = now + FEED_FULL_COOLDOWN_MS
-      showPoke('C', cStuffedLines()[Math.floor(Math.random() * cStuffedLines().length)], 'stuffed', 2400)
-      return
-    }
-    // 按当下时段/季节端点心:早上早餐、午间午餐、夏天冷饮、冬天火锅(与待机时段池同口味)
-    showPoke('C', packLine('feed', cFeedLines()), snackActionNow(), 2600)
+    interactions.feedC()
   }
 
   // 空闲 3 分钟无互动 → 角色打瞌睡(sleepy);任何互动/演出/面板恢复
