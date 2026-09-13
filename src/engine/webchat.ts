@@ -117,11 +117,12 @@ export async function webchatLogin(site: WebchatSite): Promise<void> {
   await invoke('webchat_login', { site })
 }
 
-/** 逐级探测目标站点可否发消息,detail 说明断点位置(未就绪时展示给用户/排查用) */
-export async function webchatProbe(): Promise<{ ready: boolean; detail: string }> {
+/** 逐级探测目标站点可否发消息,detail 说明断点位置(未就绪时展示给用户/排查用)。
+ *  site 可指定(AI 剧场按甲乙站点分别探测);缺省 = 当前配置站点 */
+export async function webchatProbe(site?: WebchatSite): Promise<{ ready: boolean; detail: string }> {
   if (!inTauri) return { ready: false, detail: '非桌面端' }
   const cfg = await getConfig()
-  return invoke('webchat_probe', { site: cfg.webchatSite })
+  return invoke('webchat_probe', { site: site ?? cfg.webchatSite })
 }
 
 /** 手动恢复主覆盖层(角色回屏) */

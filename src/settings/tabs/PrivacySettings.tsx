@@ -2,11 +2,45 @@
 // 截屏快捷键的设置已挪到「快捷键」分页统一管理;本页只留捕获排除开关。
 // 网页版生成的窗口/状态轮询是本页私有的临时会话,挂载期间存活、切走即止。
 import { useEffect, useRef, useState } from 'react'
-import { WEBCHAT_SITES, webchatLogin, webchatProbe, webchatRestoreMain } from '../../engine/webchat'
+import { WEBCHAT_SITES, webchatLogin, webchatProbe, webchatRestoreMain, type WebchatSite } from '../../engine/webchat'
 import type { AppConfig } from '../../storage/configStore'
 import { toolList } from '../../tools/registry'
 import { useSettings } from '../useSettingsSession'
 import { SettingsCard, SetField, SetLine, SetSwitch } from '../SettingsPrimitives'
+
+/** 站点登录行(AI 剧场用):甲乙各自登录/探测,状态本组件私有 */
+function SiteLogin({ label, site }: { label: string; site: WebchatSite }) {
+  const [status, setStatus] = useState('')
+  return (
+    <SetLine title={label} hint="打开可见 Edge 窗口登录一次,登录态长期有效">
+      <div className="shot-key-row">
+        <button
+          className="panel-btn"
+          onClick={() => {
+            setStatus('正在打开 Edge 窗口…')
+            void webchatLogin(site)
+              .then(() => setStatus('窗口已打开,登录成功后角色自动恢复'))
+              .catch((e) => setStatus(`打开失败:${String(e)}`))
+          }}
+        >
+          打开登录窗口
+        </button>
+        <button
+          className="panel-btn"
+          onClick={() => {
+            setStatus('检查中…')
+            void webchatProbe(site)
+              .then((p) => setStatus(p.ready ? '已就绪 ✓' : `未就绪:${p.detail}`))
+              .catch((e) => setStatus(`检查失败:${String(e)}`))
+          }}
+        >
+          查状态
+        </button>
+      </div>
+      {status && <div className="set-note">{status}</div>}
+    </SetLine>
+  )
+}
 
 export function PrivacySettings() {
   const { form, setForm, saveField, flashCard } = useSettings()
@@ -135,6 +169,63 @@ export function PrivacySettings() {
             <div className="set-note">
               生成用系统 Edge 的独立窗口(独立 profile,不影响日常浏览):登录一次长期有效;生成时会出现
               Edge 标签页,可最小化,完成后自动关闭。
+            </div>
+          </>
+        )}
+      </SettingsCard>
+      <SettingsCard card="AI剧场" flash={flashCard} title="AI剧场" desc="实验">
+        <SetLine title="启用 AI 剧场模式" hint="多个网页 AI 各演一个角色,逐轮即兴接话;实验功能,默认关">
+          <SetSwitch
+            checked={form.aiTheater.enabled}
+            label="启用 AI 剧场模式"
+            onChange={(v) => {
+              const next = { ...form.aiTheater, enabled: v }
+              setForm({ ...form, aiTheater: next })
+              saveField({ aiTheater: next }, true)
+            }}
+          />
+        </SetLine>
+        {form.aiTheater.enabled && (
+          <>
+            <SetField label="甲的站点" htmlFor="cfg-theater-a">
+              <select
+                id="cfg-theater-a"
+                value={form.aiTheater.actorA}
+                onChange={(e) => {
+                  const next = { ...form.aiTheater, actorA: e.target.value as AppConfig['aiTheater']['actorA'] }
+                  setForm({ ...form, aiTheater: next })
+                  saveField({ aiTheater: next }, true)
+                }}
+              >
+                {WEBCHAT_SITES.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.label}
+                  </option>
+                ))}
+              </select>
+            </SetField>
+            <SiteLogin label="甲登录" site={form.aiTheater.actorA} />
+            <SetField label="乙的站点" htmlFor="cfg-theater-b">
+              <select
+                id="cfg-theater-b"
+                value={form.aiTheater.actorB}
+                onChange={(e) => {
+                  const next = { ...form.aiTheater, actorB: e.target.value as AppConfig['aiTheater']['actorB'] }
+                  setForm({ ...form, aiTheater: next })
+                  saveField({ aiTheater: next }, true)
+                }}
+              >
+                {WEBCHAT_SITES.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.label}
+                  </option>
+                ))}
+              </select>
+            </SetField>
+            <SiteLogin label="乙登录" site={form.aiTheater.actorB} />
+            <div className="set-note">
+              两个角色各绑一个网页会话,甲乙可同站(会话独立),建议选不同模型对比效果;演出时后台会开两个
+              Edge 标签页,可最小化。两个站点都需要先登录一次。
             </div>
           </>
         )}

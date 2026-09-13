@@ -97,6 +97,8 @@ test('中途中止:onStopped 同步收前缀,onDone 不触发,iterator 被关闭
 test('首句之前抛错:onSourceError(played 为空),onDone 不触发', async () => {
   const events = []
   const player = makePlayer(events)
+  // 生成器形状是流式依赖的契约;首句产出前即抛错,故无 yield
+  // oxlint-disable-next-line require-yield
   const boom = async function* () {
     throw new Error('首句失败')
   }

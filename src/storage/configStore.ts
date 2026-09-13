@@ -241,6 +241,17 @@ export interface AppConfig {
   /** 角色工具系统:按工具开关与 external 工具的"记住允许"。
    *  键 = 工具注册表 id(src/tools/registry.ts);开关缺省键 = 各工具 defaultEnabled */
   tools: ToolPrefsConfig
+  /** AI 剧场(多网页会话即兴):实验开关默认关;甲乙各绑一个网页模型站点
+   *  (同站合法——同站点两个会话本就独立,设置页仅提示建议不同模型) */
+  aiTheater: AiTheaterConfig
+}
+
+/** AI 剧场配置 */
+export interface AiTheaterConfig {
+  /** 实验开关:默认关 */
+  enabled: boolean
+  actorA: 'deepseek' | 'doubao'
+  actorB: 'deepseek' | 'doubao'
 }
 
 /** 翻译面板配置 */
@@ -366,6 +377,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   memoryDisplay: 'off',
   wizardDone: false,
   tools: { switches: {}, autoApproved: {} },
+  aiTheater: { enabled: false, actorA: 'deepseek', actorB: 'doubao' },
 }
 
 /** 角色工具系统偏好 */
@@ -394,6 +406,19 @@ function sanitizeTopicPrefs(v: unknown): TopicPrefsConfig {
       o.duration === 'three-episodes' || o.duration === 'until-cleared' ? o.duration : 'once',
     distance: o.distance === 'near' || o.distance === 'far' ? o.distance : 'medium',
     aiDiscover: o.aiDiscover === true,
+  }
+}
+
+/** 清洗 AI 剧场配置:站点只认白名单值;同站合法(会话本就独立) */
+function sanitizeAiTheater(v: unknown): AiTheaterConfig {
+  const d = DEFAULT_CONFIG.aiTheater
+  const o = (v ?? {}) as Record<string, unknown>
+  const site = (x: unknown, dft: 'deepseek' | 'doubao'): 'deepseek' | 'doubao' =>
+    x === 'deepseek' || x === 'doubao' ? x : dft
+  return {
+    enabled: o.enabled === true,
+    actorA: site(o.actorA, d.actorA),
+    actorB: site(o.actorB, d.actorB),
   }
 }
 
@@ -868,6 +893,7 @@ const FIELD_SANITIZERS: { [K in keyof AppConfig]: (v: unknown, all: Record<strin
   launchOnBoot: (v) => v === true,
   wizardDone: (v) => v === true,
   tools: sanitizeToolPrefs,
+  aiTheater: sanitizeAiTheater,
   bubbleStyle: sanitizeBubbleStyle,
   memoryDisplay: (v) => (v === 'subtle' || v === 'debug' ? v : 'off'),
 }
