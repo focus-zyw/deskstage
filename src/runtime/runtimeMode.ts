@@ -22,6 +22,7 @@ export type OverlayId =
   | 'tools'
   | 'translation'
   | 'mode-menu' // Dock 的模式选择下拉(轻交互,无输入框,不激活窗口)
+  | 'c-menu' // 角色C右键点播菜单(同 mode-menu:轻交互,原生钩子派发点击)
 
 interface RuntimeState {
   mode: RuntimeMode

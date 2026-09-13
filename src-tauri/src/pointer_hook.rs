@@ -17,6 +17,8 @@ struct NativePointerEvent {
     x: i32,
     y: i32,
     delta_y: i32,
+    /// 0 = 左键,2 = 右键(DOM MouseEvent.button 语义);滚轮事件恒为 0
+    button: u8,
 }
 
 #[cfg(windows)]
@@ -28,13 +30,16 @@ mod platform {
     use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
     use windows::Win32::UI::WindowsAndMessaging::{
         CallNextHookEx, GetMessageW, SetWindowsHookExW, UnhookWindowsHookEx, HC_ACTION, MSG,
-        MSLLHOOKSTRUCT, WH_MOUSE_LL, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEWHEEL,
+        MSLLHOOKSTRUCT, WH_MOUSE_LL, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEWHEEL, WM_RBUTTONDOWN,
+        WM_RBUTTONUP,
     };
 
     #[derive(Default)]
     struct HookState {
         regions: Vec<NativePointerRegion>,
         captured_id: Option<String>,
+        /// 右键捕获独立于左键:左键拖拽进行中右键仍可能落下,互不干扰
+        right_captured_id: Option<String>,
         sender: Option<mpsc::Sender<NativePointerEvent>>,
     }
 
@@ -70,6 +75,7 @@ mod platform {
                                     x: info.pt.x,
                                     y: info.pt.y,
                                     delta_y: 0,
+                                    button: 0,
                                 }
                             }),
                         WM_LBUTTONUP => hook.captured_id.take().map(|id| NativePointerEvent {
@@ -78,7 +84,32 @@ mod platform {
                             x: info.pt.x,
                             y: info.pt.y,
                             delta_y: 0,
+                            button: 0,
                         }),
+                        // 右键:区域内按下即吞掉(不给底层应用弹菜单的机会),前端合成 contextmenu
+                        WM_RBUTTONDOWN => containing_region(&hook.regions, info.pt.x, info.pt.y)
+                            .map(|id| {
+                                hook.right_captured_id = Some(id.clone());
+                                NativePointerEvent {
+                                    kind: "down",
+                                    id,
+                                    x: info.pt.x,
+                                    y: info.pt.y,
+                                    delta_y: 0,
+                                    button: 2,
+                                }
+                            }),
+                        WM_RBUTTONUP => hook
+                            .right_captured_id
+                            .take()
+                            .map(|id| NativePointerEvent {
+                                kind: "up",
+                                id,
+                                x: info.pt.x,
+                                y: info.pt.y,
+                                delta_y: 0,
+                                button: 2,
+                            }),
                         WM_MOUSEWHEEL => containing_region(&hook.regions, info.pt.x, info.pt.y)
                             .map(|id| {
                                 // Win32 向上滚为正，DOM WheelEvent 向上滚的 deltaY 为负。
@@ -89,6 +120,7 @@ mod platform {
                                     x: info.pt.x,
                                     y: info.pt.y,
                                     delta_y: -wheel_delta,
+                                    button: 0,
                                 }
                             }),
                         _ => None,

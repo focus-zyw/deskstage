@@ -389,6 +389,94 @@ export async function improvPokeLine(
   }
 }
 
+// ---------- 每日互动台词包 ----------
+// 一天一次 LLM 调用拿一整套角色C的互动小台词,交互时零延迟零消耗。
+// 解析与调用分离:parseLinePackJson 是纯函数,单测直测容错。
+
+/** 台词包类目 → 要求句数(提示词与校验共用一套期望) */
+const LINE_PACK_SPEC: { kind: string; count: number; brief: string }[] = [
+  { kind: 'poke', count: 6, brief: '被观众轻轻戳一下的即时反应' },
+  { kind: 'headpat', count: 6, brief: '被摸头/挠痒时的反应,害羞又受用' },
+  { kind: 'feed', count: 8, brief: '被投喂点心时的话,可以提到具体点心(早餐/午餐/冰淇淋/西瓜/火锅等)' },
+  { kind: 'joke', count: 5, brief: '讲给观众听的小笑话或冷笑话,一句话讲完' },
+  { kind: 'nap', count: 3, brief: '被点播睡午觉时说的话' },
+  { kind: 'work', count: 3, brief: '被点播干点活时说的话(管家式认真)' },
+  { kind: 'dance', count: 3, brief: '被点播跳个舞时说的话' },
+  { kind: 'trick', count: 5, brief: '被点播来个绝活时说的话(变魔术/杂技/养鲸鱼这类奇技)' },
+]
+
+/**
+ * 容错解析台词包 JSON:容忍 ```json 围栏与前后杂文本;
+ * 每类只收短句(≤30字),缺类目/空类目直接缺席,调用方逐类兜底。
+ * 返回 null 表示整包不可用。
+ */
+export function parseLinePackJson(raw: string): Partial<Record<string, string[]>> | null {
+  const text = raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '')
+  // 模型偶尔在 JSON 外套话:取首个 { 到配对大括号的窗口
+  const start = text.indexOf('{')
+  if (start < 0) return null
+  let depth = 0
+  let end = -1
+  for (let i = start; i < text.length; i++) {
+    if (text[i] === '{') depth++
+    else if (text[i] === '}') {
+      depth--
+      if (depth === 0) {
+        end = i
+        break
+      }
+    }
+  }
+  if (end < 0) return null
+  let obj: unknown
+  try {
+    obj = JSON.parse(text.slice(start, end + 1))
+  } catch {
+    return null
+  }
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null
+  const src = obj as Record<string, unknown>
+  const out: Partial<Record<string, string[]>> = {}
+  for (const { kind } of LINE_PACK_SPEC) {
+    const arr = src[kind]
+    if (!Array.isArray(arr)) continue
+    const lines = arr
+      .filter((x): x is string => typeof x === 'string')
+      .map((x) => x.trim().replace(/^["'「『]|["'」』]$/g, ''))
+      .filter((x) => x.length > 0 && x.length <= 30)
+    if (lines.length > 0) out[kind] = lines
+  }
+  return Object.keys(out).length > 0 ? out : null
+}
+
+/**
+ * 生成今日互动台词包:一次调用产出角色C全部常用互动的短句套装。
+ * 注入配置名与人设(自定义人设接管原则:自定义了就用自定义的口吻)。
+ * 15s 超时、不重试——失败由调用方静默回退内置池,明天再试。
+ */
+export async function generateDailyLinePack(): Promise<Partial<Record<string, string[]>> | null> {
+  const persona = soloShortPersona('C')
+  const spec = LINE_PACK_SPEC.map((s) => `"${s.kind}": ${s.count} 句(${s.brief})`).join(',\n')
+  const messages: { role: string; content: string }[] = [
+    {
+      role: 'system',
+      content: `桌面情景剧互动台词生成。你是情景剧里的${persona}(当前名字:${nameOf('C')})。观众会在桌面上和你互动:戳你、摸头、投喂零食、右键点播小动作。请用你的口吻为下列每类互动各写几句台词,每句 15 字以内,活泼、口语、符合人设;提到自己时用"${nameOf('C')}"。只输出一个 JSON 对象,不要多余文字,形如:\n{\n${spec}\n}`,
+    },
+    {
+      role: 'user',
+      content: '请生成今天的互动台词包(JSON)。',
+    },
+  ]
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(new DOMException('超时', 'TimeoutError')), 15_000)
+  try {
+    const raw = await chatRaw(messages, ctrl.signal)
+    return parseLinePackJson(raw)
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 /**
  * 聊天通道:观众对指定角色说了一句话,该角色用自己的口吻回一句(15~25 字)。
  * 注入称呼/画像/记忆事实,命中雷区的话题不接。8s 超时、不重试,失败由调用方静默兜底。

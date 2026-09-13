@@ -6,7 +6,6 @@ import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   parseGeneratedDialog,
-  sanitizeDialogLine,
   VALID_ACTIONS,
   DELIVERIES,
 } from '../../src/performer/dialogSchema.ts'

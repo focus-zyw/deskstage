@@ -2,7 +2,6 @@
 import { readFileSync } from 'node:fs'
 const src = readFileSync('src/engine/webchat.ts', 'utf8')
 // 被模板引用的常量,从源码里提出来供插值代入
-const REPLY_SEL = src.match(/const REPLY_SEL = `([\s\S]*?)`/)?.[1] ?? ''
 const UTILS_JS = src.match(/const UTILS_JS = `([\s\S]*?)`/)?.[1] ?? ''
 const ROOT_SELS_JS = src.match(/const ROOT_SELS_JS = `([\s\S]*?)`/)?.[1] ?? ''
 

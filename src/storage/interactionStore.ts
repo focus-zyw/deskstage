@@ -14,7 +14,6 @@ export interface InteractionStats {
   pokeB: number
   pokeC: number
   interrupts: number
-  drags: number
   sinceInject: number
   /** 主动行为被用户打断的连击计数(按行为分桶):连续 >=3 次 → 该类行为冷却翻倍 */
   dismissSpontaneous: number
@@ -23,7 +22,7 @@ export interface InteractionStats {
 }
 
 const DEFAULTS: InteractionStats = {
-  pokeA: 0, pokeB: 0, pokeC: 0, interrupts: 0, drags: 0, sinceInject: 0,
+  pokeA: 0, pokeB: 0, pokeC: 0, interrupts: 0, sinceInject: 0,
   dismissSpontaneous: 0, dismissReplay: 0, dismissBreak: 0,
 }
 const LS_KEY = 'vc-interactions'
@@ -37,7 +36,7 @@ function sanitize(v: unknown): InteractionStats {
   const num = (x: unknown) => (Number.isFinite(Number(x)) ? Math.max(0, Math.floor(Number(x))) : 0)
   return {
     pokeA: num(o.pokeA), pokeB: num(o.pokeB), pokeC: num(o.pokeC),
-    interrupts: num(o.interrupts), drags: num(o.drags),
+    interrupts: num(o.interrupts),
     sinceInject: num(o.sinceInject),
     dismissSpontaneous: num(o.dismissSpontaneous),
     dismissReplay: num(o.dismissReplay),
@@ -80,8 +79,8 @@ async function writeAll(stats: InteractionStats): Promise<void> {
   }
 }
 
-/** 记录一次观众互动(戳/插话等,中性计数,不做负面定性) */
-export async function logInteraction(kind: 'pokeA' | 'pokeB' | 'pokeC' | 'interrupts' | 'drags'): Promise<void> {
+/** 记录一次观众戳一戳(中断走 logInterrupt,拖拽是布局操作不进账本) */
+export async function logInteraction(kind: 'pokeA' | 'pokeB' | 'pokeC'): Promise<void> {
   const stats = await readAll()
   const next = sanitize({ ...stats, [kind]: (stats as unknown as Record<string, number>)[kind] + 1, sinceInject: stats.sinceInject + 1 })
   await writeAll(next)

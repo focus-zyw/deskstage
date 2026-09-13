@@ -159,6 +159,16 @@ export function GeneralSettings() {
             ))}
           </div>
         </SetLine>
+        <SetLine title="互动台词每日一换" hint="每天自动为角色C生成一整套互动小台词(戳/摸头/投喂/右键点播);保留最近7天,当天没有就用存档里最早的,一份都没有才用内置台词">
+          <SetSwitch
+            checked={form.dailyLinePack}
+            label="互动台词每日一换"
+            onChange={(v) => {
+              setForm({ ...form, dailyLinePack: v })
+              saveField({ dailyLinePack: v }, true)
+            }}
+          />
+        </SetLine>
         <SetLine title="久坐提醒" hint="连续活跃一段时间后,角色会提醒你休息">
           <SetSwitch
             checked={form.breakReminder.enabled}

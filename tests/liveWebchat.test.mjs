@@ -9,7 +9,6 @@ let generateLiveReplyBatch
 let sanitizeLiveReplyBatch
 let paceFor
 let startLiveSession
-let handleLiveEvent
 
 before(async () => {
   server = await createServer({
@@ -18,7 +17,7 @@ before(async () => {
     logLevel: 'silent',
   })
   ;({ generateLiveReplyBatch, sanitizeLiveReplyBatch } = await server.ssrLoadModule('/src/engine/llmClient.ts'))
-  ;({ paceFor, startLiveSession, handleLiveEvent } = await server.ssrLoadModule('/src/runtime/liveDanmaku.ts'))
+  ;({ paceFor, startLiveSession } = await server.ssrLoadModule('/src/runtime/liveDanmaku.ts'))
 })
 
 after(async () => {

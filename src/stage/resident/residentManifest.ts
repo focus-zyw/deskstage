@@ -4,6 +4,22 @@
 // 抓取重命名为稳定英文 ID;文件缺失时运行期回退 idle,不报错不阻塞。
 import type { ResidentClipId } from './residentTypes'
 
+/** 稀有彩蛋池:超低频惊喜(鲸鱼大招/魔术/杂技/吃Token),不进常规池避免被稀释。
+ *  声明在词表之前:INTERNAL_CLIPS 的 trick(右键点播绝活)整池引用它 */
+export const RARE_CLIPS: readonly ResidentClipId[] = [
+  'whale_rise',
+  'whale_bubble',
+  'dove',
+  'card_magic',
+  'juggle',
+  'gomoku',
+  'bloom',
+  'eat_token',
+]
+
+/** 稀有彩蛋触发概率 */
+export const RARE_CHANCE = 0.02
+
 /** 词表动作(VALID_ACTIONS)→ 候选片段;多个候选随机挑,同一动作不总是一个动画 */
 const ACTION_CLIPS: Record<string, ResidentClipId[]> = {
   idle: ['idle'],
@@ -20,6 +36,8 @@ const ACTION_CLIPS: Record<string, ResidentClipId[]> = {
   sleepy: ['yawn', 'nap'],
   shake: ['squash'],
   jump: ['jump_smash'],
+  // 右键点播"跳个舞":情绪池的宅舞三件套
+  dance: ['dance', 'swing_dance', 'spin_show'],
 }
 
 /** C 内部动作(状态机/交互专用,对话协议不产生这些词) */
@@ -37,6 +55,22 @@ const INTERNAL_CLIPS: Record<string, ResidentClipId[]> = {
   hum: ['hum'],
   // 点击回应:敲桌面互动
   tap: ['tap'],
+  // 摸头/挠痒(长按手势):咯咯笑为主,开心/欢呼做候选
+  headpat: ['tickle', 'happy', 'cheer'],
+  // 右键点播"睡午觉":固定午睡,不与 sleepy 的打哈欠混选
+  nap: ['nap'],
+  // 投喂吃撑(连喂):被点心压扁
+  stuffed: ['squash'],
+  // 右键点播"来个绝活":稀有彩蛋整池点播,不必再等 2% 随机
+  trick: [...RARE_CLIPS],
+  // 右键点播"投喂零食":点心动作词按当下时段/季节由 snackActionNow 选出,一词一片段
+  breakfast: ['breakfast'],
+  lunch: ['lunch'],
+  dinner: ['dinner'],
+  ice_cream: ['ice_cream'],
+  watermelon: ['watermelon'],
+  hotpot: ['hotpot'],
+  what_to_eat: ['what_to_eat'],
 }
 
 /** 待机链候选(管家日常与玩心,单次片段):擦桌/对屏碎碎念是本职,其余是玩心 */
@@ -58,21 +92,6 @@ export const AMBIENT_CLIPS: readonly ResidentClipId[] = [
   'butterflies',
 ]
 
-/** 稀有彩蛋池:超低频惊喜(鲸鱼大招/魔术/杂技/吃Token),不进常规池避免被稀释 */
-export const RARE_CLIPS: readonly ResidentClipId[] = [
-  'whale_rise',
-  'whale_bubble',
-  'dove',
-  'card_magic',
-  'juggle',
-  'gomoku',
-  'bloom',
-  'eat_token',
-]
-
-/** 稀有彩蛋触发概率 */
-export const RARE_CHANCE = 0.02
-
 /** 点击回应候选(乖巧管家式的反应;挠痒咯咯笑/被吓一跳是新候选) */
 export const POKE_CLIPS: readonly ResidentClipId[] = ['happy', 'wave', 'startled', 'caught', 'tap', 'tickle', 'scared']
 
@@ -89,6 +108,23 @@ export function timeAmbientClips(slotId: string, month: number): readonly Reside
   if (month >= 6 && month <= 8) clips.push('fan', 'watermelon', 'ice_cream')
   if (month === 12 || month <= 2) clips.push('snowman', 'hotpot')
   return clips
+}
+
+/** 投喂零食 → 当下该吃的点心(动作词,经 INTERNAL_CLIPS 一词一片段)。
+ *  与 timeAmbientClips 同一套时段/季节口味:早上早餐、午间午餐、夏天冷饮、冬天火锅,
+ *  其余时段端出"想想吃啥"的纠结;now 可注入(测试) */
+export function snackActionNow(now: Date = new Date()): string {
+  const hour = now.getHours()
+  const month = now.getMonth() + 1
+  if (hour < 10) return 'breakfast'
+  if (hour < 14) return 'lunch'
+  if (hour < 17) {
+    if (month >= 6 && month <= 8) return Math.random() < 0.5 ? 'ice_cream' : 'watermelon'
+    return 'what_to_eat'
+  }
+  if (hour < 20) return 'dinner'
+  if (month === 12 || month <= 2) return 'hotpot'
+  return 'what_to_eat'
 }
 
 const FALLBACK: ResidentClipId[] = ['idle']

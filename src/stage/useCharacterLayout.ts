@@ -21,7 +21,12 @@ export interface CharacterLayoutDeps {
   present(who: Speaker, line: string, action: string, ms?: number, loud?: boolean): void
   /** 原地点一下(位移 < 6px)= 戳一戳 */
   onPoke(who: Speaker): void
+  /** 按住不动(600ms,位移 < 6px)= 摸头长按;长按后继续拖动仍是拖拽 */
+  onLongPress?(who: Speaker): void
 }
+
+/** 长按判定时长:短于此松手是戳一戳,按住不动超过它触发摸头 */
+const LONG_PRESS_MS = 600
 
 export function useCharacterLayout(deps: CharacterLayoutDeps) {
   // 角色布局(位置各自独立/缩放共享);ref 供拖动/滚轮事件读最新值
@@ -38,7 +43,9 @@ export function useCharacterLayout(deps: CharacterLayoutDeps) {
   const [dragUi, setDragUi] = useState<Speaker | null>(null)
   const [dropFor, setDropFor] = useState<Speaker | null>(null)
   const dropTimer = useRef(0)
-  const dragRef = useRef<{ who: Speaker; startX: number; startY: number; orig: CharPos; moved: boolean } | null>(null)
+  const dragRef = useRef<{ who: Speaker; startX: number; startY: number; orig: CharPos; moved: boolean; longFired?: boolean } | null>(null)
+  // 长按(摸头)定时器:pointerdown 起表,位移超阈值或松手即撤
+  const longPressTimer = useRef(0)
   // 拖动中的角色命中区膨胀为全窗口:快速拖动时光标冲出角色矩形,
   // 否则穿透窗口会立刻恢复 ignoreCursorEvents,拖拽被中断
   const draggingWho = useRef<Speaker | null>(null)
@@ -85,6 +92,16 @@ export function useCharacterLayout(deps: CharacterLayoutDeps) {
       orig: { ...charCfgRef.current[who] },
       moved: false,
     }
+    // 长按起表:按住不动 600ms = 摸头;转拖拽或提前松手都会撤表
+    window.clearTimeout(longPressTimer.current)
+    if (deps.onLongPress) {
+      longPressTimer.current = window.setTimeout(() => {
+        const d = dragRef.current
+        if (!d || d.who !== who || d.moved) return
+        d.longFired = true
+        deps.onLongPress?.(who)
+      }, LONG_PRESS_MS)
+    }
     try {
       ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
     } catch {
@@ -100,6 +117,7 @@ export function useCharacterLayout(deps: CharacterLayoutDeps) {
     if (!d.moved) {
       if (Math.hypot(dx, dy) < 6) return // 小位移视为点击,留给戳一戳
       d.moved = true
+      window.clearTimeout(longPressTimer.current) // 动了就是拖拽,长按作废
       draggingWho.current = who
     }
     const cur = charCfgRef.current
@@ -121,6 +139,7 @@ export function useCharacterLayout(deps: CharacterLayoutDeps) {
   }
 
   function onCharPointerUp(who: Speaker) {
+    window.clearTimeout(longPressTimer.current)
     const d = dragRef.current
     dragRef.current = null
     setDragUi(null)
@@ -132,8 +151,8 @@ export function useCharacterLayout(deps: CharacterLayoutDeps) {
       window.clearTimeout(dropTimer.current)
       dropTimer.current = window.setTimeout(() => setDropFor(null), 500)
       void maybeDistancePlay(who)
-    } else {
-      deps.onPoke(who) // 原地点一下 = 戳一戳
+    } else if (!d.longFired) {
+      deps.onPoke(who) // 原地点一下 = 戳一戳;长按已触发过摸头,不再叠加
     }
   }
 

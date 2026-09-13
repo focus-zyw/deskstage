@@ -13,6 +13,8 @@ let residentSrc
 let nativeFacing
 let resolveResidentClip
 let shouldFlip
+let snackActionNow
+let RARE_CLIPS
 
 before(async () => {
   server = await createServer({
@@ -20,7 +22,7 @@ before(async () => {
     appType: 'custom',
     logLevel: 'silent',
   })
-  ;({ clipsForAction, pickClip, isLoopingClip, residentSrc, nativeFacing } = await server.ssrLoadModule(
+  ;({ clipsForAction, pickClip, isLoopingClip, residentSrc, nativeFacing, snackActionNow, RARE_CLIPS } = await server.ssrLoadModule(
     '/src/stage/resident/residentManifest.ts',
   ))
   ;({ resolveResidentClip, shouldFlip } = await server.ssrLoadModule('/src/stage/resident/residentMachine.ts'))
@@ -48,6 +50,49 @@ test('C 内部动作(围观/互动/待机链)映射到专属片段', () => {
   assert.deepEqual(clipsForAction('stretch'), ['stretch'])
   assert.deepEqual(clipsForAction('hum'), ['hum'])
   assert.deepEqual(clipsForAction('tap'), ['tap'])
+})
+
+test('互动扩展动作词(摸头/午睡/吃撑/跳舞/绝活/点心)都解析到合法候选', () => {
+  // 摸头长按:咯咯笑为主
+  assert.deepEqual(clipsForAction('headpat'), ['tickle', 'happy', 'cheer'])
+  // 右键点播
+  assert.deepEqual(clipsForAction('nap'), ['nap'])
+  assert.deepEqual(clipsForAction('stuffed'), ['squash'])
+  assert.deepEqual(clipsForAction('dance'), ['dance', 'swing_dance', 'spin_show'])
+  // 绝活 = 稀有彩蛋整池点播(原本只有 2% 随机可见)
+  assert.deepEqual(clipsForAction('trick'), [...RARE_CLIPS])
+  assert.ok(RARE_CLIPS.length >= 8, '绝活池应有足够的彩蛋候选')
+  // 投喂点心:一词一片段
+  for (const word of ['breakfast', 'lunch', 'dinner', 'ice_cream', 'watermelon', 'hotpot', 'what_to_eat']) {
+    assert.deepEqual(clipsForAction(word), [word], word)
+  }
+  // 随机挑选不越界:每个新词挑出的片段都在自身候选内
+  for (const word of ['headpat', 'nap', 'stuffed', 'dance', 'trick']) {
+    const candidates = clipsForAction(word)
+    for (let i = 0; i < 20; i++) {
+      assert.ok(candidates.includes(pickClip(word)), `${word} 挑出候选外的片段`)
+    }
+  }
+})
+
+test('投喂点心按时段/季节选:早早餐、午午餐、夏冷饮、冬火锅', () => {
+  const at = (h, m = 0) => {
+    const d = new Date(2026, 0, 15, h, m) // 1 月 = 冬
+    d.setMonth(0)
+    return d
+  }
+  assert.equal(snackActionNow(at(8)), 'breakfast')
+  assert.equal(snackActionNow(at(12)), 'lunch')
+  assert.equal(snackActionNow(at(18)), 'dinner')
+  // 冬天下午/深夜:火锅与纠结
+  assert.equal(snackActionNow(at(15)), 'what_to_eat')
+  assert.equal(snackActionNow(at(22)), 'hotpot')
+  // 夏天(8 月)下午端冷饮,深夜不端火锅
+  const summer = (h) => new Date(2026, 7, 15, h, 0)
+  for (let i = 0; i < 10; i++) {
+    assert.ok(['ice_cream', 'watermelon'].includes(snackActionNow(summer(15))), '夏天下午应为冷饮')
+  }
+  assert.equal(snackActionNow(summer(22)), 'what_to_eat')
 })
 
 test('多候选按随机源挑选,单候选不受随机影响', () => {

@@ -35,7 +35,9 @@ export function CaptureOverlay({
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const doneRef = useRef(onDone)
-  doneRef.current = onDone
+  useEffect(() => {
+    doneRef.current = onDone
+  })
   // 松手定型的选区:rect(CSS 像素)供工具条定位,crop(物理像素)供 Rust 裁剪;null = 还在框选
   const [picked, setPicked] = useState<{
     rect: { x: number; y: number; w: number; h: number }

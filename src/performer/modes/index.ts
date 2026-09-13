@@ -33,8 +33,8 @@ export interface DialogMode<ID extends string = string> {
   /** 可选：自然语言路由触发词("来一段关于加班的相声"里的"相声");
    *  缺省不可被自然语言点播,只能从模式菜单进。内置模式与模式工坊新模式都靠它进路由 */
   triggers?: string[]
-  /** 可选：基调。'comedy'(daily/crosstalk 显式声明)= 默认互怼喜剧全套(包袱/secret反转/逗弄/关系攻守);
-   *  其他描述值(如 '温暖治愈')= 非喜剧分支:prompt 裁掉默认喜剧件,tone 值本身也注入 prompt 作基调语境。
+  /** 可选：基调。'comedy' 或缺省 = 默认互怼喜剧全套(包袱/secret反转/逗弄/关系攻守),内置仅 crosstalk 走这档;
+   *  其他描述值(如 daily 的 '日常闲聊'、模式工坊的 '温暖治愈')= 非喜剧分支:prompt 裁掉默认喜剧件,tone 值本身也注入 prompt 作基调语境。
    *  live 不声明(不锁死):其弹幕回复 prompt 也读本字段,改 live.ts 一行即可切换直播风格 */
   tone?: string
 }
