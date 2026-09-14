@@ -19,6 +19,7 @@ const MAX_WAV_BYTES: usize = 32 * 1024 * 1024;
 /// 连接超时与 endpoint_proxy 对齐;总超时覆盖"上传+识别"全程
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const TOTAL_TIMEOUT: Duration = Duration::from_secs(20);
+const CONNECTION_TEST_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Serialize)]
 pub struct AsrResult {
@@ -38,8 +39,11 @@ fn client() -> &'static reqwest::Client {
 
 /// 转写一段 wav(PCM16)。模型由前端传(设置里选,官方列表:SenseVoiceSmall /
 /// TeleSpeechASR,或用户自填,连接测试验证)。返回识别文本(可能为空串 = 没听清)。
-#[tauri::command]
-pub async fn asr_transcribe(wav_base64: String, model: String) -> Result<AsrResult, String> {
+async fn transcribe_with_timeout(
+    wav_base64: String,
+    model: String,
+    total_timeout: Duration,
+) -> Result<AsrResult, String> {
     let key = crate::secrets::read_secret("asr:siliconflow")?
         .filter(|k| !k.trim().is_empty())
         .ok_or("未配置语音识别密钥(设置 → 角色语音 → 语音对话)")?;
@@ -65,7 +69,7 @@ pub async fn asr_transcribe(wav_base64: String, model: String) -> Result<AsrResu
         .post(ENDPOINT)
         .bearer_auth(key)
         .multipart(form)
-        .timeout(TOTAL_TIMEOUT)
+        .timeout(total_timeout)
         .send()
         .await
         .map_err(|e| format!("识别请求失败:{e}"))?;
@@ -93,6 +97,18 @@ pub async fn asr_transcribe(wav_base64: String, model: String) -> Result<AsrResu
     }
 }
 
+#[tauri::command]
+pub async fn asr_transcribe(wav_base64: String, model: String) -> Result<AsrResult, String> {
+    transcribe_with_timeout(wav_base64, model, TOTAL_TIMEOUT).await
+}
+
+/// 设置页只验证 endpoint/key/model 是否可用:10 秒截止且不重试,避免测试按钮
+/// 长时间无反馈。静音返回文本没有质量含义,前端只把 HTTP 成功解释为服务可连接。
+#[tauri::command]
+pub async fn asr_test_connection(wav_base64: String, model: String) -> Result<AsrResult, String> {
+    transcribe_with_timeout(wav_base64, model, CONNECTION_TEST_TIMEOUT).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -111,5 +127,11 @@ mod tests {
             msg.contains("密钥") || msg.contains("模型"),
             "意外错误: {msg}"
         );
+    }
+
+    #[test]
+    fn connection_test_policy_is_short() {
+        assert_eq!(CONNECTION_TEST_TIMEOUT, Duration::from_secs(10));
+        assert!(CONNECTION_TEST_TIMEOUT <= TOTAL_TIMEOUT);
     }
 }

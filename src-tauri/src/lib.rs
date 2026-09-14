@@ -156,6 +156,7 @@ pub fn run() {
             mic_capture::mic_start,
             mic_capture::mic_stop,
             asr::asr_transcribe,
+            asr::asr_test_connection,
             capture::capture_screen,
             capture::capture_finish,
             capture::capture_save,

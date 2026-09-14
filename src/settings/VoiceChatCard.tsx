@@ -8,10 +8,31 @@ import { listMics, rmsDbfs, startMic, MIC_SAMPLE_RATE, type MicDevice, type MicS
 import { bytesToBase64 } from '../engine/asr'
 import { pcmToWav } from '../engine/tts/wav'
 import { saveConfig, type VoiceChatConfig, type VoiceConfig } from '../storage/configStore'
+import { recognitionTestOutcome, type AsrTestState } from './asrTest'
 import { useSettings } from './useSettingsSession'
 import { SetField, SetLine, SetSwitch, SettingsCard } from './SettingsPrimitives'
 
 const ASR_MODELS = ['FunAudioLLM/SenseVoiceSmall', 'TeleAI/TeleSpeechASR']
+const ASR_RECORD_MS = 3000
+
+function elapsedMs(startedAt: number): number {
+  return Math.max(0, Math.round(performance.now() - startedAt))
+}
+
+function concatPcmFrames(frames: Int16Array[]): Int16Array {
+  const total = frames.reduce((sum, frame) => sum + frame.length, 0)
+  const out = new Int16Array(total)
+  let offset = 0
+  for (const frame of frames) {
+    out.set(frame, offset)
+    offset += frame.length
+  }
+  return out
+}
+
+function invalidateRun(ref: { current: number }): void {
+  ref.current++
+}
 
 /** 电平条:-100~0 dBFS 映射为条宽,黄线 = 当前起声阈值(校准后显示) */
 function LevelMeter(props: { dbfs: number; thresholdDbfs: number | null }) {
@@ -69,6 +90,9 @@ export function VoiceChatCard() {
   const sessionRef = useRef<MicSession | null>(null)
   const levelRef = useRef(-120)
   const calibrateRef = useRef<number[] | null>(null)
+  const asrRunRef = useRef(0)
+  const [asrAction, setAsrAction] = useState<'connection' | 'recognition' | null>(null)
+  const [asrTest, setAsrTest] = useState<AsrTestState>({ state: 'idle', msg: '' })
 
   useEffect(() => {
     if (vc.mode === 'off') return
@@ -77,6 +101,7 @@ export function VoiceChatCard() {
       .catch((e) => setTestError(String(e)))
     return () => {
       // 卸载(切页/关窗)即停采;Rust 侧通道断开也会自停,双保险
+      invalidateRun(asrRunRef)
       void sessionRef.current?.stop()
       sessionRef.current = null
       setTesting(false)
@@ -131,24 +156,78 @@ export function VoiceChatCard() {
     }, 2000)
   }
 
-  // ASR 测试连接:先落盘(密钥进凭据库)再发 1s 静音 wav
-  const [asrTest, setAsrTest] = useState<{ state: 'idle' | 'testing' | 'ok' | 'fail'; msg: string }>({
-    state: 'idle',
-    msg: '',
-  })
-  const testAsr = async () => {
-    setAsrTest({ state: 'testing', msg: '' })
+  // ASR 连接测试:静音只走 endpoint/key/model 校验,10s 截止且不重试。
+  const testAsrConnection = async () => {
+    const run = ++asrRunRef.current
+    setAsrAction('connection')
+    const startedAt = performance.now()
+    setAsrTest({ state: 'testing', msg: '正在连接识别服务…' })
     try {
       await saveConfig({ voice: { ...voice, asr: voice.asr } })
       const pcm = new Int16Array(MIC_SAMPLE_RATE) // 1 秒静音:只验 key+模型+连通
       const wav = new Uint8Array(pcmToWav(new Uint8Array(pcm.buffer), MIC_SAMPLE_RATE, 1, 16))
-      const r = await invoke<{ text: string }>('asr_transcribe', {
+      await invoke<{ text: string }>('asr_test_connection', {
         wavBase64: bytesToBase64(wav),
         model: voice.asr.model,
       })
-      setAsrTest({ state: 'ok', msg: `连接正常(识别返回:${r.text ? `“${r.text}”` : '空'})` })
+      if (asrRunRef.current !== run) return
+      setAsrTest({
+        state: 'ok',
+        msg: `服务可连接(${elapsedMs(startedAt)} ms);静音样本不用于判断识别质量`,
+      })
     } catch (e) {
+      if (asrRunRef.current !== run) return
       setAsrTest({ state: 'fail', msg: String(e) })
+    }
+  }
+
+  // 识别质量测试:独占录制 3 秒真实麦克风音频,空文本明确判失败。
+  const testAsrRecognition = async () => {
+    const run = ++asrRunRef.current
+    setAsrAction('recognition')
+    setAsrTest({ state: 'testing', msg: '正在准备麦克风…' })
+    let recording: MicSession | null = null
+    try {
+      await saveConfig({ voice: { ...voice, asr: voice.asr } })
+      if (testing) await stopTest()
+
+      const frames: Int16Array[] = []
+      let endedReason = ''
+      recording = await startMic({
+        owner: 'settings-preview',
+        deviceId: vc.deviceId || undefined,
+        onFrame: (pcm) => frames.push(pcm.slice()),
+        onEnded: (reason) => {
+          endedReason = reason
+        },
+      })
+      sessionRef.current = recording
+      setAsrTest({ state: 'testing', msg: '正在录音,请清楚说一句话(3 秒)…' })
+      await new Promise<void>((resolve) => window.setTimeout(resolve, ASR_RECORD_MS))
+      if (asrRunRef.current !== run) return
+
+      await recording.stop()
+      if (sessionRef.current === recording) sessionRef.current = null
+      recording = null
+      if (endedReason) throw new Error(`麦克风录音中断:${endedReason}`)
+
+      const pcm = concatPcmFrames(frames)
+      if (pcm.length === 0) throw new Error('没有采集到麦克风音频;请检查设备与系统麦克风权限')
+      const wav = new Uint8Array(pcmToWav(new Uint8Array(pcm.buffer), MIC_SAMPLE_RATE, 1, 16))
+      setAsrTest({ state: 'testing', msg: '录音完成,正在识别…' })
+      const startedAt = performance.now()
+      const result = await invoke<{ text: string }>('asr_transcribe', {
+        wavBase64: bytesToBase64(wav),
+        model: voice.asr.model,
+      })
+      if (asrRunRef.current !== run) return
+      setAsrTest(recognitionTestOutcome(result.text, elapsedMs(startedAt)))
+    } catch (e) {
+      if (asrRunRef.current !== run) return
+      setAsrTest({ state: 'fail', msg: String(e) })
+    } finally {
+      await recording?.stop()
+      if (sessionRef.current === recording) sessionRef.current = null
     }
   }
 
@@ -203,11 +282,11 @@ export function VoiceChatCard() {
                   停止测试
                 </button>
               ) : (
-                <button type="button" className="panel-btn" onClick={() => void startTest()}>
+                <button type="button" className="panel-btn" disabled={asrTest.state === 'testing'} onClick={() => void startTest()}>
                   开始测试
                 </button>
               )}
-              <button type="button" className="panel-btn" onClick={calibrate}>
+              <button type="button" className="panel-btn" disabled={asrTest.state === 'testing'} onClick={calibrate}>
                 校准
               </button>
             </div>
@@ -291,10 +370,28 @@ export function VoiceChatCard() {
               ))}
             </datalist>
           </SetField>
-          <SetLine title="识别测试连接" hint={asrTest.msg || '发 1 秒静音验证密钥与模型;识别质量以真实说话为准'}>
-            <button type="button" className="panel-btn" disabled={asrTest.state === 'testing'} onClick={() => void testAsr()}>
-              {asrTest.state === 'testing' ? '测试中…' : '测试连接'}
-            </button>
+          <SetLine
+            title="识别服务与模型测试"
+            hint={asrTest.msg || '先快速验证服务连接;要验证识别效果,请录音并说一句话'}
+          >
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <button
+                type="button"
+                className="panel-btn"
+                disabled={asrTest.state === 'testing'}
+                onClick={() => void testAsrConnection()}
+              >
+                {asrTest.state === 'testing' && asrAction === 'connection' ? '连接中…' : '测试连接'}
+              </button>
+              <button
+                type="button"
+                className="panel-btn"
+                disabled={asrTest.state === 'testing'}
+                onClick={() => void testAsrRecognition()}
+              >
+                {asrTest.state === 'testing' && asrAction === 'recognition' ? '录音/识别中…' : '录音识别'}
+              </button>
+            </div>
           </SetLine>
           {asrTest.state === 'fail' && <p className="set-note">{asrTest.msg}</p>}
           {asrTest.state === 'ok' && <p className="set-note">{asrTest.msg}</p>}
