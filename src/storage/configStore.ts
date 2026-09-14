@@ -156,6 +156,16 @@ export interface UserProfile {
   banTopics: string
 }
 
+/** 网页模型站点 id 白名单:与 Rust 侧 src-tauri/src/webchat/sites.rs 的 adapter
+ *  注册表一一对应。新增站点 = 这里加一个 id + engine/webchat.ts 加一条 label
+ *  + sites.rs 加一个 adapter(三处齐了才可用,缺一处会被下面两个清洗函数挡掉) */
+export const WEBCHAT_SITE_IDS = ['deepseek', 'doubao', 'chatgpt', 'gemini', 'qianwen'] as const
+export type WebchatSiteId = (typeof WEBCHAT_SITE_IDS)[number]
+
+export function isWebchatSite(v: unknown): v is WebchatSiteId {
+  return typeof v === 'string' && (WEBCHAT_SITE_IDS as readonly string[]).includes(v)
+}
+
 export interface AppConfig {
   apiKey: string
   /** 各厂商分别记忆的 API Key:键 = 预设厂商 id,自定义端点 = `custom:{baseUrl}`;
@@ -200,7 +210,7 @@ export interface AppConfig {
    *  其余小调用(记忆提取/演出标注/短聊)仍走 API */
   webchatEnabled: boolean
   /** 网页模型站点 */
-  webchatSite: 'deepseek' | 'doubao'
+  webchatSite: WebchatSiteId
   /** 桌面环境感知(电量/前台应用分类等,仅本机分类不上传) */
   envSense: boolean
   /** 环境感知注入冷却分钟数:同一条感知在此窗口内不重复进入提示词 */
@@ -250,8 +260,8 @@ export interface AppConfig {
 export interface AiTheaterConfig {
   /** 实验开关:默认关 */
   enabled: boolean
-  actorA: 'deepseek' | 'doubao'
-  actorB: 'deepseek' | 'doubao'
+  actorA: WebchatSiteId
+  actorB: WebchatSiteId
 }
 
 /** 翻译面板配置 */
@@ -413,8 +423,8 @@ function sanitizeTopicPrefs(v: unknown): TopicPrefsConfig {
 function sanitizeAiTheater(v: unknown): AiTheaterConfig {
   const d = DEFAULT_CONFIG.aiTheater
   const o = (v ?? {}) as Record<string, unknown>
-  const site = (x: unknown, dft: 'deepseek' | 'doubao'): 'deepseek' | 'doubao' =>
-    x === 'deepseek' || x === 'doubao' ? x : dft
+  const site = (x: unknown, dft: WebchatSiteId): WebchatSiteId =>
+    isWebchatSite(x) ? x : dft
   return {
     enabled: o.enabled === true,
     actorA: site(o.actorA, d.actorA),
@@ -876,7 +886,7 @@ const FIELD_SANITIZERS: { [K in keyof AppConfig]: (v: unknown, all: Record<strin
   hotkeys: sanitizeHotkeys,
   userInterests: (v) => (typeof v === 'string' ? v.trim() : ''),
   webchatEnabled: (v) => v === true,
-  webchatSite: (v) => (v === 'doubao' ? 'doubao' : 'deepseek'),
+  webchatSite: (v) => (isWebchatSite(v) ? v : 'deepseek'),
   envSense: (v) => v !== false,
   envNoteCooldownMin: sanitizeEnvNoteCooldownMin,
   breakReminder: sanitizeBreakReminder,

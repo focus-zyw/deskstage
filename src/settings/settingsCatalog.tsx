@@ -278,7 +278,7 @@ export const SETTINGS_SEARCH_INDEX: { tab: SettingsTab; card: string; label: str
   // 气泡工坊
   { tab: 'bubble', card: '选择主题', label: '气泡风格切换', keywords: '气泡 主题 柔彩 夜色 玻璃 切换 外观' },
   { tab: 'bubble', card: 'AI 生成主题', label: 'AI 生成气泡主题', keywords: '气泡 自定义 生成 配色 字号 圆角 工坊' },
-  { tab: 'bubble', card: '编辑主题', label: '气泡主题编辑', keywords: '气泡 颜色 透明度 模糊 字号 宽度 圆角 编辑' },
+  { tab: 'bubble', card: '编辑主题', label: '气泡主题编辑', keywords: '气泡 颜色 透明度 模糊 字号 宽度 圆角 形状 轮廓 尾巴 阴影 字重 行距 留白 编辑' },
   { tab: 'bubble', card: '自定义主题', label: '自定义气泡主题列表', keywords: '气泡 自定义 删除 列表' },
   // 视频工坊
   { tab: 'video', card: '视频服务', label: '视频服务商', keywords: '即梦 seedance 方舟 海螺 minimax 清影 智谱 cogvideox 视频生成' },
@@ -338,8 +338,8 @@ export const SETTINGS_SEARCH_INDEX: { tab: SettingsTab; card: string; label: str
   { tab: 'hotkeys', card: '截屏', label: '全局截屏快捷键', keywords: '截图 快捷键 热键 框选' },
   // 工具与隐私
   { tab: 'privacy', card: '截屏', label: '截屏/录屏时排除角色', keywords: '隐私 排除 录屏 隐藏' },
-  { tab: 'privacy', card: '网页版生成', label: '主演出改用网页模型生成', keywords: '实验 网页 deepseek 豆包' },
-  { tab: 'privacy', card: '网页版生成', label: '网页模型站点', keywords: 'deepseek 豆包 站点' },
+  { tab: 'privacy', card: '网页版生成', label: '主演出改用网页模型生成', keywords: '实验 网页 deepseek 豆包 chatgpt gemini 千问 通义' },
+  { tab: 'privacy', card: '网页版生成', label: '网页模型站点', keywords: 'deepseek 豆包 chatgpt gemini 千问 通义 站点' },
   { tab: 'privacy', card: '网页版生成', label: '网页窗口登录', keywords: 'edge 登录 窗口' },
   { tab: 'privacy', card: '隐私与数据', label: '隐私与数据说明', keywords: '本机 上传 隐私 安全' },
   // 记忆

@@ -4,14 +4,19 @@
 // 本文件只剩:invoke 参数组装、取消(abort → webchat_cancel)、取消语义还原
 // (Rust 的「已取消」在这里转回 AbortError,llmClient 的回退逻辑照旧识别)。
 import { invoke } from '@tauri-apps/api/core'
-import { getConfig, inTauri } from '../storage/configStore'
+import { getConfig, inTauri, type WebchatSiteId } from '../storage/configStore'
 import { diag, type LlmCallKind } from '../diag/store'
 
-export type WebchatSite = 'deepseek' | 'doubao'
+/** 站点 id 白名单的唯一事实源在 configStore(与 Rust 侧 adapter 注册表对齐),这里只别名 */
+export type WebchatSite = WebchatSiteId
 
+/** 设置页下拉用的显示名。顺序 = 设置页呈现顺序(先境内后境外) */
 export const WEBCHAT_SITES: { id: WebchatSite; label: string }[] = [
   { id: 'deepseek', label: 'DeepSeek 网页版' },
   { id: 'doubao', label: '豆包网页版' },
+  { id: 'qianwen', label: '千问(通义)网页版' },
+  { id: 'chatgpt', label: 'ChatGPT 网页版' },
+  { id: 'gemini', label: 'Gemini 网页版' },
 ]
 
 /** 网页聊天没有 system role:合并成单条文本注入(与手动验证测试包同款拼法) */
