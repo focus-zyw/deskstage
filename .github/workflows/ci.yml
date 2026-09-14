@@ -1,5 +1,10 @@
-# 提交门禁:七步全绿才算通过。顺序有约束——tauri 的 generate_context! 宏在
-# 编译期读取 frontendDist(../dist),所以 pnpm build 必须先于所有 cargo 步骤。
+# 提交门禁:frontend 与 node-tests 同时启动,rust 等 frontend 的 dist,CI Gate 汇总。
+# 顺序约束不变——tauri 的 generate_context! 宏在编译期读取 frontendDist(../dist),
+# rust job 通过下载 frontend job 上传的 dist artifact 满足该依赖(同一次提交的产物)。
+#
+# 分片不是固定架构:全量 Node 测试本身只有几十秒,每个分片都要付出启动/安装的固定
+# 开销。按 4 分片上线采样 5~10 次,若单片测试耗时不足安装耗时的一半,把 matrix 直接
+# 降为 ["1/2", "2/2"] 即可,无需改任何测试清单(分片按文件清单自动均分)。
 name: CI
 
 on:
@@ -8,8 +13,12 @@ on:
     branches: [master]
   workflow_dispatch:
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  gate:
+  frontend:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -21,6 +30,65 @@ jobs:
           node-version: 24
           cache: pnpm
 
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint (oxlint)
+        run: pnpm lint
+
+      - name: Build frontend
+        run: pnpm build
+
+      - name: Upload dist
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: dist
+          retention-days: 1
+          if-no-files-found: error
+
+  node-tests:
+    name: Node tests (${{ matrix.shard }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["1/4", "2/4", "3/4", "4/4"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Test (node --test, shard ${{ matrix.shard }})
+        run: pnpm test:shard -- --test-shard=${{ matrix.shard }} tests/*.test.mjs
+
+  rust:
+    runs-on: windows-latest
+    needs: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download dist
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: dist
+
+      - name: Verify frontend artifact
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "dist/index.html")) {
+            throw "frontend-dist 缺少 dist/index.html"
+          }
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -28,18 +96,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Lint (oxlint)
-        run: pnpm lint
-
-      - name: Test (node --test)
-        run: pnpm test
-
-      - name: Build frontend
-        run: pnpm build
 
       - name: Rust format
         run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
@@ -49,3 +105,21 @@ jobs:
 
       - name: Rust test
         run: cargo test --manifest-path src-tauri/Cargo.toml
+
+  gate:
+    # 汇总检查点:check 名保持 "gate"(job id,不加 name 覆盖),
+    # 分支保护的 required check 引用不变
+    if: always()
+    runs-on: windows-latest
+    needs: [frontend, node-tests, rust]
+    steps:
+      - shell: pwsh
+        run: |
+          $results = @(
+            "${{ needs.frontend.result }}",
+            "${{ needs.node-tests.result }}",
+            "${{ needs.rust.result }}"
+          )
+          if ($results | Where-Object { $_ -ne "success" }) {
+            throw "CI 子任务未全部通过:$($results -join ', ')"
+          }

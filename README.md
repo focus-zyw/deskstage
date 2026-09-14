@@ -100,6 +100,10 @@ pnpm install
 pnpm tauri dev     # 桌面运行(含穿透窗口;浏览器 pnpm dev 仅可调 UI,存储降级 localStorage)
 pnpm build         # 类型检查 + 前端构建
 pnpm tauri build   # 打包安装程序
+pnpm test          # 全量测试(交付前跑一次)
+pnpm test:fast     # 快速冒烟:协议/配置/气泡/工具/运行时等高频修改面(开发反馈用)
+pnpm test:bubble   # 气泡引擎与主题
+pnpm test:shard -- --test-shard=1/4 tests/*.test.mjs   # 本地手动分片(与 CI 同机制)
 ```
 
 配置运行时在设置面板改,也可直接编辑 `data/config.json` 后重启;

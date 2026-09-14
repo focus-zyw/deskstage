@@ -11,6 +11,9 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint --deny-warnings",
     "test": "node --test tests/*.test.mjs",
+    "test:bubble": "node --test tests/bubbleEngine.test.mjs tests/bubbleThemes.test.mjs",
+    "test:fast": "node --test tests/bubbleEngine.test.mjs tests/bubbleThemes.test.mjs tests/configMigration.test.mjs tests/configPartial.test.mjs tests/dialogProtocol.test.mjs tests/scriptValidation.test.mjs tests/turnBatch.test.mjs tests/toolSystem.test.mjs tests/runtimeMode.test.mjs tests/hotkeys.test.mjs tests/mention.test.mjs tests/sentenceSplitter.test.mjs",
+    "test:shard": "node --test",
     "preview": "vite preview",
     "tauri": "tauri"
   },
