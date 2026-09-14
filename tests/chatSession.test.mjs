@@ -1,4 +1,4 @@
-// ChatSession 行为矩阵(深模块验收,评审规格):内存 adapter 驱动,零网络零 DOM。
+// legacyChat 行为矩阵(原 ChatSession 单飞引擎,回退开关保一个版本):内存 adapter 驱动,零网络零 DOM。
 // 覆盖:LLM 失败→单句回落 / 取消后迟到响应不呈现 / 落盘成功但事实提取失败 /
 // TTS 失败不影响文本 / 连续快发 busy 语义 / 演出中改走插话 / @解析与轮换 / groupAsk。
 import assert from 'node:assert/strict'
@@ -14,7 +14,8 @@ before(async () => {
     appType: 'custom',
     logLevel: 'silent',
   })
-  mod = await server.ssrLoadModule('/src/session/ChatSession.ts')
+  // 旧单飞引擎已迁至 legacyChat(Actor 化后保一个版本的回退路径);本矩阵继续验收它
+  mod = await server.ssrLoadModule('/src/session/legacyChat.ts')
 })
 
 after(async () => {
@@ -108,7 +109,7 @@ function makeEngine(over = {}) {
 test('正常应答:TurnBatch 逐句呈现+落盘+TTS,结束后 busy 回落', async () => {
   const { host, calls } = makeHost()
   const { engine, calls: ecalls } = makeEngine()
-  const session = mod.createChatSession(host, engine)
+  const session = mod.createLegacyChatSession(host, engine)
   const res = await session.send('你好呀')
   assert.equal(res, 'accepted')
   await session.whenIdle()
@@ -126,7 +127,7 @@ test('TurnBatch 失败静默回落单句应答', async () => {
   const { engine, calls: ecalls } = makeEngine({
     turnBatch: () => Promise.reject(new Error('API 挂了')),
   })
-  const session = mod.createChatSession(host, engine)
+  const session = mod.createLegacyChatSession(host, engine)
   await session.send('在吗')
   await session.whenIdle()
   assert.equal(calls.presentTurn.length, 1)
@@ -143,7 +144,7 @@ test('取消后迟到响应不再呈现,busy 立即回落', async () => {
         resolveBatch = r
       }),
   })
-  const session = mod.createChatSession(host, engine)
+  const session = mod.createLegacyChatSession(host, engine)
   const res = await session.send('慢问题')
   assert.equal(res, 'accepted')
   assert.equal(session.getSnapshot().busy, true)
@@ -160,7 +161,7 @@ test('取消后迟到响应不再呈现,busy 立即回落', async () => {
 test('落盘成功但事实提取失败:静默不吞,无 unhandled rejection', async () => {
   const { host, calls } = makeHost()
   const { engine, calls: ecalls } = makeEngine({ factsFail: true })
-  const session = mod.createChatSession(host, engine)
+  const session = mod.createLegacyChatSession(host, engine)
   await session.send('我叫小张')
   await session.whenIdle()
   await new Promise((r) => setTimeout(r, 20))
@@ -172,7 +173,7 @@ test('落盘成功但事实提取失败:静默不吞,无 unhandled rejection', a
 test('TTS 失败不影响文本呈现与落盘', async () => {
   const { host, calls } = makeHost()
   const { engine, calls: ecalls } = makeEngine({ ttsFail: true })
-  const session = mod.createChatSession(host, engine)
+  const session = mod.createLegacyChatSession(host, engine)
   await session.send('说句话')
   await session.whenIdle()
   assert.equal(calls.presentTurn.length, 1)
@@ -188,7 +189,7 @@ test('连续快发:第一发受理,第二发 busy,空闲后恢复受理', async 
         releaseBatch = r
       }),
   })
-  const session = mod.createChatSession(host, engine)
+  const session = mod.createLegacyChatSession(host, engine)
   const first = await session.send('第一句')
   const second = await session.send('第二句')
   assert.equal(first, 'accepted')
@@ -202,7 +203,7 @@ test('连续快发:第一发受理,第二发 busy,空闲后恢复受理', async 
 test('演出中:改走插话队列,不调 LLM,不聚焦角色', async () => {
   const { host, calls } = makeHost({ isPerforming: () => true })
   const { engine, calls: ecalls } = makeEngine()
-  const session = mod.createChatSession(host, engine)
+  const session = mod.createLegacyChatSession(host, engine)
   const res = await session.send('插一句')
   assert.equal(res, 'accepted')
   assert.equal(calls.queueInterjection.length, 1)
@@ -214,7 +215,7 @@ test('演出中:改走插话队列,不调 LLM,不聚焦角色', async () => {
 test('@解析:点名乙应答乙,groupAsk 关键词放开多句请求', async () => {
   const { host, calls } = makeHost()
   const { engine, calls: ecalls } = makeEngine()
-  const session = mod.createChatSession(host, engine)
+  const session = mod.createLegacyChatSession(host, engine)
   await session.send('@乙 你怎么看')
   await session.whenIdle()
   assert.equal(calls.presentTurn[0].speaker, 'B')
@@ -227,7 +228,7 @@ test('@解析:点名乙应答乙,groupAsk 关键词放开多句请求', async ()
 test('@解析跟随设置里的角色名', async () => {
   const { host, calls } = makeHost({ names: () => ({ A: '阿呆', B: '阿瓜', C: '团子' }) })
   const { engine } = makeEngine()
-  const session = mod.createChatSession(host, engine)
+  const session = mod.createLegacyChatSession(host, engine)
   await session.send('@阿瓜 讲一个')
   await session.whenIdle()
   assert.equal(calls.presentTurn[0].speaker, 'B')
@@ -236,7 +237,7 @@ test('@解析跟随设置里的角色名', async () => {
 test('空文本返回 empty;订阅者在 busy 翻转时收到通知', async () => {
   const { host } = makeHost()
   const { engine } = makeEngine()
-  const session = mod.createChatSession(host, engine)
+  const session = mod.createLegacyChatSession(host, engine)
   assert.equal(await session.send('   '), 'empty')
   const events = []
   const un = session.subscribe(() => events.push(session.getSnapshot().busy))
@@ -281,7 +282,7 @@ test('语音路径:句级提交——播完才落盘', async () => {
     ],
   })
   const tts = makeTtsVoice(false) // ended 手动放行
-  const session = mod.createChatSession(host, { ...engine, ...tts.engine, streamTurn: undefined })
+  const session = mod.createLegacyChatSession(host, { ...engine, ...tts.engine, streamTurn: undefined })
   await session.send('讲讲', { voice: true })
   await new Promise((r) => setTimeout(r, 20))
   // 两句都已开声,但还没播完:不应提交
@@ -301,7 +302,7 @@ test('语音路径:打断——在播句不落盘,句柄级停声', async () => 
     turnBatch: async () => [{ speaker: 'A', text: '会被打断的句子', action: 'talk' }],
   })
   const tts = makeTtsVoice(false)
-  const session = mod.createChatSession(host, { ...engine, ...tts.engine, streamTurn: undefined })
+  const session = mod.createLegacyChatSession(host, { ...engine, ...tts.engine, streamTurn: undefined })
   await session.send('说话', { voice: true })
   await new Promise((r) => setTimeout(r, 20))
   session.cancel()
@@ -315,7 +316,7 @@ test('语音路径·流式:首句前失败 → 整段回落 turnBatch(无轻提�
   const { host, calls } = makeHost()
   const { engine, calls: ecalls } = makeEngine()
   const tts = makeTtsVoice(true)
-  const session = mod.createChatSession(host, {
+  const session = mod.createLegacyChatSession(host, {
     ...engine,
     ...tts.engine,
     // 生成器形状是流式依赖的契约;首句产出前即抛错,故无 yield
@@ -336,7 +337,7 @@ test('语音路径·流式:已有句后失败 → 保留已完成句 + 轻提示
   const { host, calls } = makeHost()
   const { engine, calls: ecalls } = makeEngine()
   const tts = makeTtsVoice(true)
-  const session = mod.createChatSession(host, {
+  const session = mod.createLegacyChatSession(host, {
     ...engine,
     ...tts.engine,
     streamTurn: async function* (input) {
@@ -368,7 +369,7 @@ test('记忆不变量:present 的 refs = record 的 refs = 传给生成的 promp
     ],
   }
   const { engine, calls: ecalls } = makeEngine({ memory: ctx })
-  const session = mod.createChatSession(host, engine)
+  const session = mod.createLegacyChatSession(host, engine)
   const res = await session.send('随便聊聊')
   assert.equal(res, 'accepted')
   await waitFor(() => calls.presentTurn.length > 0)

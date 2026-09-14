@@ -55,6 +55,9 @@ export interface GroupChatDeps {
   }>
   /** 提交回调:committed-speak 携带回复(宿主负责落盘+呈现入队);listen 也通知(游标推进) */
   onCommit?(msg: RoomMessage | null, meta: { actor: ActorId; result: CommitResult }): void
+  /** 用户消息入列通知(宿主负责落盘+短期窗口;工具/记忆在 openUserTurn 间隙执行)。
+   *  primary 为 null = 停止词分支(消息照常入列留痕,但全员暂停) */
+  onUserMessage?(msg: RoomMessage, primary: ActorId | null): void
   /** 运行事件(停止/epoch/状态)诊断钩子 */
   onEvent?(e: { type: 'paused' | 'resumed' | 'epoch' | 'status' | 'stale-drop'; actor?: ActorId; detail?: string }): void
 }
@@ -64,6 +67,26 @@ export type ActorBatchLike = import('./types').ActorBatch
 
 export interface GroupChatRuntime {
   sendUser(text: string): Promise<SendUserResult>
+  /**
+   * 打开用户回合但不唤醒任何 Worker:消息入列、链建立,工具/记忆由宿主在此间隙
+   * 执行一次(评审④)。普通结果调 handle.wake();工具 clarify 调 handle.awaitUser。
+   */
+  openUserTurn(text: string): Promise<
+    | { kind: 'empty' }
+    | { kind: 'backpressure' }
+    | { kind: 'stop' }
+    | {
+        kind: 'open'
+        chainId: string
+        message: RoomMessage
+        /** 主回应角色(@点名或甲乙轮换;宿主呈现/诊断用) */
+        primary: ActorId
+        /** 普通结果:唤醒全部 Actor 开始消费 */
+        wake(): void
+        /** 工具 clarify 短路:主回应人直接发一句反问,链挂起 awaiting-user,不唤醒 Worker */
+        awaitUser(actor: ActorId, text: string): void
+      }
+  >
   cancel(): void
   reset(): void
   /** 启动引导:历史消息按时间序占位(context-only;各角色游标随后对齐尾部) */
@@ -193,22 +216,32 @@ export function createGroupChatRuntime(deps: GroupChatDeps): GroupChatRuntime {
 
   return {
     async sendUser(text: string): Promise<SendUserResult> {
+      const turn = await this.openUserTurn(text)
+      // stop = 停止词已受理并暂停全员:消息已入列,对调用方即 accepted
+      if (turn.kind === 'stop') return 'accepted'
+      if (turn.kind !== 'open') return turn.kind
+      turn.wake()
+      return 'accepted'
+    },
+
+    async openUserTurn(text: string) {
       const trimmed = text.trim()
-      if (!trimmed) return 'empty'
-      if (disposed) return 'backpressure'
+      if (!trimmed) return { kind: 'empty' as const }
+      if (disposed) return { kind: 'backpressure' as const }
       const cfg = deps.config()
       // 用户最高优先级 · 停止:消息照常入列留痕,但立即暂停且不唤醒任何 Worker;
       // 该消息的因果链直接关闭——恢复永远由下一条用户消息开启
       if (isStopCommand(trimmed)) {
-        const { chain } = router.appendUser({
+        const { chain, message } = router.appendUser({
           text: trimmed,
           epoch: router.currentEpoch(),
           primaryActor: 'A',
           primaryAutonomy: 'quiet',
         })
         closeChain(chain)
+        deps.onUserMessage?.(message, null)
         stopAll('stop')
-        return 'accepted'
+        return { kind: 'stop' as const }
       }
       if (router.resume()) {
         // 从暂停恢复:新 epoch,失败计数复位(其他角色继续聊的能力一并恢复)
@@ -222,19 +255,44 @@ export function createGroupChatRuntime(deps: GroupChatDeps): GroupChatRuntime {
       }
       const primary = resolvePrimary(trimmed, cfg.names, rotation)
       rotation = primary.rotation
-      router.appendUser({
+      const { message, chain } = router.appendUser({
         text: trimmed,
         epoch: router.currentEpoch(),
         primaryActor: primary.actor,
         primaryAutonomy: cfg.actors[primary.actor]?.autonomy ?? 'natural',
       })
-      // 用户抢占:取消所有基于旧 revision、尚未提交的角色请求(§11.1);
-      // 批次保持未 ACK,重新收集的批次自然包含这条新消息,绝不重复回答
-      for (const id of ids) workers[id].abortActive()
-      router.trackDisabled()
-      wakeAll()
+      deps.onUserMessage?.(message, primary.actor)
       emit()
-      return 'accepted'
+      return {
+        kind: 'open' as const,
+        chainId: chain.rootMessageId,
+        message,
+        primary: primary.actor,
+        wake() {
+          // 用户抢占:取消所有基于旧 revision、尚未提交的角色请求(§11.1);
+          // 批次保持未 ACK,重新收集的批次自然包含这条新消息,绝不重复回答
+          for (const id of ids) workers[id].abortActive()
+          router.trackDisabled()
+          wakeAll()
+          emit()
+        },
+        awaitUser(actor: ActorId, clarifyText: string) {
+          // clarify 短路(评审④):主回应人直接发一句,链挂起 awaiting-user,
+          // 不唤醒任何 Worker——不伪造"模型已收到";用户补充后新批次一次读完
+          const clarify = journal.append({
+            author: actor,
+            kind: 'chat',
+            text: clarifyText,
+            epoch: router.currentEpoch(),
+            causalRootId: chain.rootMessageId,
+            depth: 1,
+            replyTo: [message.id],
+          })
+          router.markAwaitingUser(chain.rootMessageId)
+          deps.onCommit?.(clarify, { actor, result: { outcome: 'committed-speak', reply: clarify } })
+          emit()
+        },
+      }
     },
 
     cancel(): void {
@@ -297,6 +355,7 @@ export function createGroupChatRuntime(deps: GroupChatDeps): GroupChatRuntime {
 
     presentationHold() {
       presentationHolds += 1
+      emit()
       let released = false
       return () => {
         if (released) return

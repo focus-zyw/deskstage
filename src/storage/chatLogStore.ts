@@ -30,6 +30,16 @@ export interface ChatLogEntry {
   memoryRefs?: ChatMemoryRef[]
   /** 调试档完整检索 trace(仅 id/分数/枚举,无正文;默认档不落) */
   trace?: unknown
+  /** 群聊 Actor 系统:因果链会话标识(同一会话内 roomSeq 严格递增) */
+  sessionId?: string
+  /** 群聊全局序号(并发提交的排序事实源,不依赖毫秒 ts) */
+  roomSeq?: number
+  /** 用户转向代次 */
+  epoch?: number
+  /** 因果链根消息 id */
+  causalRootId?: string
+  /** 明确回应的消息 id 列表 */
+  replyTo?: string[]
 }
 
 const WHO_SET = new Set<ChatWho>(['user', 'A', 'B', 'C'])
@@ -86,6 +96,15 @@ export function sanitizeChatEntry(o: unknown): ChatLogEntry | null {
     if (refs.length > 0) out.memoryRefs = refs.slice(0, 20)
   }
   if (rec.trace && typeof rec.trace === 'object') out.trace = rec.trace
+  // 群聊 Actor 字段(可选; roomSeq 是并发提交的排序事实源)
+  if (typeof rec.sessionId === 'string' && rec.sessionId) out.sessionId = rec.sessionId.slice(0, 64)
+  if (typeof rec.roomSeq === 'number' && Number.isFinite(rec.roomSeq)) out.roomSeq = Math.trunc(rec.roomSeq)
+  if (typeof rec.epoch === 'number' && Number.isFinite(rec.epoch)) out.epoch = Math.trunc(rec.epoch)
+  if (typeof rec.causalRootId === 'string' && rec.causalRootId) out.causalRootId = rec.causalRootId.slice(0, 64)
+  if (Array.isArray(rec.replyTo)) {
+    const ids = rec.replyTo.filter((x): x is string => typeof x === 'string' && !!x).map((x) => x.slice(0, 64))
+    if (ids.length > 0) out.replyTo = ids.slice(0, 6)
+  }
   return out
 }
 
@@ -107,7 +126,20 @@ function getLogFile(): Promise<string> {
 /** 一批消息一次性落盘。角色应答可带 id/parentTurnId/memoryRefs/trace;
  *  ts 缺省 = 现在,但调用方应显式传入受理时刻的 ts(与 turn.id 同源,保证可对照) */
 export async function appendChatTurns(
-  turns: Array<{ id?: string; parentTurnId?: string; who: ChatWho; text: string; ts?: number; memoryRefs?: ChatMemoryRef[]; trace?: unknown }>,
+  turns: Array<{
+    id?: string
+    parentTurnId?: string
+    who: ChatWho
+    text: string
+    ts?: number
+    memoryRefs?: ChatMemoryRef[]
+    trace?: unknown
+    sessionId?: string
+    roomSeq?: number
+    epoch?: number
+    causalRootId?: string
+    replyTo?: string[]
+  }>,
 ): Promise<void> {
   const valid = turns
     .map((t) => sanitizeChatEntry({ ...t, ts: t.ts ?? Date.now() }))
@@ -162,21 +194,30 @@ export async function clearChatLog(): Promise<void> {
 
 // ---------- 时间线合并(纯函数,导出供测试) ----------
 
-/** 信息流条目:聊天消息为独立气泡;演出集为整块(含全部台词) */
+/** 信息流条目:聊天消息为独立气泡;演出集为整块(含全部台词)。
+ *  ord = 输入序(同 ts 且无 roomSeq 时保持原序的稳定排序兜底) */
 export type FeedItem =
-  | { kind: 'chat'; ts: number; entry: ChatLogEntry }
+  | { kind: 'chat'; ts: number; entry: ChatLogEntry; ord?: number }
   | { kind: 'episode'; ts: number; ep: Episode }
 
 /**
  * 演出集与聊天消息按 ts 升序合并成统一时间线(聊天气泡穿插在集块之间)。
  * 同 ts 时聊天消息排在集块前(消息先于该刻定稿的演出呈现);各输入内部已有序时为稳定排序。
+ * 同 ts 的聊天消息之间按 roomSeq(群聊 Actor 并发提交的排序事实源),无 roomSeq 保持原序。
  */
 export function buildFeed(episodes: Episode[], turns: ChatLogEntry[]): FeedItem[] {
   const items: FeedItem[] = [
     ...episodes.map((ep) => ({ kind: 'episode', ts: ep.ts, ep }) as FeedItem),
-    ...turns.map((entry) => ({ kind: 'chat', ts: entry.ts, entry }) as FeedItem),
+    ...turns.map((entry, i) => ({ kind: 'chat', ts: entry.ts, entry, ord: i }) as FeedItem),
   ]
-  return items.sort((a, b) => a.ts - b.ts || rank(a) - rank(b))
+  return items.sort(
+    (a, b) =>
+      a.ts - b.ts ||
+      rank(a) - rank(b) ||
+      (a.kind === 'chat' && b.kind === 'chat'
+        ? (a.entry.roomSeq ?? a.ord ?? 0) - (b.entry.roomSeq ?? b.ord ?? 0)
+        : 0),
+  )
 }
 
 /** 同 ts 的稳定次序:chat(0) 在 episode(1) 前 */

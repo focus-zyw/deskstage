@@ -123,14 +123,22 @@ export function createActorWorker(deps: ActorWorkerDeps): ActorWorker {
       toolNotes: extras.toolNotes,
       fullContext,
     }
+    // 网页两段式恢复的按需重建:同一输入切 fullContext/recovery 形态
+    const buildFor = (mode: { fullContext: boolean; recovery: boolean }) => {
+      const variant: PromptBuildInput = { ...input, fullContext: mode.fullContext, recovery: mode.recovery }
+      return {
+        prompt: buildReactionPrompt(identity, variant),
+        messages: buildReactionMessages(identity, variant),
+      }
+    }
     return {
       actor,
       batch,
       maySpeak,
-      prompt: buildReactionPrompt(identity, input),
-      messages: buildReactionMessages(identity, input),
       fullContext,
+      ...buildFor({ fullContext, recovery: false }),
       chainRootId: batch.primaryUserMessageId ?? batch.messages[0].causalRootId,
+      rebuildPrompt: buildFor,
     }
   }
 

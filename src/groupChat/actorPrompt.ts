@@ -38,6 +38,8 @@ export interface PromptBuildInput {
   /** 附在特定消息后的工具观察块(工具系统渲染好的不可信资料),键 = 消息 id */
   toolNotes?: Record<string, string>
   fullContext: boolean
+  /** 断线恢复语(网页两段式恢复:重建会话 + 全量进度重发) */
+  recovery?: boolean
 }
 
 const PROTOCOL_RULES = (batch: ActorBatch, maySpeak: boolean, remaining: number | null): string => {
@@ -110,8 +112,11 @@ function systemContent(input: PromptBuildInput, identity: PromptIdentity): strin
       `你的人设:${identity.persona}`,
       `群里的其他人:${identity.rosterLine}`,
       disciplineBlock(identity),
+      input.recovery ? '刚才连接断了一下;下面是目前群聊的完整进度,请从中断处继续正常参与群聊。' : '',
       PROTOCOL_RULES(input.batch, input.maySpeak, input.remainingReplies),
-    ].join('\n\n')
+    ]
+      .filter(Boolean)
+      .join('\n\n')
   }
   return [
     `继续群聊(你是 ${selfName},speaker "${input.actor}",人设与纪律同前)。`,

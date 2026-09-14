@@ -10,6 +10,17 @@ import { applyAppHotkeys, setHotkeyHandler } from './hotkeys'
 import { setCharacterGenders, setCharacterNames, setPersonaOverride, setCEnabled, nameOf } from './engine/persona'
 import { startEnvPolling } from './engine/envAware'
 import {
+  balanceVendorOf,
+  cachedBalanceLine,
+  formatBalanceLine,
+  loadBalanceTrack,
+  queryVendorBalance,
+  rememberBalance,
+  saveBalanceTrack,
+  updateBalanceTrack,
+  type BalanceInfo,
+} from './engine/balance'
+import {
   setCaptureMode,
   initPointerManager,
   registerHitRegion,
@@ -26,7 +37,7 @@ import type { Speaker } from './performer/player'
 import { useAllModes, modeOf, type Mode } from './performer/modes'
 import { generateShortChat, memoReminderLine, generateDailyLinePack } from './engine/llmClient'
 import { loadLinePacks, saveLinePack, dayKey } from './storage/linePackStore'
-import { createChatSession } from './session/ChatSession'
+import { createChatSession, type SendResult } from './session/ChatSession'
 import { pushTurn, type TurnWho } from './dialogue/turnWindow'
 import { appendChatTurns, listChatTurns } from './storage/chatLogStore'
 import { createToolCoordinator } from './tools/coordinator'
@@ -218,23 +229,25 @@ function App() {
     if (modeMenuOpen) closeOverlay('mode-menu')
     else openOverlayExclusive('mode-menu')
   }
-  // C 右键菜单:轻交互浮层(mode-menu 同机制,不激活窗口)。
+  // 角色右键菜单(C 团宠互动 + A/B 工具互动):轻交互浮层(mode-menu 同机制,不激活窗口)。
   // 声明在组件顶部:hit region 注册表(useOverlayHitRegions)要读 cMenuOpen/cMenuRef
   const cMenuOpen = rt.overlays.includes('c-menu')
+  const [cMenuFor, setCMenuFor] = useState<'A' | 'B' | 'C'>('C')
   const cMenuPos = useRef({ x: 0, y: 0 })
   const cMenuRef = useRef<HTMLDivElement>(null)
-  function openCMenu(x: number, y: number) {
+  function openCMenu(who: 'A' | 'B' | 'C', x: number, y: number) {
     // 限位:176 宽菜单贴边不裁切
     cMenuPos.current = {
       x: Math.max(8, Math.min(window.innerWidth - 184, x)),
       y: Math.max(8, Math.min(window.innerHeight - 260, y)),
     }
+    setCMenuFor(who)
     openOverlayExclusive('c-menu')
   }
   /** 菜单项动作:演出/生成期间只应一句,不动演出;空闲时执行 */
-  function runCMenuAction(run: () => void) {
+  function runCMenuAction(who: 'A' | 'B' | 'C', run: () => void) {
     if (phaseRef.current !== 'idle' || director.isPlaying()) {
-      showPoke('C', '（摆手）等这集演完再来点我~', 'talk', 1800)
+      showPoke(who, '（摆手）等这集演完再来点我~', 'talk', 1800)
       return
     }
     noteUserActive() // 点播也是主动互动:重置空闲/降频计时
@@ -272,6 +285,46 @@ function App() {
       run: feedC,
     },
   ]
+  /** A/B 右键菜单:工具型互动(与 C 的陪玩互动分开) */
+  function abMenuActions(who: 'A' | 'B'): { id: string; label: string; run: () => void }[] {
+    return [{ id: 'balance', label: '💰 查询余额', run: () => void runBalanceQuery(who) }]
+  }
+  /** 右键「查询余额」:DeepSeek/Kimi 公开余额接口 + 当日差值记账,角色口吻播报。
+   *  引导/失败都先角色开口;查询本体走 UtilityCard(后台处理中的载体) */
+  async function runBalanceQuery(who: 'A' | 'B') {
+    const cfg = await getConfig()
+    if (!cfg.apiKey.trim()) {
+      showPoke(who, '还没填 API Key,先到 设置 → 模型服务 里填上~', 'surprise', 3200)
+      return
+    }
+    if (!balanceVendorOf(cfg.baseUrl)) {
+      showPoke(who, '这家供应商没有公开的余额接口,查不了~', 'talk', 3000)
+      return
+    }
+    const cached = cachedBalanceLine()
+    if (cached) {
+      showPoke(who, cached, 'happy', 4200)
+      return
+    }
+    presenterSay(who, '我查查余额哈…', { ms: 2200 })
+    await runUtilityTask('tool', '查询余额', who, async (report) => {
+      report('连接中…')
+      let info: BalanceInfo
+      try {
+        info = await queryVendorBalance(cfg.baseUrl, cfg.apiKey)
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e)
+        showPoke(who, `查询失败:${msg}`, 'surprise', 3600)
+        return `查询失败:${msg}`
+      }
+      const { todayUsage, note, track } = updateBalanceTrack(loadBalanceTrack(), { total: info.total })
+      saveBalanceTrack(track)
+      const line = formatBalanceLine(info, todayUsage, note)
+      rememberBalance(info, line)
+      showPoke(who, line, 'happy', 4200)
+      return line
+    })
+  }
   // 设置窗:独立 WebView(tauri.conf 预建 label=settings,启动隐藏),主窗只管 show/hide
   // 与开关态同步;窗内表单、保存、Esc/关闭按钮都由设置窗自理(经 settings 事件桥回报)
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -589,6 +642,9 @@ function App() {
   // 不在各 runUtilityTask 调用点散布 showProp。截图翻译的任务 done 只代表 OCR 完成,
   // 翻译阶段由面板 onState 接力(running=翻译卡),真正完成才上 success。
   const utilityTasks = useUtilityTasks()
+  const utilCardsRef = useRef<HTMLDivElement>(null)
+  const utilCardsCountRef = useRef(0)
+  utilCardsCountRef.current = utilityTasks.length
   const utilPropSeen = useRef(new Map<string, string>())
   useEffect(() => {
     for (const t of utilityTasks) {
@@ -899,6 +955,15 @@ function App() {
               : new DOMRect(0, 0, 0, 0),
         },
         {
+          // 工具任务卡:同备忘卡,不注册则错误卡的"知道了"点不到(卡永远关不掉)
+          id: 'util-cards',
+          active: true,
+          getRect: () =>
+            utilCardsCountRef.current > 0
+              ? (utilCardsRef.current?.getBoundingClientRect() ?? new DOMRect(0, 0, 0, 0))
+              : new DOMRect(0, 0, 0, 0),
+        },
+        {
           id: 'outside',
           active: overlaysOpen,
           getRect: () => new DOMRect(0, 0, window.innerWidth, window.innerHeight),
@@ -1111,8 +1176,9 @@ function App() {
   const chatBusy = useSyncExternalStore(chatSession.subscribe, () => chatSession.getSnapshot().busy)
 
   /** 聊天通道核心(主聊天框与群聊页共用)。返回受理结果供 UI 提示:
-   *  'empty' 空文本 / 'busy' 忙碌 / 'accepted' 已受理;其余见 session/ChatSession.ts */
-  async function sendUserChatText(raw: string): Promise<'accepted' | 'busy' | 'empty'> {
+   *  'empty' 空文本 / 'busy' 仅旧引擎回退 / 'backpressure' 运行时销毁中 /
+   *  'accepted' 已受理(自由群聊下回应期间也照常受理) */
+  async function sendUserChatText(raw: string): Promise<SendResult> {
     return chatSession.send(raw)
   }
 
@@ -1516,20 +1582,20 @@ function App() {
         </div>
       )}
 
-      {/* C 右键点播菜单:锚在右键位置,轻交互浮层(点击项经原生钩子派发) */}
-      {cMenuOpen && !charHidden && cEnabled && (
+      {/* 角色右键点播菜单(C 团宠互动 / A/B 工具互动):锚在右键位置,轻交互浮层(点击项经原生钩子派发) */}
+      {cMenuOpen && !charHidden && (cMenuFor === 'C' ? cEnabled : true) && (
         <div
           ref={cMenuRef}
           className="mode-menu c-menu"
           style={{ left: cMenuPos.current.x, top: cMenuPos.current.y }}
         >
-          {cMenuActions.map((a) => (
+          {(cMenuFor === 'C' ? cMenuActions : abMenuActions(cMenuFor)).map((a) => (
             <button
               key={a.id}
               className="mode-menu-item"
               onClick={() => {
                 closeOverlay('c-menu')
-                runCMenuAction(a.run)
+                runCMenuAction(cMenuFor, a.run)
               }}
             >
               <span className="mode-menu-label">{a.label}</span>
@@ -1715,7 +1781,10 @@ function App() {
         onPointerMove={(e) => onCharPointerMove(e, 'A')}
         onPointerUp={() => onCharPointerUp('A')}
         onWheel={(e) => onCharWheel(e)}
-        onContextMenu={(e) => e.preventDefault()}
+        onContextMenu={(e) => {
+          e.preventDefault()
+          openCMenu('A', e.clientX, e.clientY)
+        }}
       >
         <Bubble
           text={bubble.A}
@@ -1767,7 +1836,10 @@ function App() {
         onPointerMove={(e) => onCharPointerMove(e, 'B')}
         onPointerUp={() => onCharPointerUp('B')}
         onWheel={(e) => onCharWheel(e)}
-        onContextMenu={(e) => e.preventDefault()}
+        onContextMenu={(e) => {
+          e.preventDefault()
+          openCMenu('B', e.clientX, e.clientY)
+        }}
       >
         <Bubble
           text={bubble.B}
@@ -1822,7 +1894,7 @@ function App() {
         onWheel={(e) => onResidentWheel(e)}
         onContextMenu={(e) => {
           e.preventDefault()
-          openCMenu(e.clientX, e.clientY)
+          openCMenu('C', e.clientX, e.clientY)
         }}
       >
         <ResidentActor
@@ -1908,11 +1980,11 @@ function App() {
               />
               <button
                 className="panel-btn primary"
-                disabled={chatBusy || phase !== 'idle' || !chatDraft.trim()}
-                title={phase !== 'idle' ? '演出/生成进行中,稍后再说' : ''}
+                disabled={phase !== 'idle' || !chatDraft.trim()}
+                title={phase !== 'idle' ? '演出/生成进行中,稍后再说' : chatBusy ? '角色正在回应,可继续输入' : ''}
                 onClick={() => void sendUserChat()}
               >
-                {chatBusy ? '…' : '发送'}
+                {chatBusy ? '回应中…' : '发送'}
               </button>
             </div>
           </div>
@@ -2042,7 +2114,9 @@ function App() {
           onDismiss={dismissRating}
         />
 
-        <UtilityCards />
+        <div ref={utilCardsRef}>
+          <UtilityCards />
+        </div>
 
         {captureShot && (
           <Suspense fallback={null}>

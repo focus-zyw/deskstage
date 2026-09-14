@@ -108,6 +108,14 @@ export interface ActorReactionRequest {
   fullContext: boolean
   /** 因果链根消息 id(重建会话时注入正式日志摘要用) */
   chainRootId: string
+  /**
+   * 网页恢复专用:按需以另一形态重建 prompt(全量上下文/断线恢复语)。
+   * API Adapter 无状态不需要;网页 Adapter 两段式恢复时用它重发全量进度。
+   */
+  rebuildPrompt?(mode: { fullContext: boolean; recovery: boolean }): {
+    prompt: string
+    messages: ActorReactionRequest['messages']
+  }
 }
 
 export interface ActorReactionResponse {

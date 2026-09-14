@@ -11,6 +11,9 @@ export interface ActorModelAdapter {
   react(request: ActorReactionRequest, signal: AbortSignal): Promise<ActorReaction>
   /** 请求下次 react 携带全量上下文(网页会话首叫/重建后);缺省 = 恒全量(API 无状态) */
   prefersFullContext?(): boolean
+  /** 作废当前网页会话(转向/停止时在飞废弃/绑定切换/清空):下次 react 重建会话。
+   *  会话键带 generation,旧键的页面被释放——旧内容绝不污染新批次 */
+  invalidate?(): void
   reset?(): Promise<void>
   dispose?(): Promise<void>
 }
