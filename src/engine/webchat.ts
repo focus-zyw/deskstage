@@ -122,10 +122,23 @@ export async function webchatLogin(site: WebchatSite): Promise<void> {
   await invoke('webchat_login', { site })
 }
 
+/** probe 阶段状态:沿状态机逐级只读走查,断在哪一级诊断指向哪一级 */
+export interface ProbeStage {
+  stage: 'connected' | 'page' | 'input'
+  ok: boolean
+  detail: string
+}
+
+export interface ProbeResult {
+  ready: boolean
+  detail: string
+  stages: ProbeStage[]
+}
+
 /** 逐级探测目标站点可否发消息,detail 说明断点位置(未就绪时展示给用户/排查用)。
  *  site 可指定(AI 剧场按甲乙站点分别探测);缺省 = 当前配置站点 */
-export async function webchatProbe(site?: WebchatSite): Promise<{ ready: boolean; detail: string }> {
-  if (!inTauri) return { ready: false, detail: '非桌面端' }
+export async function webchatProbe(site?: WebchatSite): Promise<ProbeResult> {
+  if (!inTauri) return { ready: false, detail: '非桌面端', stages: [] }
   const cfg = await getConfig()
   return invoke('webchat_probe', { site: site ?? cfg.webchatSite })
 }

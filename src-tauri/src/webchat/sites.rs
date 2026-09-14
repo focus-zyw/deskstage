@@ -312,6 +312,28 @@ const READY_JS: &str = r#"(() => {
   return sels.some((s) => [...document.querySelectorAll(s)].some(visible));
 })()"#;
 
+/// 页面状态检查:输入框可见 + 通用风控/验证码拦截启发。
+/// blocker 只查 class/id 属性与 iframe src 命中 captcha/验证码/安全验证字样,
+/// 不扫正文——聊天内容里提到"验证码"不该被误判成风控弹窗。
+/// 登录失效的直接征兆也是输入框消失(未登录站点通常没有输入框),归入 inputReady。
+const STATE_JS: &str = r#"(() => {
+  __UTILS__
+  const sels = __COMPOSER_SELS__;
+  const inputReady = sels.some((s) => [...document.querySelectorAll(s)].some(visible));
+  const hit = (el) => {
+    const key = `${el.className || ''} ${el.id || ''}`.toLowerCase();
+    return /captcha|verify|安全验证|滑动验证|风控/.test(key);
+  };
+  const blocker =
+    [...document.querySelectorAll('iframe')].some((f) => visible(f) && /captcha|verify/i.test(f.src || ''))
+    || [...document.querySelectorAll('div,section')].some((el) => {
+      if (!visible(el)) return false;
+      const b = el.getBoundingClientRect();
+      return b.width > 200 && b.height > 120 && hit(el);
+    });
+  return JSON.stringify({ inputReady, blocker: blocker ? '检测到验证码/安全验证弹层' : '' });
+})()"#;
+
 impl SiteAdapter {
     fn selectors_json(selectors: &[&str]) -> String {
         serde_json::to_string(selectors).expect("静态 CSS 选择器应可序列化")
@@ -386,6 +408,14 @@ impl SiteAdapter {
     /// 就绪检查脚本
     pub fn ready_js(&self) -> String {
         READY_JS.replace("__UTILS__", UTILS_JS).replace(
+            "__COMPOSER_SELS__",
+            &Self::selectors_json(self.composer_sels),
+        )
+    }
+
+    /// 页面状态脚本(输入框可见 + 风控/验证码启发),probe 阶段化用
+    pub fn state_js(&self) -> String {
+        STATE_JS.replace("__UTILS__", UTILS_JS).replace(
             "__COMPOSER_SELS__",
             &Self::selectors_json(self.composer_sels),
         )
@@ -487,10 +517,7 @@ pub fn adapter(id: &str) -> Option<&'static SiteAdapter> {
             r#"button[aria-label*="发送"]"#,
         ],
         send_retry_sels: NO_SELS,
-        message_root_sels: &[
-            r#"[data-message-author-role="assistant"]"#,
-            ".agent-turn",
-        ],
+        message_root_sels: &[r#"[data-message-author-role="assistant"]"#, ".agent-turn"],
         markdown_body_sels: &[".markdown"],
         thinking_sels: &[
             r#"[data-testid="reasoning"]"#,
@@ -532,7 +559,11 @@ pub fn adapter(id: &str) -> Option<&'static SiteAdapter> {
             r#"button[aria-label*="发送"]"#,
         ],
         send_retry_sels: NO_SELS,
-        message_root_sels: &["model-response", ".model-response-text", ".response-container"],
+        message_root_sels: &[
+            "model-response",
+            ".model-response-text",
+            ".response-container",
+        ],
         markdown_body_sels: &[
             ".model-response-text",
             "message-content",
@@ -736,7 +767,12 @@ mod tests {
             ("qianwen", "answer-common-card"),
         ];
         for site in all() {
-            for script in [site.ready_js(), site.send_js(), site.snap_js()] {
+            for script in [
+                site.ready_js(),
+                site.send_js(),
+                site.snap_js(),
+                site.state_js(),
+            ] {
                 assert!(!script.contains("__"), "站点脚本仍有未替换占位符");
             }
             for (owner, mark) in fingerprints {

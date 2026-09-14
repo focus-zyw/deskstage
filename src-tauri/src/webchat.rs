@@ -1881,53 +1881,143 @@ pub async fn webchat_login(
 pub struct ProbeResult {
     pub ready: bool,
     pub detail: String,
+    /// 阶段状态(替代布尔"已就绪"):沿状态机逐级只读走查的结果,
+    /// 断在哪一级,诊断就指向哪一级(连接 / 页面 / 输入框与登录态)
+    pub stages: Vec<ProbeStage>,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ProbeStage {
+    /// 阶段名:connected / page / input(与 AskPhase 状态机对齐)
+    pub stage: String,
+    pub ok: bool,
+    pub detail: String,
 }
 
 /// 逐级探测目标站点可否发消息,detail 说明断点位置(未就绪时展示给用户/排查用)
 #[tauri::command]
 pub async fn webchat_probe(app: AppHandle, site: String) -> Result<ProbeResult, String> {
     let a = adapter(&site).ok_or_else(|| format!("未知站点: {site}"))?;
-    let not_ready = |detail: &str| ProbeResult {
-        ready: false,
-        detail: detail.to_string(),
-    };
     let profile = profile_dir(&app)?;
-    let Ok((port, mut browser)) = browser_connect(&profile).await else {
-        return Ok(not_ready("连不上 Edge 调试端口:Edge 未启动或端口不对"));
-    };
-    let res = match browser.call("Target.getTargets", json!({}), 8000).await {
-        Ok(res) => res,
-        Err(e) => return Ok(not_ready(&format!("拉取标签页列表失败: {e}"))),
-    };
-    // 取最近打开的本站标签页(与旧实现的 reverse().find 语义一致)
-    let target_id = res
-        .get("targetInfos")
-        .and_then(Value::as_array)
-        .and_then(|list| {
-            list.iter()
-                .rev()
-                .find(|t| {
-                    t.get("type").and_then(Value::as_str) == Some("page")
-                        && t.get("url")
-                            .and_then(Value::as_str)
-                            .is_some_and(|u| u.contains(a.host))
-                })
-                .and_then(|t| t.get("targetId").and_then(Value::as_str))
-                .map(String::from)
+    let mut stages: Vec<ProbeStage> = Vec::new();
+
+    // ---- Connected:Edge 进程存在 + 调试通道可连 ----
+    let connected = browser_connect(&profile).await;
+    stages.push(ProbeStage {
+        stage: "connected".into(),
+        ok: connected.is_ok(),
+        detail: connected
+            .as_ref()
+            .map(|_| "Edge 专用实例在跑,调试通道可连".into())
+            .unwrap_or_else(|e| format!("Edge 未启动或调试通道不可连: {e}")),
+    });
+    let Ok((port, mut browser)) = connected else {
+        return Ok(ProbeResult {
+            ready: false,
+            detail: "Edge 未启动:先点「打开登录窗口」拉起专用 Edge".into(),
+            stages,
         });
-    let Some(target_id) = target_id else {
-        return Ok(not_ready("Edge 里没有目标站点标签页"));
     };
-    match page_call(port, &target_id, &a.ready_js(), 8000, false, false).await {
-        Ok(v) if v.as_bool() == Some(true) => {
-            show_main(&app, true);
+
+    // ---- Page:标签页存活且属于正确站点 ----
+    let found = match browser.call("Target.getTargets", json!({}), 8000).await {
+        Ok(res) => res
+            .get("targetInfos")
+            .and_then(Value::as_array)
+            .and_then(|list| {
+                list.iter()
+                    .rev()
+                    .find(|t| {
+                        t.get("type").and_then(Value::as_str) == Some("page")
+                            && t.get("url")
+                                .and_then(Value::as_str)
+                                .is_some_and(|u| u.contains(a.host))
+                    })
+                    .and_then(|t| t.get("targetId").and_then(Value::as_str))
+                    .map(String::from)
+            }),
+        Err(e) => {
+            stages.push(ProbeStage {
+                stage: "page".into(),
+                ok: false,
+                detail: format!("拉取标签页列表失败: {e}"),
+            });
+            return Ok(ProbeResult {
+                ready: false,
+                detail: format!("拉取标签页列表失败: {e}"),
+                stages,
+            });
+        }
+    };
+    let Some(target_id) = found else {
+        stages.push(ProbeStage {
+            stage: "page".into(),
+            ok: false,
+            detail: format!("没有 {} 的标签页(未打开,或打开的是别的站点)", a.host),
+        });
+        return Ok(ProbeResult {
+            ready: false,
+            detail: format!("Edge 里没有 {} 的标签页:先点「打开登录窗口」", a.host),
+            stages,
+        });
+    };
+    stages.push(ProbeStage {
+        stage: "page".into(),
+        ok: true,
+        detail: "站点标签页存活".into(),
+    });
+
+    // ---- Input:页面加载完成 + 输入框可见 + 无风控/验证码拦截(全部只读) ----
+    let state = page_call(port, &target_id, &a.state_js(), 8000, false, false).await;
+    match state {
+        Ok(v) => {
+            let parsed: Value =
+                serde_json::from_str(v.as_str().unwrap_or("{}")).unwrap_or_else(|_| json!({}));
+            let input_ready = parsed.get("inputReady").and_then(Value::as_bool) == Some(true);
+            let blocker = parsed
+                .get("blocker")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty());
+            stages.push(ProbeStage {
+                stage: "input".into(),
+                ok: input_ready && blocker.is_none(),
+                detail: if let Some(b) = blocker {
+                    b.to_string()
+                } else if input_ready {
+                    "输入框可见,可以发送".into()
+                } else {
+                    "输入框未出现:可能登录已失效,或站点改版需更新选择器".into()
+                },
+            });
+            let input_stage = stages.last().unwrap();
+            let ready = input_stage.ok;
+            let detail = if ready {
+                "已就绪".into()
+            } else {
+                input_stage.detail.clone()
+            };
+            if ready {
+                show_main(&app, true);
+            }
             Ok(ProbeResult {
-                ready: true,
-                detail: "已就绪".into(),
+                ready,
+                detail,
+                stages,
             })
         }
-        Ok(_) => Ok(not_ready("输入框未出现(未登录,或站点改版需更新选择器)")),
-        Err(e) => Ok(not_ready(&format!("附加到页面失败: {e}"))),
+        Err(e) => {
+            stages.push(ProbeStage {
+                stage: "input".into(),
+                ok: false,
+                detail: format!("页面检查失败: {e}"),
+            });
+            Ok(ProbeResult {
+                ready: false,
+                detail: format!("附加到页面失败: {e}"),
+                stages,
+            })
+        }
     }
 }
 
