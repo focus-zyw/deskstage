@@ -17,6 +17,7 @@ import {
   emptyTurnMemory,
   getMemory,
   mergeFacts,
+  prepareTurnMemory,
   topFacts,
   type TurnMemoryContext,
 } from '../storage/memoryStore'
@@ -362,7 +363,10 @@ export function createChatSession(
       host.onUserActive()
 
       // —— 工具/记忆:用户入口只执行一次(评审④)——
-      const memory: TurnMemoryContext = (await engine.prepareMemory?.({ query: text, n: 3 }).catch(() => emptyTurnMemory())) ?? emptyTurnMemory()
+      // 缺省走真实记忆检索(测试注入 engine.prepareMemory 覆盖)
+      const memory: TurnMemoryContext =
+        (await (engine.prepareMemory ?? prepareTurnMemory)({ query: text, n: 3 }).catch(() => emptyTurnMemory())) ??
+        emptyTurnMemory()
       diag.memorySelection(turnId, {
         ms: 0,
         selected: memory.selected.map((s) => ({ id: s.id, score: s.score, source: s.source })),

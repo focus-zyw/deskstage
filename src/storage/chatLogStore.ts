@@ -53,6 +53,18 @@ const MAX_TURNS = 5000
 const CHATLOG_BUMP_EVENT = 'chatlog-bump'
 const inTauriHost = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 
+/** 只有主窗(唯一写入端)才向外推送——设置窗收到 bump 后本地 bump 也会走到这里,
+ *  不分窗口就是"自己发给自己→监听→再 bump"的无限自反馈循环(真实事故) */
+function isMainWindow(): boolean {
+  try {
+    const meta = (window as unknown as { __TAURI_INTERNALS__?: { metadata?: { currentWindow?: { label?: string } } } })
+      .__TAURI_INTERNALS__
+    return meta?.metadata?.currentWindow?.label !== 'settings'
+  } catch {
+    return true
+  }
+}
+
 let version = 0
 const listeners = new Set<() => void>()
 
@@ -60,7 +72,7 @@ const listeners = new Set<() => void>()
 function bumpVersion(): void {
   version += 1
   for (const l of listeners) l()
-  if (inTauriHost) {
+  if (inTauriHost && isMainWindow()) {
     void emitTo('settings', CHATLOG_BUMP_EVENT, { version }).catch(() => {})
   }
 }

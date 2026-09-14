@@ -9,7 +9,7 @@
 // 集管理(赞/踩/删除/收藏)仍在「演出历史」页。
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ChangeEvent, KeyboardEvent } from 'react'
-import { listen } from '@tauri-apps/api/event'
+import { emitTo, listen } from '@tauri-apps/api/event'
 import { listEpisodes, type Episode } from '../../storage/historyStore'
 import {
   listChatTurns,
@@ -344,6 +344,15 @@ export function ChatLogSettings() {
     return () => {
       void un.then((f) => f())
     }
+  }, [])
+
+  // 兜底:窗口重新聚焦(从主窗切回来)时重拉一次列表——跨窗事件万一错漏也不丢消息
+  useEffect(() => {
+    const refetch = () => {
+      void listChatTurns(MAX_TURNS).then((ts) => setTurns(ts))
+    }
+    window.addEventListener('focus', refetch)
+    return () => window.removeEventListener('focus', refetch)
   }, [])
 
   // 滚动:接近底部(40px 内)= 跟随模式,新消息自动滚到底;向上前置加载后保持视口。
@@ -852,6 +861,18 @@ export function ChatLogSettings() {
               ✕
             </button>
           </div>
+          <button
+            className="drawer-field"
+            style={{ cursor: 'pointer', textAlign: 'left' }}
+            title="为甲/乙/丙各自选择 API 模型或网页模型"
+            onClick={() => {
+              setDrawerOpen(false)
+              void emitTo('settings', 'settings-goto', { tab: 'model', card: '群聊角色绑定' })
+            }}
+          >
+            <span>角色模型绑定</span>
+            <span style={{ opacity: 0.75 }}>去选择 →</span>
+          </button>
           <label className="drawer-field">
             <span>群名</span>
             <input

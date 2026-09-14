@@ -12,6 +12,9 @@ import {
   type SettingsSessionApi,
 } from './useSettingsSession'
 import { SETTINGS_NAV, SETTINGS_SEARCH_INDEX, TAB_GROUP, type SettingsTab } from './settingsCatalog'
+import { DEFAULT_CONFIG } from '../storage/configStore'
+
+const DEFAULT_GROUP_NAME = DEFAULT_CONFIG.groupChat.name
 import { useConfigSnapshot } from '../storage/configStore'
 
 const GeneralSettings = lazy(() => import('./tabs/GeneralSettings').then((m) => ({ default: m.GeneralSettings })))
@@ -102,6 +105,10 @@ export function SettingsWindow({ innerRef, bridge, initialTab = 'general', onClo
   const [flashCard, setFlashCard] = useState<string | null>(null)
   const flashTimer = useRef(0)
   const setBodyRef = useRef<HTMLDivElement>(null)
+  // 群聊页导航名 = 用户设置的群名(空串回落默认『我们的群』)
+  const navLabelOverride: Partial<Record<SettingsTab, string>> = {
+    chatlog: session.form.groupChat.name.trim() || DEFAULT_GROUP_NAME,
+  }
 
   // 主窗驱动的分页跳转(工具栏/命令面板直达某分页):窗口常驻隐藏,show 后按事件切页
   const onCloseRef = useRef(onClose)
@@ -111,9 +118,14 @@ export function SettingsWindow({ innerRef, bridge, initialTab = 'general', onClo
   })
   useEffect(() => {
     if (!('__TAURI_INTERNALS__' in window)) return
-    const un = listen<{ tab: SettingsTab }>('settings-goto', (e) => {
+    const un = listen<{ tab: SettingsTab; card?: string }>('settings-goto', (e) => {
       setSettingsQuery('')
       setSettingsTab(e.payload.tab)
+      if (e.payload.card) {
+        setFlashCard(e.payload.card)
+        window.clearTimeout(flashTimer.current)
+        flashTimer.current = window.setTimeout(() => setFlashCard(null), 2600)
+      }
     })
     // Esc 关闭设置窗(搜索框/快捷键录入器等局部 Esc 已 stopPropagation,不会漏到这里)
     const onKey = (e: KeyboardEvent) => {
@@ -172,7 +184,9 @@ export function SettingsWindow({ innerRef, bridge, initialTab = 'general', onClo
       )
     : []
   const currentTabLabel =
-    SETTINGS_NAV.flatMap((g) => g.items).find((i) => i.id === settingsTab)?.label ?? '设置'
+    // 聊天记录页的导航名跟随用户设置的群名(未设置用默认),其余分页用静态标签
+    (navLabelOverride[settingsTab] ?? SETTINGS_NAV.flatMap((g) => g.items).find((i) => i.id === settingsTab)?.label) ??
+      '设置'
   const TabContent = TAB_CONTENT[settingsTab]
 
   return (
@@ -222,7 +236,7 @@ export function SettingsWindow({ innerRef, bridge, initialTab = 'general', onClo
                     }}
                   >
                     <span className="set-nav-icon">{item.icon}</span>
-                    {item.label}
+                    {navLabelOverride[item.id] ?? item.label}
                   </button>
                 ))}
               </nav>
