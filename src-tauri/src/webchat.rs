@@ -703,6 +703,21 @@ impl<O: CdpOps> HubState<O> {
         }
     }
 
+    /// 探活(带重试):单次 WS 握手超时(实例繁忙/负载高)不等于 Edge 挂了。
+    /// 误判的代价是杀整个实例——多 AI 剧场两个站点的会话标签页会一起消失,故先重试再升级
+    async fn probe_running(&self, profile: &Path, deadline: Deadline) -> Option<u16> {
+        for _ in 0..3 {
+            if let Some(port) = self.ops.probe_port(profile).await {
+                return Some(port);
+            }
+            if deadline.expired() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(400)).await;
+        }
+        None
+    }
+
     /// 读租约:确保 Edge 在跑(不在跑则短暂升写租约拉起),返回租约守卫。
     /// 写租约等待期间新读请求 FIFO 排队,不会插进 restart 中间
     async fn edge_read_lease(
@@ -714,16 +729,27 @@ impl<O: CdpOps> HubState<O> {
     ) -> Result<tokio::sync::RwLockReadGuard<'_, EdgeRuntime>, AskFail> {
         loop {
             let guard = within(self.edge.read(), cancel, deadline, "edge").await?;
-            let port = within(self.ops.probe_port(profile), cancel, deadline, "edge").await?;
+            let port = within(
+                self.probe_running(profile, deadline),
+                cancel,
+                deadline,
+                "edge",
+            )
+            .await?;
             if port.is_some() {
                 return Ok(guard);
             }
             drop(guard);
             // 升写:杀旧拉新(写者之间互斥;另一写者刚修好则直接回落读)
             let w = within(self.edge.write(), cancel, deadline, "edge").await?;
-            let still_down = within(self.ops.probe_port(profile), cancel, deadline, "edge")
-                .await?
-                .is_none();
+            let still_down = within(
+                self.probe_running(profile, deadline),
+                cancel,
+                deadline,
+                "edge",
+            )
+            .await?
+            .is_none();
             if still_down {
                 self.ops
                     .kill_and_launch(profile, url)
@@ -1036,6 +1062,39 @@ impl<O: CdpOps> HubState<O> {
         }
     }
 
+    /// 打开登录窗口(设置页"打开登录窗口"/AI剧场甲乙各自登录)。
+    /// 关键语义:实例已在跑 = **只开一个新标签页**——绝不杀实例,其他站点的
+    /// 标签页与会话(多 AI 剧场两个站点并存)原样存活;只有真的没在跑才冷启动。
+    /// 冷启动会重启进程:epoch +1、全部会话句柄失效(后续 ask 自动重建标签页)。
+    pub async fn open_login(&self, profile: &Path, url: &str) -> Result<LoginOutcome, String> {
+        if let Some(port) = self.ops.probe_port(profile).await {
+            // 复用路径:新标签页落在已有窗口(createTarget 默认前台激活)
+            self.ops.create_page(port, url).await?;
+            return Ok(LoginOutcome::Reused);
+        }
+        // 冷启动:先取消全部活动请求(在飞 ask 快速收场释放读租约),再取写租约
+        self.cancel_all();
+        let mut w = tokio::time::timeout(Duration::from_secs(30), self.edge.write())
+            .await
+            .map_err(|_| "等待在飞网页生成结束超时,请稍后重试登录".to_string())?;
+        // 双检:等锁期间在飞 ask 的自动拉起可能已把实例修好
+        match self.ops.probe_port(profile).await {
+            Some(port) => {
+                drop(w);
+                self.ops.create_page(port, url).await?;
+                Ok(LoginOutcome::Reused)
+            }
+            None => {
+                // kill 兜底:清理"端口文件缺失但进程还在"的僵尸实例(无调试参数)
+                self.ops.kill_and_launch(profile, url).await?;
+                w.epoch += 1;
+                // 全部会话句柄失效(target 随进程消失):清表,后续 ask 自动重建
+                self.conversations.lock().await.clear();
+                Ok(LoginOutcome::ColdStarted)
+            }
+        }
+    }
+
     /// 闲置会话清扫(sweeper 定时调用,崩溃兜底)。
     /// key_lock.try_lock 拿不到 = ask 在飞,跳过不关在用会话
     pub async fn sweep_idle(&self) {
@@ -1080,6 +1139,13 @@ impl<O: CdpOps> HubState<O> {
 
 /// 桌面端装配:真实 CDP 传输
 pub type WebchatHub = HubState<RealCdpOps>;
+
+/// 登录窗口的两种结果:复用已有实例开新页 = 其他标签页原样存活
+#[derive(Debug, PartialEq, Eq)]
+pub enum LoginOutcome {
+    Reused,
+    ColdStarted,
+}
 
 // ---------- 命令:Shared 路由(旧通道,外部行为兼容) ----------
 
@@ -1293,8 +1359,9 @@ pub fn webchat_cancel(hub: State<'_, Arc<WebchatHub>>, request_id: String) -> Re
 }
 
 /// 拉起可见的 Edge 窗口给用户登录(隐藏主覆盖层让路)。
-/// 走 Hub 写租约:先取消全部活动请求(在飞 ask 快速收场释放读租约),
-/// 再 kill+重启,epoch +1 原子失效全部会话句柄——重启不可能杀掉在飞 ask
+/// 实例已在跑 = 只开新标签页(其他站点标签页原样存活——多 AI 剧场两个站点
+/// 并存的关键);只有没在跑才冷启动(epoch 失效会话句柄)。成功才隐藏主覆盖层:
+/// 拉起失败没有可交互的 Edge 窗口,角色该留在屏幕上
 #[tauri::command]
 pub async fn webchat_login(
     app: AppHandle,
@@ -1305,20 +1372,9 @@ pub async fn webchat_login(
         .ok_or_else(|| format!("未知站点: {site}"))?
         .url;
     let profile = profile_dir(&app)?;
-    hub.cancel_all();
-    // 写租约:等在飞 ask 收场(已取消,≤ 单次 evaluate 上限);期间新 ask FIFO 排队其后
-    let mut w = tokio::time::timeout(Duration::from_secs(30), hub.edge.write())
-        .await
-        .map_err(|_| "等待在飞网页生成结束超时,请稍后重试登录".to_string())?;
-    let r = hub.ops.kill_and_launch(&profile, url).await;
-    if r.is_ok() {
-        w.epoch += 1;
-        // 全部会话句柄失效(target 已随进程死亡):清表,后续 ask 自动重建
-        hub.conversations.lock().await.clear();
-    }
-    drop(w);
+    hub.open_login(&profile, url).await?;
     show_main(&app, false);
-    r
+    Ok(())
 }
 
 // ---------- 就绪探测(设置页测试按钮) ----------
@@ -1416,6 +1472,8 @@ mod tests {
         /// 活跃 eval 计数与峰值(并发断言用)
         active_evals: u32,
         peak_evals: u32,
+        /// Edge 实例是否在跑(false = 探活失败,走冷启动路径)
+        running: bool,
     }
 
     struct FakeOps {
@@ -1425,7 +1483,10 @@ mod tests {
     impl FakeOps {
         fn new() -> Self {
             Self {
-                inner: Mutex::new(FakeOpsInner::default()),
+                inner: Mutex::new(FakeOpsInner {
+                    running: true, // 缺省实例在跑;测试可置 false 模拟 Edge 未启动/已退出
+                    ..FakeOpsInner::default()
+                }),
             }
         }
 
@@ -1435,15 +1496,20 @@ mod tests {
     }
 
     impl CdpOps for FakeOps {
-        async fn kill_and_launch(&self, _profile: &Path, _url: &str) -> Result<(), String> {
+        async fn kill_and_launch(&self, _profile: &Path, url: &str) -> Result<(), String> {
             let mut s = self.state();
             s.launched += 1;
             s.pages.clear(); // 进程死亡 = 全部标签页消失
+                             // 真实行为:Edge 以 URL 参数启动 = 新实例第一个窗口就打开该页
+            s.next_id += 1;
+            let id = format!("t{}", s.next_id);
+            s.pages.push((id, url.to_string()));
+            s.running = true;
             Ok(())
         }
 
         async fn probe_port(&self, _profile: &Path) -> Option<u16> {
-            Some(9222)
+            self.state().running.then_some(9222)
         }
 
         async fn list_pages(&self, _port: u16) -> Result<Vec<(String, String)>, String> {
@@ -1655,8 +1721,70 @@ mod tests {
         // 重启后同 key ask:全新标签页(旧的已随进程消失)
         let _ = ask_conv(&hub, "r2", "k1", 10_000).await.unwrap();
         let s = hub.ops.state();
-        assert_eq!(s.pages.len(), 1);
+        // 重启实例的启动页(以 URL 参数打开) + 为该 key 新建的会话页
+        assert_eq!(s.pages.len(), 2);
         assert!(s.launched >= 1);
+    }
+
+    /// 登录复用路径(回归:多 AI 剧场两个站点并存的关键):
+    /// 实例在跑时"打开登录窗口"只开新标签页,其他站点标签页与会话句柄原样存活
+    #[tokio::test]
+    async fn login_reuses_running_instance_and_keeps_other_tabs() {
+        let hub = hub_with(FakeOps::new());
+        // 甲(deepseek)已有一场会话
+        let _ = ask_conv(&hub, "r1", "relay:e1:A", 10_000).await.unwrap();
+        let before = hub.ops.state().pages.len();
+        assert_eq!(before, 1);
+        // 给乙(豆包)打开登录窗口:实例在跑,不允许杀实例
+        let outcome = hub
+            .open_login(&profile(), "https://www.doubao.com/chat/")
+            .await
+            .unwrap();
+        assert_eq!(outcome, LoginOutcome::Reused);
+        {
+            // std Mutex 不可重入:守卫用完即释放,别跨断言持有(否则下面再锁即死锁)
+            let s = hub.ops.state();
+            assert_eq!(s.launched, 0, "复用路径不得重启 Edge");
+            assert_eq!(s.pages.len(), before + 1, "登录只应新增一个标签页");
+        }
+        // 甲的会话句柄原样存活,且旧标签页仍在(豆包/深寻互不干扰)
+        let map = hub.conversations.lock().await;
+        assert!(map.contains_key("relay:e1:A"));
+        let slot = map.get("relay:e1:A").unwrap().clone();
+        drop(map);
+        let tid = slot.state.lock().await.target_id.clone().unwrap();
+        drop(slot);
+        assert!(
+            hub.ops.state().pages.iter().any(|(id, _)| id == &tid),
+            "原会话标签页必须存活"
+        );
+        // 再问一次同 key:复用原标签页,不再新建
+        let _ = ask_conv(&hub, "r2", "relay:e1:A", 10_000).await.unwrap();
+        assert_eq!(hub.ops.state().pages.len(), before + 1);
+    }
+
+    /// 冷启动路径:实例真没在跑才重启;epoch 失效、会话句柄清空
+    #[tokio::test]
+    async fn login_cold_starts_when_edge_not_running() {
+        let hub = hub_with(FakeOps::new());
+        let _ = ask_conv(&hub, "r1", "relay:e1:A", 10_000).await.unwrap();
+        let epoch_before = hub.edge.read().await.epoch;
+        hub.ops.state().running = false; // 用户把 Edge 整个关了
+        let outcome = hub
+            .open_login(&profile(), "https://chat.deepseek.com/")
+            .await
+            .unwrap();
+        assert_eq!(outcome, LoginOutcome::ColdStarted);
+        assert_eq!(hub.ops.state().launched, 1);
+        assert!(
+            hub.edge.read().await.epoch > epoch_before,
+            "冷启动必须失效旧句柄"
+        );
+        assert!(
+            hub.conversations.lock().await.is_empty(),
+            "旧会话句柄应被清空"
+        );
+        assert!(hub.ops.state().running, "冷启动后实例应在跑");
     }
 
     #[tokio::test]
