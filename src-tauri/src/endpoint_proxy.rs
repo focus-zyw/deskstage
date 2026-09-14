@@ -97,24 +97,11 @@ fn kind_spec(kind: &str) -> Result<(&'static str, bool), String> {
 }
 
 /// 解析端点 base。统一状态中心的内存配置优先:写路径经临时文件 rename 原子提交、
-/// 加载在进程锁内单飞,内存态永不撕裂——旧"撕裂读稍候重试"补丁随之退役。
-/// 服务未加载(极端场景)才回退读一次文件。config.json 不含明文密钥,读它不等于读凭证。
-fn configured_base(app: &AppHandle, kind: &str) -> Result<String, String> {
-    let (pointer, _) = kind_spec(kind)?;
-    let pick = |v: &Value| -> Result<String, String> {
-        let s = v
-            .pointer(pointer)
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .trim();
-        if s.is_empty() {
-            Err("未配置端点地址(请在设置里填写后重试)".into())
-        } else {
-            Ok(s.to_string())
-        }
-    };
+/// 加载在进程锁内单飞,内存态永不撕裂。服务未加载(极端场景)才回退读一次文件。
+/// config.json 不含明文密钥,读它不等于读凭证。
+fn committed_or_file_config(app: &AppHandle) -> Result<Value, String> {
     if let Some(v) = crate::config_service::committed(app) {
-        return pick(&v);
+        return Ok(v);
     }
     let path = app
         .path()
@@ -123,21 +110,84 @@ fn configured_base(app: &AppHandle, kind: &str) -> Result<String, String> {
         .join("data")
         .join("config.json");
     let raw = std::fs::read_to_string(&path).map_err(|e| format!("读取配置失败: {e}"))?;
-    let v: Value = serde_json::from_str(&raw).map_err(|e| format!("配置解析失败: {e}"))?;
-    pick(&v)
+    serde_json::from_str(&raw).map_err(|e| format!("配置解析失败: {e}"))
 }
 
-/// 鉴权头由 Rust 注入(密钥不流经前端);gptsovits 本地服务无鉴权
-fn auth_header(kind: &str) -> Result<Option<String>, String> {
+/// 模型档案 id 封闭字符集(与前端 PROFILE_ID_RE 一致)
+fn is_valid_profile_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 48
+        && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+/// 模型档案解析:先校验 profileId,再按对象键读取——不拼 JSON Pointer,
+/// 天然规避 '/'、'~' 转义与路径注入(评审③)。缺档案报可读错误。
+fn profile_base(v: &Value, profile_id: &str) -> Result<String, String> {
+    if !is_valid_profile_id(profile_id) {
+        return Err(format!("模型档案 id 不合法: {profile_id}"));
+    }
+    let base = v
+        .get("modelProfiles")
+        .and_then(|m| m.get(profile_id))
+        .and_then(|p| p.get("baseUrl"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or("");
+    if base.is_empty() {
+        return Err(format!(
+            "未找到模型档案 {profile_id} 的端点地址(请在设置的群聊角色绑定中配置)"
+        ));
+    }
+    Ok(base.to_string())
+}
+
+/// 解析端点 base:kind 指针为缺省路径;kind=llm 且带 profile(非缺省/'main')时
+/// 改走模型档案。地址由 Rust 从 config.json 解析,前端从头到尾接触不到完整 URL。
+fn configured_base(app: &AppHandle, kind: &str, profile: Option<&str>) -> Result<String, String> {
+    let (pointer, _) = kind_spec(kind)?;
+    let v = committed_or_file_config(app)?;
+    if kind == "llm" {
+        if let Some(pid) = profile.map(str::trim).filter(|p| !p.is_empty() && *p != "main") {
+            return profile_base(&v, pid);
+        }
+    }
+    let s = v
+        .pointer(pointer)
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    if s.is_empty() {
+        Err("未配置端点地址(请在设置里填写后重试)".into())
+    } else {
+        Ok(s.to_string())
+    }
+}
+
+/// 鉴权头由 Rust 注入(密钥不流经前端);gptsovits 本地服务无鉴权。
+/// 档案请求的 Key 从 'llm:profileKeys' 整组 JSON(map 型凭据)里按已校验的
+/// 对象键取;Key 缺失返回无鉴权头——让厂商 401 暴露配置问题,而不是这里猜测。
+fn auth_header(kind: &str, profile: Option<&str>) -> Result<Option<String>, String> {
     let needs_auth = kind_spec(kind)?.1;
     if !needs_auth {
         return Ok(None);
     }
-    let secret_id = match kind {
-        "llm" => "llm:apiKey",
-        _ => "ocr:apiKey",
-    };
-    Ok(crate::secrets::read_secret(secret_id)?.map(|k| format!("Bearer {k}")))
+    if kind == "llm" {
+        if let Some(pid) = profile.map(str::trim).filter(|p| !p.is_empty() && *p != "main") {
+            if !is_valid_profile_id(pid) {
+                return Err(format!("模型档案 id 不合法: {pid}"));
+            }
+            let raw = crate::secrets::read_secret("llm:profileKeys")?.unwrap_or_default();
+            let parsed: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
+            let key = parsed.get(pid).and_then(Value::as_str).unwrap_or("").trim();
+            return Ok(if key.is_empty() {
+                None
+            } else {
+                Some(format!("Bearer {key}"))
+            });
+        }
+        return Ok(crate::secrets::read_secret("llm:apiKey")?.map(|k| format!("Bearer {k}")));
+    }
+    Ok(crate::secrets::read_secret("ocr:apiKey")?.map(|k| format!("Bearer {k}")))
 }
 
 /// 代理请求参数(kind 解析后的最终形态;参数打包避免 8 参函数)
@@ -240,10 +290,11 @@ pub async fn endpoint_request(
     path_and_query: String,
     body: String,
     timeout_ms: Option<u64>,
+    profile: Option<String>,
     on_chunk: Channel<InvokeResponseBody>,
 ) -> Result<u16, String> {
-    let base = configured_base(&app, &kind)?;
-    let auth = auth_header(&kind)?;
+    let base = configured_base(&app, &kind, profile.as_deref())?;
+    let auth = auth_header(&kind, profile.as_deref())?;
     let timeout = timeout_ms.unwrap_or(90_000).clamp(1_000, 300_000);
     proxy_core(ProxyRequest {
         state: &state,
@@ -307,6 +358,40 @@ mod tests {
         assert!(kind_spec("ocr").is_ok());
         assert!(kind_spec("gptsovits").is_ok());
         assert!(kind_spec("anything").is_err());
+    }
+
+    #[test]
+    fn profile_id_rejects_path_characters_and_overflow() {
+        assert!(is_valid_profile_id("deepseek-a"));
+        assert!(is_valid_profile_id("B_2"));
+        assert!(is_valid_profile_id("x1y9z0"));
+        // 非法:空 / 路径符号 / JSON Pointer 转义字符 / 超长(评审③:非法 id 不进对象读取)
+        assert!(!is_valid_profile_id(""));
+        assert!(!is_valid_profile_id("a/b"));
+        assert!(!is_valid_profile_id("a~b"));
+        assert!(!is_valid_profile_id(".."));
+        assert!(!is_valid_profile_id("含中文"));
+        assert!(!is_valid_profile_id(&"x".repeat(49)));
+    }
+
+    #[test]
+    fn profile_base_reads_by_object_key_never_pointer_interp() {
+        let v: Value = serde_json::from_str(
+            r#"{
+            "modelProfiles": {
+                "p1": { "label": "档案一", "baseUrl": "https://api.x.com/v1", "model": "m" },
+                "a/b": { "baseUrl": "https://evil.example.com/v1" }
+            }
+        }"#,
+        )
+        .unwrap();
+        assert_eq!(profile_base(&v, "p1").unwrap(), "https://api.x.com/v1");
+        // 非法 id 一律拒绝:即使配置里恰好存在同名键(如 "a/b")也读不到
+        assert!(profile_base(&v, "a/b").is_err());
+        // 缺档案/缺地址报可读错误
+        assert!(profile_base(&v, "missing").unwrap_err().contains("missing"));
+        let empty: Value = serde_json::from_str("{}").unwrap();
+        assert!(profile_base(&empty, "p1").unwrap_err().contains("p1"));
     }
 
     /// 本机回环集成:真实 TCP 服务器 + 真实 reqwest + 通道转发,CI 可跑

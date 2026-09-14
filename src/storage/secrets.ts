@@ -17,6 +17,7 @@ export type SecretId =
   | 'video:apiKeys'
   | 'ocr:apiKey'
   | 'live:cookie'
+  | 'llm:profileKeys'
 
 const LS_PREFIX = 'vc-secret:'
 

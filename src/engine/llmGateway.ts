@@ -28,7 +28,11 @@ export interface CompletionOptions {
   /** 端点通道:llm = 主配置端点;ocr = 设置里的视觉模型端点。
    *  origin 与密钥由 Rust 从配置/凭据库解析,前端不传地址与 key */
   kind?: EndpointKind
-  /** 模型覆盖(如 OCR 用免费的视觉模型);缺省 = 配置的主模型 */
+  /** 模型档案 id(仅 kind='llm';缺省/'main' = 主配置端点):地址由 Rust 按
+   *  config.modelProfiles[id].baseUrl 解析,Key 由凭据库 'llm:profileKeys' 注入,
+   *  body.model 缺省取档案模型。档案缺失时由 Rust 报可读错误 */
+  profile?: string
+  /** 模型覆盖(如 OCR 用免费的视觉模型);缺省 = 档案模型 / 配置的主模型 */
   model?: string
   temperature?: number
   maxTokens?: number
@@ -105,8 +109,13 @@ export async function complete(options: CompletionOptions): Promise<string> {
   let t0 = 0
   try {
     const cfg = await getConfig()
-    const model = options.model?.trim() || cfg.model
-    const baseUrl = cfg.baseUrl
+    // 档案解析:'main'/缺省 = 主端点;其余按 config.modelProfiles 取模型与(预览态)地址。
+    // 桌面端地址/Key 均由 Rust 按同一 profile 参数解析,这里只决定 body.model。
+    const profile = options.profile?.trim() || undefined
+    const profileEntry =
+      profile && profile !== 'main' ? cfg.modelProfiles?.[profile] : undefined
+    const model = options.model?.trim() || profileEntry?.model || cfg.model
+    const baseUrl = profileEntry?.baseUrl || cfg.baseUrl
     const body = JSON.stringify({
       model,
       messages,
@@ -137,6 +146,7 @@ export async function complete(options: CompletionOptions): Promise<string> {
       const { status, body: respBytes } = await requestEndpoint(kind, '/chat/completions', {
         body,
         timeoutMs,
+        profile,
         signal: ctrl.signal,
       })
       out = await readCompletion({ status, text: () => new TextDecoder().decode(respBytes) })
@@ -247,8 +257,11 @@ export async function completeStream(
   })
   try {
     const cfg = await getConfig()
-    const model = options.model?.trim() || cfg.model
-    const baseUrl = cfg.baseUrl
+    const profile = options.profile?.trim() || undefined
+    const profileEntry =
+      profile && profile !== 'main' ? cfg.modelProfiles?.[profile] : undefined
+    const model = options.model?.trim() || profileEntry?.model || cfg.model
+    const baseUrl = profileEntry?.baseUrl || cfg.baseUrl
     const body = JSON.stringify({ model, messages, temperature, max_tokens: maxTokens, stream: true })
     t0 = Date.now()
     if (!inTauri) {
@@ -277,6 +290,7 @@ export async function completeStream(
     const { stream } = openEndpointStream(kind, '/chat/completions', {
       body,
       timeoutMs,
+      profile,
       signal: ctrl.signal,
     })
     const reader = stream.getReader()

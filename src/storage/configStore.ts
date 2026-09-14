@@ -258,6 +258,12 @@ export interface AppConfig {
   /** AI 剧场(多网页会话即兴):实验开关默认关;甲乙各绑一个网页模型站点
    *  (同站合法——同站点两个会话本就独立,设置页仅提示建议不同模型) */
   aiTheater: AiTheaterConfig
+  /** 群聊模型档案(角色可绑独立 API 端点);键须匹配 PROFILE_ID_RE,'main' 保留 */
+  modelProfiles: Record<string, ModelProfile>
+  /** 档案 Key(明文不落盘:SECRET_FIELDS 改道 'llm:profileKeys',键须同白名单) */
+  modelProfileKeys: Record<string, string>
+  /** 群聊角色绑定与生成引擎(自由群聊 Actor 系统) */
+  groupChatActors: GroupChatActorsConfig
 }
 
 /** AI 剧场配置 */
@@ -266,6 +272,39 @@ export interface AiTheaterConfig {
   enabled: boolean
   actorA: WebchatSiteId
   actorB: WebchatSiteId
+}
+
+/** 群聊模型档案:每角色可绑定的独立 OpenAI 兼容端点(地址/模型是普通配置;
+ *  Key 经 modelProfileKeys 由 SECRET_FIELDS 改道进凭据库 'llm:profileKeys' 一条 map) */
+export interface ModelProfile {
+  label: string
+  baseUrl: string
+  model: string
+}
+
+/** 档案 id 白名单:Rust 端按对象键读取前同样校验(不拼 JSON Pointer,防路径注入) */
+export const PROFILE_ID_RE = /^[a-zA-Z0-9_-]{1,48}$/
+
+/** 群聊角色模型绑定:api 缺省/'main' = 全局主模型;web = 网页站点;disabled 不参与 */
+export type GroupModelBinding =
+  | { kind: 'api'; profileId?: string }
+  | { kind: 'web'; site: WebchatSiteId }
+  | { kind: 'disabled' }
+
+export type GroupAutonomy = 'quiet' | 'natural' | 'lively'
+
+export interface GroupActorConfig {
+  binding: GroupModelBinding
+  autonomy: GroupAutonomy
+}
+
+/** 群聊 Actor 配置:engine = 生成引擎(legacy 是保一个版本的旧单飞回退开关)。
+ *  迁移默认(控费用):A=主模型+natural、B=主模型+quiet、C=disabled */
+export interface GroupChatActorsConfig {
+  engine: 'actors' | 'legacy'
+  A: GroupActorConfig
+  B: GroupActorConfig
+  C: GroupActorConfig
 }
 
 /** 翻译面板配置 */
@@ -393,6 +432,14 @@ export const DEFAULT_CONFIG: AppConfig = {
   wizardDone: false,
   tools: { switches: {}, autoApproved: {} },
   aiTheater: { enabled: false, actorA: 'deepseek', actorB: 'doubao' },
+  modelProfiles: {},
+  modelProfileKeys: {},
+  groupChatActors: {
+    engine: 'actors',
+    A: { binding: { kind: 'api' }, autonomy: 'natural' },
+    B: { binding: { kind: 'api' }, autonomy: 'quiet' },
+    C: { binding: { kind: 'disabled' }, autonomy: 'natural' },
+  },
 }
 
 /** 角色工具系统偏好 */
@@ -436,6 +483,78 @@ function sanitizeAiTheater(v: unknown): AiTheaterConfig {
     actorB: site(o.actorB, d.actorB),
   }
 }
+
+/** 档案 id 是否可用:匹配 PROFILE_ID_RE 且不占保留字 'main'(= 全局主模型) */
+export function isUsableProfileId(id: string): boolean {
+  return id !== 'main' && PROFILE_ID_RE.test(id)
+}
+
+const MAX_MODEL_PROFILES = 12
+
+/** 清洗模型档案:键走 id 白名单,baseUrl 必须是 http(s),model 必填;非法条目整条拒收。
+ *  导出供测试(与 sanitizeCharacters 同款测试出口) */
+export function sanitizeModelProfiles(v: unknown): Record<string, ModelProfile> {
+  const out: Record<string, ModelProfile> = {}
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return out
+  for (const [id, raw] of Object.entries(v as Record<string, unknown>)) {
+    if (Object.keys(out).length >= MAX_MODEL_PROFILES) break
+    if (!isUsableProfileId(id)) continue
+    const o = (raw ?? {}) as Record<string, unknown>
+    const baseUrl = typeof o.baseUrl === 'string' ? o.baseUrl.trim() : ''
+    const model = typeof o.model === 'string' ? o.model.trim().slice(0, 120) : ''
+    if (!/^https?:\/\//i.test(baseUrl) || !model) continue
+    const label = typeof o.label === 'string' && o.label.trim() ? o.label.trim().slice(0, 40) : model
+    out[id] = { label, baseUrl, model }
+  }
+  return out
+}
+
+/** 清洗档案 Key 映射(map 型密钥,整组走 llm:profileKeys 凭据):键同档案白名单。导出供测试 */
+export function sanitizeModelProfileKeys(v: unknown): Record<string, string> {
+  const out: Record<string, string> = {}
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return out
+  for (const [id, raw] of Object.entries(v as Record<string, unknown>)) {
+    if (!isUsableProfileId(id)) continue
+    if (typeof raw !== 'string') continue
+    out[id] = raw.slice(0, 400)
+  }
+  return out
+}
+
+/** 清洗单角色绑定:api 收敛 profileId('main'/非法 → 缺省=主模型);web 站点白名单;其余 disabled */
+function sanitizeGroupActor(v: unknown): GroupActorConfig {
+  const o = (v ?? {}) as Record<string, unknown>
+  const b = (o.binding ?? {}) as Record<string, unknown>
+  let binding: GroupModelBinding
+  if (b.kind === 'api') {
+    const pid =
+      typeof b.profileId === 'string' && isUsableProfileId(b.profileId) ? b.profileId : undefined
+    binding = pid ? { kind: 'api', profileId: pid } : { kind: 'api' }
+  } else if (b.kind === 'web') {
+    binding = { kind: 'web', site: isWebchatSite(b.site) ? b.site : 'deepseek' }
+  } else {
+    binding = { kind: 'disabled' }
+  }
+  const autonomy: GroupAutonomy =
+    o.autonomy === 'quiet' || o.autonomy === 'lively' ? o.autonomy : 'natural'
+  return { binding, autonomy }
+}
+
+function sanitizeGroupChatActors(v: unknown): GroupChatActorsConfig {
+  const o = (v ?? {}) as Record<string, unknown>
+  const d = DEFAULT_CONFIG.groupChatActors
+  // 旧配置缺整个条目 → 该角色回迁移默认(而非误算成 disabled)
+  const actor = (x: unknown, fallback: GroupActorConfig): GroupActorConfig =>
+    x && typeof x === 'object' ? sanitizeGroupActor(x) : structuredClone(fallback)
+  return {
+    engine: o.engine === 'legacy' ? 'legacy' : 'actors',
+    A: actor(o.A, d.A),
+    B: actor(o.B, d.B),
+    C: actor(o.C, d.C),
+  }
+}
+// 导出供测试(FIELD_SANITIZERS 消费同源)
+export { sanitizeGroupChatActors }
 
 /** 清洗工具偏好:只收布尔值,键数封顶(注册表一共个位数工具,32 足够防脏数据膨胀) */
 function sanitizeToolPrefs(v: unknown): ToolPrefsConfig {
@@ -940,6 +1059,9 @@ const FIELD_SANITIZERS: { [K in keyof AppConfig]: (v: unknown, all: Record<strin
   wizardDone: (v) => v === true,
   tools: sanitizeToolPrefs,
   aiTheater: sanitizeAiTheater,
+  modelProfiles: sanitizeModelProfiles,
+  modelProfileKeys: sanitizeModelProfileKeys,
+  groupChatActors: sanitizeGroupChatActors,
   bubbleStyle: sanitizeBubbleStyle,
   memoryDisplay: (v) => (v === 'subtle' || v === 'debug' ? v : 'off'),
 }
@@ -983,6 +1105,7 @@ const SECRET_FIELDS: { path: string[]; id: SecretId; map?: boolean }[] = [
   { path: ['videoGen', 'apiKeys'], id: 'video:apiKeys', map: true },
   { path: ['ocr', 'apiKey'], id: 'ocr:apiKey' },
   { path: ['live', 'cookie'], id: 'live:cookie' },
+  { path: ['modelProfileKeys'], id: 'llm:profileKeys', map: true },
 ]
 
 function getByPath(obj: unknown, path: string[]): unknown {

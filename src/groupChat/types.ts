@@ -8,9 +8,13 @@
 // 持久化定位是「会话内可靠队列」:journal 为内存事实源,重启后从日志尾部开始,
 // 历史仅作上下文,不恢复待处理消息。
 import type { Speaker } from '../performer/dialogSchema'
-import type { WebchatSiteId } from '../storage/configStore'
+import type { GroupAutonomy, GroupModelBinding } from '../storage/configStore'
 
 export type ActorId = Speaker
+
+/** 绑定与自主档位的规范定义在 configStore(持久 schema 单源);这里别名对齐 */
+export type ModelBinding = GroupModelBinding
+export type AutonomyLevel = GroupAutonomy
 
 /** 消息作者:用户或某个角色 */
 export type RoomAuthor = 'user' | ActorId
@@ -60,14 +64,7 @@ export interface ActorReaction {
   }
 }
 
-/** 角色模型绑定:api 走模型档案(缺省 = 全局主模型),web 走网页会话,disabled 不参与 */
-export type ModelBinding =
-  | { kind: 'api'; profileId?: string }
-  | { kind: 'web'; site: WebchatSiteId }
-  | { kind: 'disabled' }
-
-/** 自由聊天自主档位(预算表见 autonomyPolicy) */
-export type AutonomyLevel = 'quiet' | 'natural' | 'lively'
+/** 角色模型绑定已改为 configStore 别名(见文件头) */
 
 export interface ActorRuntimeConfig {
   binding: ModelBinding

@@ -13,6 +13,9 @@ export interface EndpointOptions {
   body?: string
   /** 总超时(Rust 侧钳位 1s~300s,缺省 90s) */
   timeoutMs?: number
+  /** 模型档案 id(仅 kind='llm';缺省/'main' = 全局主端点):Rust 按档案解析
+   *  地址与 Key,前端不传地址与 key。校验在 Rust 侧再兜一道 */
+  profile?: string
   signal?: AbortSignal
 }
 
@@ -150,6 +153,7 @@ async function runInvoke(
       pathAndQuery,
       body: opts.body ?? '',
       timeoutMs: opts.timeoutMs,
+      profile: opts.profile,
       onChunk: channel,
     })
   } catch (e) {

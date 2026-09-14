@@ -17,7 +17,7 @@ use tauri::Manager;
 const SERVICE: &str = "dev.virtualcharacter.app";
 
 /// 封闭的 SecretId 白名单(凭据库"账户名"),前端传别的 id 一律拒绝
-const SECRET_IDS: [&str; 8] = [
+const SECRET_IDS: [&str; 9] = [
     "llm:apiKey",
     "llm:apiKeys",
     "tts:voice",
@@ -26,6 +26,7 @@ const SECRET_IDS: [&str; 8] = [
     "video:apiKeys",
     "ocr:apiKey",
     "live:cookie",
+    "llm:profileKeys",
 ];
 
 fn id_allowed(id: &str) -> Result<(), String> {
@@ -48,6 +49,7 @@ pub const SECRET_PATHS: &[(&[&str], &str, bool)] = &[
     (&["videoGen", "apiKeys"], "video:apiKeys", true),
     (&["ocr", "apiKey"], "ocr:apiKey", false),
     (&["live", "cookie"], "live:cookie", false),
+    (&["modelProfileKeys"], "llm:profileKeys", true),
 ];
 
 /// 按 JSON 路径只读(存在才返回 Some);提取与写库事务共用。
