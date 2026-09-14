@@ -103,7 +103,14 @@ import {
   saveConfig,
   useConfigSnapshot,
 } from './storage/configStore'
-import { applyBubbleThemeTo, useBubbleThemes } from './storage/bubbleThemesStore'
+import { useBubbleThemesV2 } from './storage/bubbleThemesStore'
+import {
+  BUILT_IN_BUBBLE_THEMES,
+  BubbleThemeProvider,
+  isBuiltinBubbleThemeId,
+  resolveGuestLook,
+  syncBubbleCompatVars,
+} from './bubble'
 import { applyLaunchOnBoot } from './runtime/launchOnBoot'
 import { useOverlayHitRegions } from './runtime/useOverlayHitRegion'
 import { initSettingsBridgeServer } from './settings/bridgeServer'
@@ -272,26 +279,22 @@ function App() {
   const config = useConfigSnapshot()
   const charNames = { A: config.names.a, B: config.names.b, C: config.names.c }
   const showWatermark = config.showWatermark
-  // 气泡主题落地到根节点:内置 comic/glass 走 data-bubble 变量集;
-  // 气泡工坊自建主题走 inline style 变量(优先级更高),主题增删改即时生效。
-  // 选中的自定义主题不存在(被删)时回退柔彩。
-  const bubbleThemes = useBubbleThemes()
-  useEffect(() => {
-    const root = document.documentElement
-    if (config.bubbleStyle === 'comic' || config.bubbleStyle === 'glass') {
-      applyBubbleThemeTo(root, null)
-      root.dataset.bubble = config.bubbleStyle === 'glass' ? 'glass' : 'comic'
-      return
-    }
-    const theme = bubbleThemes.find((t) => t.id === config.bubbleStyle)
-    if (!theme) {
-      applyBubbleThemeTo(root, null)
-      root.dataset.bubble = 'comic'
-      return
-    }
-    root.dataset.bubble = 'comic' // 自定义以 inline 变量为准,清理内置 data 钩子语义
-    applyBubbleThemeTo(root, theme)
+  // 气泡主题 V2 统一链路:内置 comic/glass 从引擎目录取不可变 V2 数据,自定义主题
+  // 读取时经 normalize(旧 V1 主题就地迁移);经 Provider 下发,气泡组件在自身节点上 resolve。
+  // 选中的自定义主题不存在(被删)时回落柔彩;根节点只同步群聊/头像消费的兼容变量。
+  const bubbleThemes = useBubbleThemesV2()
+  const bubbleTheme = useMemo(() => {
+    if (isBuiltinBubbleThemeId(config.bubbleStyle)) return BUILT_IN_BUBBLE_THEMES[config.bubbleStyle]
+    return bubbleThemes.find((t) => t.id === config.bubbleStyle) ?? null
   }, [config.bubbleStyle, bubbleThemes])
+  useEffect(() => {
+    syncBubbleCompatVars(document.documentElement, bubbleTheme)
+  }, [bubbleTheme])
+  // C 画外音横幅固定走 caption 语义(低干扰半透明条),但取色来自当前主题
+  const guestLook = useMemo(
+    () => resolveGuestLook(bubbleTheme ?? BUILT_IN_BUBBLE_THEMES.comic),
+    [bubbleTheme],
+  )
   // 聊天通道:输入框开合/草稿/应答中;用户气泡(区别于角色气泡)
   const chatOpen = rt.overlays.includes('chat')
   const [chatDraft, setChatDraft] = useState('')
@@ -1432,7 +1435,7 @@ function App() {
   const bFacesLeft = charCfg.B.xPct >= charCfg.A.xPct
 
   return (
-    <>
+    <BubbleThemeProvider theme={bubbleTheme}>
       <div
       className="stage"
       onPointerDown={(e) => {
@@ -1974,9 +1977,12 @@ function App() {
           </div>
         )}
 
-        {/* C 已是常驻身体,台词气泡在角色头顶;仅在设置里禁用 C 时回落画外音横幅 */}
+        {/* C 已是常驻身体,台词气泡在角色头顶;仅在设置里禁用 C 时回落画外音横幅(取色随主题) */}
         {bubble.C && !cEnabled && (
-          <div className="guest-bubble">
+          <div
+            className="guest-bubble"
+            style={{ background: guestLook.surface, borderColor: guestLook.edge, color: guestLook.text }}
+          >
             <span className="guest-tag">📞 画外音</span>
             {bubble.C}
           </div>
@@ -2112,7 +2118,7 @@ function App() {
           }}
         />
       )}
-      </>
+    </BubbleThemeProvider>
   )
 }
 

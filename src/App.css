@@ -8,37 +8,38 @@
   --radius-input: 8px;
   --radius-panel: 14px;
   --text-dim: rgba(255, 255, 255, 0.65);
-  /* 气泡主题:默认柔彩。每个角色用衣着邻近色区分,描边/阴影同色系而非黑色。 */
-  --bubble-bg: rgba(250, 247, 242, 0.93);
-  --bubble-text: #26232f;
-  --bubble-stroke: rgba(146, 136, 126, 0.42);
-  --bubble-stroke-w: 1px;
-  --bubble-blur: none;
-  --bubble-acc-a: #e98050;
-  --bubble-acc-b: #5f86da;
-  --bubble-acc-c: #8572d8;
-  --bubble-bg-a: rgba(255, 244, 235, 0.93);
-  --bubble-bg-b: rgba(237, 245, 255, 0.93);
-  --bubble-bg-c: rgba(245, 240, 255, 0.93);
-  --bubble-stroke-a: rgba(221, 139, 98, 0.5);
-  --bubble-stroke-b: rgba(104, 143, 213, 0.5);
-  --bubble-stroke-c: rgba(137, 116, 210, 0.48);
-}
-:root[data-bubble='glass'] {
-  --bubble-bg: rgba(27, 30, 47, 0.86);
-  --bubble-text: #f2f4ff;
-  --bubble-stroke: rgba(163, 153, 213, 0.42);
-  --bubble-stroke-w: 1px;
-  --bubble-blur: blur(14px) saturate(1.18);
-  --bubble-acc-a: #ffb066;
-  --bubble-acc-b: #7db3ff;
-  --bubble-acc-c: #a89bff;
-  --bubble-bg-a: rgba(48, 35, 40, 0.88);
-  --bubble-bg-b: rgba(27, 39, 64, 0.88);
-  --bubble-bg-c: rgba(43, 35, 67, 0.88);
-  --bubble-stroke-a: rgba(255, 176, 102, 0.42);
-  --bubble-stroke-b: rgba(125, 179, 255, 0.42);
-  --bubble-stroke-c: rgba(168, 155, 255, 0.42);
+  /* 气泡主题 V2 启动兜底(柔彩,与内置 V2 主题 resolve 输出一致):
+     主题经 Provider 落到每个 .bubble-shell 自身,这里只保证主题加载前首帧不裸奔,
+     以及 --bubble-acc-* 兼容变量(群聊说话人名/头像消费,根节点 adapter 会再同步)。 */
+  --bub-text: #26232f;
+  --bub-surface: rgba(250, 247, 242, 0.93);
+  --bub-edge: rgba(146, 136, 126, 0.42);
+  --bub-outline-w: 1px;
+  --bub-radius: 18px;
+  --bub-backdrop: none;
+  --bub-surface-image: none;
+  --bub-shadow: 0 10px 28px var(--bub-shadow-c);
+  --bub-shadow-c: rgba(233, 128, 80, 0.2);
+  --bub-font-size: 16px;
+  --bub-font-weight: 650;
+  --bub-line-height: 1.58;
+  --bub-align: left;
+  --bub-max-w: 320px;
+  --bub-pad-x: 17px;
+  --bub-pad-y: 15px;
+  --bub-tail-size: 16px;
+  --bub-acc-a: #e98050;
+  --bub-acc-b: #5f86da;
+  --bub-acc-c: #8572d8;
+  --bub-surface-a: rgba(255, 244, 235, 0.93);
+  --bub-surface-b: rgba(237, 245, 255, 0.93);
+  --bub-surface-c: rgba(245, 240, 255, 0.93);
+  --bub-edge-a: rgba(221, 139, 98, 0.51);
+  --bub-edge-b: rgba(104, 143, 213, 0.51);
+  --bub-edge-c: rgba(137, 116, 210, 0.49);
+  --bubble-acc-a: var(--bub-acc-a);
+  --bubble-acc-b: var(--bub-acc-b);
+  --bubble-acc-c: var(--bub-acc-c);
 }
 
 /* 舞台与角色样式（立绘精灵版） */
@@ -428,72 +429,74 @@
   opacity: 1;
 }
 
-/* 台词气泡:柔彩材质 + 独立角色名签。尾巴偏移与立绘朝向同源,不再固定居中。 */
-.bubble {
-  --bubble-surface: var(--bubble-bg);
-  --bubble-edge: var(--bubble-stroke);
-  --bubble-shadow-color: color-mix(in srgb, #776d8d 20%, transparent);
-  --bubble-tail-x: 50%;
-  --bubble-tail-rotation: 45deg;
+/* ===================== 台词气泡 V2(主题引擎驱动)=====================
+   .bubble-shell 自带 data-template / data-material / data-nameplate / data-tail
+   与 --bub-* 变量(resolveBubbleAppearance 产物,经组件 style 注入到节点自身),
+   CSS 只做结构与组合选择,不承担颜色计算;嵌套预览(工坊三候选)因此天然隔离。
+   模板 × 材质兼容矩阵见 docs/气泡工坊V2.md。 */
+.bubble-shell {
+  /* per-speaker 转译:shell 上的 -a/-b/-c 组按说话人落为生效值 */
+  --bub-surface: var(--bub-surface-a);
+  --bub-edge: var(--bub-edge-a);
+  --sp: var(--bub-acc-a);
+  --bub-shadow-c: var(--bub-shadow-c-a);
+  --bub-glow-color: color-mix(in srgb, var(--sp) 55%, transparent);
+  --bub-tail-x: 50%;
+  --bub-tail-rotation: 45deg;
+  --bub-mood-mark: '';
   position: relative;
   isolation: isolate;
   margin-bottom: 14px;
-  padding: var(--bubble-padding, 17px 17px 14px);
+  padding: var(--bub-pad-y, 15px) var(--bub-pad-x, 17px);
   min-width: 148px;
-  max-width: min(var(--bubble-max-w, 320px), 72vw);
-  background-color: var(--bubble-surface);
-  background-image:
-    radial-gradient(circle at 18% -20%, rgba(255, 255, 255, 0.2), transparent 44%),
-    linear-gradient(145deg, rgba(255, 255, 255, 0.05), rgba(107, 94, 137, 0.035));
-  color: var(--bubble-text);
-  border: var(--bubble-stroke-w) solid var(--bubble-edge);
-  border-radius: var(--bubble-border-radius, 18px 18px 18px 9px);
-  font-family: 'MiSans', 'HarmonyOS Sans SC', 'Microsoft YaHei UI', 'PingFang SC', sans-serif;
-  font-size: var(--bubble-font-size, 16px);
-  font-weight: var(--bubble-font-weight, 650);
-  line-height: var(--bubble-line-height, 1.58);
+  max-width: min(var(--bub-max-w, 320px), 72vw);
+  background-color: var(--bub-surface, rgba(250, 247, 242, 0.93));
+  background-image: var(--bub-surface-image, none);
+  color: var(--bub-text, #26232f);
+  border: var(--bub-outline-w, 1px) solid var(--bub-edge, rgba(146, 136, 126, 0.42));
+  border-radius: var(--bub-radius, 18px);
+  font-family: var(--bub-font, 'MiSans', 'HarmonyOS Sans SC', 'Microsoft YaHei UI', 'PingFang SC', sans-serif);
+  font-size: var(--bub-font-size, 16px);
+  font-weight: var(--bub-font-weight, 650);
+  line-height: var(--bub-line-height, 1.58);
+  text-align: var(--bub-align, left);
   overflow-wrap: anywhere;
   text-wrap: pretty;
-  backdrop-filter: var(--bubble-blur);
-  -webkit-backdrop-filter: var(--bubble-blur);
-  box-shadow: var(--bubble-shadow, 0 10px 28px var(--bubble-shadow-color));
+  backdrop-filter: var(--bub-backdrop, none);
+  -webkit-backdrop-filter: var(--bub-backdrop, none);
+  box-shadow: var(--bub-shadow, 0 10px 28px var(--bub-shadow-c));
   white-space: pre-wrap;
-  transform-origin: var(--bubble-tail-x) calc(100% + 7px);
-  animation: bubble-in 0.24s cubic-bezier(0.2, 1.45, 0.42, 1);
+  transform-origin: var(--bub-tail-x) calc(100% + 7px);
+  animation: var(--bub-in, bubble-in 0.24s cubic-bezier(0.2, 1.45, 0.42, 1));
 }
-.bubble[data-speaker='A'] {
-  --sp: var(--bubble-acc-a);
-  --bubble-surface: var(--bubble-bg-a);
-  --bubble-edge: var(--bubble-stroke-a);
-  --bubble-shadow-color: color-mix(in srgb, var(--sp) 20%, transparent);
+.bubble-shell[data-speaker='A'] {
+  --sp: var(--bub-acc-a);
+  --bub-surface: var(--bub-surface-a);
+  --bub-edge: var(--bub-edge-a);
+  --bub-shadow-c: var(--bub-shadow-c-a);
 }
-.bubble[data-speaker='B'] {
-  --sp: var(--bubble-acc-b);
-  --bubble-surface: var(--bubble-bg-b);
-  --bubble-edge: var(--bubble-stroke-b);
-  --bubble-shadow-color: color-mix(in srgb, var(--sp) 20%, transparent);
+.bubble-shell[data-speaker='B'] {
+  --sp: var(--bub-acc-b);
+  --bub-surface: var(--bub-surface-b);
+  --bub-edge: var(--bub-edge-b);
+  --bub-shadow-c: var(--bub-shadow-c-b);
 }
-.bubble[data-speaker='C'] {
-  --sp: var(--bubble-acc-c);
-  --bubble-surface: var(--bubble-bg-c);
-  --bubble-edge: var(--bubble-stroke-c);
-  --bubble-shadow-color: color-mix(in srgb, var(--sp) 20%, transparent);
+.bubble-shell[data-speaker='C'] {
+  --sp: var(--bub-acc-c);
+  --bub-surface: var(--bub-surface-c);
+  --bub-edge: var(--bub-edge-c);
+  --bub-shadow-c: var(--bub-shadow-c-c);
 }
-.bubble::before {
-  /* 情绪只改这一枚轻装饰,基础轮廓始终一致。 */
-  content: var(--bubble-mood-mark, '');
+
+/* 内容壳:模板骨架(clip-path/背景层)作用在它身上,尾巴与名签留在裁剪范围外 */
+.bubble-frame {
+  display: block;
+  min-width: 0;
+}
+
+/* ---------- 名签:badge 悬浮徽章 / tab 标签槽 / inline 行内 / hidden 不渲染 ---------- */
+.bubble-shell .b-name {
   position: absolute;
-  top: 5px;
-  right: 10px;
-  color: var(--sp);
-  font-size: 15px;
-  font-weight: 900;
-  opacity: 0.7;
-}
-.bubble .b-name {
-  position: absolute;
-  top: -10px;
-  left: 16px;
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -506,55 +509,297 @@
   font-weight: 700;
   line-height: 1.35;
   letter-spacing: 0.06em;
-  box-shadow: 0 5px 14px var(--bubble-shadow-color);
+  z-index: 2;
+  box-shadow: 0 4px 12px var(--bub-shadow-c);
+  white-space: nowrap;
 }
-.bubble .b-name i {
+.bubble-shell[data-nameplate='badge'] .b-name {
+  top: -10px;
+  left: 16px;
+}
+.bubble-shell[data-nameplate-pos='top-center'][data-nameplate='badge'] .b-name {
+  top: -10px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+.bubble-shell[data-nameplate='tab'] .b-name {
+  top: -11px;
+  left: 10px;
+  border-radius: 8px 8px 0 0;
+  border-bottom-color: transparent;
+}
+.bubble-shell[data-nameplate='inline'] .b-who {
+  display: inline-block;
+  margin-right: 7px;
+  margin-bottom: 1px;
+  padding: 1px 8px;
+  border-radius: 6px;
+  background: var(--sp, #776d8d);
+  color: #fff;
+  font-size: 0.76em;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  vertical-align: 2px;
+}
+.bubble-shell .b-name i {
   width: 5px;
   height: 5px;
   border-radius: 50%;
   background: rgba(255, 255, 255, 0.88);
 }
-.bubble .b-text {
+.bubble-shell .b-text {
   display: block;
   animation: bubble-copy-in 0.1s ease-out;
 }
-/* 水滴尾巴:圆角菱形比尖锐三角柔和;横向位置/角度由角色朝向驱动。 */
-.bubble::after {
+
+/* ---------- 独立尾巴节点:droplet 菱形 / triangle 尖角 / curve 弧尾 / bubbles 圆泡串 ---------- */
+.bubble-tail {
+  position: absolute;
+  display: none;
+  z-index: -1;
+  left: var(--bub-tail-x);
+  bottom: -7px;
+  transform: translateX(-50%);
+}
+.bubble-shell[data-tail='droplet'] .bubble-tail {
+  display: block;
+  width: var(--bub-tail-size, 16px);
+  height: var(--bub-tail-size, 16px);
+  transform: translateX(-50%) rotate(var(--bub-tail-rotation));
+  border: var(--bub-outline-w, 1px) solid var(--bub-edge);
+  border-radius: 4px 3px 12px 3px;
+  background: var(--bub-surface);
+}
+.bubble-shell[data-tail='triangle'] .bubble-tail {
+  display: block;
+  width: calc(var(--bub-tail-size, 17px) + 2px);
+  height: calc(var(--bub-tail-size, 17px) - 3px);
+  bottom: calc(-1 * var(--bub-tail-size, 17px) + 7px);
+  background: var(--bub-edge);
+  clip-path: polygon(10% 0, 90% 0, 50% 100%);
+}
+.bubble-shell[data-tail='triangle'] .bubble-tail::before {
   content: '';
-  display: var(--bubble-tail-display, block);
+  position: absolute;
+  inset: 0;
+  background: var(--bub-surface);
+  clip-path: polygon(16% 0, 84% 0, 50% 88%);
+}
+.bubble-shell[data-tail='curve'] .bubble-tail {
+  display: block;
+  width: calc(var(--bub-tail-size, 12px) + 10px);
+  height: calc(var(--bub-tail-size, 12px) * 0.8);
+  bottom: calc(-1 * var(--bub-tail-size, 12px) * 0.55);
+  border: var(--bub-outline-w, 1px) solid var(--bub-edge);
+  border-top: none;
+  border-radius: 0 0 999px 999px;
+  background: var(--bub-surface);
+}
+.bubble-shell[data-tail='bubbles'] .bubble-tail {
+  display: block;
+  width: calc(var(--bub-tail-size, 12px) * 2.6);
+  height: var(--bub-tail-size, 12px);
+  background:
+    radial-gradient(circle at 17% 30%, var(--bub-edge) 0 calc(var(--bub-tail-size, 12px) * 0.42), transparent calc(var(--bub-tail-size, 12px) * 0.48)),
+    radial-gradient(circle at 52% 68%, var(--bub-edge) 0 calc(var(--bub-tail-size, 12px) * 0.34), transparent calc(var(--bub-tail-size, 12px) * 0.4)),
+    radial-gradient(circle at 84% 40%, var(--bub-edge) 0 calc(var(--bub-tail-size, 12px) * 0.26), transparent calc(var(--bub-tail-size, 12px) * 0.32));
+}
+.bubble-shell[data-tail='bubbles'] .bubble-tail::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at 17% 30%, var(--bub-surface) 0 calc(var(--bub-tail-size, 12px) * 0.34), transparent calc(var(--bub-tail-size, 12px) * 0.42)),
+    radial-gradient(circle at 52% 68%, var(--bub-surface) 0 calc(var(--bub-tail-size, 12px) * 0.26), transparent calc(var(--bub-tail-size, 12px) * 0.34)),
+    radial-gradient(circle at 84% 40%, var(--bub-surface) 0 calc(var(--bub-tail-size, 12px) * 0.18), transparent calc(var(--bub-tail-size, 12px) * 0.26));
+}
+/* 尾巴横向偏移追随角色朝向 */
+.bubble-shell[data-tail-side='left'] {
+  --bub-tail-x: 42%;
+  --bub-tail-rotation: 55deg;
+}
+.bubble-shell[data-tail-side='right'] {
+  --bub-tail-x: 58%;
+  --bub-tail-rotation: 35deg;
+}
+/* 气泡翻到角色下方:尾巴朝上 */
+.bubble-shell.below .bubble-tail {
+  bottom: auto;
+  top: -7px;
+  transform: translateX(-50%) rotate(180deg);
+}
+.bubble-shell.below[data-tail='triangle'] .bubble-tail {
+  top: calc(-1 * var(--bub-tail-size, 17px) + 7px);
+  transform: translateX(-50%) scaleY(-1);
+}
+.bubble-shell.below[data-tail='curve'] .bubble-tail {
+  top: calc(-1 * var(--bub-tail-size, 12px) * 0.55);
+  transform: translateX(-50%) scaleY(-1);
+}
+.bubble-shell.below[data-tail='bubbles'] .bubble-tail {
+  top: calc(-1 * var(--bub-tail-size, 12px));
+  transform: translateX(-50%) scaleY(-1);
+}
+.bubble-shell.below {
+  transform-origin: var(--bub-tail-x) -7px;
+}
+
+/* ---------- 装饰层:情绪符号 + 模板装饰(sticker 胶带等在模板段挂 ::before) ---------- */
+.bubble-deco {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.bubble-deco::after {
+  content: var(--bub-mood-mark, '');
+  position: absolute;
+  top: 4px;
+  right: 9px;
+  color: var(--sp);
+  font-size: 15px;
+  font-weight: 900;
+  opacity: 0.7;
+}
+.bubble-shell[data-mood='angry'] { --bub-mood-mark: '♯'; }
+.bubble-shell[data-mood='shy'] { --bub-mood-mark: '♡'; }
+.bubble-shell[data-mood='excited'] { --bub-mood-mark: '✦'; }
+
+/* ---------- 材质表面 ---------- */
+/* 玻璃:模糊上限由 resolve 钳制(≤24px);contain 不含 paint——名签/尾巴在盒外,裁剪会切掉它们 */
+.bubble-shell[data-material='glass'] {
+  contain: layout style;
+}
+.bubble-shell[data-material='neon'] {
+  --bub-edge: color-mix(in srgb, var(--sp) 72%, var(--bub-edge));
+}
+
+/* ---------- 模板骨架(pill 由 resolve 的 --bub-radius=999px 表达,无需规则) ---------- */
+
+/* 漫画爆发框:双层同形锯齿画在 frame 背景层(文字不参与裁剪),阴影走 drop-shadow */
+.bubble-shell[data-template='comic-burst'] {
+  --burst: polygon(50% 0%, 59% 6%, 69% 2%, 74% 11%, 85% 10%, 86% 20%, 96% 23%, 92% 32%, 100% 40%, 93% 48%, 99% 58%, 89% 62%, 92% 73%, 82% 74%, 80% 85%, 70% 82%, 63% 92%, 55% 85%, 46% 94%, 39% 85%, 29% 90%, 26% 79%, 15% 80%, 17% 69%, 6% 66%, 12% 57%, 2% 49%, 11% 43%, 5% 33%, 15% 31%, 14% 20%, 25% 21%, 28% 10%, 38% 13%, 43% 3%);
+  padding: 0;
+  background: none;
+  border: none;
+  box-shadow: none;
+  filter: var(--bub-filter, none);
+}
+.bubble-shell[data-template='comic-burst'] .bubble-frame {
+  position: relative;
+  padding: calc(var(--bub-pad-y, 15px) + 7px) calc(var(--bub-pad-x, 17px) + 7px);
+  background: none;
+}
+.bubble-shell[data-template='comic-burst'] .bubble-frame::before,
+.bubble-shell[data-template='comic-burst'] .bubble-frame::after {
+  content: '';
   position: absolute;
   z-index: -1;
-  left: var(--bubble-tail-x);
-  bottom: -8px;
-  width: var(--bubble-tail-size, 16px);
-  height: var(--bubble-tail-size, 16px);
-  transform: translateX(-50%) rotate(var(--bubble-tail-rotation));
-  border: var(--bubble-stroke-w) solid var(--bubble-edge);
-  border-radius: var(--bubble-tail-radius, 4px 3px 12px 3px);
-  background: var(--bubble-surface);
+  clip-path: var(--burst);
 }
-.bubble[data-tail='left'] {
-  --bubble-tail-x: 42%;
-  --bubble-tail-rotation: 55deg;
+.bubble-shell[data-template='comic-burst'] .bubble-frame::before {
+  inset: calc(-1 * var(--bub-outline-w, 1px) - 0.5px);
+  background: var(--bub-edge);
 }
-.bubble[data-tail='right'] {
-  --bubble-tail-x: 58%;
-  --bubble-tail-rotation: 35deg;
+.bubble-shell[data-template='comic-burst'] .bubble-frame::after {
+  inset: 0;
+  background-color: var(--bub-surface);
+  background-image: var(--bub-surface-image, none);
 }
-.bubble.below::after {
-  bottom: auto;
-  top: -8px;
-  transform: translateX(-50%) rotate(calc(var(--bubble-tail-rotation) + 180deg));
+/* 名签与情绪符移进锯齿内部,避免视觉出格 */
+.bubble-shell[data-template='comic-burst'] .b-name {
+  top: 6px;
+  left: 22px;
 }
-.bubble.below { transform-origin: var(--bubble-tail-x) -7px; }
-.bubble[data-mood='angry'] { --bubble-mood-mark: '♯'; }
-.bubble[data-mood='shy'] { --bubble-mood-mark: '♡'; }
-.bubble[data-mood='excited'] { --bubble-mood-mark: '✦'; }
-.bubble.long { font-size: calc(var(--bubble-font-size, 16px) - 2px); line-height: var(--bubble-line-height, 1.52); }
+.bubble-shell[data-template='comic-burst'] .bubble-deco::after {
+  top: 8px;
+  right: 16px;
+}
+
+/* 云朵:圆瓣轮廓画在 frame 背景层(描边层在下、底色层在上),正文不参与 mask,多行不失真 */
+.bubble-shell[data-template='cloud'] {
+  padding: 0;
+  background: none;
+  border: none;
+}
+.bubble-shell[data-template='cloud'] .bubble-frame {
+  position: relative;
+  padding: calc(var(--bub-pad-y, 18px) + 8px) calc(var(--bub-pad-x, 22px) + 8px);
+}
+.bubble-shell[data-template='cloud'] .bubble-frame::before,
+.bubble-shell[data-template='cloud'] .bubble-frame::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: 32px;
+  background:
+    radial-gradient(circle at 12% 34%, var(--petal) 0 15px, transparent 16px),
+    radial-gradient(circle at 30% 14%, var(--petal) 0 19px, transparent 20px),
+    radial-gradient(circle at 54% 9%, var(--petal) 0 17px, transparent 18px),
+    radial-gradient(circle at 78% 18%, var(--petal) 0 18px, transparent 19px),
+    radial-gradient(circle at 94% 42%, var(--petal) 0 14px, transparent 15px),
+    radial-gradient(circle at 90% 74%, var(--petal) 0 16px, transparent 17px),
+    radial-gradient(circle at 70% 92%, var(--petal) 0 14px, transparent 15px),
+    radial-gradient(circle at 42% 90%, var(--petal) 0 16px, transparent 17px),
+    radial-gradient(circle at 10% 66%, var(--petal) 0 15px, transparent 16px),
+    linear-gradient(var(--petal), var(--petal));
+}
+.bubble-shell[data-template='cloud'] .bubble-frame::after {
+  --petal: var(--bub-surface);
+}
+.bubble-shell[data-template='cloud'] .bubble-frame::before {
+  --petal: var(--bub-edge);
+  inset: calc(-1 * var(--bub-outline-w, 1px) - 1px);
+}
+
+/* 手账贴纸:轻微歪斜的纸片;硬偏移阴影由 resolve 输出;胶带挂在装饰层 */
+.bubble-shell[data-template='sticker'] {
+  transform: rotate(-0.6deg);
+  border: none;
+}
+.bubble-shell[data-template='sticker'] .bubble-deco::before {
+  content: '';
+  position: absolute;
+  top: -9px;
+  left: 50%;
+  width: 74px;
+  height: 20px;
+  transform: translateX(-50%) rotate(-3deg);
+  background: color-mix(in srgb, var(--sp) 30%, rgba(255, 255, 255, 0.55));
+  opacity: 0.75;
+  border-radius: 2px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+}
+
+/* RPG 文本框:外描边 + 内嵌亮线;tab 名签骑在上边框(基础段已定位) */
+.bubble-shell[data-template='rpg'] {
+  box-shadow:
+    inset 0 0 0 2px color-mix(in srgb, var(--bub-surface) 62%, #ffffff),
+    var(--bub-shadow);
+}
+.bubble-shell[data-template='rpg'] .b-name {
+  padding: 3px 12px;
+}
+
+/* 极简字幕:低干扰横条,文字加轻投影保证半透明底上可读 */
+.bubble-shell[data-template='caption'] {
+  min-width: 220px;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+}
+
+/* ---------- 状态 ---------- */
+.bubble-shell.long {
+  font-size: calc(var(--bub-font-size, 16px) - 2px);
+}
+.bubble-shell.loud {
+  font-size: calc(var(--bub-font-size, 16px) + 1px);
+  min-width: 190px;
+  max-width: min(calc(var(--bub-max-w, 320px) + 40px), 80vw);
+}
 
 /* 参考记忆徽标(透明档):流内小 chip,纯装饰(pointer-events:none 随穿透语义),
    随气泡退场一起消失;演出/直播路径不传 memoryCount,天然不渲染 */
-.bubble .b-mem {
+.bubble-shell .b-mem {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -569,7 +814,7 @@
   pointer-events: none;
   user-select: none;
 }
-.bubble.out {
+.bubble-shell.out {
   animation: bubble-out 0.16s ease forwards;
   pointer-events: none;
 }
@@ -687,12 +932,7 @@
   width: 100%;
 }
 
-/* 远距离互相喊话:加大加粗 */
-.bubble.loud {
-  font-size: calc(var(--bubble-font-size, 16px) + 1px);
-  font-weight: 600;
-  max-width: calc(var(--bubble-max-w, 320px) + 40px);
-}
+/* 远距离互相喊话的状态样式并入 .bubble-shell.loud(见气泡 V2 段) */
 
 @keyframes bubble-in {
   from {
@@ -3094,16 +3334,259 @@ body.settings-standalone .settings-window {
   background: rgba(255, 255, 255, 0.22);
 }
 
-/* 气泡工坊:预览行复用 .bubble 真样式(变量在 :root,窗口内同样生效);
-   颜色小方块与数字参数行的紧凑布局 */
+/* 气泡工坊 V2:左预览(sticky)右配置两栏;模板画廊真实缩略;场景三维切换 */
+.bubble-workshop {
+  display: grid;
+  grid-template-columns: minmax(300px, 5fr) minmax(340px, 6fr);
+  gap: 14px;
+  align-items: start;
+}
+@media (max-width: 1180px) {
+  .bubble-workshop {
+    grid-template-columns: 1fr;
+  }
+  .bw-preview-col {
+    position: static;
+  }
+}
+.bw-preview-col {
+  position: sticky;
+  top: 12px;
+}
+.bw-scenes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.bw-stage {
+  border-radius: 12px;
+  padding: 26px 16px 14px;
+  min-height: 190px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 14px;
+  transition: background 0.25s ease;
+}
+.bw-stage.desk-light {
+  background: linear-gradient(160deg, #efe9df, #ddd6c9);
+}
+.bw-stage.desk-dark {
+  background: linear-gradient(160deg, #232637, #14151f);
+}
+.bw-stage.desk-clear {
+  background:
+    linear-gradient(45deg, rgba(128, 128, 140, 0.16) 25%, transparent 25%, transparent 75%, rgba(128, 128, 140, 0.16) 75%),
+    linear-gradient(45deg, rgba(128, 128, 140, 0.16) 25%, transparent 25%, transparent 75%, rgba(128, 128, 140, 0.16) 75%),
+    rgba(180, 180, 195, 0.12);
+  background-size: 22px 22px;
+  background-position: 0 0, 11px 11px, 0 0;
+}
+.bw-stage.editing {
+  outline: 1px dashed color-mix(in srgb, var(--accent) 48%, transparent);
+}
+.bw-stage-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+.bw-stage-row .bubble-shell {
+  margin-bottom: 0;
+  animation: none;
+}
+.bw-vs {
+  font-size: 11px;
+  opacity: 0.7;
+  margin-bottom: 4px;
+}
+.bw-diag {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(255, 176, 80, 0.12);
+  border: 1px solid rgba(255, 176, 80, 0.35);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.bw-simple-palette {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.bw-strength {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  opacity: 0.9;
+}
+.bw-strength input[type='range'] {
+  flex: 1;
+}
+.bw-advanced-colors {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  padding: 10px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+}
+.bw-advanced-colors .bubble-color-chip {
+  flex-direction: column;
+  gap: 2px;
+  font-size: 11px;
+  opacity: 0.85;
+}
+.bw-advanced-colors .bubble-color-chip input {
+  width: 100%;
+  height: 26px;
+}
+/* 模板画廊:迷你轮廓缩略图(去色,仅辨形) */
+.bw-gallery {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin: 6px 0 10px;
+}
+.bw-tpl {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  padding: 9px 4px 7px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  cursor: pointer;
+}
+.bw-tpl:hover {
+  background: rgba(255, 255, 255, 0.07);
+}
+.bw-tpl.on {
+  border-color: color-mix(in srgb, var(--accent) 65%, transparent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.bw-tpl-label {
+  font-size: 11px;
+  line-height: 1.2;
+}
+.bw-thumb {
+  display: block;
+  width: 52px;
+  height: 30px;
+  position: relative;
+}
+.bw-thumb i {
+  position: absolute;
+  inset: 0;
+  border: 1.5px solid color-mix(in srgb, var(--accent) 80%, #fff);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  border-radius: 9px;
+  display: block;
+}
+.bw-thumb[data-template='pill'] i {
+  border-radius: 999px;
+}
+.bw-thumb[data-template='pill'] i::after {
+  content: '';
+  position: absolute;
+  left: 42%;
+  bottom: -5px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: inherit;
+  border: inherit;
+  border-top: 0;
+}
+.bw-thumb[data-template='comic-burst'] i {
+  border: none;
+  background:
+    linear-gradient(color-mix(in srgb, var(--accent) 80%, #fff), color-mix(in srgb, var(--accent) 80%, #fff)) 0 0 / 100% 100%,
+    color-mix(in srgb, var(--accent) 16%, transparent);
+  clip-path: polygon(50% 0%, 61% 8%, 74% 3%, 78% 15%, 91% 14%, 89% 27%, 100% 33%, 92% 43%, 100% 54%, 89% 59%, 92% 72%, 79% 72%, 76% 86%, 64% 81%, 55% 92%, 45% 83%, 33% 91%, 29% 78%, 16% 79%, 19% 66%, 5% 62%, 13% 52%, 0% 44%, 11% 37%, 5% 25%, 18% 24%, 20% 11%, 33% 14%, 40% 3%);
+}
+.bw-thumb[data-template='cloud'] i {
+  border: none;
+  border-radius: 12px;
+  background:
+    radial-gradient(circle at 18% 100%, color-mix(in srgb, var(--accent) 80%, #fff) 0 5px, transparent 6px),
+    radial-gradient(circle at 50% 100%, color-mix(in srgb, var(--accent) 80%, #fff) 0 6px, transparent 7px),
+    radial-gradient(circle at 82% 100%, color-mix(in srgb, var(--accent) 80%, #fff) 0 5px, transparent 6px),
+    radial-gradient(circle at 0% 60%, color-mix(in srgb, var(--accent) 80%, #fff) 0 5px, transparent 6px),
+    radial-gradient(circle at 100% 60%, color-mix(in srgb, var(--accent) 80%, #fff) 0 5px, transparent 6px),
+    radial-gradient(circle at 15% 0%, color-mix(in srgb, var(--accent) 80%, #fff) 0 6px, transparent 7px),
+    radial-gradient(circle at 50% 0%, color-mix(in srgb, var(--accent) 80%, #fff) 0 7px, transparent 8px),
+    radial-gradient(circle at 85% 0%, color-mix(in srgb, var(--accent) 80%, #fff) 0 6px, transparent 7px),
+    color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.bw-thumb[data-template='sticker'] i {
+  transform: rotate(-6deg);
+  border-radius: 8px 4px 9px 5px;
+  border-style: dashed;
+}
+.bw-thumb[data-template='rpg'] i {
+  border-radius: 3px;
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+.bw-thumb[data-template='caption'] i {
+  top: 8px;
+  height: 14px;
+  border-radius: 4px;
+  opacity: 0.75;
+}
+/* AI 三候选并排 */
+.bw-candidates {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin-top: 10px;
+}
+.bw-candidate {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  align-items: center;
+}
+.bw-cand-stage {
+  min-height: 84px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.bw-cand-stage .bubble-shell {
+  margin-bottom: 0;
+  animation: none;
+  transform: scale(0.82);
+}
+.bw-cand-name {
+  font-size: 13px;
+  font-weight: 700;
+}
+.bw-cand-meta {
+  font-size: 11px;
+  opacity: 0.7;
+  text-align: center;
+}
+
+/* 气泡工坊:预览行复用真气泡组件(.bubble-shell 同款 DOM/CSS,主题经 Provider
+   注入预览容器自身,与舞台同一条 resolve 链路);颜色小方块与数字参数行的紧凑布局 */
 .bubble-preview {
   display: flex;
   flex-wrap: wrap;
   gap: 20px;
   padding: 20px 14px 12px;
 }
-.bubble-preview .bubble {
+.bubble-preview .bubble-shell {
   margin-bottom: 0;
+  animation: none;
 }
 .bubble-preview.editing {
   border-radius: 10px;
@@ -3784,4 +4267,52 @@ body.settings-standalone .settings-window {
   background: var(--sw-primary);
   border-color: var(--sw-primary);
   color: #fff;
+}
+
+/* 气泡模板样例页(dev-only,/bubble-gallery.html):视觉基线截图来源 */
+.gal-page {
+  max-width: 780px;
+  margin: 0 auto;
+  padding: 28px 18px 60px;
+  font-family: 'MiSans', 'HarmonyOS Sans SC', 'Microsoft YaHei UI', sans-serif;
+  color: #23242e;
+}
+.gal-page h1 {
+  font-size: 20px;
+}
+.gal-hint {
+  font-size: 12px;
+  opacity: 0.7;
+  line-height: 1.7;
+}
+.gal-row h2 {
+  margin: 26px 0 8px;
+  font-size: 14px;
+}
+.gal-row h2 small {
+  margin-left: 10px;
+  font-size: 12px;
+  font-weight: 400;
+  opacity: 0.6;
+}
+.gal-desk {
+  border-radius: 14px;
+  padding: 30px 20px 18px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+.gal-desk.desk-light {
+  background: linear-gradient(160deg, #efe9df, #ddd6c9);
+}
+.gal-desk.desk-dark {
+  background: linear-gradient(160deg, #232637, #14151f);
+}
+.gal-desk .bubble-shell {
+  margin-bottom: 0;
+}
+/* 样例页 body 浅色底(App.css 全局 body 是舞台深色,样例页独立) */
+body:has(.gal-page) {
+  background: #f3efe7;
 }

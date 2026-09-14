@@ -276,10 +276,10 @@ export const SETTINGS_SEARCH_INDEX: { tab: SettingsTab; card: string; label: str
   // 基础设置
   { tab: 'general', card: '显示与布局', label: '气泡风格', keywords: '气泡 柔彩 夜色 玻璃 主题 外观 配色' },
   // 气泡工坊
-  { tab: 'bubble', card: '选择主题', label: '气泡风格切换', keywords: '气泡 主题 柔彩 夜色 玻璃 切换 外观' },
-  { tab: 'bubble', card: 'AI 生成主题', label: 'AI 生成气泡主题', keywords: '气泡 自定义 生成 配色 字号 圆角 工坊' },
-  { tab: 'bubble', card: '编辑主题', label: '气泡主题编辑', keywords: '气泡 颜色 透明度 模糊 字号 宽度 圆角 形状 轮廓 尾巴 阴影 字重 行距 留白 编辑' },
-  { tab: 'bubble', card: '自定义主题', label: '自定义气泡主题列表', keywords: '气泡 自定义 删除 列表' },
+  { tab: 'bubble', card: '选择主题', label: '气泡风格切换', keywords: '气泡 主题 柔彩 夜色 玻璃 切换 外观 复制' },
+  { tab: 'bubble', card: 'AI 生成主题', label: 'AI 生成气泡主题', keywords: '气泡 自定义 生成 三方案 候选 配色 工坊' },
+  { tab: 'bubble', card: '编辑主题', label: '气泡主题编辑', keywords: '气泡 模板 材质 主色 派生 覆盖 对比度 修复 撤销 重做 字体 字号 圆角 描边 阴影 辉光 纹理 尾巴 名签 预览 编辑' },
+  { tab: 'bubble', card: '预览', label: '气泡多场景预览', keywords: '气泡 预览 长文本 喊话 翻转 深色 浅色 透明桌面 对比 诊断' },
   // 视频工坊
   { tab: 'video', card: '视频服务', label: '视频服务商', keywords: '即梦 seedance 方舟 海螺 minimax 清影 智谱 cogvideox 视频生成' },
   { tab: 'video', card: '视频服务', label: '视频 API Key', keywords: '视频 密钥 key 鉴权' },
