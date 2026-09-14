@@ -220,6 +220,7 @@ pub async fn proxy_core(req: ProxyRequest<'_>) -> Result<u16, String> {
     let target = resolve_target(base, path_and_query)?;
     let host_for_log = target.host_str().unwrap_or("?").to_string();
     let has_auth = auth.is_some();
+    let is_stream_req = body.contains("\"stream\":true") || body.contains("\"stream\": true");
     let mut req = client()
         .post(target)
         .header("Content-Type", "application/json");
@@ -238,12 +239,32 @@ pub async fn proxy_core(req: ProxyRequest<'_>) -> Result<u16, String> {
         .insert(request_id.to_string(), tx);
 
     let work = async {
-        let resp = req.send().await.map_err(|e| format!("请求失败: {e}"))?;
+        log::info!("端点代理发送: host={host_for_log} stream={is_stream_req}");
+        let resp = req.send().await.map_err(|e| {
+            log::warn!("端点代理发送失败: host={host_for_log} err={e}");
+            format!("请求失败: {e}")
+        })?;
         let status = resp.status().as_u16();
+        log::info!("端点代理响应头: host={host_for_log} status={status}");
         let mut stream = resp.bytes_stream();
         let mut total: usize = 0;
+        // 流空闲超时:仅对 SSE 流式请求启用。上游挂起(200+心跳后迟迟不出正文)时
+        // 快速失败,避免前端等满整个请求超时;非流式生成完成前 body 本就无数据,
+        // 空闲判定会误杀长生成,仍由整体 timeout 兜底
+        const STREAM_IDLE: Duration = Duration::from_secs(45);
+        let idle = if is_stream_req { Some(STREAM_IDLE) } else { None };
         loop {
-            match stream.next().await {
+            let next = match idle {
+                Some(d) => match tokio::time::timeout(d, stream.next()).await {
+                    Err(_) => {
+                        log::warn!("端点代理流空闲超时: host={host_for_log} idle={d:?} total={total}");
+                        return Err("响应体空闲超时(上游长时间无数据)".into());
+                    }
+                    Ok(next) => next,
+                },
+                None => stream.next().await,
+            };
+            match next {
                 Some(Ok(chunk)) => {
                     total += chunk.len();
                     if total > MAX_RESP_BODY {
@@ -256,7 +277,10 @@ pub async fn proxy_core(req: ProxyRequest<'_>) -> Result<u16, String> {
                         return Err("前端通道已关闭".into());
                     }
                 }
-                Some(Err(e)) => return Err(format!("响应读取失败: {e}")),
+                Some(Err(e)) => {
+                    log::warn!("端点代理流读失败: host={host_for_log} err={e}");
+                    return Err(format!("响应读取失败: {e}"));
+                }
                 None => {
                     // 空字节哨兵:Channel 内部保序,前端见到它即知 body 已完整,
                     // 与 invoke 返回值何时不相关(IPC 两条通路间无顺序保证)
@@ -272,7 +296,10 @@ pub async fn proxy_core(req: ProxyRequest<'_>) -> Result<u16, String> {
 
     let out = tokio::select! {
         r = work => r,
-        _ = rx => Err(CANCELLED.to_string()),
+        _ = rx => {
+            log::info!("端点代理取消: host={host_for_log}");
+            Err(CANCELLED.to_string())
+        }
     };
     if let Ok(mut map) = state.pending.lock() {
         map.remove(request_id);
@@ -293,9 +320,11 @@ pub async fn endpoint_request(
     profile: Option<String>,
     on_chunk: Channel<InvokeResponseBody>,
 ) -> Result<u16, String> {
+    log::info!("端点代理入口: kind={kind} path={path_and_query} body={}", body.len());
     let base = configured_base(&app, &kind, profile.as_deref())?;
     let auth = auth_header(&kind, profile.as_deref())?;
     let timeout = timeout_ms.unwrap_or(90_000).clamp(1_000, 300_000);
+    log::info!("端点代理参数就绪: host={}", url::Url::parse(&base).ok().and_then(|u| u.host_str().map(str::to_string)).unwrap_or_default());
     proxy_core(ProxyRequest {
         state: &state,
         request_id: &request_id,
