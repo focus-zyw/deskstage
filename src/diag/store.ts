@@ -268,6 +268,10 @@ export const diag = {
       contextLines: number
       timeoutMs?: number
       estTokens?: number
+      actor?: string
+      batchId?: string
+      attempt?: number
+      queueDepth?: number
     },
   ): void {
     emit(id, {
@@ -300,6 +304,10 @@ export const diag = {
       status?: number
       errorKind?: LlmErrorKind
       serverMsg?: string
+      actor?: string
+      batchId?: string
+      attempt?: number
+      queueDepth?: number
     },
   ): void {
     emit(id, {

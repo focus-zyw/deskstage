@@ -70,7 +70,7 @@ export function initSettingsBridgeServer(refs: SettingsBridgeServerRefs): Promis
   void initDiagBridgeServer().catch(() => {}) // 诊断推送/动作受理:失败不影响主桥
   return Promise.all([
     listen<{
-      kind: 'replay' | 'reset-layout' | 'reset-c' | 'privacy-tip' | 'support-thanks' | 'group-send'
+      kind: 'replay' | 'reset-layout' | 'reset-c' | 'privacy-tip' | 'support-thanks' | 'group-send' | 'clear-chatlog'
       episode?: Parameters<SettingsBridge['onReplay']>[0]
       content?: Parameters<SettingsBridge['onSupportThanks']>[0]
       text?: string
@@ -92,6 +92,11 @@ export function initSettingsBridgeServer(refs: SettingsBridgeServerRefs): Promis
           .then((result) =>
             emitTo('settings', 'settings-action-reply', { requestId: p.requestId, result }).catch(() => {}),
           )
+      }
+      if (p.kind === 'clear-chatlog' && p.requestId) {
+        void Promise.resolve(bridge.onClearChatlog?.() ?? undefined)
+          .catch(() => undefined)
+          .then(() => emitTo('settings', 'settings-action-reply', { requestId: p.requestId, result: 'accepted' }).catch(() => {}))
       }
     }),
     listen('settings-closed', () => refs.onClosed()),

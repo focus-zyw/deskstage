@@ -7,10 +7,15 @@ import { getConfig, inTauri } from '../storage/configStore'
 import { diag, type LlmCallKind, type LlmErrorKind } from '../diag/store'
 import { openEndpointStream, requestEndpoint, type EndpointKind } from './endpointProxy'
 
-/** 诊断引用:不传 = 本次调用不进诊断环 */
+/** 诊断引用:不传 = 本次调用不进诊断环。
+ *  群聊 Actor 维度(可选白名单标量):并发调用区分调用者 */
 export interface GatewayDiag {
   turnId: string
   call: LlmCallKind
+  actor?: string
+  batchId?: string
+  attempt?: number
+  queueDepth?: number
 }
 
 /** 多模态消息内容:纯文本,或 文本+图片 混排(OpenAI 兼容视觉格式,智谱/通义等一致) */
@@ -158,6 +163,10 @@ export async function complete(options: CompletionOptions): Promise<string> {
         ok: true,
         elapsedMs: Date.now() - t0,
         outputChars: out.length,
+        actor: d.actor,
+        batchId: d.batchId,
+        attempt: d.attempt,
+        queueDepth: d.queueDepth,
       })
     }
     return out
@@ -174,6 +183,10 @@ export async function complete(options: CompletionOptions): Promise<string> {
         errorKind: c.errorKind,
         status: c.status,
         serverMsg: c.serverMsg,
+        actor: d.actor,
+        batchId: d.batchId,
+        attempt: d.attempt,
+        queueDepth: d.queueDepth,
       })
     }
     throw e

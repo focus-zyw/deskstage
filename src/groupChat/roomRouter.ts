@@ -68,8 +68,12 @@ export interface RoomRouter {
     primaryActor: ActorId
     primaryAutonomy: AutonomyLevel
   }): { message: RoomMessage; chain: ConversationChainState }
-  /** 控制消息入列(catch-up 摘要等;进各角色 FIFO 统一 ACK) */
-  appendControl(text: string, epoch: number): RoomMessage
+  /**
+   * 追赶摘要(§13):未读超过阈值时调用。把积压折叠成一条 control 摘要消息——
+   * 用户消息逐条原文进入摘要(绝不丢弃),角色消息只计条数;显式推游标越过历史,
+   * 摘要本身保持未读,随下一批正常投递与 ACK。返回 false = 未达阈值。
+   */
+  catchUpDigest(actor: ActorId): boolean
   /** 角色回复在临界区内入列;仅 roomRouter.commitActorResult 可调 */
   appendReplyDirect(reply: RoomMessage): void
 
@@ -275,16 +279,25 @@ export function createRoomRouter(opts: RoomRouterOpts): RoomRouter {
       return { message, chain }
     },
 
-    appendControl(text: string, currentEpoch: number): RoomMessage {
-      return journal.append({
+    catchUpDigest(actor: ActorId): boolean {
+      const unread = visibleFor(actor, cursorsBy[actor].ackedThrough)
+      if (unread.length <= INBOX_PAUSE_THRESHOLD) return false
+      const userMsgs = unread.filter((m) => m.author === 'user' && m.kind === 'chat')
+      const lines = userMsgs
+        .slice(-10)
+        .map((m) => `- ${m.text.slice(0, 60)}`)
+      const digest = journal.append({
         author: 'user',
         kind: 'control',
-        text,
-        epoch: currentEpoch,
-        causalRootId: '',
+        text: `【系统摘要】你离开期间群聊累计了 ${unread.length} 条消息(其中用户消息 ${userMsgs.length} 条,原文如下;其余为角色发言,只作背景):\n${lines.join('\n') || '(无)'}`,
+        epoch,
+        causalRootId: userMsgs[userMsgs.length - 1]?.id ?? '',
         depth: 0,
         replyTo: [],
       })
+      // 显式 catch-up:推游标越过被摘要的历史;摘要本身仍未读,随下一批投递
+      cursorsBy[actor].ackedThrough = digest.roomSeq - 1
+      return true
     },
 
     appendReplyDirect(reply: RoomMessage) {

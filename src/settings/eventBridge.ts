@@ -73,5 +73,15 @@ export function createEventBridge(): SettingsBridge {
         pending.set(requestId, { resolve, timer })
         void emitTo('main', SETTINGS_ACTION_EVENT, { kind: 'group-send', text, requestId })
       }),
+    onClearChatlog: () =>
+      new Promise((resolve) => {
+        const requestId = `cc${Date.now()}${Math.random().toString(36).slice(2, 8)}`
+        const timer = window.setTimeout(() => {
+          pending.delete(requestId)
+          resolve() // 超时兜底:清空结果以重拉列表为准
+        }, 4000)
+        pending.set(requestId, { resolve: () => resolve(), timer })
+        void emitTo('main', SETTINGS_ACTION_EVENT, { kind: 'clear-chatlog', requestId })
+      }),
   }
 }

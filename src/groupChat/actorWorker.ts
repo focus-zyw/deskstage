@@ -24,8 +24,6 @@ import type { RoomJournal } from './roomJournal'
 import type { RoomRouter } from './roomRouter'
 import type { ActorBatch, ActorId, ActorStatus, Clock } from './types'
 
-const CATCHUP_RETRY_MS = 5_000
-
 export interface ActorWorkerDeps {
   actor: ActorId
   router: RoomRouter
@@ -34,11 +32,12 @@ export interface ActorWorkerDeps {
   clock: Clock
   /** 身份与人设(运行时按当前配置组装;每次取最新,改名/换人设即生效) */
   identity(): PromptIdentity
-  /** 可选附加上下文(记忆事实/用户简报/工具观察块);失败不得阻塞收发 */
+  /** 可选附加上下文(记忆事实/用户简报/工具观察块/诊断轮 id);失败不得阻塞收发 */
   prepareExtras?(batch: ActorBatch): Promise<{
     factsLine?: string
     briefLine?: string
     toolNotes?: Record<string, string>
+    diagTurnId?: string
   }>
   /** 状态/事件通知(运行时据此 emit 与诊断) */
   onEvent?(e: { type: 'status' | 'stale-drop'; actor: ActorId; status?: ActorStatus }): void
@@ -102,7 +101,12 @@ export function createActorWorker(deps: ActorWorkerDeps): ActorWorker {
     const now = clock.now()
     const identity = deps.identity()
     const fullContext = adapter.prefersFullContext?.() ?? true
-    let extras: { factsLine?: string; briefLine?: string; toolNotes?: Record<string, string> } = {}
+    let extras: {
+      factsLine?: string
+      briefLine?: string
+      toolNotes?: Record<string, string>
+      diagTurnId?: string
+    } = {}
     if (deps.prepareExtras) {
       try {
         extras = (await deps.prepareExtras(batch)) ?? {}
@@ -139,6 +143,11 @@ export function createActorWorker(deps: ActorWorkerDeps): ActorWorker {
       ...buildFor({ fullContext, recovery: false }),
       chainRootId: batch.primaryUserMessageId ?? batch.messages[0].causalRootId,
       rebuildPrompt: buildFor,
+      diag: {
+        turnId: extras.diagTurnId,
+        attempt: failures + 1,
+        queueDepth: batch.messages.length,
+      },
     }
   }
 
@@ -160,10 +169,11 @@ export function createActorWorker(deps: ActorWorkerDeps): ActorWorker {
           return
         }
         const now = clock.now()
-        // 追赶阈值:暂停自动调用,等 catch-up(消息绝不丢)
+        // 追赶阈值:折叠摘要 + 显式推游标(用户消息原文进摘要,绝不丢),随后照常消费
         if (router.unreadCount(actor) > INBOX_PAUSE_THRESHOLD) {
-          setStatus('backoff')
-          schedule(CATCHUP_RETRY_MS)
+          router.catchUpDigest(actor)
+          setStatus('collecting')
+          schedule(300)
           return
         }
         // 限流:统计所有 invocation;窗口内超限就等最早一条滑出

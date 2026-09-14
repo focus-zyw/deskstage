@@ -23,6 +23,16 @@ export function createApiActorAdapter(opts: ApiActorAdapterOpts = {}): ActorMode
         temperature: 1.0,
         timeoutMs: opts.timeoutMs ?? 40_000,
         signal,
+        diag: req.diag?.turnId
+          ? {
+              turnId: req.diag.turnId,
+              call: 'groupActor',
+              actor: req.actor,
+              batchId: req.batch.id,
+              attempt: req.diag.attempt,
+              queueDepth: req.diag.queueDepth,
+            }
+          : undefined,
       })
       return parseValidReaction(raw, req.batch)
     },

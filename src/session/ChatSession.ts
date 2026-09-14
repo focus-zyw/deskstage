@@ -55,6 +55,8 @@ export interface ChatSnapshot {
 export interface ChatSession {
   send(raw: string, opts?: SendOptions): Promise<SendResult>
   cancel(): void
+  /** 统一清空:清 journal/队列/待播与网页会话代(legacy 模式为 no-op) */
+  reset(): void
   getSnapshot(): ChatSnapshot
   subscribe(listener: () => void): () => void
   whenIdle(): Promise<void>
@@ -207,6 +209,19 @@ export function createChatSession(
         A: opts.adapters?.A ?? slotAdapter('A'),
         B: opts.adapters?.B ?? slotAdapter('B'),
         C: opts.adapters?.C ?? slotAdapter('C'),
+      },
+      prepareExtras: async (batch) => {
+        // 工具观察块/记忆事实只随"直接回应这条用户消息"的批次注入(一次执行,全员可见)
+        const rootId = batch.primaryUserMessageId
+        if (!rootId) return {}
+        const extra = chainExtras.get(rootId)
+        if (!extra) return { diagTurnId: chainTurn.get(rootId) }
+        return {
+          factsLine: extra.factsLine,
+          briefLine: extra.briefLine,
+          toolNotes: extra.toolNote ? { [rootId]: extra.toolNote } : undefined,
+          diagTurnId: chainTurn.get(rootId),
+        }
       },
       onUserMessage: (msg, primary) => {
         // 用户消息:气泡上屏 + 短期窗口 + 落盘(entryId = 诊断轮 id)
@@ -406,6 +421,17 @@ export function createChatSession(
       runtimeOf().cancel()
       presenterOf().cancel()
       currentTurnId = null
+      emit()
+    },
+
+    reset(): void {
+      chainTurn.clear()
+      chainExtras.clear()
+      currentTurnId = null
+      if (mode === 'actors' && runtime) {
+        presenterOf().cancel()
+        runtime.reset()
+      }
       emit()
     },
 

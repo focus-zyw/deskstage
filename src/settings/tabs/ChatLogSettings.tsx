@@ -9,6 +9,7 @@
 // 集管理(赞/踩/删除/收藏)仍在「演出历史」页。
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ChangeEvent, KeyboardEvent } from 'react'
+import { listen } from '@tauri-apps/api/event'
 import { listEpisodes, type Episode } from '../../storage/historyStore'
 import {
   listChatTurns,
@@ -262,6 +263,7 @@ export function ChatLogSettings() {
   const [clearArmed, setClearArmed] = useState(false)
   // 群设置抽屉 / 背景图 / 头像 / 长演出展开
   const [drawerOpen, setDrawerOpen] = useState(false)
+  const [actorStatus, setActorStatus] = useState<Partial<Record<'A' | 'B' | 'C', { status?: string; queueDepth?: number }>>>({})
   const [bgDataUrl, setBgDataUrl] = useState<string | null>(null)
   const [bgBusy, setBgBusy] = useState(false)
   const [bgTick, setBgTick] = useState(0)
@@ -332,6 +334,18 @@ export function ChatLogSettings() {
     }
   }, [])
 
+  // 群聊 Actor 状态条(P4):主窗节流推送,这里只渲染;dot 状态语义见 statusDot
+  useEffect(() => {
+    const un = listen<{
+      actors: Partial<Record<'A' | 'B' | 'C', { status?: string; queueDepth?: number }>>
+    }>('group-actor-status', (e) => {
+      setActorStatus(e.payload.actors ?? {})
+    })
+    return () => {
+      void un.then((f) => f())
+    }
+  }, [])
+
   // 滚动:接近底部(40px 内)= 跟随模式,新消息自动滚到底;向上前置加载后保持视口。
   // 双 rAF:等一轮布局再落位,防字体/图片晚到把内容撑高后停在半途
   const feedRef = useRef<HTMLDivElement>(null)
@@ -368,7 +382,9 @@ export function ChatLogSettings() {
   }, [draft])
 
   async function onClearTurns() {
-    await clearChatLog()
+    // 统一清空(评审①):文件写入与运行时重置都在主窗完成,设置窗不自写
+    if (bridge.onClearChatlog) await bridge.onClearChatlog()
+    else await clearChatLog()
     setTurns(await listChatTurns(MAX_TURNS))
   }
 
@@ -591,6 +607,38 @@ export function ChatLogSettings() {
 
       <div className="group-head">
         <span className="group-name">{group.name}</span>
+        <span
+          style={{ display: 'inline-flex', gap: 4, marginLeft: 8, alignItems: 'center' }}
+          title="群聊角色状态:灰=空闲 橙=生成中 红=退避/暂停 深=未参与"
+        >
+          {(['A', 'B', 'C'] as const).map((id) => {
+            const st = actorStatus[id]?.status ?? 'idle'
+            const depth = actorStatus[id]?.queueDepth ?? 0
+            const name = id === 'A' ? names.a : id === 'B' ? names.b : names.c
+            const color =
+              st === 'invoking' || st === 'collecting'
+                ? '#e8a33d'
+                : st === 'backoff' || st === 'paused'
+                  ? '#d4574e'
+                  : st === 'disabled'
+                    ? 'rgba(128,128,128,.3)'
+                    : 'rgba(128,128,128,.55)'
+            return (
+              <span
+                key={id}
+                style={{
+                  width: 8,
+                  height: 8,
+                  borderRadius: 8,
+                  background: color,
+                  display: 'inline-block',
+                  opacity: depth > 0 ? 1 : 0.7,
+                }}
+                title={`${name}:${st}${depth > 0 ? `(待读 ${depth})` : ''}`}
+              />
+            )
+          })}
+        </span>
         <button
           className={`group-gear${drawerOpen ? ' on' : ''}`}
           title="群设置"

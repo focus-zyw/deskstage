@@ -5,6 +5,7 @@
 // 订阅三件套(version 计数):群聊页据此实时刷新——角色逐句应答落盘即冒出。
 import { readTextFile, writeTextFile, exists, mkdir, remove } from '@tauri-apps/plugin-fs'
 import { appDataDir, join } from '@tauri-apps/api/path'
+import { emitTo, listen } from '@tauri-apps/api/event'
 import { useSyncExternalStore } from 'react'
 import type { Episode } from './historyStore'
 import { withFileLock } from './writeLock'
@@ -47,6 +48,11 @@ const MAX_TEXT = 500
 const MAX_TURNS = 5000
 
 // ---------- 订阅三件套(useSyncExternalStore):version 只增不回退,读侧拿它当 effect 依赖 ----------
+// 跨窗:写入发生在主窗,设置窗的模块实例感知不到——写入端 emit 'chatlog-bump',
+// 设置窗 installChatlogSync() 监听后 bump 本地 version(修既有跨窗缝隙)。
+const CHATLOG_BUMP_EVENT = 'chatlog-bump'
+const inTauriHost = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+
 let version = 0
 const listeners = new Set<() => void>()
 
@@ -54,6 +60,17 @@ const listeners = new Set<() => void>()
 function bumpVersion(): void {
   version += 1
   for (const l of listeners) l()
+  if (inTauriHost) {
+    void emitTo('settings', CHATLOG_BUMP_EVENT, { version }).catch(() => {})
+  }
+}
+
+/** 设置窗调用:监听主窗的落盘通知并 bump 本地 version(幂等;预览环境无操作) */
+export async function installChatlogSync(): Promise<void> {
+  if (!inTauriHost) return
+  await listen<{ version?: number }>(CHATLOG_BUMP_EVENT, () => {
+    bumpVersion()
+  })
 }
 
 /** 订阅聊天日志变更;返回退订函数 */

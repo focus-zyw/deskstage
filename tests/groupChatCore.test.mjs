@@ -268,6 +268,26 @@ test('停止态:在飞 speak 收尾按 listen,不再产生公开回复', async (
   assert.equal(journal.list().filter((m) => m.author === 'A').length, 0)
 })
 
+test('catch-up 摘要:超阈值积压折叠,用户消息原文进摘要、游标显式推过历史(I7)', () => {
+  const clock = makeClock()
+  const { journal, router } = makeRouter(clock)
+  router.alignCursorsToTail()
+  for (let i = 1; i <= 105; i++) userSay(router, `消息${i}`)
+  assert.equal(router.unreadCount('B'), 105)
+  assert.equal(router.catchUpDigest('B'), true)
+  const digestSeq = journal.maxSeq()
+  assert.equal(router.cursors('B').ackedThrough, digestSeq - 1, '游标越过被摘要历史,摘要本身未读')
+  const info = router.nextBatchInfo('B', clock.now())
+  assert.equal(info.status, 'ready')
+  assert.equal(info.batch.messages.length, 1, '下一批只含摘要')
+  assert.equal(info.batch.messages[0].kind, 'control')
+  assert.ok(info.batch.messages[0].text.includes('消息105'), '最新用户消息原文进摘要(绝不丢)')
+  assert.ok(info.batch.messages[0].text.includes('105 条消息'), '积压总数进摘要')
+  assert.equal(router.catchUpDigest('B'), false, '未达阈值不再折叠')
+  // 其他角色不受影响(摘要同样入列,未读 = 105 历史 + 1 摘要)
+  assert.equal(router.unreadCount('A'), 106)
+})
+
 test('调用限流统计所有 invocation,60s 滑窗后恢复', () => {
   const limiter = autonomyPolicy.createInvocationLimiter(3)
   const t0 = 1_000_000

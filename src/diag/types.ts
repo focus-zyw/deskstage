@@ -31,6 +31,7 @@ export type LlmCallKind =
   | 'memo'
   | 'distill'
   | 'cues'
+  | 'groupActor'
   | 'other'
 
 export type LlmTransport = 'api' | 'webchat'
@@ -83,8 +84,13 @@ export type DiagEvent =
       contextLines: number
       estTokens: number
       timeoutMs?: number
+      /** 群聊 Actor 维度(并发调用区分调用者;评审要求白名单标量字段) */
+      actor?: string
+      batchId?: string
+      attempt?: number
+      queueDepth?: number
     }
-  | { kind: 'llm_first_token'; ts: number; level: 'basic'; call: LlmCallKind; transport: LlmTransport; ms: number }
+  | { kind: 'llm_first_token'; ts: number; level: 'basic'; call: LlmCallKind; transport: LlmTransport; ms: number; actor?: string; batchId?: string; attempt?: number; queueDepth?: number }
   /** 流式首句闭合(分句器吐出第一句):语音"开口延迟"的决定项 */
   | { kind: 'llm_first_sentence'; ts: number; level: 'basic'; call: LlmCallKind; ms: number }
   | {
@@ -103,6 +109,11 @@ export type DiagEvent =
       errorKind?: LlmErrorKind
       /** 服务端错误说明,强制 scrub 后截断 ≤160 字符(可能含模型侧回显,兜底一次) */
       serverMsg?: string
+      /** 群聊 Actor 维度 */
+      actor?: string
+      batchId?: string
+      attempt?: number
+      queueDepth?: number
     }
   /** 回退事件:回答"为什么走了网页版回退 / 为什么整段回落单句" */
   | {

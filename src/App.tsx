@@ -39,7 +39,7 @@ import { generateShortChat, memoReminderLine, generateDailyLinePack } from './en
 import { loadLinePacks, saveLinePack, dayKey } from './storage/linePackStore'
 import { createChatSession, type SendResult } from './session/ChatSession'
 import { pushTurn, type TurnWho } from './dialogue/turnWindow'
-import { appendChatTurns, listChatTurns } from './storage/chatLogStore'
+import { appendChatTurns, clearChatLog, listChatTurns } from './storage/chatLogStore'
 import { createToolCoordinator } from './tools/coordinator'
 import { TOOLS } from './tools/registry'
 import { createJsonPromptPlanner, defaultPlannerDeps } from './tools/planner/jsonPromptPlanner'
@@ -1175,6 +1175,22 @@ function App() {
   // busy 消费走外部 store:演出/抉择等待不算忙(session 与导演状态分界)
   const chatBusy = useSyncExternalStore(chatSession.subscribe, () => chatSession.getSnapshot().busy)
 
+  // 群聊页(设置窗)角色状态条:主窗节流推送快照(P4 可观测性;设置窗无会话实例)
+  let lastActorPush = 0
+  chatSession.subscribe(() => {
+    const now = Date.now()
+    if (now - lastActorPush < 400) return
+    lastActorPush = now
+    const snap = chatSession.getSnapshot()
+    void emitTo('settings', 'group-actor-status', {
+      actors: {
+        A: { status: snap.actors.A.status, queueDepth: snap.actors.A.queueDepth },
+        B: { status: snap.actors.B.status, queueDepth: snap.actors.B.queueDepth },
+        C: { status: snap.actors.C.status, queueDepth: snap.actors.C.queueDepth },
+      },
+    }).catch(() => {})
+  })
+
   /** 聊天通道核心(主聊天框与群聊页共用)。返回受理结果供 UI 提示:
    *  'empty' 空文本 / 'busy' 仅旧引擎回退 / 'backpressure' 运行时销毁中 /
    *  'accepted' 已受理(自由群聊下回应期间也照常受理) */
@@ -1273,6 +1289,12 @@ function App() {
     onPrivacyTip: showPrivacyTip,
     onSupportThanks: showSupportThanks,
     onGroupSend: (text) => sendUserChatText(text),
+    // 统一清空(评审①):只有主窗写文件——清 chatlog 的同时重置群聊运行时
+    // (journal/队列/待播与网页会话 generation 全部重建)
+    onClearChatlog: async () => {
+      await clearChatLog()
+      chatSession.reset()
+    },
   }
   // 设置窗(独立 WebView)的事件桥服务端:动作回放/复位/群聊发送、代落盘配置、
   // 退出请求、关闭同步。bridge 与退出流程随渲染重建,监听只注册一次,经 ref 取最新

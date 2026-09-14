@@ -51,6 +51,8 @@ export interface SettingsBridge {
   onSupportThanks(content: { rarity: Rarity; text: string }): void
   /** 群聊页发送消息:走主聊天通道(应答/插话/落盘同源),返回受理结果供 UI 提示 */
   onGroupSend(text: string): Promise<SendResultBridge>
+  /** 统一清空:经由主窗执行(清文件 + 重置群聊运行时),设置窗不自写文件 */
+  onClearChatlog?(): Promise<void>
 }
 
 export interface SettingsSessionApi {

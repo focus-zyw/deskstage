@@ -116,6 +116,8 @@ export interface ActorReactionRequest {
     prompt: string
     messages: ActorReactionRequest['messages']
   }
+  /** 诊断载荷(可选):诊断轮 id 由宿主注入;attempt/queueDepth 由 Worker 填 */
+  diag?: { turnId?: string; attempt?: number; queueDepth?: number }
 }
 
 export interface ActorReactionResponse {
