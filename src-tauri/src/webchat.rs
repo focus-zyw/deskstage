@@ -29,7 +29,7 @@
 // 可测性:CDP/Edge 物理操作全部经 CdpOps trait,Hub 逻辑写在泛型之上,
 // 单测注入内存假件即可覆盖并发/取消/失效语义(不起 Edge)。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -362,9 +362,23 @@ fn read_devtools(profile: &Path) -> Option<(u16, String)> {
 }
 
 async fn connect_ws(url: String) -> Result<WsStream, String> {
-    let (ws, _) = tokio_tungstenite::connect_async(url)
+    // Windows 上 connect_async(String) 对真实 Edge 调试端口偶发走到无效地址
+    // (WSAEADDRNOTAVAIL/10049)，尽管同端口的 HTTP 与显式 IPv4 TCP 都可达。
+    // CDP 地址由本模块构造且恒为本机，先钉死 IPv4 loopback socket，再在该
+    // socket 上做握手，避免 ToSocketAddrs 的平台解析分支。
+    let parsed = url::Url::parse(&url).map_err(|e| format!("Edge 调试地址无效: {e}"))?;
+    if parsed.scheme() != "ws" || parsed.host_str() != Some("127.0.0.1") {
+        return Err("Edge 调试地址必须是本机 ws://127.0.0.1".into());
+    }
+    let port = parsed
+        .port()
+        .ok_or_else(|| "Edge 调试地址缺少端口".to_string())?;
+    let socket = TokioTcpStream::connect(std::net::SocketAddr::from(([127, 0, 0, 1], port)))
         .await
-        .map_err(|e| format!("连接 Edge 调试通道失败: {e}"))?;
+        .map_err(|e| format!("连接 Edge 调试端口失败: {e}"))?;
+    let (ws, _) = tokio_tungstenite::client_async(url, MaybeTlsStream::Plain(socket))
+        .await
+        .map_err(|e| format!("Edge WebSocket 握手失败: {e}"))?;
     Ok(ws)
 }
 
@@ -497,8 +511,34 @@ fn json_arg(s: &str) -> String {
     serde_json::to_string(s).unwrap_or_else(|_| "\"\"".into())
 }
 
-/// 桌面端真实传输:每次操作新建短连接(本机 WS 连接毫秒级,轮询间隔 300ms 完全淹没)
-pub struct RealCdpOps;
+/// 桌面端真实传输:每次操作新建短连接(本机 WS 连接毫秒级,轮询间隔 300ms 完全淹没)。
+/// Chromium 的浏览器级 WS 路径包含启动时生成的 UUID；probe 时从
+/// DevToolsActivePort 读取并按端口缓存，Target 域操作必须复用该路径，
+/// `/json` 是 HTTP discovery endpoint，不是 WebSocket endpoint。
+#[derive(Default)]
+pub struct RealCdpOps {
+    browser_paths: Mutex<HashMap<u16, String>>,
+}
+
+impl RealCdpOps {
+    fn remember_browser_path(&self, port: u16, path: &str) {
+        if let Ok(mut paths) = self.browser_paths.lock() {
+            paths.insert(port, path.to_string());
+        }
+    }
+
+    async fn browser_cdp(&self, port: u16) -> Result<Cdp, String> {
+        let path = self
+            .browser_paths
+            .lock()
+            .map_err(|e| e.to_string())?
+            .get(&port)
+            .cloned()
+            .ok_or_else(|| "Edge 浏览器调试路径尚未探活".to_string())?;
+        let ws = connect_ws(format!("ws://127.0.0.1:{port}{path}")).await?;
+        Ok(Cdp::new(ws))
+    }
+}
 
 impl CdpOps for RealCdpOps {
     async fn kill_and_launch(&self, profile: &Path, url: &str) -> Result<(), String> {
@@ -514,6 +554,7 @@ impl CdpOps for RealCdpOps {
                 )
                 .await;
                 if let Ok(Ok(_)) = attempt {
+                    self.remember_browser_path(port, &path);
                     return Ok(());
                 }
             }
@@ -523,11 +564,16 @@ impl CdpOps for RealCdpOps {
     }
 
     async fn probe_port(&self, profile: &Path) -> Option<u16> {
-        browser_connect(profile).await.ok().map(|(port, _)| port)
+        let (port, path) = read_devtools(profile)?;
+        connect_ws(format!("ws://127.0.0.1:{port}{path}"))
+            .await
+            .ok()?;
+        self.remember_browser_path(port, &path);
+        Some(port)
     }
 
     async fn list_pages(&self, port: u16) -> Result<Vec<(String, String)>, String> {
-        let mut browser = Cdp::new(connect_ws(format!("ws://127.0.0.1:{port}/json")).await?);
+        let mut browser = self.browser_cdp(port).await?;
         let res = browser.call("Target.getTargets", json!({}), 8000).await?;
         let pages = res
             .get("targetInfos")
@@ -547,7 +593,7 @@ impl CdpOps for RealCdpOps {
     }
 
     async fn create_page(&self, port: u16, url: &str) -> Result<String, String> {
-        let mut browser = Cdp::new(connect_ws(format!("ws://127.0.0.1:{port}/json")).await?);
+        let mut browser = self.browser_cdp(port).await?;
         let res = browser
             .call("Target.createTarget", json!({ "url": url }), 15_000)
             .await?;
@@ -558,7 +604,7 @@ impl CdpOps for RealCdpOps {
     }
 
     async fn close_page(&self, port: u16, target_id: &str) -> Result<(), String> {
-        let mut browser = Cdp::new(connect_ws(format!("ws://127.0.0.1:{port}/json")).await?);
+        let mut browser = self.browser_cdp(port).await?;
         browser
             .call("Target.closeTarget", json!({ "targetId": target_id }), 5000)
             .await?;
@@ -617,6 +663,8 @@ struct EdgeRuntime {
 pub struct ConversationState {
     site: String,
     target_id: Option<String>,
+    /// true = Hub 为该会话创建，可在释放时关闭；false = 用户预先打开的登录页，只解除占用。
+    target_owned: bool,
     edge_epoch: u64,
     turn_count: u32,
     last_used_at: Instant,
@@ -637,6 +685,7 @@ impl ConversationSlot {
             state: tokio::sync::Mutex::new(ConversationState {
                 site: site.to_string(),
                 target_id: None,
+                target_owned: false,
                 edge_epoch: 0,
                 turn_count: 0,
                 last_used_at: Instant::now(),
@@ -653,6 +702,8 @@ pub struct HubState<O: CdpOps> {
     /// 读租约 = ask 整段持有;写租约 = login/restart(先取消全部活动请求)
     edge: tokio::sync::RwLock<EdgeRuntime>,
     conversations: tokio::sync::Mutex<HashMap<String, Arc<ConversationSlot>>>,
+    /// 已被 Conversation 路由认领的 target，防止两个同站点角色抢到同一登录页。
+    claimed_targets: tokio::sync::Mutex<HashSet<String>>,
     requests: Arc<Mutex<HashMap<String, Arc<CancellationHandle>>>>,
     /// Conversation 路由的全局生成槽;Shared 路由走自己的单飞槽,互不占位
     permits: Arc<Semaphore>,
@@ -673,6 +724,7 @@ impl<O: CdpOps> HubState<O> {
             ops,
             edge: tokio::sync::RwLock::new(EdgeRuntime { port: 0, epoch: 1 }),
             conversations: tokio::sync::Mutex::new(HashMap::new()),
+            claimed_targets: tokio::sync::Mutex::new(HashSet::new()),
             requests: Arc::new(Mutex::new(HashMap::new())),
             permits: Arc::new(Semaphore::new(HUB_PERMITS)),
             inflight: Mutex::new(None),
@@ -729,36 +781,71 @@ impl<O: CdpOps> HubState<O> {
     ) -> Result<tokio::sync::RwLockReadGuard<'_, EdgeRuntime>, AskFail> {
         loop {
             let guard = within(self.edge.read(), cancel, deadline, "edge").await?;
-            let port = within(
+            let probed_port = within(
                 self.probe_running(profile, deadline),
                 cancel,
                 deadline,
                 "edge",
             )
             .await?;
-            if port.is_some() {
-                return Ok(guard);
+            if let Some(port) = probed_port {
+                if guard.port == port {
+                    return Ok(guard);
+                }
+                // Hub 刚创建时 port=0；或用户在外部重启了专用 Edge 导致端口变化。
+                // 升写锁同步真实端口，下一轮再交付覆盖整段 ask 的读租约。
+                drop(guard);
+                let mut w = within(self.edge.write(), cancel, deadline, "edge").await?;
+                let latest = within(
+                    self.probe_running(profile, deadline),
+                    cancel,
+                    deadline,
+                    "edge",
+                )
+                .await?;
+                if let Some(latest) = latest {
+                    if w.port != latest {
+                        let replaced_running_edge = w.port != 0;
+                        w.port = latest;
+                        if replaced_running_edge {
+                            w.epoch += 1;
+                            self.conversations.lock().await.clear();
+                            self.claimed_targets.lock().await.clear();
+                        }
+                    }
+                }
+                drop(w);
+                continue;
             }
             drop(guard);
             // 升写:杀旧拉新(写者之间互斥;另一写者刚修好则直接回落读)
-            let w = within(self.edge.write(), cancel, deadline, "edge").await?;
-            let still_down = within(
+            let mut w = within(self.edge.write(), cancel, deadline, "edge").await?;
+            let current_port = within(
                 self.probe_running(profile, deadline),
                 cancel,
                 deadline,
                 "edge",
             )
-            .await?
-            .is_none();
-            if still_down {
+            .await?;
+            if let Some(port) = current_port {
+                if w.port != port {
+                    let replaced_running_edge = w.port != 0;
+                    w.port = port;
+                    if replaced_running_edge {
+                        w.epoch += 1;
+                        self.conversations.lock().await.clear();
+                        self.claimed_targets.lock().await.clear();
+                    }
+                }
+            } else {
                 self.ops
                     .kill_and_launch(profile, url)
                     .await
                     .map_err(AskFail::Failed)?;
                 let t0 = Instant::now();
-                loop {
-                    if self.ops.probe_port(profile).await.is_some() {
-                        break;
+                let launched_port = loop {
+                    if let Some(port) = self.ops.probe_port(profile).await {
+                        break port;
                     }
                     if t0.elapsed() > Duration::from_secs(EDGE_READY_SECS) {
                         return Err(AskFail::Failed(format!(
@@ -766,7 +853,11 @@ impl<O: CdpOps> HubState<O> {
                         )));
                     }
                     tokio::time::sleep(Duration::from_millis(600)).await;
-                }
+                };
+                w.port = launched_port;
+                w.epoch += 1;
+                self.conversations.lock().await.clear();
+                self.claimed_targets.lock().await.clear();
             }
             drop(w);
         }
@@ -802,7 +893,53 @@ impl<O: CdpOps> HubState<O> {
             .await
     }
 
-    /// 解析会话专属标签页:reset/epoch 变化/站点变化/句柄缺失/已消失 = 关旧建新
+    /// 优先认领用户已打开并登录的同站点页；没有可用页时才创建会话页。
+    /// claimed_targets 的锁覆盖“选择/创建/登记”，保证同站点并发会话不会抢同一页。
+    async fn claim_or_create_conversation_target(
+        &self,
+        port: u16,
+        site: &str,
+        cancel: &CancellationHandle,
+        deadline: Deadline,
+    ) -> Result<(String, bool), AskFail> {
+        let a = adapter(site).ok_or_else(|| AskFail::Failed(format!("未知站点: {site}")))?;
+        let pages = self.op(self.ops.list_pages(port), cancel, deadline).await?;
+        let mut claimed = self.claimed_targets.lock().await;
+        if let Some((id, _)) = pages
+            .iter()
+            .rev()
+            .find(|(id, url)| url.contains(a.host) && !claimed.contains(id))
+        {
+            claimed.insert(id.clone());
+            return Ok((id.clone(), false));
+        }
+        let tid = self
+            .op(self.ops.create_page(port, a.url), cancel, deadline)
+            .await?;
+        claimed.insert(tid.clone());
+        Ok((tid, true))
+    }
+
+    async fn create_claimed_conversation_target(
+        &self,
+        port: u16,
+        site: &str,
+        cancel: &CancellationHandle,
+        deadline: Deadline,
+    ) -> Result<String, AskFail> {
+        let url = adapter(site)
+            .ok_or_else(|| AskFail::Failed(format!("未知站点: {site}")))?
+            .url;
+        let mut claimed = self.claimed_targets.lock().await;
+        let tid = self
+            .op(self.ops.create_page(port, url), cancel, deadline)
+            .await?;
+        claimed.insert(tid.clone());
+        Ok(tid)
+    }
+
+    /// 解析会话标签页:首轮优先认领现有登录页；后续复用同一 target。
+    /// reset/epoch 变化/站点变化/句柄丢失时释放旧 target，再认领或新建。
     #[allow(clippy::too_many_arguments)]
     async fn resolve_conversation_target(
         &self,
@@ -827,23 +964,27 @@ impl<O: CdpOps> HubState<O> {
                 return Ok(tid);
             }
             trace.mark("target_lost_reuse");
+            self.claimed_targets.lock().await.remove(&tid);
             old = None;
         }
-        // 关旧建新(旧上下文作废;恢复靠 transcript prompt)
+        // 释放旧上下文；恢复靠 transcript prompt。
         if let Some(tid) = old {
+            self.claimed_targets.lock().await.remove(&tid);
             let _ = self
                 .op(self.ops.close_page(port, &tid), cancel, deadline)
                 .await;
         }
-        let url = adapter(site)
-            .ok_or_else(|| AskFail::Failed(format!("未知站点: {site}")))?
-            .url;
-        let tid = self
-            .op(self.ops.create_page(port, url), cancel, deadline)
+        let (tid, target_owned) = self
+            .claim_or_create_conversation_target(port, site, cancel, deadline)
             .await?;
-        trace.mark("target_created");
+        trace.mark(if target_owned {
+            "target_created"
+        } else {
+            "target_adopted"
+        });
         st.site = site.to_string();
         st.target_id = Some(tid.clone());
+        st.target_owned = target_owned;
         st.edge_epoch = epoch;
         st.turn_count = 0;
         st.last_used_at = Instant::now();
@@ -1055,16 +1196,15 @@ impl<O: CdpOps> HubState<O> {
                     .await
             }
             Route::Conversation => {
-                within(self.ops.create_page(port, a.url), cancel, deadline, "pages")
-                    .await?
-                    .map_err(AskFail::Failed)
+                self.create_claimed_conversation_target(port, site, cancel, deadline)
+                    .await
             }
         }
     }
 
     /// 打开登录窗口(设置页"打开登录窗口"/AI剧场甲乙各自登录)。
     /// 关键语义:实例已在跑 = **只开一个新标签页**——绝不杀实例,其他站点的
-    /// 标签页与会话(多 AI 剧场两个站点并存)原样存活;只有真的没在跑才冷启动。
+    /// 标签页与会话原样存活；该新页会在对应角色首轮生成时被认领并持续复用。
     /// 冷启动会重启进程:epoch +1、全部会话句柄失效(后续 ask 自动重建标签页)。
     pub async fn open_login(&self, profile: &Path, url: &str) -> Result<LoginOutcome, String> {
         if let Some(port) = self.ops.probe_port(profile).await {
@@ -1087,9 +1227,15 @@ impl<O: CdpOps> HubState<O> {
             None => {
                 // kill 兜底:清理"端口文件缺失但进程还在"的僵尸实例(无调试参数)
                 self.ops.kill_and_launch(profile, url).await?;
+                w.port = self
+                    .ops
+                    .probe_port(profile)
+                    .await
+                    .ok_or_else(|| "Edge 重启后调试端口仍不可用".to_string())?;
                 w.epoch += 1;
                 // 全部会话句柄失效(target 随进程消失):清表,后续 ask 自动重建
                 self.conversations.lock().await.clear();
+                self.claimed_targets.lock().await.clear();
                 Ok(LoginOutcome::ColdStarted)
             }
         }
@@ -1128,6 +1274,13 @@ impl<O: CdpOps> HubState<O> {
                 continue;
             }
             if let Some(tid) = st.target_id.clone() {
+                self.claimed_targets.lock().await.remove(&tid);
+                if !st.target_owned {
+                    st.released = true;
+                    drop(st);
+                    self.conversations.lock().await.remove(&key);
+                    continue;
+                }
                 let _ = self.ops.close_page(lease.port, &tid).await;
             }
             st.released = true;
@@ -1295,6 +1448,7 @@ async fn run_conversation<O: CdpOps>(
         )
         .await?;
     trace.mark("page_ready");
+    let original_target = target_id.clone();
     let result = hub
         .generation(
             lease.port,
@@ -1310,6 +1464,12 @@ async fn run_conversation<O: CdpOps>(
     // 结账:成败都记使用时刻;成功累计轮次
     if let Ok(mut st) = slot.state.try_lock() {
         st.last_used_at = Instant::now();
+        if target_id != original_target {
+            hub.claimed_targets.lock().await.remove(&original_target);
+            hub.claimed_targets.lock().await.insert(target_id.clone());
+            st.target_id = Some(target_id);
+            st.target_owned = true;
+        }
         if result.is_ok() {
             st.turn_count += 1;
         }
@@ -1336,6 +1496,11 @@ pub async fn webchat_release_conversation(
         return Ok(());
     }
     if let Some(tid) = st.target_id.clone() {
+        hub.claimed_targets.lock().await.remove(&tid);
+        if !st.target_owned {
+            st.released = true;
+            return Ok(());
+        }
         if let Some(port) = hub.ops.probe_port(&profile_dir(&app)?).await {
             let _ = hub.ops.close_page(port, &tid).await;
         }
@@ -1438,6 +1603,73 @@ pub async fn webchat_probe(app: AppHandle, site: String) -> Result<ProbeResult, 
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn connect_ws_reaches_ipv4_loopback_server() {
+        let listener =
+            tokio::net::TcpListener::bind(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
+                .await
+                .unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            tokio_tungstenite::accept_async(socket).await.unwrap()
+        });
+
+        let client = tokio::time::timeout(
+            Duration::from_secs(3),
+            connect_ws(format!("ws://127.0.0.1:{port}/devtools/test")),
+        )
+        .await
+        .expect("连接不得挂起");
+        assert!(client.is_ok(), "IPv4 回环 WebSocket 应可连接: {client:?}");
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn target_commands_use_cached_browser_websocket_path() {
+        let listener =
+            tokio::net::TcpListener::bind(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
+                .await
+                .unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (path_tx, path_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut path_tx = Some(path_tx);
+            let mut ws = tokio_tungstenite::accept_hdr_async(
+                socket,
+                move |request: &tokio_tungstenite::tungstenite::handshake::server::Request,
+                      response: tokio_tungstenite::tungstenite::handshake::server::Response| {
+                    let _ = path_tx.take().unwrap().send(request.uri().path().to_string());
+                    Ok(response)
+                },
+            )
+            .await
+            .unwrap();
+            let request = ws.next().await.unwrap().unwrap().into_text().unwrap();
+            let request: Value = serde_json::from_str(&request).unwrap();
+            assert_eq!(
+                request.get("method").and_then(Value::as_str),
+                Some("Target.createTarget")
+            );
+            ws.send(Message::text(
+                json!({ "id": request["id"], "result": { "targetId": "target-1" } }).to_string(),
+            ))
+            .await
+            .unwrap();
+        });
+
+        let ops = RealCdpOps::default();
+        ops.remember_browser_path(port, "/devtools/browser/test-id");
+        let target = ops
+            .create_page(port, "https://chat.deepseek.com/")
+            .await
+            .unwrap();
+        assert_eq!(target, "target-1");
+        assert_eq!(path_rx.await.unwrap(), "/devtools/browser/test-id");
+        server.await.unwrap();
+    }
+
     /// 阶段轨迹:阶段按序追加、毫秒数单调、finish 落库 LAST_TRACE 且可取回
     #[test]
     fn trace_builder_records_and_publishes() {
@@ -1472,6 +1704,8 @@ mod tests {
         /// 活跃 eval 计数与峰值(并发断言用)
         active_evals: u32,
         peak_evals: u32,
+        /// Hub 传给物理操作的端口(回归:探活端口必须写回 EdgeRuntime)
+        ports_seen: Vec<u16>,
         /// Edge 实例是否在跑(false = 探活失败,走冷启动路径)
         running: bool,
     }
@@ -1516,8 +1750,9 @@ mod tests {
             Ok(self.state().pages.clone())
         }
 
-        async fn create_page(&self, _port: u16, url: &str) -> Result<String, String> {
+        async fn create_page(&self, port: u16, url: &str) -> Result<String, String> {
             let mut s = self.state();
+            s.ports_seen.push(port);
             s.next_id += 1;
             let id = format!("t{}", s.next_id);
             s.pages.push((id.clone(), url.to_string()));
@@ -1531,13 +1766,14 @@ mod tests {
 
         async fn eval(
             &self,
-            _port: u16,
+            port: u16,
             target_id: &str,
             expr: &str,
             _t: u64,
         ) -> Result<Value, String> {
             {
                 let mut s = self.state();
+                s.ports_seen.push(port);
                 if !s.pages.iter().any(|(id, _)| id == target_id) {
                     return Err("Target closed".into()); // 标签页没了 = 上下文丢失
                 }
@@ -1562,12 +1798,13 @@ mod tests {
 
         async fn eval_await(
             &self,
-            _port: u16,
+            port: u16,
             target_id: &str,
             _expr: &str,
             _t: u64,
         ) -> Result<Value, String> {
             let mut s = self.state();
+            s.ports_seen.push(port);
             if !s.pages.iter().any(|(id, _)| id == target_id) {
                 return Err("Target closed".into());
             }
@@ -1649,6 +1886,17 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn probe_port_is_written_into_edge_lease() {
+        let hub = hub_with(FakeOps::new());
+        ask_conv(&hub, "port", "k1", 10_000).await.unwrap();
+        assert_eq!(hub.edge.read().await.port, 9222);
+        assert!(
+            hub.ops.state().ports_seen.iter().all(|port| *port == 9222),
+            "create/eval 不得收到初始占位端口 0"
+        );
+    }
+
+    #[tokio::test]
     async fn cancel_while_waiting_permit_is_immediate() {
         let ops = FakeOps::new();
         ops.state().eval_delay_ms = 5_000; // 占住生成槽的 ask 很慢
@@ -1718,11 +1966,11 @@ mod tests {
             hub.conversations.lock().await.clear();
         }
         assert!(hub.conversations.lock().await.is_empty());
-        // 重启后同 key ask:全新标签页(旧的已随进程消失)
+        hub.claimed_targets.lock().await.clear();
+        // 重启后同 key ask:认领 Edge 启动时已经打开的站点页
         let _ = ask_conv(&hub, "r2", "k1", 10_000).await.unwrap();
         let s = hub.ops.state();
-        // 重启实例的启动页(以 URL 参数打开) + 为该 key 新建的会话页
-        assert_eq!(s.pages.len(), 2);
+        assert_eq!(s.pages.len(), 1);
         assert!(s.launched >= 1);
     }
 
@@ -1761,6 +2009,85 @@ mod tests {
         // 再问一次同 key:复用原标签页,不再新建
         let _ = ask_conv(&hub, "r2", "relay:e1:A", 10_000).await.unwrap();
         assert_eq!(hub.ops.state().pages.len(), before + 1);
+    }
+
+    /// 设置页提前打开并完成登录的站点页，应直接成为该角色的会话页。
+    /// 否则第一次生成会额外创建标签页，用户刚登录的页面也不会承接后续对话。
+    #[tokio::test]
+    async fn first_conversation_adopts_open_login_tab_and_keeps_using_it() {
+        let hub = hub_with(FakeOps::new());
+        hub.open_login(&profile(), "https://chat.deepseek.com/")
+            .await
+            .unwrap();
+        let login_target = hub.ops.state().pages[0].0.clone();
+
+        ask_conv(&hub, "r1", "relay:e1:A", 10_000).await.unwrap();
+        assert_eq!(
+            hub.ops.state().pages.len(),
+            1,
+            "首轮生成应复用已打开的登录标签页"
+        );
+
+        let slot = hub
+            .conversations
+            .lock()
+            .await
+            .get("relay:e1:A")
+            .unwrap()
+            .clone();
+        assert_eq!(
+            slot.state.lock().await.target_id.as_deref(),
+            Some(login_target.as_str())
+        );
+
+        ask_conv(&hub, "r2", "relay:e1:A", 10_000).await.unwrap();
+        assert_eq!(
+            hub.ops.state().pages.len(),
+            1,
+            "同一 conversationKey 的后续轮次必须继续使用同一标签页"
+        );
+    }
+
+    #[tokio::test]
+    async fn same_site_conversations_never_share_one_login_tab() {
+        let ops = FakeOps::new();
+        ops.state().eval_delay_ms = 100;
+        let hub = hub_with(ops);
+        hub.open_login(&profile(), "https://chat.deepseek.com/")
+            .await
+            .unwrap();
+
+        let (h1, h2) = (hub.clone(), hub.clone());
+        let a = tokio::spawn(async move { ask_conv(&h1, "r1", "relay:e1:A", 10_000).await });
+        let b = tokio::spawn(async move { ask_conv(&h2, "r2", "relay:e1:B", 10_000).await });
+        let (ra, rb) = tokio::join!(a, b);
+        assert!(ra.unwrap().is_ok() && rb.unwrap().is_ok());
+        assert_eq!(hub.ops.state().pages.len(), 2);
+
+        let map = hub.conversations.lock().await;
+        let a = map.get("relay:e1:A").unwrap().state.lock().await;
+        let b = map.get("relay:e1:B").unwrap().state.lock().await;
+        assert_ne!(a.target_id, b.target_id, "两个角色不能向同一页面并发发消息");
+    }
+
+    #[tokio::test]
+    async fn sweeping_adopted_conversation_keeps_login_tab_open() {
+        let hub = hub_with(FakeOps::new());
+        hub.open_login(&profile(), "https://chat.deepseek.com/")
+            .await
+            .unwrap();
+        ask_conv(&hub, "r1", "relay:e1:A", 10_000).await.unwrap();
+        {
+            let map = hub.conversations.lock().await;
+            let slot = map.get("relay:e1:A").unwrap();
+            slot.state.lock().await.last_used_at =
+                Instant::now() - Duration::from_secs(HUB_IDLE_SECS + 60);
+        }
+
+        hub.sweep_idle().await;
+        assert_eq!(hub.ops.state().pages.len(), 1, "用户登录页不应被清扫关闭");
+        assert!(hub.conversations.lock().await.is_empty());
+        assert!(hub.claimed_targets.lock().await.is_empty());
     }
 
     /// 冷启动路径:实例真没在跑才重启;epoch 失效、会话句柄清空
@@ -1825,7 +2152,7 @@ mod tests {
         let profile =
             std::env::temp_dir().join(format!("webchat-edge-profile-smoke-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&profile);
-        let ops = RealCdpOps;
+        let ops = RealCdpOps::default();
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             ops.kill_and_launch(&profile, "https://chat.deepseek.com")

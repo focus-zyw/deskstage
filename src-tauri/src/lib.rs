@@ -139,7 +139,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(audio_capture::CaptureState::default())
         .manage(Arc::new(webchat::WebchatHub::new(Arc::new(
-            webchat::RealCdpOps,
+            webchat::RealCdpOps::default(),
         ))))
         .manage(endpoint_proxy::ProxyState::default())
         .manage(mic_capture::MicState::default())
