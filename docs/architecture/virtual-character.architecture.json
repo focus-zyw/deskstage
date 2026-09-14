@@ -1,0 +1,92 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "virtual-character · 项目总架构",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "overlay-input",
+        "label": "桌面穿透与交互",
+        "focus": ["desktop", "overlay", "pointer", "runtime", "rust"],
+        "note": "窗口铺满主屏且默认穿透,只有热区命中才恢复交互"
+      },
+      {
+        "id": "performance-path",
+        "label": "点播演出主链路",
+        "focus": ["runtime", "director", "performer", "stage", "engine", "store"],
+        "note": "话题规划与 LLM 生成之后,台词脚本走同一条演出队列到立绘/气泡/语音"
+      },
+      {
+        "id": "ai-channels",
+        "label": "AI 通道与外部平台",
+        "focus": ["platform", "engine", "cloud", "rust"],
+        "note": "直播弹幕、网页 AI 会话与厂商 API 三条外部通路"
+      }
+    ]
+  },
+  "components": [
+    { "id": "desktop", "type": "external", "label": "用户与桌面", "sublabel": "鼠标 · 热键 · 前台应用", "pos": [56, 110], "size": [144, 72] },
+    { "id": "platform", "type": "external", "label": "外部互动平台", "sublabel": "直播弹幕 · 网页 AI", "pos": [484, 110], "size": [144, 72] },
+    { "id": "engine", "type": "backend", "label": "AI 引擎", "sublabel": "LLM · 人设 · TTS", "pos": [698, 110], "size": [144, 72] },
+    { "id": "cloud", "type": "cloud", "label": "远端 AI 厂商", "sublabel": "模型 · 语音 · 视觉", "pos": [932, 110], "size": [144, 72] },
+    { "id": "overlay", "type": "frontend", "label": "穿透覆盖层", "sublabel": "全屏透明主窗", "pos": [56, 300], "size": [144, 72] },
+    { "id": "pointer", "type": "security", "label": "穿透协调", "sublabel": "热区注册 · 原生钩子", "pos": [270, 300], "size": [144, 72] },
+    { "id": "runtime", "type": "backend", "label": "统一运行状态", "sublabel": "能力闸门 · 主动调度", "pos": [484, 300], "size": [144, 72] },
+    { "id": "director", "type": "backend", "label": "导演层", "sublabel": "对话 · 话题 · 工具", "pos": [698, 300], "size": [144, 72] },
+    { "id": "performer", "type": "backend", "label": "演出层", "sublabel": "台词队列 · 模式注册表", "pos": [912, 300], "size": [144, 72] },
+    { "id": "stage", "type": "frontend", "label": "表现层", "sublabel": "立绘 · 气泡 · 语音", "pos": [1126, 300], "size": [144, 72] },
+    { "id": "rust", "type": "backend", "label": "Rust 主进程", "sublabel": "钩子 · 端点代理 · 采集", "pos": [42, 560], "size": [172, 76] },
+    { "id": "store", "type": "database", "label": "本地数据", "sublabel": "data/*.json · 语音缓存", "pos": [684, 560], "size": [172, 76] }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "主窗交互运行时", "wraps": ["overlay", "pointer", "runtime", "director", "performer", "stage"], "pad": 24 },
+    { "kind": "security-group", "label": "Rust 特权层 · 系统能力", "wraps": ["rust"], "pad": 24 }
+  ],
+  "connections": [
+    { "id": "cursor-input", "from": "desktop", "to": "overlay", "label": "光标 · 热键", "variant": "emphasis", "labelAt": [128, 232] },
+    { "id": "hit-regions", "from": "overlay", "to": "pointer", "label": "热区注册" },
+    { "id": "hit-events", "from": "pointer", "to": "runtime", "label": "交互事件" },
+    { "id": "capability-gate", "from": "runtime", "to": "director", "label": "能力闸门" },
+    { "id": "script-out", "from": "director", "to": "performer", "label": "台词脚本" },
+    { "id": "present-line", "from": "performer", "to": "stage", "label": "逐句呈现" },
+    { "id": "danmaku-stream", "from": "platform", "to": "runtime", "label": "弹幕流", "labelAt": [556, 228] },
+    { "id": "webchat-session", "from": "platform", "to": "engine", "label": "网页会话" },
+    { "id": "llm-generate", "from": "engine", "to": "director", "label": "台词生成", "labelAt": [770, 228] },
+    { "id": "vendor-api", "from": "engine", "to": "cloud", "label": "厂商 API" },
+    { "id": "persist-episode", "from": "director", "to": "store", "label": "落盘 · 记忆注入", "labelAt": [770, 466] },
+    { "id": "window-hook", "from": "rust", "to": "overlay", "label": "窗口 · 钩子", "fromSide": "top", "toSide": "bottom", "labelAt": [128, 446] },
+    { "id": "cursor-poll", "from": "rust", "to": "pointer", "label": "光标轮询", "fromSide": "top", "toSide": "bottom", "labelAt": [342, 420] },
+    { "id": "atomic-write", "from": "rust", "to": "store", "label": "原子写 · 进程锁", "fromSide": "right", "toSide": "left", "labelAt": [449, 598] }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "主链路",
+      "items": [
+        "穿透覆盖层承载全部前端运行时",
+        "交互命中先过 runtimeMode 能力闸门",
+        "点播 / 聊天 / 主动行为共用同一条演出队列"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "关键边界",
+      "items": [
+        "Rust 主进程独占 Win32 钩子与 WASAPI 采集",
+        "外部请求经 endpoint_proxy 硬化后转发",
+        "密钥与 Cookie 只进系统凭据库"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "数据落盘",
+      "items": [
+        "%APPDATA%/dev.virtualcharacter.app/data/",
+        "config / memory / story / memos / interactions",
+        "history 按日 jsonl,语音走两级缓存"
+      ]
+    }
+  ]
+}
