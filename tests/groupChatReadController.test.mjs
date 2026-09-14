@@ -49,6 +49,21 @@ function seed(controller, entries) {
   controller.setView({ ...VIEW_BOTTOM, lastFullyVisibleId: entries.at(-1)?.id ?? null })
 }
 
+test('0. getSnapshot 引用稳定(useSyncExternalStore 契约):突变前两次调用同一对象,突变后换新', () => {
+  const { controller } = makeController()
+  const base = [user('u1'), actor('m1', 'A')]
+  seed(controller, base)
+  const a = controller.getSnapshot()
+  const b = controller.getSnapshot()
+  assert.equal(a, b, '无突变时必须返回同一引用,否则 useSyncExternalStore 无限重渲染')
+  controller.setView(VIEW_HISTORY)
+  const c = controller.getSnapshot()
+  assert.equal(c, controller.getSnapshot())
+  controller.setEntries([...base, actor('m2', 'B')], 'append')
+  const d = controller.getSnapshot()
+  assert.notEqual(c, d, '突变后快照更新')
+})
+
 test('1. 底部收到消息:自动跟随(scroll-bottom),未读为 0', () => {
   const { controller } = makeController()
   seed(controller, [user('u1'), actor('m1', 'A')])

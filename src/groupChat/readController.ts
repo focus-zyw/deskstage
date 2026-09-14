@@ -89,6 +89,10 @@ export function createGroupChatReadController(opts: GroupChatReadControllerOpts)
   let cursorId: string | null = cursor
   let ownSendPending = false
   const listeners = new Set<() => void>()
+  let snapshotCache: GroupChatReadSnapshot | null = null
+  const dirtySnapshot = () => {
+    snapshotCache = null
+  }
 
   /** 派生键:页面保证条目有 ID(listChatTurns 兜底);这里仍防御缺 ID */
   const keyOf = (e: ChatLogEntry, i: number): string => e.id ?? `#${i}`
@@ -131,6 +135,7 @@ export function createGroupChatReadController(opts: GroupChatReadControllerOpts)
     if (targetIndex < 0) return
     if (ci >= 0 && targetIndex <= ci) return
     cursorId = key
+    dirtySnapshot()
     opts.setCursor(cursorId)
     emit()
   }
@@ -140,6 +145,7 @@ export function createGroupChatReadController(opts: GroupChatReadControllerOpts)
     const last = keyOf(entries[entries.length - 1], entries.length - 1)
     if (cursorId === last) return
     cursorId = last
+    dirtySnapshot()
     opts.setCursor(cursorId)
     emit()
   }
@@ -153,10 +159,12 @@ export function createGroupChatReadController(opts: GroupChatReadControllerOpts)
     setEntries(next, cause) {
       const prev = entries
       entries = next
+      dirtySnapshot()
       USER_SET_CACHE.delete(prev)
 
       if (cause === 'clear' || next.length === 0) {
         cursorId = null
+        dirtySnapshot()
         opts.setCursor(null)
         return buildEffect({ type: 'none' })
       }
@@ -198,6 +206,7 @@ export function createGroupChatReadController(opts: GroupChatReadControllerOpts)
       const prevActive = active
       active = input.active
       nearBottom = input.distanceToBottom < NEAR_BOTTOM_PX
+      dirtySnapshot()
 
       if (!prevActive && active) {
         // 重新进入群聊(§1):有未读 → 定位第一条未读;没有 → 保持视口
@@ -221,6 +230,7 @@ export function createGroupChatReadController(opts: GroupChatReadControllerOpts)
     notifyOwnSend() {
       ownSendPending = true
       nearBottom = true
+      dirtySnapshot()
       if (active) advanceCursorToEnd()
       return buildEffect({ type: 'scroll-bottom' })
     },
@@ -235,6 +245,7 @@ export function createGroupChatReadController(opts: GroupChatReadControllerOpts)
     },
 
     getSnapshot() {
+      if (snapshotCache) return snapshotCache
       const unread = unreadSlice().filter((u) => u.entry.who !== 'user')
       const userSet = userMessageIds()
       let latestTargetedActor: ActorId | null = null
@@ -254,7 +265,7 @@ export function createGroupChatReadController(opts: GroupChatReadControllerOpts)
           label = `${count} 条新消息`
         }
       }
-      return {
+      snapshotCache = {
         active,
         nearBottom,
         unreadCount: count,
@@ -262,6 +273,7 @@ export function createGroupChatReadController(opts: GroupChatReadControllerOpts)
         latestTargetedActor,
         label,
       }
+      return snapshotCache
     },
 
     subscribe(listener) {
