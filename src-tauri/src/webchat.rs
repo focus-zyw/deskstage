@@ -61,8 +61,17 @@ const CANCELLED: &str = "已取消";
 pub const LOST_AFTER_SEND: &str = "发送后页面丢失";
 /// Conversation 路由的全局生成槽数量(Shared 路由走独立单飞槽,互不占位)
 const HUB_PERMITS: usize = 2;
+/// 应用自管的显式 CDP 端口文件。不能使用 Chromium 的 port=0：它会把
+/// navigator.webdriver 置为 true，Google 等 OAuth 提供方会据此拦截登录。
+const DEBUG_PORT_FILE: &str = "WebchatDebugPort";
 /// 会话闲置清理阈值:超过该时长的标签页由 sweeper 关闭(崩溃兜底)
 pub const HUB_IDLE_SECS: u64 = 30 * 60;
+/// ResponseStarted(确认回复已开始生成)后的额外观察窗:慢响应/深度思考
+/// 不再被原总超时掐死
+const RESPONSE_STARTED_EXTRA_MS: u64 = 120_000;
+/// 同会话连续失败的指数退避基数与上限(1s→2s→4s→8s→16s,封顶 30s)
+const BACKOFF_BASE_MS: u64 = 1_000;
+const BACKOFF_CAP_MS: u64 = 30_000;
 /// 闲置清扫周期
 pub const HUB_SWEEP_SECS: u64 = 10 * 60;
 
@@ -230,6 +239,11 @@ impl Deadline {
     fn expired(&self) -> bool {
         Instant::now() >= self.at
     }
+
+    /// 延长观察窗(ResponseStarted 跃迁时调用:慢响应不被原总超时掐死)
+    fn extend(&mut self, ms: u64) {
+        self.at += Duration::from_millis(ms);
+    }
 }
 
 /// 失败分类:命令层只对外暴露固定文案(前端据此识别取消/超时/发送后丢失)
@@ -240,7 +254,46 @@ enum AskFail {
     Failed(String),
 }
 
+/// 生成阶段状态机:恢复策略按阶段分派(见 generation)。
+/// Disconnected 是进入 generation 前的语义书档(读租约获取即 Connected),
+/// 单独保留以完整表达状态空间
+#[allow(dead_code)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum AskPhase {
+    Disconnected,
+    Connected,
+    PageReady,
+    Sent,
+    ResponseStarted,
+    Completed,
+}
+
+impl AskPhase {
+    fn name(self) -> &'static str {
+        match self {
+            AskPhase::Disconnected => "phase:disconnected",
+            AskPhase::Connected => "phase:connected",
+            AskPhase::PageReady => "phase:page_ready",
+            AskPhase::Sent => "phase:sent",
+            AskPhase::ResponseStarted => "phase:response_started",
+            AskPhase::Completed => "phase:completed",
+        }
+    }
+}
+
 impl AskFail {
+    /// 超时按阶段给出具体诊断(模型慢?页面没就绪?),不再只是笼统超时
+    fn timeout_hinted(phase: AskPhase) -> AskFail {
+        let detail = if phase >= AskPhase::ResponseStarted {
+            "模型响应慢(已在生成,超出延长观察窗)"
+        } else if phase >= AskPhase::Sent {
+            "已发送但模型迟迟未开始响应"
+        } else {
+            "页面/网络未就绪"
+        };
+        AskFail::Failed(format!("网页生成超时 —— 诊断:{detail}"))
+    }
+
     fn msg(&self) -> String {
         match self {
             AskFail::Cancelled => CANCELLED.into(),
@@ -329,36 +382,98 @@ pub fn kill_profile_edge() {
         .output();
 }
 
-fn launch_edge(profile: &Path, url: &str) -> Result<(), String> {
+fn reserve_debug_port() -> Result<u16, String> {
+    let listener = std::net::TcpListener::bind(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
+        .map_err(|e| format!("分配 Edge 调试端口失败: {e}"))?;
+    let port = listener
+        .local_addr()
+        .map_err(|e| format!("读取 Edge 调试端口失败: {e}"))?
+        .port();
+    drop(listener);
+    Ok(port)
+}
+
+fn launch_edge(profile: &Path, url: &str) -> Result<u16, String> {
     use std::process::Stdio;
     let exe = find_edge()?;
     std::fs::create_dir_all(profile).map_err(|e| e.to_string())?;
+    let port = reserve_debug_port()?;
+    std::fs::write(profile.join(DEBUG_PORT_FILE), port.to_string())
+        .map_err(|e| format!("保存 Edge 调试端口失败: {e}"))?;
     let mut cmd = Command::new(exe);
-    cmd.arg("--remote-debugging-port=0")
-        .arg(format!("--user-data-dir={}", profile.display()))
-        .args([
-            "--no-first-run",
-            "--no-default-browser-check",
-            "--window-size=960,760",
-        ]);
+    cmd.args(edge_launch_args(profile, url, port));
     // stdio 接 null:Edge 生命周期远长于调用方,若继承 stdout/stderr 管道,
     // 读管道的一侧(cargo test / tauri dev 终端)会因等不到 EOF 卡死
     cmd.stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    cmd.arg(url);
-    cmd.spawn()
-        .map_err(|e| format!("启动 Edge 失败({exe}): {e}"))?;
-    Ok(())
+    if let Err(e) = cmd.spawn() {
+        let _ = std::fs::remove_file(profile.join(DEBUG_PORT_FILE));
+        return Err(format!("启动 Edge 失败({exe}): {e}"));
+    }
+    Ok(port)
 }
 
-/// DevToolsActivePort(Chromium 官方机制):首行 = 实际调试端口,次行 = 浏览器级 WS 路径
-fn read_devtools(profile: &Path) -> Option<(u16, String)> {
-    let text = std::fs::read_to_string(profile.join("DevToolsActivePort")).ok()?;
-    let mut lines = text.lines();
-    let port = lines.next()?.trim().parse().ok()?;
-    let path = lines.next()?.trim().to_string();
-    Some((port, path))
+fn edge_launch_args(profile: &Path, url: &str, port: u16) -> Vec<String> {
+    vec![
+        format!("--remote-debugging-port={port}"),
+        "--remote-debugging-address=127.0.0.1".into(),
+        format!("--user-data-dir={}", profile.display()),
+        "--no-first-run".into(),
+        "--no-default-browser-check".into(),
+        "--window-size=960,760".into(),
+        url.into(),
+    ]
+}
+
+/// 新版读取应用自管的显式端口；旧版 port=0 实例仍可从 DevToolsActivePort 迁移探活。
+fn read_debug_port(profile: &Path) -> Option<u16> {
+    std::fs::read_to_string(profile.join(DEBUG_PORT_FILE))
+        .ok()
+        .and_then(|text| text.trim().parse().ok())
+        .or_else(|| {
+            std::fs::read_to_string(profile.join("DevToolsActivePort"))
+                .ok()?
+                .lines()
+                .next()?
+                .trim()
+                .parse()
+                .ok()
+        })
+}
+
+/// 显式非零端口不会生成可依赖的 DevToolsActivePort 浏览器路径，改从 Chromium
+/// 官方 discovery endpoint 读取 browser WebSocket URL，再只保留其路径。
+async fn discover_browser_path(port: u16) -> Result<String, String> {
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .timeout(Duration::from_millis(1500))
+        .build()
+        .map_err(|e| format!("创建 Edge 探活客户端失败: {e}"))?;
+    let response = client
+        .get(format!("http://127.0.0.1:{port}/json/version"))
+        .send()
+        .await
+        .map_err(|e| format!("Edge discovery 连接失败: {e}"))?;
+    if !response.status().is_success() {
+        return Err(format!("Edge discovery 返回 HTTP {}", response.status()));
+    }
+    let body: Value = serde_json::from_str(
+        &response
+            .text()
+            .await
+            .map_err(|e| format!("读取 Edge discovery 失败: {e}"))?,
+    )
+    .map_err(|e| format!("解析 Edge discovery 失败: {e}"))?;
+    let ws_url = body
+        .get("webSocketDebuggerUrl")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "Edge discovery 缺少 browser WebSocket 地址".to_string())?;
+    let parsed = url::Url::parse(ws_url).map_err(|e| format!("浏览器调试地址无效: {e}"))?;
+    if parsed.scheme() != "ws" || !parsed.path().starts_with("/devtools/browser/") {
+        return Err("Edge discovery 返回了非 browser WebSocket 地址".into());
+    }
+    Ok(parsed.path().to_string())
 }
 
 async fn connect_ws(url: String) -> Result<WsStream, String> {
@@ -382,11 +497,12 @@ async fn connect_ws(url: String) -> Result<WsStream, String> {
     Ok(ws)
 }
 
-/// 浏览器级短连接(端口文件 → WS);每次操作即建即弃
+/// 浏览器级短连接(自管端口 → HTTP discovery → WS);每次操作即建即弃
 async fn browser_connect(profile: &Path) -> Result<(u16, Cdp), String> {
-    let Some((port, path)) = read_devtools(profile) else {
+    let Some(port) = read_debug_port(profile) else {
         return Err("Edge 调试端口文件不存在(Edge 未启动)".into());
     };
+    let path = discover_browser_path(port).await?;
     let ws = tokio::time::timeout(
         Duration::from_millis(2000),
         connect_ws(format!("ws://127.0.0.1:{port}{path}")),
@@ -513,8 +629,7 @@ fn json_arg(s: &str) -> String {
 
 /// 桌面端真实传输:每次操作新建短连接(本机 WS 连接毫秒级,轮询间隔 300ms 完全淹没)。
 /// Chromium 的浏览器级 WS 路径包含启动时生成的 UUID；probe 时从
-/// DevToolsActivePort 读取并按端口缓存，Target 域操作必须复用该路径，
-/// `/json` 是 HTTP discovery endpoint，不是 WebSocket endpoint。
+/// `/json/version` 读取并按端口缓存，Target 域操作必须复用该路径。
 #[derive(Default)]
 pub struct RealCdpOps {
     browser_paths: Mutex<HashMap<u16, String>>,
@@ -544,10 +659,10 @@ impl CdpOps for RealCdpOps {
     async fn kill_and_launch(&self, profile: &Path, url: &str) -> Result<(), String> {
         kill_profile_edge();
         tokio::time::sleep(Duration::from_millis(1500)).await;
-        launch_edge(profile, url)?;
+        let port = launch_edge(profile, url)?;
         let t0 = Instant::now();
         while t0.elapsed() < Duration::from_secs(EDGE_READY_SECS) {
-            if let Some((port, path)) = read_devtools(profile) {
+            if let Ok(path) = discover_browser_path(port).await {
                 let attempt = tokio::time::timeout(
                     Duration::from_millis(1200),
                     connect_ws(format!("ws://127.0.0.1:{port}{path}")),
@@ -564,7 +679,8 @@ impl CdpOps for RealCdpOps {
     }
 
     async fn probe_port(&self, profile: &Path) -> Option<u16> {
-        let (port, path) = read_devtools(profile)?;
+        let port = read_debug_port(profile)?;
+        let path = discover_browser_path(port).await.ok()?;
         connect_ws(format!("ws://127.0.0.1:{port}{path}"))
             .await
             .ok()?;
@@ -669,6 +785,8 @@ pub struct ConversationState {
     turn_count: u32,
     last_used_at: Instant,
     released: bool,
+    /// 同会话连续失败计数(成功清零):驱动下一次 ask 的指数退避
+    consecutive_failures: u32,
 }
 
 /// 一个会话 = 一把串行锁(整个 ask 期间持有,release/sweeper 以它判定在飞)+
@@ -690,6 +808,7 @@ impl ConversationSlot {
                 turn_count: 0,
                 last_used_at: Instant::now(),
                 released: false,
+                consecutive_failures: 0,
             }),
         }
     }
@@ -991,8 +1110,13 @@ impl<O: CdpOps> HubState<O> {
         Ok(tid)
     }
 
-    /// 生成主流程:上下文稳定 → 发送 → 轮询抓取(稳定 2.5s 判定)。
-    /// target_id 可变:发送前确认丢失时路由内安全重建;发送后丢失 = typed error
+    /// 生成主流程(显式阶段状态机):
+    ///   Disconnected → Connected(Edge 读租约)→ PageReady(右站点宿主+输入框可见)
+    ///   → Sent(prompt 已写入且发出)→ ResponseStarted(回复开始生成,观察窗延长)
+    ///   → Completed(稳定 2.5s)
+    /// 分阶段恢复:PageReady 前确认丢失 = 安全重建;Sent 后断线 = 先恢复同 target
+    /// 检查是否已有回复,确认无回复才安全重发一次;ResponseStarted 后疑似丢失 =
+    /// 退避重试探活,确认消失才 LostAfterSend,绝不重建标签页
     #[allow(clippy::too_many_arguments)]
     async fn generation(
         &self,
@@ -1006,15 +1130,19 @@ impl<O: CdpOps> HubState<O> {
         trace: &mut TraceBuilder,
     ) -> Result<String, AskFail> {
         let a = adapter(site).ok_or_else(|| AskFail::Failed(format!("未知站点: {site}")))?;
+        // 读租约已持有 = Connected;Disconnected 仅是进入本函数前的语义书档
+        let mut phase = AskPhase::Connected;
+        let mut deadline = deadline;
+        trace.mark(phase.name());
 
-        // 等目标页上下文稳定(新建标签页要从 about:blank 导航过来);
-        // 标签页消失 = 发送前丢失,路由内安全重建
+        // ---- PageReady:上下文稳定 + 右站点宿主 + 输入框可见(全部只读检查) ----
+        let mut wrong_site = 0u32;
         loop {
             if cancel.is_cancelled() {
                 return Err(AskFail::Cancelled);
             }
             if deadline.expired() {
-                return Err(AskFail::Timeout);
+                return Err(AskFail::timeout_hinted(phase));
             }
             let v = match self
                 .op(
@@ -1042,16 +1170,65 @@ impl<O: CdpOps> HubState<O> {
                     continue;
                 }
             };
-            if v.as_str().is_some_and(|s| s.starts_with("https://")) {
-                break;
+            let href = v.as_str().unwrap_or("");
+            if href.starts_with("https://") {
+                if href.contains(a.host) {
+                    break;
+                }
+                // 认领到了别的站点的标签页:发送前丢失,安全重建(有界,防重建循环)
+                wrong_site += 1;
+                if wrong_site > 2 {
+                    let short = &href[..href.len().min(80)];
+                    return Err(AskFail::Failed(format!("认领到错误站点的标签页: {short}")));
+                }
+                *target_id = self
+                    .recreate_target(port, route, site, cancel, deadline)
+                    .await?;
+                trace.mark("target_recreated");
+                continue;
             }
             tokio::time::sleep(Duration::from_millis(800)).await;
         }
-        trace.mark("ctx_stable");
+        // 输入框可见 = 未登录/站点改版在此暴露(只读检查;最多 ~10s 等页面水合)
+        let ready_expr = a.ready_js();
+        let mut input_ready = false;
+        for _ in 0..10 {
+            if cancel.is_cancelled() {
+                return Err(AskFail::Cancelled);
+            }
+            if deadline.expired() {
+                return Err(AskFail::timeout_hinted(phase));
+            }
+            if let Ok(v) = self
+                .op(
+                    self.ops.eval(port, target_id, &ready_expr, 5000),
+                    cancel,
+                    deadline,
+                )
+                .await
+            {
+                if v.as_bool() == Some(true) {
+                    input_ready = true;
+                    break;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(1000)).await;
+        }
+        if !input_ready {
+            return Err(AskFail::Failed(
+                "输入框未出现(可能登录失效,或站点改版需更新选择器)".into(),
+            ));
+        }
+        phase = AskPhase::PageReady;
+        trace.mark(phase.name());
 
-        // 发送阶段:随导航殉职 = 已发出的强信号,按 Sent 继续(同 target 轮询)
+        // ---- Sent:写入校验与清空判定在 send_js 内(5 次重试逐字比对) ----
         let send_expr = format!("({})({})", a.send_js(), json_arg(prompt));
-        let v = match self
+        let mut before_count: Option<u64> = None;
+        let mut before_text: Option<String> = None;
+        // 发送结果未知(导航殉职)= true:进入轮询前必须先恢复并检查是否已有回复
+        let mut send_ambiguous = false;
+        let sent = match self
             .op(
                 self.ops.eval_await(port, target_id, &send_expr, 60_000),
                 cancel,
@@ -1059,7 +1236,19 @@ impl<O: CdpOps> HubState<O> {
             )
             .await
         {
-            Ok(v) => v,
+            Ok(v) => {
+                if v.get("sent") == Some(&json!(false)) {
+                    let why = v.get("why").and_then(Value::as_str).unwrap_or("未能发送");
+                    return Err(AskFail::Failed(why.to_string()));
+                }
+                before_count = v.get("beforeCount").and_then(Value::as_u64);
+                before_text = v
+                    .get("beforeText")
+                    .and_then(Value::as_str)
+                    .map(String::from);
+                trace.mark("sent");
+                true
+            }
             Err(e) => {
                 if let AskFail::Failed(m) = &e {
                     if !is_context_lost(m) {
@@ -1070,24 +1259,68 @@ impl<O: CdpOps> HubState<O> {
                 }
                 // 导航殉职:视为已发送(旧行为,实战校验);target 之后确认消失才升级为丢失
                 trace.mark("sent_context_lost");
-                Value::Null
+                send_ambiguous = true;
+                true
             }
         };
-        if v.get("sent") == Some(&json!(false)) {
-            let why = v.get("why").and_then(Value::as_str).unwrap_or("未能发送");
-            return Err(AskFail::Failed(why.to_string()));
-        }
-        let before_count = v.get("beforeCount").and_then(Value::as_u64);
-        let before_text = v
-            .get("beforeText")
-            .and_then(Value::as_str)
-            .map(String::from);
-        let sent = true;
-        trace.mark("sent");
+        phase = AskPhase::Sent;
+        let mut resent = false;
 
-        // 抓取阶段:见过生成中 → 不忙 → 有答案(非思考/非截断)→ 稳定 2.5 秒
+        // ---- 发送结果未知的立即恢复:先查原 target 是否已有回复,
+        //      确认无回复才安全重发一次(有回复再发会污染会话/触发限流) ----
         let head: String = prompt.chars().take(20).collect();
         let watch_expr = format!("({})({})", a.snap_js(), json_arg(&head));
+        let mut response_started = false;
+        if send_ambiguous {
+            trace.mark("post_send_recover");
+            tokio::time::sleep(Duration::from_millis(1000)).await;
+            if !self.target_alive(port, target_id, cancel, deadline).await {
+                return Err(AskFail::LostAfterSend);
+            }
+            let replied = self
+                .op(
+                    self.ops.eval(port, target_id, &watch_expr, 8000),
+                    cancel,
+                    deadline,
+                )
+                .await
+                .ok()
+                .and_then(|raw| serde_json::from_str::<Value>(raw.as_str().unwrap_or("{}")).ok())
+                .map(|snap| {
+                    snap.get("busy").and_then(Value::as_bool).unwrap_or(false)
+                        || !snap
+                            .get("text")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .is_empty()
+                })
+                .unwrap_or(false);
+            if replied {
+                response_started = true;
+                phase = AskPhase::ResponseStarted;
+                deadline.extend(RESPONSE_STARTED_EXTRA_MS);
+                trace.mark("response_started_recovered");
+            } else if !resent {
+                resent = true;
+                trace.mark("safe_resend");
+                if let Ok(v2) = self
+                    .op(
+                        self.ops.eval_await(port, target_id, &send_expr, 60_000),
+                        cancel,
+                        deadline,
+                    )
+                    .await
+                {
+                    before_count = v2.get("beforeCount").and_then(Value::as_u64);
+                    before_text = v2
+                        .get("beforeText")
+                        .and_then(Value::as_str)
+                        .map(String::from);
+                }
+            }
+        }
+
+        // ---- ResponseStarted → Completed:首次见到生成迹象即延长观察窗 ----
         let mut saw_generating = false;
         let mut saw_text = false;
         let mut last = String::new();
@@ -1097,7 +1330,7 @@ impl<O: CdpOps> HubState<O> {
                 return Err(AskFail::Cancelled);
             }
             if deadline.expired() {
-                return Err(AskFail::Timeout);
+                return Err(AskFail::timeout_hinted(phase));
             }
             let raw = match self
                 .op(
@@ -1118,14 +1351,77 @@ impl<O: CdpOps> HubState<O> {
                     let _ = transient;
                     trace.mark("reconnect");
                     tokio::time::sleep(Duration::from_millis(1000)).await;
-                    if !self.target_alive(port, target_id, cancel, deadline).await {
-                        if sent {
-                            return Err(AskFail::LostAfterSend);
+                    // Sent/ResponseStarted 后疑似丢失:退避重试探活,绝不立即重建标签页
+                    let mut alive = self.target_alive(port, target_id, cancel, deadline).await;
+                    if !alive {
+                        for _ in 0..2 {
+                            tokio::time::sleep(Duration::from_millis(1500)).await;
+                            if self.target_alive(port, target_id, cancel, deadline).await {
+                                alive = true;
+                                break;
+                            }
                         }
-                        *target_id = self
-                            .recreate_target(port, route, site, cancel, deadline)
-                            .await?;
-                        trace.mark("target_recreated");
+                    }
+                    if !alive {
+                        if !sent {
+                            *target_id = self
+                                .recreate_target(port, route, site, cancel, deadline)
+                                .await?;
+                            trace.mark("target_recreated");
+                            continue;
+                        }
+                        return Err(AskFail::LostAfterSend);
+                    }
+                    // 恢复成功:先看页面是否已经产生回复——
+                    // 有(busy/增长/变化)= 按 ResponseStarted 继续等完成;
+                    // 无 = 本次发送没落地,安全重发一次(已有回复再发会污染会话)
+                    if sent && !response_started {
+                        if let Ok(raw2) = self
+                            .op(
+                                self.ops.eval(port, target_id, &watch_expr, 8000),
+                                cancel,
+                                deadline,
+                            )
+                            .await
+                        {
+                            let snap: Value = serde_json::from_str(raw2.as_str().unwrap_or("{}"))
+                                .unwrap_or_else(|_| json!({}));
+                            let busy = snap.get("busy").and_then(Value::as_bool).unwrap_or(false);
+                            let text = snap.get("text").and_then(Value::as_str).unwrap_or("");
+                            let grew = before_count.is_some_and(|b| {
+                                snap.get("count")
+                                    .and_then(Value::as_u64)
+                                    .is_some_and(|c| c > b)
+                            });
+                            let changed = before_text
+                                .as_ref()
+                                .is_some_and(|b| !text.is_empty() && text != *b);
+                            if busy || grew || changed {
+                                response_started = true;
+                                phase = AskPhase::ResponseStarted;
+                                deadline.extend(RESPONSE_STARTED_EXTRA_MS);
+                                trace.mark("response_started_recovered");
+                            } else if !resent {
+                                resent = true;
+                                trace.mark("safe_resend");
+                                // 重发后以这次发送的 before 值为新基线(否则
+                                // before_count=None 会让 ResponseStarted 永远无法判定)
+                                if let Ok(v2) = self
+                                    .op(
+                                        self.ops.eval_await(port, target_id, &send_expr, 60_000),
+                                        cancel,
+                                        deadline,
+                                    )
+                                    .await
+                                {
+                                    before_count = v2.get("beforeCount").and_then(Value::as_u64);
+                                    before_text = v2
+                                        .get("beforeText")
+                                        .and_then(Value::as_str)
+                                        .map(String::from);
+                                }
+                            }
+                        }
                     }
                     continue;
                 }
@@ -1155,16 +1451,26 @@ impl<O: CdpOps> HubState<O> {
                 let changed = before_text
                     .as_ref()
                     .is_some_and(|b| !text.is_empty() && &text != b);
+                // ResponseStarted:回复确已开始生成(busy/计数增长/文本变化任一)——
+                // 此刻起延长观察窗,慢响应(深度思考等)不再被原总超时掐死
+                if !response_started && (busy || grew || changed) {
+                    response_started = true;
+                    phase = AskPhase::ResponseStarted;
+                    deadline.extend(RESPONSE_STARTED_EXTRA_MS);
+                    trace.mark(phase.name());
+                }
                 if !text.is_empty() && !saw_text {
                     saw_text = true;
                     trace.mark("first_text");
                 }
                 let has_answer = !text.is_empty() && !truncated;
-                if (saw_generating || grew || changed) && !busy && has_answer {
+                if response_started && !busy && has_answer {
                     if text == last {
                         let since = stable_since.get_or_insert_with(Instant::now);
                         if since.elapsed() >= Duration::from_millis(STABLE_MS) {
                             trace.mark("stable_done");
+                            phase = AskPhase::Completed;
+                            trace.mark(phase.name());
                             return Ok(text);
                         }
                     } else {
@@ -1421,6 +1727,29 @@ async fn run_conversation<O: CdpOps>(
     };
     // 同 key 串行(取消/超时可打断排队等待)
     let _serial = within(slot.key_lock.lock(), cancel, deadline, "slot").await?;
+    // 同会话连续失败的指数退避(1s→2s→4s…封顶 30s):连续失败往往伴随站点
+    // 限流/风控,立刻重试只会火上浇油;退避可取消、受 deadline 钳制
+    {
+        let backoff_ms = {
+            let st = slot.state.lock().await;
+            if st.consecutive_failures == 0 {
+                0
+            } else {
+                BACKOFF_BASE_MS << (st.consecutive_failures - 1).min(4)
+            }
+        }
+        .min(BACKOFF_CAP_MS);
+        if backoff_ms > 0 {
+            trace.mark("backoff");
+            within(
+                tokio::time::sleep(Duration::from_millis(backoff_ms)),
+                cancel,
+                deadline,
+                "backoff",
+            )
+            .await?;
+        }
+    }
     // 全局生成槽(仅 Conversation 路由;Shared 走独立单飞槽互不占位)
     let permit: OwnedSemaphorePermit = within(
         hub.permits.clone().acquire_owned(),
@@ -1461,7 +1790,7 @@ async fn run_conversation<O: CdpOps>(
             trace,
         )
         .await;
-    // 结账:成败都记使用时刻;成功累计轮次
+    // 结账:成败都记使用时刻;成功累计轮次并清零失败计数,失败累计(驱动退避)
     if let Ok(mut st) = slot.state.try_lock() {
         st.last_used_at = Instant::now();
         if target_id != original_target {
@@ -1472,6 +1801,9 @@ async fn run_conversation<O: CdpOps>(
         }
         if result.is_ok() {
             st.turn_count += 1;
+            st.consecutive_failures = 0;
+        } else {
+            st.consecutive_failures = st.consecutive_failures.saturating_add(1);
         }
     }
     drop(permit);
@@ -1603,6 +1935,71 @@ pub async fn webchat_probe(app: AppHandle, site: String) -> Result<ProbeResult, 
 mod tests {
     use super::*;
 
+    #[test]
+    fn edge_launch_never_enables_webdriver_via_zero_debug_port() {
+        let args = edge_launch_args(
+            Path::new("D:/isolated-profile"),
+            "https://chatgpt.com/",
+            19333,
+        );
+        assert!(
+            !args.iter().any(|arg| arg == "--remote-debugging-port=0"),
+            "端口 0 会令 Chromium 暴露 navigator.webdriver=true，触发 OAuth 风控"
+        );
+        assert!(args
+            .iter()
+            .any(|arg| arg == "--remote-debugging-port=19333"));
+        assert!(
+            args.iter()
+                .any(|arg| arg == "--remote-debugging-address=127.0.0.1"),
+            "调试端口必须只监听本机"
+        );
+    }
+
+    #[test]
+    fn managed_debug_port_wins_over_stale_chromium_port_file() {
+        let profile =
+            std::env::temp_dir().join(format!("webchat-debug-port-test-{}", std::process::id()));
+        std::fs::create_dir_all(&profile).unwrap();
+        std::fs::write(profile.join(DEBUG_PORT_FILE), "19333").unwrap();
+        std::fs::write(
+            profile.join("DevToolsActivePort"),
+            "2407\n/devtools/browser/stale",
+        )
+        .unwrap();
+        assert_eq!(read_debug_port(&profile), Some(19333));
+        std::fs::remove_dir_all(profile).unwrap();
+    }
+
+    #[tokio::test]
+    async fn browser_path_is_discovered_from_explicit_debug_port() {
+        use std::io::{Read, Write};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 1024];
+            let _ = socket.read(&mut request).unwrap();
+            let body = format!(
+                r#"{{"webSocketDebuggerUrl":"ws://localhost:{port}/devtools/browser/fixed-port"}}"#
+            );
+            write!(
+                socket,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            )
+            .unwrap();
+        });
+
+        assert_eq!(
+            discover_browser_path(port).await.unwrap(),
+            "/devtools/browser/fixed-port"
+        );
+        server.join().unwrap();
+    }
+
     #[tokio::test]
     async fn connect_ws_reaches_ipv4_loopback_server() {
         let listener =
@@ -1708,6 +2105,16 @@ mod tests {
         ports_seen: Vec<u16>,
         /// Edge 实例是否在跑(false = 探活失败,走冷启动路径)
         running: bool,
+        /// PageReady 输入框探测的应答(false = 未登录/改版)
+        ready_flag: bool,
+        /// 可编排的快照序列:逐次消费耗尽后回落默认快照(延窗/恢复测试用)
+        snap_script: Vec<Value>,
+        /// eval_await 失败注入:下次发送抛上下文丢失
+        fail_next_send_with_context_lost: bool,
+        /// eval_await 调用计数(安全重发恰一次断言用)
+        send_calls: u32,
+        /// location.href 的应答覆写(None = 默认 deepseek 宿主;宿主校验测试用)
+        wrong_site_href: Option<String>,
     }
 
     struct FakeOps {
@@ -1718,7 +2125,8 @@ mod tests {
         fn new() -> Self {
             Self {
                 inner: Mutex::new(FakeOpsInner {
-                    running: true, // 缺省实例在跑;测试可置 false 模拟 Edge 未启动/已退出
+                    running: true,    // 缺省实例在跑;测试可置 false 模拟 Edge 未启动/已退出
+                    ready_flag: true, // 缺省输入框可见;测试可置 false 模拟未登录/改版
                     ..FakeOpsInner::default()
                 }),
             }
@@ -1780,17 +2188,31 @@ mod tests {
                 s.active_evals += 1;
                 s.peak_evals = s.peak_evals.max(s.active_evals);
             }
-            // 上下文稳定探测:返回 https URL 即通过
+            // 上下文稳定探测:返回 https URL 即通过(可覆写为错误站点,验证宿主校验)
             if expr.contains("location.href") {
                 let mut s = self.state();
                 s.active_evals = s.active_evals.saturating_sub(1);
-                return Ok(json!("https://chat.deepseek.com"));
+                let href = s
+                    .wrong_site_href
+                    .clone()
+                    .unwrap_or_else(|| "https://chat.deepseek.com".into());
+                return Ok(json!(href));
+            }
+            // PageReady 输入框探测:按脚本应答(缺省 = 输入框可见)
+            if expr.contains("composerSels") || expr.contains("chat-input") {
+                let mut s = self.state();
+                s.active_evals = s.active_evals.saturating_sub(1);
+                return Ok(json!(s.ready_flag));
             }
             let delay = self.state().eval_delay_ms;
             tokio::time::sleep(Duration::from_millis(delay)).await;
             let mut s = self.state();
             s.active_evals = s.active_evals.saturating_sub(1);
-            // 抓取快照:页面 JS 返回 JSON 字符串(外层 as_str 再解析)
+            // 抓取快照:脚本序列逐次消费(耗尽后回落默认快照);
+            // 页面 JS 返回 JSON 字符串(外层 as_str 再解析)
+            if !s.snap_script.is_empty() {
+                return Ok(json!(s.snap_script.remove(0).to_string()));
+            }
             Ok(json!(
                 json!({ "busy": false, "text": "回复文本", "count": 1 }).to_string()
             ))
@@ -1804,8 +2226,11 @@ mod tests {
             _t: u64,
         ) -> Result<Value, String> {
             let mut s = self.state();
+            s.send_calls += 1;
             s.ports_seen.push(port);
-            if !s.pages.iter().any(|(id, _)| id == target_id) {
+            let fail_context_lost = s.fail_next_send_with_context_lost;
+            s.fail_next_send_with_context_lost = false;
+            if !s.pages.iter().any(|(id, _)| id == target_id) || fail_context_lost {
                 return Err("Target closed".into());
             }
             if s.drop_target_after_send {
@@ -1944,7 +2369,10 @@ mod tests {
         let hub = hub_with(ops);
         let t0 = std::time::Instant::now();
         let r = ask_conv(&hub, "slow", "k1", 800).await.unwrap_err();
-        assert_eq!(r, "网页生成超时");
+        assert!(
+            r.starts_with("网页生成超时"),
+            "超时错误应带诊断前缀,实际: {r}"
+        );
         assert!(t0.elapsed() < Duration::from_millis(4_000));
     }
 
@@ -2141,6 +2569,117 @@ mod tests {
             "闲置会话被清"
         );
         let _ = inflight.await;
+    }
+
+    // ---------- 状态机:ResponseStarted 延窗 / Sent 后安全恢复 / 退避 ----------
+
+    fn snap(busy: bool, text: &str, count: u64) -> Value {
+        json!({ "busy": busy, "text": text, "count": count })
+    }
+
+    /// ResponseStarted 延窗:回复开始生成后,原 deadline 到点不再掐死,
+    /// 延长观察窗内完成即成功(旧实现此处必超时)
+    #[tokio::test]
+    async fn response_started_extends_the_observation_window() {
+        let ops = FakeOps::new();
+        ops.state().eval_delay_ms = 600;
+        // 快照脚本:前 3 拍 busy(生成中,原 deadline 已过),之后出文本完成
+        ops.state().snap_script = vec![snap(true, "", 1), snap(true, "", 1), snap(true, "", 1)];
+        let hub = hub_with(ops);
+        let r = ask_conv(&hub, "slow-gen", "k1", 1_600).await;
+        assert!(r.is_ok(), "ResponseStarted 后应延长观察窗而不是超时: {r:?}");
+    }
+
+    /// Sent 后断线:恢复同 target 发现已有回复 → 直接等完成,不重发
+    #[tokio::test]
+    async fn post_send_recovery_finds_existing_reply_and_skips_resend() {
+        let ops = FakeOps::new();
+        ops.state().fail_next_send_with_context_lost = true;
+        // 恢复后的快照:回复已在生成(busy)→ 无需重发
+        ops.state().snap_script = vec![snap(true, "", 1)];
+        let hub = hub_with(ops);
+        let r = ask_conv(&hub, "recover-reply", "k1", 20_000).await;
+        assert!(r.is_ok(), "恢复发现已有回复应继续等完成: {r:?}");
+        assert_eq!(
+            hub.ops.state().send_calls,
+            1,
+            "已有回复时不得重复发送(污染会话/触发限流)"
+        );
+    }
+
+    /// Sent 后断线:恢复确认无回复 → 安全重发恰一次,随后完成
+    #[tokio::test]
+    async fn post_send_recovery_without_reply_resends_exactly_once() {
+        let ops = FakeOps::new();
+        ops.state().fail_next_send_with_context_lost = true;
+        // 恢复后的快照:无回复(count 未增长)→ 触发一次安全重发
+        ops.state().snap_script = vec![snap(false, "", 0)];
+        let hub = hub_with(ops);
+        let r = ask_conv(&hub, "recover-resend", "k1", 20_000).await;
+        assert!(r.is_ok(), "安全重发后应正常完成: {r:?}");
+        assert_eq!(hub.ops.state().send_calls, 2, "无回复才允许重发,且恰一次");
+    }
+
+    /// ResponseStarted 后 target 消失:退避确认后 LostAfterSend,绝不新建标签页
+    #[tokio::test]
+    async fn response_started_target_gone_never_recreates_tab() {
+        let ops = FakeOps::new();
+        ops.state().drop_target_after_send = true;
+        // 恢复快照:有回复已开始(进入 ResponseStarted)
+        ops.state().snap_script = vec![snap(true, "", 1)];
+        let hub = hub_with(ops);
+        let r = ask_conv(&hub, "gone", "k1", 30_000).await.unwrap_err();
+        assert_eq!(r, LOST_AFTER_SEND);
+        assert!(
+            hub.ops.state().pages.is_empty(),
+            "ResponseStarted 后丢失绝不允许重建标签页"
+        );
+    }
+
+    /// PageReady 宿主校验:location.href 返回错误站点 → 不认领,重建有界后报错
+    #[tokio::test]
+    async fn page_ready_rejects_wrong_site_tab() {
+        let ops = FakeOps::new();
+        // 让 location.href 返回豆包宿主(deepseek 会话认领到别站 = 拒绝)
+        ops.state().wrong_site_href = Some("https://www.doubao.com/chat/".to_string());
+        let hub = hub_with(ops);
+        let r = ask_conv(&hub, "wrong", "k1", 30_000).await.unwrap_err();
+        assert!(r.contains("认领到错误站点的标签页"), "实际: {r}");
+    }
+
+    /// 同会话连续失败的指数退避:下一次 ask 起始延迟 ≥1s;退避中取消即时生效
+    #[tokio::test]
+    async fn consecutive_failures_back_off_exponentially_and_reset_on_success() {
+        let ops = FakeOps::new();
+        let hub = hub_with(ops);
+        // 第一次失败(drop target 模拟站点异常)
+        hub.ops.state().drop_target_after_send = true;
+        let r1 = ask_conv(&hub, "f1", "k1", 30_000).await;
+        assert!(r1.is_err());
+        hub.ops.state().drop_target_after_send = false;
+        // 基线:无失败时一场成功 ask 的耗时(含 2.5s 稳定窗)
+        let t_base = std::time::Instant::now();
+        let r_ok = ask_conv(&hub, "base", "k_base", 30_000).await;
+        assert!(r_ok.is_ok());
+        let baseline = t_base.elapsed();
+        // 第二次 ask:退避 ≥1s → 总耗时应 ≥ 基线 + 900ms
+        let t1 = std::time::Instant::now();
+        let r2 = ask_conv(&hub, "r2", "k1", 30_000).await;
+        assert!(r2.is_ok());
+        let with_backoff = t1.elapsed();
+        assert!(
+            with_backoff.as_millis() >= baseline.as_millis() + 900,
+            "连续失败后应指数退避: 基线 {baseline:?} vs 退避后 {with_backoff:?}"
+        );
+        // 成功清零:第三次不再退避(耗时应回落到基线水平)
+        let t2 = std::time::Instant::now();
+        let r3 = ask_conv(&hub, "r3", "k1", 30_000).await;
+        assert!(r3.is_ok());
+        let cleared = t2.elapsed();
+        assert!(
+            cleared.as_millis() + 500 < with_backoff.as_millis(),
+            "成功后退避应清零: {cleared:?} vs {with_backoff:?}"
+        );
     }
 
     /// 真机 CDP 冒烟:拉起专用 Edge(临时 profile)→ 浏览器级 Target 域 → 页面 evaluate。
