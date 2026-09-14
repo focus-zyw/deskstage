@@ -53,6 +53,7 @@ const TAB_CONTENT: Record<SettingsTab, React.LazyExoticComponent<() => React.JSX
   model: ModelSettings,
   persona: PersonaSettings,
   modes: CustomModesSettings,
+  topics: lazy(() => import('./tabs/TopicSettings').then((m) => ({ default: m.TopicSettings }))),
   bubble: BubbleSettings,
   video: VideoSettings,
   voice: VoiceSettings,

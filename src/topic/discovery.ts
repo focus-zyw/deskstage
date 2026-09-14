@@ -37,7 +37,10 @@ export interface DiscoveryDeps {
     apiKey: string
     envSense: boolean
     userProfile: { banTopics: string; likes: string }
-    topicPrefs: { aiDiscover: boolean; distance: 'near' | 'medium' | 'far' }
+    topicPrefs: {
+      defaults: { distance: 'near' | 'medium' | 'far' }
+      sources: { interests: boolean; aiGenerated: boolean }
+    }
   }>
   envCategory: () => string | null
   now: () => number
@@ -74,7 +77,7 @@ export async function maybeRestockTopicCandidates(
   const now = d.now()
   const cfg = await d.getConfig()
   // feature flag:默认关,显式开启且配置了 API Key 才工作(网页模型不参与后台 JSON 生成)
-  if (!cfg.topicPrefs.aiDiscover || !cfg.apiKey.trim()) return false
+  if (!cfg.topicPrefs.sources.aiGenerated || !cfg.apiKey.trim()) return false
   const state = await getTopicState()
   const usable = state.reservoir.filter((c) => !c.expiresAt || c.expiresAt > now).length
   if (usable >= DISCOVERY_POLICY.MIN_POOL) return false
@@ -97,15 +100,18 @@ async function restock(deps: DiscoveryDeps): Promise<boolean> {
     const cfg = await deps.getConfig()
     const state = await getTopicState()
     const input: DiscoveryInput = {
-      interests: cfg.userProfile.likes
-        .split(/[,，、;；\n]/)
-        .map((s) => s.trim())
-        .filter(Boolean),
+      // 兴趣来源关闭时,连发现请求都不得上传兴趣词(来源策略是隐私边界的一部分)
+      interests: cfg.topicPrefs.sources.interests
+        ? cfg.userProfile.likes
+            .split(/[,，、;；\n]/)
+            .map((s) => s.trim())
+            .filter(Boolean)
+        : [],
       recentTopics: state.recent.slice(-20).map((r) => ({ title: r.title })),
       timeBucket: timeBucketOf(now),
       envCategory: cfg.envSense ? deps.envCategory() : null,
       banText: cfg.userProfile.banTopics,
-      distance: cfg.topicPrefs.distance,
+      distance: cfg.topicPrefs.defaults.distance,
     }
     const raw = await deps.complete({
       messages: buildDiscoveryMessages(input),
@@ -119,6 +125,12 @@ async function restock(deps: DiscoveryDeps): Promise<boolean> {
     accepted = await mergeCards(rawCards, cfg.userProfile.banTopics, now)
     return accepted > 0
   } catch (e) {
+    // 用户关闭 AI 扩充触发的中止不算失败:不写尝试账本、不进冷却,
+    // 否则重新开启后会被 6 小时冷却挡住第一次补货
+    if (abortCtrl?.signal.aborted) {
+      console.warn('话题候选发现被取消(用户关闭),不计入尝试')
+      return false
+    }
     console.warn('话题候选发现失败(静默,稍后退避重试)', e)
     // 失败也记尝试:静默退避一个冷却周期,避免无 Key/限流时空转连发
     try {

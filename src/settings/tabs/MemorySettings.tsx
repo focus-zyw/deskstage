@@ -24,8 +24,7 @@ import { effectiveStatus, scoreFact, type MemorySensitivity } from '../../storag
 import { getBond, getStory, removeArc, removeStoryItem, type StoryData } from '../../storage/storyStore'
 import { bondTierOf } from '../../engine/interactionRules'
 import { useSettings } from '../useSettingsSession'
-import { SettingsCard, SetField, SetLine, SetSwitch } from '../SettingsPrimitives'
-import { maybeRestockTopicCandidates } from '../../topic/discovery'
+import { SettingsCard, SetField } from '../SettingsPrimitives'
 
 /** 记忆事实分类的中文标签 */
 const MEM_CAT_LABEL: Record<string, string> = {
@@ -287,25 +286,7 @@ export function MemorySettings() {
         </SetField>
       </SettingsCard>
 
-      <SettingsCard card="话题发现" flash={flashCard} title="话题发现">
-        <SetLine
-          title="AI 后台发现候选话题"
-          hint="候选话题不足时,后台让模型批量想新题,经本地雷区与查重清洗后入池;只在开启后工作,会产生少量模型调用费用"
-        >
-          <SetSwitch
-            checked={form.topicPrefs.aiDiscover}
-            label="AI 后台发现候选话题"
-            onChange={(v) => {
-              setForm({ ...form, topicPrefs: { ...form.topicPrefs, aiDiscover: v } })
-              saveField({ topicPrefs: { ...form.topicPrefs, aiDiscover: v } }, true)
-              if (v) void maybeRestockTopicCandidates()
-            }}
-          />
-        </SetLine>
-        <div className="set-note">
-          输入只有兴趣关键词与最近话题标题,不含屏幕内容;关闭后完全不调用。节奏:池子快见底才补,每小时最多一单
-        </div>
-      </SettingsCard>
+      <div className="set-note">AI 话题发现与长期话题偏好已移到「演出话题」设置页。</div>
 
       {needsConfirm.length > 0 && (
         <SettingsCard

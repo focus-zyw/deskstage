@@ -21,6 +21,7 @@ import { applyScreenshotHotkey } from '../capture'
 import { applyAppHotkeys } from '../hotkeys'
 import type { SettingsBridge } from './useSettingsSession'
 import { initDiagBridgeServer } from '../diag/bridge'
+import { cancelDiscovery, maybeRestockTopicCandidates } from '../topic/discovery'
 
 /** 配置副作用:差分驱动。快照每次发布都与上一版逐字段比对,变化的才触发——
  *  首次回调只建立基线(启动初始化仍由各模块自行完成,避免双跑) */
@@ -49,6 +50,14 @@ export function initConfigEffects(): void {
     }
     if (base.characters !== next.characters) {
       setCEnabled(next.characters.C.enabled !== false) // C 关闭/开启即时采纳(新演出与话题包同步收窄)
+    }
+    if (base.topicPrefs !== next.topicPrefs) {
+      // AI 扩充开关的副作用收口在配置提交之后(此处读到的已是新配置,无保存竞态):
+      // 开→尝试补货;关→中止在途请求(中止不计失败、不进冷却)
+      const wasOn = base.topicPrefs.sources.aiGenerated
+      const on = next.topicPrefs.sources.aiGenerated
+      if (!wasOn && on) void maybeRestockTopicCandidates()
+      if (wasOn && !on) cancelDiscovery()
     }
     if (base.names !== next.names) setCharacterNames(next.names.a, next.names.b, next.names.c)
     if (base.genders !== next.genders) setCharacterGenders(next.genders.a, next.genders.b, next.genders.c) // 性别纪律立即采纳

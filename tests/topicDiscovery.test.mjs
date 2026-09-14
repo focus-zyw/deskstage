@@ -34,7 +34,7 @@ const cfg = (over = {}) => ({
   apiKey: 'sk-test',
   envSense: true,
   userProfile: { banTopics: '', likes: '', ...(over.userProfile ?? {}) },
-  topicPrefs: { aiDiscover: true, distance: 'medium', duration: 'once' },
+  topicPrefs: { defaults: { distance: 'medium' }, sources: { interests: true, aiGenerated: true } },
   ...over,
 })
 const deps = (over = {}) => ({
@@ -62,7 +62,7 @@ test('调度闸门:开关关/无Key/池充足/冷却内/日限到,一律不发�
   let calls = 0
   const complete = async () => (calls++, '{"cards":[]}')
   // 开关关(默认)
-  assert.equal(await discovery.maybeRestockTopicCandidates(deps({ complete, cfg: { topicPrefs: { aiDiscover: false, distance: 'medium', duration: 'once' } } })), false)
+  assert.equal(await discovery.maybeRestockTopicCandidates(deps({ complete, cfg: { topicPrefs: { defaults: { distance: 'medium' }, sources: { interests: true, aiGenerated: false } } } })), false)
   // 无 Key
   assert.equal(await discovery.maybeRestockTopicCandidates(deps({ complete, cfg: { apiKey: '' } })), false)
   // 池充足(8 张未过期)

@@ -52,7 +52,7 @@ const fakePlan = (over = {}) => ({
   allowedBranches: [],
   avoid: [],
   duration: 'once',
-  compatibility: { sessionRevision: 0, banHash: '', modeHash: 'mh', plannerVersion: 1, castHash: 'cast' },
+  compatibility: { sessionRevision: 0, banHash: '', modeHash: 'mh', topicPolicyHash: 'ph', plannerVersion: 1, castHash: 'cast' },
   ...over,
 })
 
@@ -85,6 +85,7 @@ const check = (over = {}) => ({
   sessionRevision: 0,
   banHash: '',
   modeHash: 'mh',
+  topicPolicyHash: 'ph',
   castHash: 'cast',
   plannerVersion: 1,
   recentFingerprints: [],
@@ -118,12 +119,14 @@ test('旧格式缓存(无 topicPlan)读取即失效,不消费', async () => {
 })
 
 test('兼容令牌:revision/雷区/模式/规划器版本任一不符即不消费', async () => {
-  await save({ compatibility: { sessionRevision: 0, banHash: '', modeHash: 'mh', plannerVersion: 1, castHash: 'cast' } })
+  await save({ compatibility: { sessionRevision: 0, banHash: '', modeHash: 'mh', topicPolicyHash: 'ph', plannerVersion: 1, castHash: 'cast' } })
   assert.ok(await store.peekCompatiblePrefetch('crosstalk', check({ sessionRevision: 1 })) === null, 'revision 变更')
   assert.ok(await store.peekCompatiblePrefetch('crosstalk', check({ banHash: 'b' })) === null, '雷区变更')
   assert.ok(await store.peekCompatiblePrefetch('crosstalk', check({ modeHash: 'other' })) === null, '模式编辑')
   assert.ok(await store.peekCompatiblePrefetch('crosstalk', check({ plannerVersion: 2 })) === null, '规划器升级')
   assert.ok(await store.peekCompatiblePrefetch('crosstalk', check({ castHash: 'other' })) === null, '阵容变更(人设/名字/性别)')
+  assert.ok(await store.peekCompatiblePrefetch('crosstalk', check({ topicPolicyHash: 'ph2' })) === null, '话题策略变更(默认值/来源/个人策略)')
+  assert.ok(await store.peekCompatiblePrefetch('crosstalk', check({ topicPolicyHash: undefined })) === null, '旧缓存缺策略哈希不可消费')
   const hit = await store.peekCompatiblePrefetch('crosstalk', check())
   await store.dropPrefetchEntry(hit)
 })

@@ -58,6 +58,7 @@ import {
   fingerprintOf,
   modeHashOf,
   parseBanWords,
+  topicPolicyHashOf,
   PLANNER_VERSION,
 } from '../topic/planner'
 import { getTopicState } from '../topic/store'
@@ -561,6 +562,7 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
       sessionRevision: state.revision,
       banHash: banHashOf(cfg.userProfile.banTopics),
       modeHash: modeHashOf(modeOf(mode)),
+      topicPolicyHash: topicPolicyHashOf(cfg.topicPrefs),
       castHash: castHash(),
       plannerVersion: PLANNER_VERSION,
       recentFingerprints: state.recent.map((r) => r.fingerprint),

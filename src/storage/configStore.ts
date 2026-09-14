@@ -385,7 +385,11 @@ export const DEFAULT_CONFIG: AppConfig = {
   },
   charactersHidden: false,
   topicOverride: null,
-  topicPrefs: { duration: 'once', distance: 'medium', aiDiscover: false },
+  topicPrefs: {
+    defaults: { duration: 'once', distance: 'medium', strict: false },
+    sources: { interests: true, characterHistory: true, aiGenerated: false },
+    personalPolicy: 'manual-only',
+  },
   theme: 'dark',
   choiceChance: 0.3,
   genders: { a: '女', b: '男', c: '女' },
@@ -450,24 +454,54 @@ export interface ToolPrefsConfig {
   autoApproved: Record<string, boolean>
 }
 
-/** 话题系统偏好(动态话题系统) */
+/** 话题系统偏好:长期默认值与选题来源策略。演出前的临时调整在话题面板的
+ *  本地草稿里,不回写这里——"本次怎么演"与"以后默认怎么选"分层 */
 export interface TopicPrefsConfig {
-  /** 手动话题默认持续时间;once 不建长期会话 */
-  duration: 'once' | 'three-episodes' | 'until-cleared'
-  /** 默认跳跃距离(相近/有点意外/天马行空) */
-  distance: 'near' | 'medium' | 'far'
-  /** AI 后台发现候选开关:默认关(会产生模型调用费用),开启后也只在空闲后台跑 */
-  aiDiscover: boolean
+  /** 默认点播方式 */
+  defaults: {
+    /** 手动话题默认持续时间;once 不建长期会话 */
+    duration: 'once' | 'three-episodes' | 'until-cleared'
+    /** 默认联想距离(相近/有点意外/天马行空) */
+    distance: 'near' | 'medium' | 'far'
+    /** 手动输入话题默认严格围绕 */
+    strict: boolean
+  }
+  /** 自动选题来源开关(精选话题是安全兜底,始终启用,不在配置内) */
+  sources: {
+    /** 使用者兴趣卡进自动候选;同时决定 AI 发现是否上传兴趣词 */
+    interests: boolean
+    /** 连续剧情通道与角色往事候选;关闭后数据保留,只是不主动使用 */
+    characterHistory: boolean
+    /** AI 后台扩充候选;关闭=不再调用且旧候选不参与自动选题 */
+    aiGenerated: boolean
+  }
+  /** 个人类话题(健康/失落/关系压力)自动候选策略;sensitive 永远仅手动 */
+  personalPolicy: 'manual-only' | 'allow-auto'
 }
 
-/** 清洗话题偏好:非法值回落默认 once/medium/false(涉费用的开关必须显式开启) */
+/** 清洗话题偏好:新形逐字段回落;旧扁平形(duration/distance/aiDiscover)
+ *  一次性迁移——strict=false、interests/characterHistory=true、
+ *  aiGenerated=aiDiscover、personalPolicy=manual-only */
 function sanitizeTopicPrefs(v: unknown): TopicPrefsConfig {
-  const o = (v ?? {}) as Record<string, unknown>
+  const raw = (v ?? {}) as Record<string, unknown>
+  const legacy = typeof raw.defaults !== 'object' || raw.defaults === null
+  const defaultsRaw = (legacy ? raw : (raw.defaults ?? {})) as Record<string, unknown>
+  const sourcesRaw = (legacy ? { aiDiscover: raw.aiDiscover } : (raw.sources ?? {})) as Record<string, unknown>
+  const duration =
+    defaultsRaw.duration === 'three-episodes' || defaultsRaw.duration === 'until-cleared'
+      ? defaultsRaw.duration
+      : 'once'
+  const distance =
+    defaultsRaw.distance === 'near' || defaultsRaw.distance === 'far' ? defaultsRaw.distance : 'medium'
+  const bool = (x: unknown, dft: boolean): boolean => (typeof x === 'boolean' ? x : dft)
   return {
-    duration:
-      o.duration === 'three-episodes' || o.duration === 'until-cleared' ? o.duration : 'once',
-    distance: o.distance === 'near' || o.distance === 'far' ? o.distance : 'medium',
-    aiDiscover: o.aiDiscover === true,
+    defaults: { duration, distance, strict: bool(defaultsRaw.strict, false) },
+    sources: {
+      interests: bool(sourcesRaw.interests, true),
+      characterHistory: bool(sourcesRaw.characterHistory, true),
+      aiGenerated: bool(sourcesRaw.aiGenerated ?? sourcesRaw.aiDiscover, false),
+    },
+    personalPolicy: raw.personalPolicy === 'allow-auto' ? 'allow-auto' : 'manual-only',
   }
 }
 

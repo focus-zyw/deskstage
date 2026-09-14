@@ -147,6 +147,8 @@ export interface PrefetchCheck {
   sessionRevision: number
   banHash: string
   modeHash: string
+  /** 话题策略指纹(默认值+来源开关+个人策略):策略变了旧剧本不误用 */
+  topicPolicyHash: string
   /** 演员阵容指纹(人设/名字/性别):阵容变了,带旧名字/旧世界的剧本不误播 */
   castHash: string
   plannerVersion: number
@@ -166,6 +168,7 @@ function compatible(entry: PrefetchEntry, mode: string, check: PrefetchCheck): b
   if (c.sessionRevision !== check.sessionRevision) return false
   if (c.banHash !== check.banHash) return false
   if (c.modeHash !== check.modeHash) return false
+  if (c.topicPolicyHash !== check.topicPolicyHash) return false
   if (c.castHash !== check.castHash) return false
   if (c.plannerVersion !== check.plannerVersion) return false
   // 意图兼容:普通点播(intent new)可消费会话推进条目(intent continue)——同 revision

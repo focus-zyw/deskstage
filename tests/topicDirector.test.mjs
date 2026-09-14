@@ -21,8 +21,11 @@ function fakeCfg(overrides = {}) {
     topicOverride: null,
     envSense: false,
     userProfile: { banTopics: '', likes: '', ...(overrides.userProfile ?? {}) },
-    topicPrefs: { duration: 'once', distance: 'medium', aiDiscover: false, ...(overrides.topicPrefs ?? {}) },
-    ...overrides,
+    topicPrefs: {
+      defaults: { duration: 'once', distance: 'medium', strict: false, ...(overrides.topicPrefs?.defaults ?? {}) },
+      sources: { interests: true, characterHistory: true, aiGenerated: false, ...(overrides.topicPrefs?.sources ?? {}) },
+      personalPolicy: overrides.topicPrefs?.personalPolicy ?? 'manual-only',
+    },
   }
 }
 
@@ -129,7 +132,7 @@ test('手动 once 只影响一集:不建会话,下次点播回动态', async () 
 
 test('手动话题默认 guided;勾选严格才是 strict;持续话题建会话', async () => {
   await resetState()
-  const { director } = makeDirector({ seed: 13, cfg: { topicPrefs: { duration: 'three-episodes', distance: 'medium', aiDiscover: false } } })
+  const { director } = makeDirector({ seed: 13, cfg: { topicPrefs: { defaults: { duration: 'three-episodes', distance: 'medium' } } } })
   const loose = await director.plan({ mode: 'daily', manualTopic: '合租的公共区域归谁管' })
   assert.equal(loose.policy, 'guided')
   const strict = await director.plan({ mode: 'daily', manualTopic: '合租的公共区域归谁管', strict: true })
@@ -167,7 +170,7 @@ test('三集会话:open→deepen→payoff 自动收官,不复用已用切口', a
 
 test('continue/change-angle 保持根话题且不复用已用切口;adopt CAS 推进', async () => {
   await resetState()
-  const { director } = makeDirector({ seed: 31, cfg: { topicPrefs: { duration: 'until-cleared', distance: 'medium', aiDiscover: false } } })
+  const { director } = makeDirector({ seed: 31, cfg: { topicPrefs: { defaults: { duration: 'until-cleared', distance: 'medium' } } } })
   const p1 = await director.plan({ mode: 'daily', manualTopic: '合租生活的高光与崩溃' })
   await director.adopt(p1)
   const p2 = await director.plan({ mode: 'daily', intent: 'change-angle' })
@@ -185,7 +188,7 @@ test('continue/change-angle 保持根话题且不复用已用切口;adopt CAS �
 
 test('完全换台结束会话:远跳 exploratory,far 距离转场线索半数省略', async () => {
   await resetState()
-  const { director } = makeDirector({ seed: 41, cfg: { topicPrefs: { duration: 'until-cleared', distance: 'medium', aiDiscover: false } } })
+  const { director } = makeDirector({ seed: 41, cfg: { topicPrefs: { defaults: { duration: 'until-cleared', distance: 'medium' } } } })
   const p1 = await director.plan({ mode: 'daily', manualTopic: '办公室空调温度争夺战' })
   await director.adopt(p1)
   // rng 恒 0.1(<0.5):far 也给桥
@@ -322,8 +325,11 @@ test('环境源:前台类别卡受 envSense 门控;时段卡(非隐私)恒可用
   for (let i = 0; i < 10; i++) {
     const plan = await withEnv.director.plan({ mode: 'daily', intent: 'new' })
     seen.add(plan.card.source)
-    // 隐私边界:环境素材只能来自内置模板,不得含任何"窗口/屏幕/剪贴板"字样
-    assert.ok(!/窗口|屏幕|截图|剪贴板/.test(plan.card.title + plan.card.hook))
+    // 隐私边界:仅约束环境素材(内置模板,不含窗口/屏幕/剪贴板字样与任何原始内容);
+    // 精选卡可能天然含有"窗口"等日常用词,不在本断言范围
+    if (plan.card.source === 'environment') {
+      assert.ok(!/窗口|屏幕|截图|剪贴板/.test(plan.card.title + plan.card.hook))
+    }
   }
   const off = makeDirector({ seed: 92, envCategory: 'editor', cfg: { envSense: false } })
   for (let i = 0; i < 10; i++) {
@@ -343,7 +349,7 @@ test('模式专属池是硬领域:专属池模式不越界到全局精选', asyn
   assert.equal(pool.length, 2)
   assert.ok(pool.every((c) => c.modeAffinity.includes('custom_praise')))
   // 评分层:专属池卡 modeFit 满分
-  const ctx = { recent: [], verdicts: new Map(), legacyWeights: {}, interests: [], modeId: 'custom_praise', modeTopicIds: new Set(pool.map((c) => c.id)) }
+  const ctx = { recent: [], verdicts: new Map(), interests: [], modeId: 'custom_praise', modeTopicIds: new Set(pool.map((c) => c.id)) }
   const scored = mod.planner.scoreCard(pool[0], ctx)
   const outsider = mod.planner.scoreCard(mod.catalog.CURATED_CARDS[0], ctx)
   assert.ok(scored.score > outsider.score - 1) // 不崩即可;modeFit 已在内部生效
@@ -351,7 +357,7 @@ test('模式专属池是硬领域:专属池模式不越界到全局精选', asyn
 })
 
 test('评分公式骨架: novelty 相似惩罚与疲劳惩罚方向正确', () => {
-  const ctx = { recent: [], verdicts: new Map(), legacyWeights: {}, interests: [], modeId: 'daily', modeTopicIds: new Set() }
+  const ctx = { recent: [], verdicts: new Map(), interests: [], modeId: 'daily', modeTopicIds: new Set() }
   const withRecent = mod.planner.scoreCard(
     mod.catalog.CURATED_CARDS[5],
     { ...ctx, recent: [{ fingerprint: mod.catalog.CURATED_CARDS[5].fingerprint, title: mod.catalog.CURATED_CARDS[5].title, category: mod.catalog.CURATED_CARDS[5].category, source: 'curated' }] },
@@ -365,7 +371,7 @@ test('评分公式骨架: novelty 相似惩罚与疲劳惩罚方向正确', () =
 })
 
 test('分类疲劳软惩罚:同类 recent 越多得分单调下降', () => {
-  const ctx = { recent: [], verdicts: new Map(), legacyWeights: {}, interests: [], modeId: 'daily', modeTopicIds: new Set() }
+  const ctx = { recent: [], verdicts: new Map(), interests: [], modeId: 'daily', modeTopicIds: new Set() }
   const card = mod.catalog.CURATED_CARDS.find((c) => c.category === 'work')
   const sameCat = mod.catalog.CURATED_CARDS.filter((c) => c.category === 'work' && c.id !== card.id)
   const scores = []
@@ -420,4 +426,81 @@ test('兴趣概率语义:命中即从兴趣卡直接择优(0.35/0.12 ≈ 动态�
   const noLikes = await makeDirector({ cfg: { userProfile: { banTopics: '', likes: '' } }, rng: () => 0.3 })
     .director.plan({ mode: 'daily', intent: 'new' })
   assert.notEqual(noLikes.card.source, 'interest', '无兴趣词无兴趣卡')
+})
+test('来源门控:全部关闭时仍能从核心精选池出题', async () => {
+  await resetState()
+  for (const seed of [1, 2, 3]) {
+    const { director } = makeDirector({
+      seed,
+      cfg: {
+        topicPrefs: {
+          defaults: { duration: 'once', distance: 'medium', strict: false },
+          sources: { interests: false, characterHistory: false, aiGenerated: false },
+        },
+      },
+    })
+    const plan = await director.plan({ mode: 'daily', intent: 'new' })
+    assert.ok(plan.card, '全来源关闭仍能出题')
+    // 精选是兜底主体;时段环境卡是非隐私的常驻氛围源,也属合法兜底
+    assert.ok(
+      plan.card.source === 'curated' || plan.card.source === 'environment',
+      `兜底来源异常:${plan.card.source}`,
+    )
+    assert.equal(plan.card.sensitivity, 'normal', '兜底不会绕过敏感级门控')
+  }
+})
+
+test('来源门控:角色故事关闭不走故事通道(30% 骰也不命中)', async () => {
+  await resetState()
+  let reserveCalled = 0
+  const { director } = makeDirector({
+    seed: 17,
+    reserveArc: () => {
+      reserveCalled++
+      return null
+    },
+    cfg: {
+      topicPrefs: {
+        defaults: { duration: 'once', distance: 'medium', strict: false },
+        sources: { interests: true, characterHistory: false, aiGenerated: true },
+      },
+    },
+  })
+  for (let i = 0; i < 5; i++) await director.plan({ mode: 'daily', intent: 'new' })
+  assert.equal(reserveCalled, 0, 'characterHistory 关闭时不应尝试故事通道')
+})
+
+test('defaults 回落:无显式传参的点播吃默认 duration/strict', async () => {
+  await resetState()
+  const { director } = makeDirector({
+    seed: 55,
+    cfg: {
+      topicPrefs: {
+        defaults: { duration: 'three-episodes', distance: 'far', strict: true },
+        sources: { interests: false, characterHistory: false, aiGenerated: false },
+      },
+    },
+  })
+  const plan = await director.plan({ mode: 'daily', manualTopic: '随手聊聊天气' })
+  assert.equal(plan.duration, 'three-episodes', '默认持续时间生效')
+  assert.equal(plan.policy, 'strict', '默认严格生效(无显式 strict 时回落 defaults.strict)')
+  assert.ok(plan.sessionId, '三集默认建会话')
+})
+
+test('clearTaste:只清 episodeSignals,recent/session/reservoir/discovery 保留', async () => {
+  const ep = { fingerprint: 'fp-x', category: 'life', source: 'curated', started: true, completed: true, rating: 'up', favored: false, updatedAt: 1 }
+  await resetState({
+    episodeSignals: { 'ep-1': ep },
+    recent: [{ fingerprint: 'fp-r', title: '保留我', category: 'life', source: 'curated', ts: 1 }],
+    reservoir: [{ id: 'gen-1', title: 'AI 卡', hook: 'AI 卡', category: 'life', tags: [], source: 'generated', fingerprint: 'fp-g', sensitivity: 'normal', generatedAt: 1 }],
+    discovery: { lastAttemptAt: 5, consumedSinceRestock: 1, attemptDay: '2026-9-14', attemptCount: 2 },
+  })
+  const { director } = makeDirector({ seed: 9 })
+  await director.clearTaste()
+  const s = await mod.store.getTopicState()
+  assert.deepEqual(s.episodeSignals, {}, '口味清空')
+  assert.equal(s.recent.length, 1, 'recent(去重窗口)保留')
+  assert.equal(s.reservoir.length, 1, 'AI 候选保留')
+  assert.equal(s.discovery.attemptCount, 2, '发现账本保留')
+  await director.clearTaste() // 幂等:再清一次不炸
 })

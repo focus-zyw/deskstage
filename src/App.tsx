@@ -56,6 +56,7 @@ import { castSnapshotOf } from './engine/persona'
 import { parseBanWords } from './topic/planner'
 import type { TopicSuggestion } from './topic/types'
 import type { TopicCategory, TopicDistance, TopicDuration, TopicIntent } from './topic/types'
+type TopicDraft = { duration: TopicDuration; distance: TopicDistance; strict: boolean }
 import { getDueMemos, addMemo, updateMemo } from './storage/memoStore'
 import { findEpisodeByEid, toggleFavorite, type Episode } from './storage/historyStore'
 import { rateEpisode } from './storage/feedbackStore'
@@ -386,12 +387,23 @@ function App() {
   // 话题面板:读模型快照(useTopicSnapshot)+ 面板本地态(搜索词/严格围绕/推荐分类)
   const topicOpen = rt.overlays.includes('topic')
   const [topicQuery, setTopicQuery] = useState('')
-  const [strictTopic, setStrictTopic] = useState(false)
+  // 面板本地草稿:本次点播的持续/联想/严格,打开面板时从长期默认值初始化一次;
+  // 打开期间跨窗配置广播不覆盖草稿(只影响下次打开),点播也不回写全局默认
+  const [topicDraft, setTopicDraft] = useState<TopicDraft>(() => ({
+    duration: 'once',
+    distance: 'medium',
+    strict: false,
+  }))
   const [suggestCat, setSuggestCat] = useState<TopicCategory | null>(null)
   // 推荐批次种子:打开面板时归零,期间保持稳定;「换一批」/点播后 +1 刷新
   const [suggestSeed, setSuggestSeed] = useState(0)
   useEffect(() => {
-    if (topicOpen) setSuggestSeed(0)
+    if (!topicOpen) return
+    setSuggestSeed(0)
+    // 仅"关闭→打开"这一次从已提交默认值初始化;打开期间广播不覆盖草稿
+    const d = config.topicPrefs.defaults
+    setTopicDraft({ duration: d.duration, distance: d.distance, strict: d.strict })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [topicOpen])
   // 空闲自动重放:频率来自配置,activeTick 用于用户互动后重置计时
   const [activeTick, setActiveTick] = useState(0)
@@ -1419,8 +1431,8 @@ function App() {
     closeOverlay('topic')
     director.play(mode, {
       ...(card ? { pinCardId: card.id, topic: norm } : { topic: norm }),
-      strict: strictTopic,
-      duration: config.topicPrefs.duration,
+      strict: topicDraft.strict,
+      duration: topicDraft.duration,
     })
     setTopicQuery('')
     setSuggestSeed((s) => s + 1) // 点播后刷新推荐,避免同一批反复出现
@@ -1429,13 +1441,6 @@ function App() {
   /** 面板"清除当前话题":结束活跃会话,回到动态选题(旧预生成缓存随之作废) */
   function clearTopicSession() {
     void topicDirector.clearSession()
-  }
-
-  /** 话题偏好(持续时间/跳跃距离/AI 发现):写 config.topicPrefs,作用于下一次手动话题 */
-  function saveTopicPrefs(patch: Partial<{ duration: TopicDuration; distance: TopicDistance; aiDiscover: boolean }>) {
-    void saveConfig({ topicPrefs: { ...config.topicPrefs, ...patch } }).catch((e) =>
-      console.warn('话题偏好保存失败(静默)', e),
-    )
   }
 
   /** 退出程序:两段确认的"已武装"态在 SettingsWindow 内,这里真正退干净。
@@ -1684,7 +1689,7 @@ function App() {
             </button>
           </div>
           <div className="topic-opts">
-            <span className="topic-opts-label">持续时间</span>
+            <span className="topic-opts-label">本次持续</span>
             {(
               [
                 ['once', '只聊一集'],
@@ -1696,15 +1701,15 @@ function App() {
                 <input
                   type="radio"
                   name="topic-duration"
-                  checked={config.topicPrefs.duration === v}
-                  onChange={() => saveTopicPrefs({ duration: v })}
+                  checked={topicDraft.duration === v}
+                  onChange={() => setTopicDraft((d) => ({ ...d, duration: v }))}
                 />
                 {label}
               </label>
             ))}
           </div>
           <div className="topic-opts">
-            <span className="topic-opts-label">跳跃距离</span>
+            <span className="topic-opts-label">本次联想</span>
             {(
               [
                 ['near', '相近'],
@@ -1716,8 +1721,8 @@ function App() {
                 <input
                   type="radio"
                   name="topic-distance"
-                  checked={config.topicPrefs.distance === v}
-                  onChange={() => saveTopicPrefs({ distance: v })}
+                  checked={topicDraft.distance === v}
+                  onChange={() => setTopicDraft((d) => ({ ...d, distance: v }))}
                 />
                 {label}
               </label>
@@ -1764,7 +1769,11 @@ function App() {
             }}
           />
           <label className="topic-strict">
-            <input type="checkbox" checked={strictTopic} onChange={(e) => setStrictTopic(e.target.checked)} />
+            <input
+              type="checkbox"
+              checked={topicDraft.strict}
+              onChange={(e) => setTopicDraft((d) => ({ ...d, strict: e.target.checked }))}
+            />
             严格围绕该话题（不要偏题）
           </label>
           <div className="topic-list">

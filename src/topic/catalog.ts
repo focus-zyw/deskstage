@@ -181,6 +181,8 @@ export interface TopicQueryCtx {
   category?: TopicCategory
   text?: string
   excludeFingerprints?: readonly string[]
+  /** 自动选题的个人类策略:默认排除 personal 与 sensitive;true 时放行 personal(sensitive 仍排除) */
+  allowPersonalAuto?: boolean
   /** 同 seed 同结果(确定性排序);缺省 0 */
   seed?: number
   limit?: number
@@ -330,8 +332,10 @@ export function createTopicCatalog(deps: TopicCatalogDeps): TopicCatalog {
   }
 
   function candidates(ctx: TopicQueryCtx = {}): TopicCard[] {
-    // 自动选题语义:sensitive 不进自动池(只允许用户显式选择)
-    return gatedPool(ctx).filter((c) => c.sensitivity !== 'sensitive')
+    // 自动选题语义:sensitive 永不进自动池;personal 仅在策略放行时进入(手动点播不受此限)
+    return gatedPool(ctx).filter((c) =>
+      ctx.allowPersonalAuto ? c.sensitivity !== 'sensitive' : c.sensitivity === 'normal',
+    )
   }
 
   return { query, resolve, candidates }

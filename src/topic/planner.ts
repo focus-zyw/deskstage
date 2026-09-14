@@ -102,6 +102,26 @@ export function modeHashOf(mode: DialogMode): string {
   )
 }
 
+/** 话题策略指纹:长期默认值与来源开关任一变化 → 旧预生成剧本不误用。
+ *  固定顺序元组,不依赖对象属性顺序 */
+export function topicPolicyHashOf(prefs: {
+  defaults: { duration: string; distance: string; strict: boolean }
+  sources: { interests: boolean; characterHistory: boolean; aiGenerated: boolean }
+  personalPolicy: string
+}): string {
+  return fingerprintOf(
+    JSON.stringify([
+      prefs.defaults.duration,
+      prefs.defaults.distance,
+      prefs.defaults.strict,
+      prefs.sources.interests,
+      prefs.sources.characterHistory,
+      prefs.sources.aiGenerated,
+      prefs.personalPolicy,
+    ]),
+  )
+}
+
 // ---------- 口味聚合(episodeSignals → 指纹口味分) ----------
 
 /** 聚合信号投影为指纹口味分:完播/赞/收藏为正,跳过/踩为负,钳制 [-2,+2] */
@@ -139,8 +159,6 @@ export interface ScoreContext {
   recent: readonly RecentLike[]
   /** 指纹口味分(verdictScores 聚合结果) */
   verdicts: ReadonlyMap<string, number>
-  /** 旧版 topicStats 种子权重(只读 legacy;键=旧标题,命中即加分,≤0 减分) */
-  legacyWeights: Record<string, number>
   /** 使用者兴趣关键词(likes 切分) */
   interests: readonly string[]
   modeId: string
@@ -172,12 +190,11 @@ export function scoreCard(card: TopicCard, ctx: ScoreContext): ScoredCard | null
   // 软硬阈值:>0.6 语义重复出局(硬排除的另一半)
   if (maxSimilarity > 0.6) return null
 
-  // relevance:兴趣命中 + legacy 口味 + 反馈口味,围绕 0.4 基线
+  // relevance:兴趣命中 + 反馈口味,围绕 0.4 基线(旧 topicStats 种子权重已退役,
+  // 口味唯一事实源 = episodeSignals)
   let relevance = 0.4
   const text = `${card.title} ${card.hook} ${card.tags.join(' ')}`
   if (ctx.interests.some((k) => k && text.includes(k))) relevance += 0.3
-  const legacy = ctx.legacyWeights[card.title]
-  if (legacy !== undefined) relevance += legacy > 0 ? Math.min(0.2, legacy * 0.04) : -0.2
   relevance += Math.max(-0.2, Math.min(0.2, (ctx.verdicts.get(card.fingerprint) ?? 0) * 0.1))
   relevance = Math.max(0, Math.min(1, relevance))
 

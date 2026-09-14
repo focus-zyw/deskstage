@@ -127,6 +127,8 @@ export interface PlanCompatibility {
   banHash: string
   /** 模式内容指纹:自定义模式编辑后旧剧本不误用 */
   modeHash: string
+  /** 话题策略指纹(默认值+来源开关+个人策略):策略变了旧剧本不误用 */
+  topicPolicyHash: string
   /** 演员阵容指纹(人设/来源/名字/性别/C 启用):阵容变了,旧剧本不误播 */
   castHash: string
   /** 规划器版本:评分/prompt 口径升级时 +1,一次性作废旧缓存 */

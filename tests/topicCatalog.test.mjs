@@ -142,9 +142,14 @@ test('applicability 门控矩阵:requiresPresent + personaSource 双维度', () 
     assert.equal(cOff.has(c.id), false, 'C 关闭时 C 包消失')
     assert.equal(allCustom.has(c.id), false, 'C 自定义时 C 包消失')
   }
+  // 全态可见性用 query 断言(含 personal 卡;candidates 默认排除 personal 属预期)
+  const q = (ctx) => new Set(mk().query({ limit: 200, ...ctx }).items.map((x) => x.id))
+  const qFull = q({ cast: cast('default', 'default', 'default') })
+  const qOff = q({ cast: cast('custom', 'custom', 'custom') })
   for (const c of catalog.CURATED_CARDS) {
-    assert.ok(cOff.has(c.id) && allCustom.has(c.id), `核心卡应全态可见:${c.title}`)
+    assert.ok(qFull.has(c.id) && qOff.has(c.id), `核心卡应全态可见:${c.title}`)
   }
+  void qOff
 })
 
 test('query:同 seed 同结果、前缀稳定、排除近期、facets 与门控池同源', () => {
@@ -198,11 +203,15 @@ test('resolve:精选/包查找 + 阵容门控失败回落 null;点卡 hook 与�
   assert.equal(withReservoir.resolve('gen-x', full).id, 'gen-x')
 })
 
-test('candidates:自动池排除 sensitive;query(显式浏览)保留', () => {
+test('candidates:自动池默认排除 personal 与 sensitive,策略放行只解禁 personal', () => {
   const cat = catalog.createTopicCatalog({ getReservoir: () => [], getHistoryPieces: () => [] })
-  const pool = cat.candidates({})
-  assert.ok(pool.every((c) => c.sensitivity !== 'sensitive'))
-  assert.ok(pool.some((c) => c.sensitivity === 'personal'), 'personal 可进自动池(prompt 加约束)')
+  const def = cat.candidates({})
+  assert.ok(def.every((c) => c.sensitivity === 'normal'), '默认只放 normal(personal 不进自动池)')
+  const allowed = cat.candidates({ allowPersonalAuto: true })
+  assert.ok(allowed.some((c) => c.sensitivity === 'personal'), 'allow-auto 放行 personal')
+  assert.ok(allowed.every((c) => c.sensitivity !== 'sensitive'), 'sensitive 永不进自动池')
+  const personal = catalog.CURATED_CARDS.find((c) => c.sensitivity === 'personal')
+  assert.equal(cat.resolve(personal.id, {}), personal, '手动点播 personal 不受门控')
 })
 
 test('换皮审计:titleSimilarity>0.6 的卡对必须在显式允许列表', () => {
@@ -363,13 +372,45 @@ test('迁移幂等:同标记会话重跑只补清理;其他会话不覆盖', asy
   assert.equal((await store.getTopicState()).session.rootCard.title, '用户自己选的新话题')
 })
 
-test('topicPrefs 清洗:非法回落 once/medium/false,费用开关必须显式开启', () => {
+test('topicPrefs 清洗:新形逐字段回落,费用开关必须显式开启', () => {
   const dirty = configStore.sanitizePartial({
-    topicPrefs: { duration: '一辈子', distance: '瞬间移动', aiDiscover: 'yes' },
+    topicPrefs: {
+      defaults: { duration: '一辈子', distance: '瞬间移动', strict: 'yes' },
+      sources: { interests: 1, characterHistory: 'x', aiGenerated: 'yes' },
+      personalPolicy: '随便',
+    },
   })
-  assert.deepEqual(dirty.topicPrefs, { duration: 'once', distance: 'medium', aiDiscover: false })
+  assert.deepEqual(dirty.topicPrefs, {
+    defaults: { duration: 'once', distance: 'medium', strict: false },
+    sources: { interests: true, characterHistory: true, aiGenerated: false },
+    personalPolicy: 'manual-only',
+  })
   const good = configStore.sanitizePartial({
-    topicPrefs: { duration: 'three-episodes', distance: 'far', aiDiscover: true },
+    topicPrefs: {
+      defaults: { duration: 'three-episodes', distance: 'far', strict: true },
+      sources: { interests: false, characterHistory: false, aiGenerated: true },
+      personalPolicy: 'allow-auto',
+    },
   })
-  assert.deepEqual(good.topicPrefs, { duration: 'three-episodes', distance: 'far', aiDiscover: true })
+  assert.deepEqual(good.topicPrefs, {
+    defaults: { duration: 'three-episodes', distance: 'far', strict: true },
+    sources: { interests: false, characterHistory: false, aiGenerated: true },
+    personalPolicy: 'allow-auto',
+  })
+})
+
+test('topicPrefs 迁移:旧扁平结构一次性映射到新形', () => {
+  const migrated = configStore.sanitizePartial({
+    topicPrefs: { duration: 'until-cleared', distance: 'near', aiDiscover: true },
+  })
+  assert.deepEqual(migrated.topicPrefs, {
+    defaults: { duration: 'until-cleared', distance: 'near', strict: false },
+    sources: { interests: true, characterHistory: true, aiGenerated: true },
+    personalPolicy: 'manual-only',
+  })
+  const legacyDefault = configStore.sanitizePartial({
+    topicPrefs: { duration: 'once', distance: 'medium' },
+  })
+  assert.equal(legacyDefault.topicPrefs.sources.aiGenerated, false, '费用开关不因迁移被打开')
+  assert.equal(legacyDefault.topicPrefs.defaults.strict, false)
 })
