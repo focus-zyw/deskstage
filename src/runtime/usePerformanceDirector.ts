@@ -25,7 +25,7 @@ import {
 import { dialogue, newEpisodeId } from '../dialogue/director'
 import { planInterjectionTakeover, keepChoiceOpts } from '../dialogue/interjection'
 import { pushTurn, chatWindow } from '../dialogue/turnWindow'
-import { nameOf, soloShortPersona } from '../engine/persona'
+import { actorWorldOf, castHash, nameOf, soloShortPersona } from '../engine/persona'
 import { recentMoodHint } from '../engine/moodState'
 import { diag } from '../diag/store'
 import { noteEpisodeAbandoned } from '../storage/moodStore'
@@ -51,10 +51,12 @@ import type {
 import { prefetchNext } from '../engine/dialogPrefetch'
 import { isFullscreenApp } from '../engine/envAware'
 import { topicDirector } from '../topic/director'
+import { topicCatalog } from '../topic'
 import {
   banHashOf,
   fingerprintOf,
   modeHashOf,
+  parseBanWords,
   PLANNER_VERSION,
 } from '../topic/planner'
 import { getTopicState } from '../topic/store'
@@ -101,9 +103,11 @@ export interface PerformanceDirectorDeps {
   sweepMemos(): Promise<void>
 }
 
-/** 点播请求:一次性话题/会话动作/跳跃距离/持续时间(缺省走导演自动决策) */
+/** 点播请求:一次性话题/点卡/会话动作/跳跃距离/持续时间(缺省走导演自动决策) */
 export interface PlayRequest {
   topic?: string
+  /** 推荐区点卡:传卡片 ID,缓存检查与规划都按原卡指纹走(hook 与面板展示一致) */
+  pinCardId?: string
   intent?: TopicIntent
   distance?: TopicDistance
   duration?: TopicDuration
@@ -532,11 +536,12 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
     })
   }, [])
 
-  /** 缓存兼容令牌:话题域 revision/雷区/模式内容/最近指纹/剧情拍号共同决定旧缓存可否消费 */
+  /** 缓存兼容令牌:话题域 revision/雷区/模式内容/阵容/最近指纹/剧情拍号共同决定旧缓存可否消费。
+   *  requestedFingerprint:明确点播(手动文本或点卡)的期望卡指纹,未命中同卡缓存一律不消费 */
   async function buildPrefetchCheck(
     cfg: Awaited<ReturnType<typeof getConfig>>,
     mode: Mode,
-    manualTopic?: string,
+    requestedFingerprint?: string,
     intent?: TopicIntent,
   ): Promise<PrefetchCheck> {
     const state = await getTopicState()
@@ -551,10 +556,11 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
     }
     return {
       intent: intent ?? 'new',
-      ...(manualTopic ? { manualFingerprint: fingerprintOf(manualTopic) } : {}),
+      ...(requestedFingerprint ? { requestedFingerprint } : {}),
       sessionRevision: state.revision,
       banHash: banHashOf(cfg.userProfile.banTopics),
       modeHash: modeHashOf(modeOf(mode)),
+      castHash: castHash(),
       plannerVersion: PLANNER_VERSION,
       recentFingerprints: state.recent.map((r) => r.fingerprint),
       arcStages,
@@ -752,7 +758,20 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
     const diagId = `perf-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     perfDiag.current = { id: diagId, startedAt: Date.now() }
     diag.beginTurn({ id: diagId, source: 'performance', text: manualTopic ?? '' })
-    const check = await buildPrefetchCheck(cfg, m, manualTopic, req0.intent)
+    // 明确点播的期望指纹:点卡先 resolve 原卡(人设刚改等门控失败回落标题指纹),
+    // 杜绝点 A 卡命中同模式下另一张自动预生成卡
+    const requestedFingerprint = req0.pinCardId
+      ? (topicCatalog
+          .resolve(req0.pinCardId, {
+            mode: modeOf(m),
+            actorWorld: actorWorldOf(cfg),
+            banWords: parseBanWords(cfg.userProfile.banTopics),
+          })
+          ?.fingerprint ?? fingerprintOf(req0.topic ?? req0.pinCardId))
+      : manualTopic
+        ? fingerprintOf(manualTopic)
+        : undefined
+    const check = await buildPrefetchCheck(cfg, m, requestedFingerprint, req0.intent)
     const entry = await peekCompatiblePrefetch(m, check)
     if (entry) {
       const adoptRes = await topicDirector.adopt(entry.topicPlan)
@@ -809,6 +828,7 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
     if (req0.intent) topicRequest.intent = req0.intent
     if (req0.distance) topicRequest.distance = req0.distance
     if (req0.duration) topicRequest.duration = req0.duration
+    if (req0.pinCardId) topicRequest.pinCardId = req0.pinCardId
     if (manualTopic) {
       topicRequest.manualTopic = manualTopic
       if (req0.strict) topicRequest.strict = true

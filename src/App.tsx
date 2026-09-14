@@ -23,7 +23,7 @@ import { SPRITE_SETS, preloadSprites } from './stage/spriteSets'
 import { ResidentActor } from './stage/resident/ResidentActor'
 import { preloadResident } from './stage/resident/residentManifest'
 import type { Speaker } from './performer/player'
-import { useAllModes, type Mode } from './performer/modes'
+import { useAllModes, modeOf, type Mode } from './performer/modes'
 import { generateShortChat, memoReminderLine, generateDailyLinePack } from './engine/llmClient'
 import { loadLinePacks, saveLinePack, dayKey } from './storage/linePackStore'
 import { createChatSession } from './session/ChatSession'
@@ -40,8 +40,10 @@ import { noteActivity } from './runtime/proactiveScheduler'
 import { speak } from './engine/tts'
 import { topicDirector } from './topic/director'
 import { maybeRestockTopicCandidates, cancelDiscovery } from './topic/discovery'
-import { useTopicSnapshot } from './topic'
-import { CURATED_CARDS } from './topic/catalog'
+import { topicCatalog, useTopicSnapshot } from './topic'
+import { actorWorldOf } from './engine/persona'
+import { parseBanWords } from './topic/planner'
+import type { TopicSuggestion } from './topic/types'
 import type { TopicCategory, TopicDistance, TopicDuration, TopicIntent } from './topic/types'
 import { getDueMemos, addMemo, updateMemo } from './storage/memoStore'
 import { findEpisodeByEid, toggleFavorite, type Episode } from './storage/historyStore'
@@ -330,6 +332,11 @@ function App() {
   const [topicQuery, setTopicQuery] = useState('')
   const [strictTopic, setStrictTopic] = useState(false)
   const [suggestCat, setSuggestCat] = useState<TopicCategory | null>(null)
+  // 推荐批次种子:打开面板时归零,期间保持稳定;「换一批」/点播后 +1 刷新
+  const [suggestSeed, setSuggestSeed] = useState(0)
+  useEffect(() => {
+    if (topicOpen) setSuggestSeed(0)
+  }, [topicOpen])
   // 空闲自动重放:频率来自配置,activeTick 用于用户互动后重置计时
   const [activeTick, setActiveTick] = useState(0)
   /** 用户主动互动:重置空闲/自动重放计时 + 清降频连击(还在陪玩的观众不该被降频) */
@@ -413,6 +420,30 @@ function App() {
   }, [])
   // 话题读模型快照:面板渲染专用(纯查询,不耗随机数/不建预约)
   const topicSnap = useTopicSnapshot()
+
+  // ---- 话题目录查询(纯查询,不耗随机数;同 seed 同结果) ----
+  const actorWorld = useMemo(() => actorWorldOf(config), [config])
+  const banWords = useMemo(() => parseBanWords(config.userProfile.banTopics), [config.userProfile.banTopics])
+  const recentFps = useMemo(() => topicSnap.recent.map((r) => r.fingerprint), [topicSnap.recent])
+  const topicQueryCtx = useMemo(
+    () => ({ mode: modeOf(mode), actorWorld, banWords, excludeFingerprints: recentFps }),
+    [mode, actorWorld, banWords, recentFps],
+  )
+  // 分类按钮由目录 facets 动态生成:空分类自动隐藏,计数与实际可选同源
+  const topicFacets = useMemo(() => topicCatalog.query({ ...topicQueryCtx, limit: 0 }).facets, [topicQueryCtx])
+  // 推荐列表:排除最近 20 个话题,优先当前模式与角色;打开期间 seed 稳定
+  const suggestions = useMemo(
+    () =>
+      suggestCat
+        ? topicCatalog.query({ ...topicQueryCtx, category: suggestCat, seed: suggestSeed, limit: 4 }).items
+        : [],
+    [topicQueryCtx, suggestCat, suggestSeed],
+  )
+  // 搜索:标题/标签/场景预告/角色动力学多字段匹配
+  const searchHits = useMemo<TopicSuggestion[]>(
+    () => (topicQuery.trim() ? topicCatalog.query({ ...topicQueryCtx, text: topicQuery, limit: 8 }).items : []),
+    [topicQueryCtx, topicQuery],
+  )
 
   /** 话题面板的行动按钮:四类动作直接触发下一集演出 */
   function playTopicAction(intent: TopicIntent, distance?: TopicDistance) {
@@ -705,7 +736,7 @@ function App() {
     { id: 'screenshot', label: '截屏(框选→保存/识字/翻译)', keywords: ['截屏', '截图', '截图翻译', '截屏翻译'], run: startScreenshotFlow },
     { id: 'memo', label: '添加提醒(打开备忘页)', keywords: ['备忘页'], run: openMemoSettings },
     { id: 'chatlog', label: '翻聊天记录(打开设置页)', keywords: ['聊天记录', '聊天', '对话回放', '记录'], run: () => openSettings('chatlog') },
-    { id: 'topic', label: '设置聊天主题', keywords: ['话题', '主题'], run: () => openOverlayExclusive('topic') },
+    { id: 'topic', label: '选择演出话题', keywords: ['话题', '演出话题', '主题'], run: () => openOverlayExclusive('topic') },
     { id: 'toggle-chars', label: charHidden ? '显示角色' : '隐藏角色', keywords: ['隐藏角色', '显示角色'], run: () => setCharsHidden(!charHidden) },
     // 点播命令从模式注册表生成:内置+自定义(模式工坊)自动进命令面板与 LLM 兜底路由
     ...allModeList
@@ -755,8 +786,8 @@ function App() {
       setCharacterNames(c.names.a, c.names.b, c.names.c)
       // 用户自定义角色性别:代词/称呼纪律的事实源
       setCharacterGenders(c.genders.a, c.genders.b, c.genders.c)
-      // 用户自定义人设:先应用,后续所有生成即采纳
-      setPersonaOverride(c.persona.a, c.persona.b, c.persona.c)
+      // 用户自定义人设:先应用,后续所有生成即采纳(来源一并采纳,供话题包门控)
+      setPersonaOverride(c.persona.a, c.persona.b, c.persona.c, c.personaSource)
       // 环境感知:按配置低频轮询本机状态(电量/前台应用分类等)
       // 环境感知或久坐提醒任一开启都需要轮询(久坐依赖键鼠空闲传感器,与环境感知解耦)
       if (c.envSense || c.breakReminder.enabled) startEnvPolling()
@@ -1288,13 +1319,18 @@ function App() {
     saveConfig({ charactersHidden: v }).catch((e) => console.warn('显示开关保存失败(静默)', e))
   }
 
-  /** 手动话题即点即演:一次性(或按面板时长选项建会话),不再有"锁定直到清除"的全局态 */
-  function playManualTopic(topic: string) {
-    const norm = topic.trim()
+  /** 手动话题即点即演:点卡传 pinCardId(展示 hook 与实际演出同源),自由输入传文本 */
+  function playManualTopic(card?: { id: string; title: string }, text?: string) {
+    const norm = (card?.title ?? text ?? '').trim()
     if (!norm) return
     closeOverlay('topic')
-    director.play(mode, { topic: norm, strict: strictTopic, duration: config.topicPrefs.duration })
+    director.play(mode, {
+      ...(card ? { pinCardId: card.id, topic: norm } : { topic: norm }),
+      strict: strictTopic,
+      duration: config.topicPrefs.duration,
+    })
     setTopicQuery('')
+    setSuggestSeed((s) => s + 1) // 点播后刷新推荐,避免同一批反复出现
   }
 
   /** 面板"清除当前话题":结束活跃会话,回到动态选题(旧预生成缓存随之作废) */
@@ -1504,7 +1540,7 @@ function App() {
           style={{ left: `${Math.min(88, Math.max(12, ctrlBar.xPct))}%`, top: ctrlBar.top + 46 }}
         >
           <div className="panel-head">
-            <span>当前话题</span>
+            <span>当前演出话题</span>
             {(topicSnap.session || topicSnap.currentTitle) && (
               <button className="panel-btn" onClick={clearTopicSession}>
                 清除当前话题
@@ -1596,38 +1632,33 @@ function App() {
           </div>
           <div className="topic-opts">
             <span className="topic-opts-label">推荐</span>
-            {(
-              [
-                ['life', '生活'],
-                ['work', '职场'],
-                ['emotion', '情绪'],
-                ['imagination', '脑洞'],
-                ['character-history', '角色往事'],
-              ] as const
-            ).map(([cat, label]) => (
+            {topicFacets.map((f) => (
               <button
-                key={cat}
-                className={`panel-btn${suggestCat === cat ? ' on' : ''}`}
-                onClick={() => setSuggestCat(suggestCat === cat ? null : cat)}
+                key={f.id}
+                className={`panel-btn${suggestCat === f.id ? ' on' : ''}`}
+                onClick={() => setSuggestCat(suggestCat === f.id ? null : f.id)}
               >
-                {label}
+                {f.label}·{f.count}
               </button>
             ))}
+            {suggestCat && (
+              <button className="panel-btn" onClick={() => setSuggestSeed((s) => s + 1)}>
+                换一批
+              </button>
+            )}
           </div>
           {suggestCat && (
             <div className="topic-list">
-              {CURATED_CARDS.filter((c) => c.category === suggestCat)
-                .slice(0, 4)
-                .map((c) => (
-                  <button
-                    key={c.id}
-                    className="topic-item"
-                    title={c.hook}
-                    onClick={() => playManualTopic(c.title)}
-                  >
-                    {c.title}
-                  </button>
-                ))}
+              {suggestions.map((s) => (
+                <button
+                  key={s.id}
+                  className="topic-item"
+                  onClick={() => playManualTopic({ id: s.id, title: s.title })}
+                >
+                  <span className="topic-item-title">{s.title}</span>
+                  <span className="topic-item-hook">{s.hook}</span>
+                </button>
+              ))}
             </div>
           )}
           <input
@@ -1636,7 +1667,7 @@ function App() {
             placeholder="搜索话题,或输入自定义主题,回车开演…"
             onChange={(e) => setTopicQuery(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === 'Enter') playManualTopic(topicQuery)
+              if (e.key === 'Enter') playManualTopic(undefined, topicQuery)
             }}
           />
           <label className="topic-strict">
@@ -1648,18 +1679,21 @@ function App() {
               <div className="topic-empty">输入关键词搜索,回车即以此话题开演</div>
             )}
             {topicQuery.trim() !== '' &&
-              !CURATED_CARDS.some((t) => t.title.includes(topicQuery.trim())) && (
-                <button className="topic-item" onClick={() => playManualTopic(topicQuery)}>
+              !searchHits.some((s) => s.title.includes(topicQuery.trim())) && (
+                <button className="topic-item" onClick={() => playManualTopic(undefined, topicQuery)}>
                   用『{topicQuery.trim()}』作为话题
                 </button>
               )}
-            {CURATED_CARDS.filter((t) => t.title.includes(topicQuery.trim()))
-              .slice(0, 8)
-              .map((t) => (
-                <button key={t.id} className="topic-item" title={t.hook} onClick={() => playManualTopic(t.title)}>
-                  {t.title}
-                </button>
-              ))}
+            {searchHits.map((s) => (
+              <button
+                key={s.id}
+                className="topic-item"
+                onClick={() => playManualTopic({ id: s.id, title: s.title })}
+              >
+                <span className="topic-item-title">{s.title}</span>
+                <span className="topic-item-hook">{s.hook}</span>
+              </button>
+            ))}
           </div>
         </div>
       )}

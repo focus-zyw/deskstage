@@ -159,13 +159,30 @@ export function renderTopicPlan(plan: TopicPlan): string {
     payoff: '收尾(反转并回收前集伏笔)',
     pivot: '新题(换新话题,按转场线索衔接)',
   }
+  // 行为骨架:只描述谁推进/谁阻挡,不绑定职业——具体身份由当前人设实例化
+  const roleNote = plan.card.roles
+    ? [
+        plan.card.roles.initiator ? `推进方——${plan.card.roles.initiator}` : '',
+        plan.card.roles.challenger ? `阻挡/求证方——${plan.card.roles.challenger}` : '',
+      ]
+        .filter(Boolean)
+        .join(';')
+    : ''
+  const sensitivityNote =
+    plan.card.sensitivity === 'personal'
+      ? '个人向话题:可以聊角色自身的处境,但不得默认把话题中的困境映射成观众本人的真实状况'
+      : plan.card.sensitivity === 'sensitive'
+        ? '敏感话题:只围绕角色自身演绎,不得诊断、断言或影射观众本人存在相应问题'
+        : ''
   return `本段话题计划：
 - 中心话题：${plan.card.title}
 - 本集切口：${plan.episodeFocus}
 - 话题阶段：${stageText[plan.stage]}
+- 角色动力学：${roleNote || '无'}
 - 允许自然延伸：${plan.allowedBranches.length ? plan.allowedBranches.join('、') : '无'}
 - 最近已聊过、不得重复：${plan.avoid.length ? plan.avoid.join('、') : '无'}
 - 转场线索：${plan.card.bridge ?? '无'}
+- 敏感约束：${sensitivityNote || '无'}
 - 约束强度：${policyText}`
 }
 

@@ -36,19 +36,179 @@ after(async () => {
   await server?.close()
 })
 
-test('精选池:75 条、指纹唯一、分类分布与原六组一致', () => {
+test('精选池:核心 85 条、指纹唯一、分类分布、通用骨架不绑职业', () => {
   const cards = catalog.CURATED_CARDS
-  assert.equal(cards.length, 75)
+  assert.equal(cards.length, 85)
   const fps = new Set(cards.map((c) => c.fingerprint))
   assert.equal(fps.size, cards.length)
   const byCat = {}
   for (const c of cards) byCat[c.category] = (byCat[c.category] ?? 0) + 1
-  assert.deepEqual(byCat, { consumption: 15, work: 12, life: 15, social: 10, technology: 8, health: 15 })
+  assert.deepEqual(byCat, {
+    consumption: 16,
+    work: 12,
+    life: 17,
+    social: 10,
+    technology: 8,
+    health: 9,
+    emotion: 7,
+    imagination: 6,
+  })
   for (const c of cards) {
     assert.equal(c.source, 'curated')
     assert.ok(c.hook.length > c.title.length / 2, 'hook 必须比标题有信息量')
     assert.ok(c.hook !== c.title)
+    // 通用骨架纪律:核心池不携带默认职业门控(默认世界题在 TOPIC_PACKS)
+    assert.equal(c.applicability, undefined)
+    // 角色往事不硬填:只允许来自真实故事数据(candidates 通道)
+    assert.notEqual(c.category, 'character-history')
   }
+  // 旅行换皮对已删除
+  assert.ok(!cards.some((c) => c.title.includes('旅行')))
+})
+
+test('默认人设专属包:仅分组不做门控,逐卡 applicability 覆盖,手写 hook', () => {
+  const packs = catalog.TOPIC_PACK_CARDS
+  assert.equal(packs.length, 1)
+  const pack = packs[0]
+  assert.equal(pack.id, 'default-world')
+  assert.ok(pack.cards.length >= 20 && pack.cards.length <= 30, '包规模 20~30')
+  let cross = 0
+  let aOnly = 0
+  let bOnly = 0
+  let cOnly = 0
+  for (const c of pack.cards) {
+    assert.ok(c.applicability?.actors && Object.keys(c.applicability.actors).length > 0, '包卡必须带 applicability')
+    assert.ok(c.hook && c.hook !== c.title, '包卡 hook 必须手写')
+    const a = c.applicability.actors
+    if (a.A === 'default' && a.B === 'default') cross++
+    else if (a.A === 'default') aOnly++
+    else if (a.B === 'default') bOnly++
+    else if (a.C === 'default') cOnly++
+  }
+  assert.ok(cross >= 10, `A×B 交叉 ≥10,实际 ${cross}`)
+  assert.ok(aOnly >= 4, `A 独立 ≥4,实际 ${aOnly}`)
+  assert.ok(bOnly >= 4, `B 独立 ≥4,实际 ${bOnly}`)
+  assert.ok(cOnly >= 1, `C 相关 ≥1,实际 ${cOnly}`)
+})
+
+test('applicability 门控矩阵:逐卡按人设来源可见性过滤,包分组不整体门控', () => {
+  const world = (a, b, c) => ({ A: a, B: b, C: c })
+  const mk = () => catalog.createTopicCatalog({ getReservoir: () => [], getHistoryPieces: () => [] })
+  const full = new Set(mk().candidates({ actorWorld: world('default', 'default', 'default') }).map((c) => c.id))
+  const partial = new Set(mk().candidates({ actorWorld: world('default', 'custom', 'default') }).map((c) => c.id))
+  const none = new Set(mk().candidates({ actorWorld: world('custom', 'custom', 'custom') }).map((c) => c.id))
+  const packCards = catalog.TOPIC_PACK_CARDS[0].cards
+  const cross = packCards.filter((c) => c.applicability.actors.A && c.applicability.actors.B)
+  const bIndependent = packCards.filter((c) => c.applicability.actors.B && !c.applicability.actors.A)
+  assert.ok(cross.length >= 10)
+  assert.ok(bIndependent.length >= 4)
+  for (const c of cross) {
+    assert.ok(full.has(c.id), '双默认可见')
+    assert.equal(partial.has(c.id), false, 'B 自定义时交叉卡消失')
+    assert.equal(none.has(c.id), false, '双自定义消失')
+  }
+  for (const c of bIndependent) {
+    assert.ok(full.has(c.id), 'B 独立卡双默认可见')
+    assert.equal(partial.has(c.id), false, '仅 B 自定义时 B 独立卡(依赖默认 B)消失')
+    assert.equal(none.has(c.id), false, '双自定义时 B 独立卡消失')
+  }
+})
+
+test('query:同 seed 同结果、前缀稳定、排除近期、facets 与门控池同源', () => {
+  const cat = catalog.createTopicCatalog({ getReservoir: () => [], getHistoryPieces: () => [] })
+  const a = cat.query({ category: 'work', seed: 7, limit: 4 }).items.map((s) => s.id)
+  const b = cat.query({ category: 'work', seed: 7, limit: 4 }).items.map((s) => s.id)
+  assert.deepEqual(a, b, '同 seed 同结果')
+  const c = cat.query({ category: 'work', seed: 8, limit: 4 }).items.map((s) => s.id)
+  assert.notDeepEqual(a, c, '不同 seed 应有变化')
+  const wider = cat.query({ category: 'work', seed: 7, limit: 8 }).items.map((s) => s.id)
+  assert.deepEqual(wider.slice(0, 4), a, 'limit 扩大时前缀稳定')
+  const anyWork = catalog.CURATED_CARDS.find((x) => x.category === 'work')
+  const baseWork = cat.query({ category: 'work', limit: 0 }).facets.find((f) => f.id === 'work').count
+  const excluded = cat.query({ category: 'work', excludeFingerprints: [anyWork.fingerprint], limit: 50 })
+  assert.ok(excluded.items.every((s) => s.id !== anyWork.id), '近期指纹被排除')
+  const excludedWork = excluded.facets.find((f) => f.id === 'work').count
+  assert.equal(excludedWork, baseWork - 1, 'facets 计数同步排除(含默认包同类卡)')
+  assert.equal(excludedWork, excluded.items.length, 'facets 与 items 同源:分类计数=该分类实际条数')
+  const facets = cat.query({ limit: 0 }).facets
+  assert.ok(facets.length > 0 && facets.every((f) => f.count > 0), '空分类不出现')
+  assert.ok(!facets.some((f) => f.id === 'character-history'), '无真实往事时角色往事隐藏')
+})
+
+test('resolve:精选/包查找 + 世界门控失败回落 null;点卡 hook 与展示同源', () => {
+  const packCard = catalog.TOPIC_PACK_CARDS[0].cards[0]
+  const cat = catalog.createTopicCatalog({ getReservoir: () => [], getHistoryPieces: () => [] })
+  const hit = cat.resolve(packCard.id, { actorWorld: { A: 'default', B: 'default', C: 'default' } })
+  assert.equal(hit?.id, packCard.id)
+  assert.equal(hit.hook, packCard.hook, '点卡拿到的是原卡 hook')
+  // B 自定义 → 交叉卡门控失败
+  assert.equal(cat.resolve(packCard.id, { actorWorld: { A: 'default', B: 'custom', C: 'default' } }), null)
+  // 候选仓优先(点 AI 卡)
+  const genCard = { ...packCard, id: 'gen-x', applicability: undefined }
+  const withReservoir = catalog.createTopicCatalog({ getReservoir: () => [genCard], getHistoryPieces: () => [] })
+  assert.equal(withReservoir.resolve('gen-x', { actorWorld: world0() }).id, 'gen-x')
+  function world0() {
+    return { A: 'default', B: 'default', C: 'default' }
+  }
+})
+
+test('candidates:自动池排除 sensitive;query(显式浏览)保留', () => {
+  const cat = catalog.createTopicCatalog({ getReservoir: () => [], getHistoryPieces: () => [] })
+  const pool = cat.candidates({})
+  assert.ok(pool.every((c) => c.sensitivity !== 'sensitive'))
+  assert.ok(pool.some((c) => c.sensitivity === 'personal'), 'personal 可进自动池(prompt 加约束)')
+})
+
+test('换皮审计:titleSimilarity>0.6 的卡对必须在显式允许列表', () => {
+  const all = [
+    ...catalog.CURATED_CARDS,
+    ...catalog.TOPIC_PACK_CARDS.flatMap((p) => p.cards),
+  ]
+  const allowed = new Set(catalog.ALLOWED_SIMILAR_PAIRS.map(([x, y]) => [x, y].sort().join('\u0001')))
+  const offenders = []
+  for (let i = 0; i < all.length; i++) {
+    for (let j = i + 1; j < all.length; j++) {
+      if (planner.titleSimilarity(all[i].title, all[j].title) > 0.6) {
+        const key = [all[i].title, all[j].title].sort().join('\u0001')
+        if (!allowed.has(key)) offenders.push(`${all[i].title} ↔ ${all[j].title}`)
+      }
+    }
+  }
+  assert.deepEqual(offenders, [], `疑似换皮题目(需人工确认或加入允许列表):\n${offenders.join('\n')}`)
+})
+
+test('personaSource 迁移三规则 + usesDefaultPersona 只读结构化来源', async () => {
+  const personaMod = await server.ssrLoadModule('/src/engine/persona.ts')
+  // 规则一:空文本 → default;规则三:其他非空 → custom
+  const dirty = configStore.sanitizeConfig({ persona: { a: '', b: '自定义侦探人设', c: '' } })
+  assert.deepEqual(dirty.personaSource, { a: 'default', b: 'custom', c: 'default' })
+  // 规则二:能识别为内置默认全文(旧"还原默认"按钮按当时名字写入)→ default
+  const canonical = personaMod.defaultPersonaText('A')
+  const legacy = configStore.sanitizeConfig({ persona: { a: canonical, b: '', c: '' } })
+  assert.equal(legacy.personaSource.a, 'default')
+  // 已持久化的结构化来源直接信任(来源是权威事实)
+  const explicit = configStore.sanitizeConfig({
+    persona: { a: '', b: '', c: '' },
+    personaSource: { a: 'custom', b: 'default', c: 'custom' },
+  })
+  assert.deepEqual(explicit.personaSource, { a: 'custom', b: 'default', c: 'custom' })
+})
+
+test('castHash:同配置同哈希(跨重启稳定),人设/名字/性别任一变化即变', async () => {
+  const personaMod = await server.ssrLoadModule('/src/engine/persona.ts')
+  personaMod.setPersonaOverride('', '', '')
+  personaMod.setCharacterNames('甲', '乙', '丙')
+  personaMod.setCharacterGenders('女', '男', '女')
+  const base = personaMod.castHash()
+  assert.equal(personaMod.castHash(), base, '内容哈希,非进程内计数器')
+  personaMod.setPersonaOverride('侦探,观察入微', '', '')
+  assert.notEqual(personaMod.castHash(), base, '人设变化 → 哈希变化')
+  personaMod.setPersonaOverride('', '', '')
+  assert.equal(personaMod.castHash(), base, '恢复同配置 → 同哈希(可安全复用)')
+  personaMod.setCharacterNames('阿甲', '乙', '丙')
+  assert.notEqual(personaMod.castHash(), base, '改名 → 哈希变化(名字进提示词)')
+  personaMod.setCharacterGenders('男', '男', '女')
+  assert.notEqual(personaMod.castHash(), base, '改性别 → 哈希变化(代词纪律)')
 })
 
 test('角度按分类取,不再全局混配', () => {

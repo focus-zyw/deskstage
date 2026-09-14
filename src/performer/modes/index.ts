@@ -53,7 +53,7 @@ export const MODES = {
   daily: dailyMode,
   crosstalk: crosstalkMode,
   live: liveMode,
-  aiTheater: aiTheaterMode,
+  'ai-theater': aiTheaterMode,
 } satisfies Record<string, DialogMode>
 
 /** 内置模式的注册键(编译期可枚举) */

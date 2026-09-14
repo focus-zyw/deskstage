@@ -184,3 +184,9 @@ test('内置模式自带触发词(数据驱动路由的前提)', () => {
   assert.deepEqual(MODES.daily.triggers, ['日常', '闲聊'])
   assert.deepEqual(MODES.crosstalk.triggers, ['相声', '段子'])
 })
+
+test('模式菜单传入每个内置 mode.id 时,modeOf 必须解析回同一模式', () => {
+  for (const mode of Object.values(MODES)) {
+    assert.equal(modeOf(mode.id), mode, `${mode.id} 被错误回退成 ${modeOf(mode.id).id}`)
+  }
+})

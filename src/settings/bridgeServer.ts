@@ -42,9 +42,9 @@ export function initConfigEffects(): void {
       if (next.envSense || next.breakReminder.enabled) startEnvPolling()
       else stopEnvPolling()
     }
-    if (base.persona !== next.persona) {
+    if (base.persona !== next.persona || base.personaSource !== next.personaSource) {
       const p = next.persona // 空串 = 还原内置人设(persona 模块内回落)
-      setPersonaOverride(p.a, p.b, p.c)
+      setPersonaOverride(p.a, p.b, p.c, next.personaSource)
     }
     if (base.names !== next.names) setCharacterNames(next.names.a, next.names.b, next.names.c)
     if (base.genders !== next.genders) setCharacterGenders(next.genders.a, next.genders.b, next.genders.c) // 性别纪律立即采纳

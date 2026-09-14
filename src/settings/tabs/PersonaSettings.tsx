@@ -1,6 +1,7 @@
 // 角色人设:角色名字(名牌与台词称呼)、性别(代词事实源)与人设全文编辑
 import { useEffect, useState } from 'react'
 import { defaultPersonaText } from '../../engine/persona'
+import type { AppConfig } from '../../storage/configStore'
 import { quantizeMood, type MoodTable } from '../../engine/moodState'
 import { getMoods, resetMoods } from '../../storage/moodStore'
 import type { Speaker } from '../../performer/dialogSchema'
@@ -54,6 +55,18 @@ function MoodCard() {
 
 export function PersonaSettings() {
   const { form, setForm, saveField, flashCard } = useSettings()
+
+  /** 保存单槽位人设:非空文本 = custom;清空 = 恢复内置默认(default)。
+   *  来源是结构化事实,与文本一起原子保存(话题包门控按来源判断) */
+  function savePersona(slot: 'a' | 'b' | 'c', value: string) {
+    const persona = { ...form.persona, [slot]: value }
+    const personaSource: AppConfig['personaSource'] = {
+      ...form.personaSource,
+      [slot]: value.trim() ? 'custom' : 'default',
+    }
+    setForm({ ...form, persona, personaSource })
+    saveField({ persona, personaSource })
+  }
   // 名字标签用已保存的生效名(提交后才换称呼),与名牌/台词一致
   const names = useConfigSnapshot().names
 
@@ -138,10 +151,7 @@ export function PersonaSettings() {
             rows={4}
             maxLength={2000}
             value={form.persona.a || defaultPersonaText('A')}
-            onChange={(e) => {
-              setForm({ ...form, persona: { ...form.persona, a: e.target.value } })
-              saveField({ persona: { ...form.persona, a: e.target.value } })
-            }}
+            onChange={(e) => savePersona('a', e.target.value)}
           />
         </SetField>
         <SetField label={`${names.b} 的人设`} htmlFor="cfg-persona-b">
@@ -150,10 +160,7 @@ export function PersonaSettings() {
             rows={4}
             maxLength={2000}
             value={form.persona.b || defaultPersonaText('B')}
-            onChange={(e) => {
-              setForm({ ...form, persona: { ...form.persona, b: e.target.value } })
-              saveField({ persona: { ...form.persona, b: e.target.value } })
-            }}
+            onChange={(e) => savePersona('b', e.target.value)}
           />
         </SetField>
         <SetField
@@ -166,10 +173,7 @@ export function PersonaSettings() {
             rows={4}
             maxLength={2000}
             value={form.persona.c || defaultPersonaText('C')}
-            onChange={(e) => {
-              setForm({ ...form, persona: { ...form.persona, c: e.target.value } })
-              saveField({ persona: { ...form.persona, c: e.target.value } })
-            }}
+            onChange={(e) => savePersona('c', e.target.value)}
           />
         </SetField>
         <div className="set-actions">
@@ -177,13 +181,10 @@ export function PersonaSettings() {
           <button
             className="panel-btn"
             onClick={() => {
-              const persona = {
-                a: defaultPersonaText('A'),
-                b: defaultPersonaText('B'),
-                c: defaultPersonaText('C'),
-              }
-              setForm({ ...form, persona })
-              saveField({ persona }, true)
+              const persona = { a: '', b: '', c: '' }
+              const personaSource: AppConfig['personaSource'] = { a: 'default', b: 'default', c: 'default' }
+              setForm({ ...form, persona, personaSource })
+              saveField({ persona, personaSource }, true)
             }}
           >
             还原默认人设

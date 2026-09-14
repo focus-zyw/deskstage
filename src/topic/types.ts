@@ -3,6 +3,7 @@
 // TopicPlan 是不可变纯数据(可直接进 prefetch.json),TopicEvent 是可逆幂等的反馈事件。
 // 全部结构都可能持久化到 data/topic-state.json 或 prefetch.json,字段增删必须同步 store 的 sanitize。
 
+import type { ActorSlot } from '../engine/persona'
 import type { Mode } from '../performer/modes'
 
 // ---------- 封闭枚举(const 数组供 sanitize/白名单校验复用) ----------
@@ -65,10 +66,32 @@ export interface TopicCard {
   bridge?: string
   /** 适配的模式 id(自定义模式话题池的卡带自己的 id) */
   modeAffinity?: string[]
+  /** 卡专属演出切口;缺省回落分类角度池 */
+  angles?: string[]
+  /** 行为骨架:本话题里谁推进、谁阻挡——只描述行为,不绑定职业 */
+  roles?: { initiator?: string; challenger?: string }
+  /** 适用条件:所列槽位的人设来源须等于给定值(如 {A:'default',B:'default'})。
+   *  职业/世界观专属卡才带;多数固定卡不带(始终可见) */
+  applicability?: { actors?: Partial<Record<ActorSlot, 'default' | 'custom'>> }
   sensitivity: 'normal' | 'personal' | 'sensitive'
   generatedAt: number
   /** AI 候选过期时间(14 天 TTL);精选/本地卡不过期 */
   expiresAt?: number
+}
+
+// ---------- TopicSuggestion:目录查询的轻量投影(面板展示用) ----------
+
+export interface TopicSuggestion {
+  id: string
+  title: string
+  /** 场景预告:面板直接展示的一句话(与实际演出 hook 同源) */
+  hook: string
+  category: TopicCategory
+  tags: string[]
+  source: TopicSource
+  sensitivity: 'normal' | 'personal' | 'sensitive'
+  /** 命中方式:分类点选 / 关键词搜索 */
+  matchedBy: 'category' | 'keyword'
 }
 
 // ---------- TopicPlan:交给对话生成模块的结果 ----------
@@ -81,6 +104,8 @@ export interface PlanCompatibility {
   banHash: string
   /** 模式内容指纹:自定义模式编辑后旧剧本不误用 */
   modeHash: string
+  /** 演员阵容指纹(人设/名字/性别):阵容变了,带旧名字/旧世界的剧本不误用 */
+  castHash: string
   /** 规划器版本:评分/prompt 口径升级时 +1,一次性作废旧缓存 */
   plannerVersion: number
 }

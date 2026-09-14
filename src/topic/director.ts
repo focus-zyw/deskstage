@@ -14,6 +14,7 @@ import { getTopicWeights } from '../storage/memoryStore'
 import { getStory, type StoryArc, type StoryThread } from '../storage/storyStore'
 import { listPrefetchedArcIds } from '../storage/prefetchStore'
 import { reserveArcBeat } from '../engine/arcReservation'
+import { actorWorldOf, castHash } from '../engine/persona'
 import { envForegroundCategory } from '../engine/envAware'
 import { modeOf, type DialogMode, type Mode } from '../performer/modes'
 import { migrateLegacyTopicOverride } from './migration'
@@ -32,8 +33,8 @@ import {
   type RecentLike,
   type ScoreContext,
 } from './planner'
-import { CURATED_CARDS, cardsFromSeeds, focusForCard, manualCardFromText, pickAngle } from './catalog'
-import { getTopicState, mutateTopicState, warmTopicState, MAX_RECENT } from './store'
+import { cardsFromSeeds, createTopicCatalog, focusForCard, manualCardFromText, pickAngle } from './catalog'
+import { getTopicState, mutateTopicState, peekTopicState, warmTopicState, MAX_RECENT } from './store'
 import type {
   AdoptResult,
   PlanCompatibility,
@@ -53,7 +54,6 @@ export const PLAN_TTL_MS = 10 * 60_000
 
 /** 候选采样目标总量(各源按先验取 ceil,评分层裁决;先验不可用的源自动归一) */
 const CANDIDATE_TARGET = 16
-const PRIOR_INTEREST = 0.25
 const PRIOR_THREADS = 0.2
 const PRIOR_ENVIRONMENT = 0.15
 const PRIOR_GENERATED = 0.25
@@ -71,8 +71,11 @@ export interface StoryLease {
   release: () => void
 }
 
-/** 结构化子集:测试只需提供这些字段( AppConfig 可直接赋给本类型) */
-export type TopicConfigSlice = Pick<AppConfig, 'userProfile' | 'topicPrefs' | 'envSense'> & {
+/** 结构化子集:测试只需提供这些字段( AppConfig 可直接赋给本类型;personaSource 缺省按全默认世界) */
+export type TopicConfigSlice = Pick<
+  AppConfig,
+  'userProfile' | 'topicPrefs' | 'envSense' | 'personaSource'
+> & {
   topicOverride?: string | null
 }
 
@@ -135,6 +138,18 @@ export function createTopicDirector(depsInput: Partial<TopicDirectorDeps> = {}) 
   const deps: TopicDirectorDeps = { ...defaultDeps, ...depsInput }
   /** 故事 lease:planId → release(进程内;adopt/release 幂等收束) */
   const leases = new Map<string, () => void>()
+  /** 已加载的角色世界(目录往事卡的数据源;pin 点播与故事通道都会先取一次) */
+  let storyCache: { arcs: StoryArc[]; threads: StoryThread[] } | null = null
+  /** 话题目录实例:UI 面板与应用单例同构;这里注入导演自己的候选仓/往事取数 */
+  const catalog = createTopicCatalog({
+    getReservoir: () => peekTopicState()?.reservoir ?? [],
+    getHistoryPieces: () =>
+      (storyCache?.threads ?? []).map((t) => ({
+        id: t.id,
+        title: t.text.slice(0, 40),
+        hook: `旧事没翻篇:${t.text.slice(0, 60)}`,
+      })),
+  })
 
   function newId(prefix: string, now: number): string {
     return `${prefix}-${now.toString(36)}-${Math.floor(deps.rng() * 0xffffffff).toString(36)}`
@@ -206,7 +221,8 @@ export function createTopicDirector(depsInput: Partial<TopicDirectorDeps> = {}) 
     now: number,
   ): TopicPlan {
     const card = req.pinCardId
-      ? (findPinnedCard(req.pinCardId, state, mode) ?? manualCardFromText(req.manualTopic?.trim() ?? '随便聊聊'))
+      ? (findPinnedCard(req.pinCardId, state, mode, cfg) ??
+        manualCardFromText(req.manualTopic?.trim() ?? '随便聊聊'))
       : manualCardFromText(req.manualTopic?.trim() ?? '')
     const duration = req.duration ?? cfg.topicPrefs.duration
     const distance = req.distance ?? cfg.topicPrefs.distance
@@ -226,13 +242,17 @@ export function createTopicDirector(depsInput: Partial<TopicDirectorDeps> = {}) 
     })
   }
 
-  function findPinnedCard(pinCardId: string, state: TopicStateV1, mode: DialogMode): TopicCard | null {
-    const inReservoir = state.reservoir.find((c) => c.id === pinCardId)
-    if (inReservoir) return inReservoir
-    const inCurated = CURATED_CARDS.find((c) => c.id === pinCardId)
-    if (inCurated) return inCurated
-    if (mode.topics) return cardsFromSeeds(mode.topics, mode.id).find((c) => c.id === pinCardId) ?? null
-    return null
+  /** 点播找卡:候选仓 → 精选+专属包+模式池+真实往事(目录深模块内封装);
+   *  世界门控不过(如人设刚改)返回 null,由调用方回落 manualTopic 文本 */
+  function findPinnedCard(
+    pinCardId: string,
+    state: TopicStateV1,
+    mode: DialogMode,
+    cfg: TopicConfigSlice,
+  ): TopicCard | null {
+    const inState = state.reservoir.find((c) => c.id === pinCardId)
+    if (inState) return inState
+    return catalog.resolve(pinCardId, { mode, actorWorld: actorWorldOf(cfg) })
   }
 
   // ---------- 通道二:session(活跃会话推进) ----------
@@ -370,6 +390,8 @@ export function createTopicDirector(depsInput: Partial<TopicDirectorDeps> = {}) 
     envCat: string | null,
   ): Promise<TopicPlan> {
     const banWords = parseBanWords(cfg.userProfile.banTopics)
+    const actorWorld = actorWorldOf(cfg)
+    const recentFps = state.recent.map((r) => r.fingerprint)
     // 模式专属池 = 硬领域(V2 §6):有专属池时精选源只收池卡,其他源按领域类别过滤
     const modePool = mode.topics ? cardsFromSeeds(mode.topics, mode.id) : []
     const domainCategories = new Set(modePool.map((c) => c.category))
@@ -377,6 +399,8 @@ export function createTopicDirector(depsInput: Partial<TopicDirectorDeps> = {}) 
       modePool.length === 0 || domainCategories.has(c.category) || (c.modeAffinity?.includes(mode.id) ?? false)
 
     const likes = splitKeywords(cfg.userProfile.likes)
+    // 精选源走目录深模块:角色 applicability 门控/雷区/近期 20 集排除/sensitive 过滤都在 catalog 内
+    const curatedPool = catalog.candidates({ mode, actorWorld, banWords, excludeFingerprints: recentFps })
     const reservoir = state.reservoir.filter((c) => (!c.expiresAt || c.expiresAt > now) && !cardHitsBan(c, banWords))
     const bucket = timeBucketOf(now)
 
@@ -386,25 +410,26 @@ export function createTopicDirector(depsInput: Partial<TopicDirectorDeps> = {}) 
       threads = threadCards(story.threads)
         .filter((c) => !cardHitsBan(c, banWords))
         .filter(inDomain)
-        .filter((c) => !state.recent.some((r) => r.fingerprint === c.fingerprint))
+        .filter((c) => !recentFps.includes(c.fingerprint))
     } catch {
       threads = []
     }
 
-    const pools: { cards: TopicCard[]; count: number }[] = [
-      // 兴趣源:模式 interestTopicChance=0 不纳入(保持模式语义)
-      {
-        cards: likes.length > 0 && (mode.interestTopicChance ?? 0) > 0 ? interestCards(likes, now).filter(inDomain) : [],
-        count: Math.ceil(CANDIDATE_TARGET * PRIOR_INTEREST),
-      },
-      { cards: threads, count: Math.ceil(CANDIDATE_TARGET * PRIOR_THREADS) },
-      { cards: environmentCards(envCat, bucket, now).filter(inDomain), count: Math.ceil(CANDIDATE_TARGET * PRIOR_ENVIRONMENT) },
-      { cards: reservoir.filter(inDomain), count: Math.ceil(CANDIDATE_TARGET * PRIOR_GENERATED) },
-      {
-        cards: (modePool.length > 0 ? modePool : CURATED_CARDS).filter((c) => !cardHitsBan(c, banWords)),
-        count: Math.ceil(CANDIDATE_TARGET * PRIOR_CURATED),
-      },
-    ]
+    // 兴趣概率语义:命中即从兴趣卡中直接择优,不与其他源竞争——
+    // interestTopicChance(0.35/0.12)≈ 动态通道最终抽中兴趣主题的命中率
+    const interestPool =
+      likes.length > 0
+        ? interestCards(likes, now).filter(inDomain).filter((c) => !recentFps.includes(c.fingerprint))
+        : []
+    const interestHit = interestPool.length > 0 && deps.rng() < (mode.interestTopicChance ?? 0)
+    const pools: { cards: TopicCard[]; count: number }[] = interestHit
+      ? [{ cards: interestPool, count: CANDIDATE_TARGET }]
+      : [
+          { cards: threads, count: Math.ceil(CANDIDATE_TARGET * PRIOR_THREADS) },
+          { cards: environmentCards(envCat, bucket, now).filter(inDomain), count: Math.ceil(CANDIDATE_TARGET * PRIOR_ENVIRONMENT) },
+          { cards: reservoir.filter(inDomain), count: Math.ceil(CANDIDATE_TARGET * PRIOR_GENERATED) },
+          { cards: modePool.length > 0 ? modePool : curatedPool, count: Math.ceil(CANDIDATE_TARGET * PRIOR_CURATED) },
+        ]
     const candidates = pools.flatMap((p) => sample(p.cards, p.count))
 
     const ctx: ScoreContext = {
@@ -419,12 +444,12 @@ export function createTopicDirector(depsInput: Partial<TopicDirectorDeps> = {}) 
       .map((c) => scoreCard(c, ctx))
       .filter((s): s is NonNullable<typeof s> => s !== null)
     const chosen = pickWeightedTopK(scored, deps.rng)
-    // 兜底:全被过滤/池空 → 雷区外精选随机;极端到精选也空 → 手动兜底卡
+    // 兜底:全被过滤/池空 → 目录候选(角色门控+雷区过滤)随机;极端到候选也空 → 手动兜底卡
     const card =
       chosen?.card ??
       (() => {
-        const fallback = CURATED_CARDS.filter((c) => !cardHitsBan(c, banWords))
-        const pool = fallback.length > 0 ? fallback : CURATED_CARDS
+        const fallback = catalog.candidates({ mode, actorWorld, banWords })
+        const pool = fallback.length > 0 ? fallback : [manualCardFromText('今天到底聊点什么')]
         return pool[Math.floor(deps.rng() * pool.length)] ?? manualCardFromText('今天到底聊点什么')
       })()
 
@@ -458,13 +483,21 @@ export function createTopicDirector(depsInput: Partial<TopicDirectorDeps> = {}) 
       sessionRevision: state.revision,
       banHash: banHashOf(cfg.userProfile.banTopics),
       modeHash: modeHashOf(mode),
+      castHash: castHash(),
       plannerVersion: PLANNER_VERSION,
     }
     const intent = req.intent ?? 'new'
     const envCat = cfg.envSense ? deps.envCategory() : null
 
-    // 通道一:手动话题 / 推荐区 pin
+    // 通道一:手动话题 / 推荐区 pin(先取角色世界,往事卡才能被 resolve)
     if (req.pinCardId || req.manualTopic?.trim()) {
+      if (req.pinCardId && !storyCache) {
+        try {
+          storyCache = await deps.getStory()
+        } catch {
+          storyCache = null
+        }
+      }
       return planPinnedOrManual(req, cfg, state, mode, compat, now)
     }
 

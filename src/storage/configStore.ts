@@ -11,6 +11,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { withFileLock } from './writeLock'
 import { readSecret, writeSecret, type SecretId } from './secrets'
 import { LANGUAGES, type TranslationStyle } from '../translation/types'
+import { defaultPersonaText, type ActorSlot, type PersonaSourceSlot } from '../engine/persona'
 
 /** 是否运行在 Tauri 窗口内(浏览器 dev 预览为 false,文件系统相关 API 不可用) */
 export const inTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
@@ -219,6 +220,9 @@ export interface AppConfig {
   breakReminder: { enabled: boolean; minutes: number }
   /** 用户自定义人设(甲/乙/丙的生效文本;空串 = 内置默认) */
   persona: { a: string; b: string; c: string }
+  /** 人设来源(结构化事实):编辑文本→custom,清空/还原默认→default。
+   *  话题包门控按此判断,不做人设文本比对(改名/旧文案滞留会让比对失真) */
+  personaSource: { a: PersonaSourceSlot; b: PersonaSourceSlot; c: PersonaSourceSlot }
   /** 角色名(名牌与台词称呼) */
   names: { a: string; b: string; c: string }
   /** 备忘默认提前提醒分钟数 */
@@ -368,6 +372,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   envNoteCooldownMin: 360,
   breakReminder: { enabled: false, minutes: 45 },
   persona: { a: '', b: '', c: '' },
+  personaSource: { a: 'default', b: 'default', c: 'default' },
   names: { a: '甲', b: '乙', c: '丙' },
   memo: { advanceMin: 30 },
   groupChat: { name: '我们的群', bg: false },
@@ -793,6 +798,36 @@ function sanitizePersona(v: unknown): { a: string; b: string; c: string } {
   return { a: cap(pr.a), b: cap(pr.b), c: cap(pr.c) }
 }
 
+/** 清洗人设来源:已持久化的结构化来源直接信任(来源是权威事实);
+ *  缺失(旧配置)时一次性迁移——空文本→default;与内置默认全文一致(含按当前
+ *  名字替换的变体)→default;其他非空→custom */
+function sanitizePersonaSource(
+  v: unknown,
+  all: Record<string, unknown>,
+): { a: PersonaSourceSlot; b: PersonaSourceSlot; c: PersonaSourceSlot } {
+  const slot = (x: unknown): PersonaSourceSlot | null => (x === 'default' || x === 'custom' ? x : null)
+  const o = (v ?? {}) as Record<string, unknown>
+  if (slot(o.a) && slot(o.b) && slot(o.c)) {
+    return { a: slot(o.a)!, b: slot(o.b)!, c: slot(o.c)! }
+  }
+  const text = sanitizePersona(all.persona)
+  const names = sanitizeNames(all.names)
+  // canonical 用模块默认名拼装;named 复刻 defaultPersonaText 的改名替换,识别
+  // "还原默认人设"旧按钮存进盘里的那份全文
+  const recognize = (t: string, id: ActorSlot): PersonaSourceSlot => {
+    if (!t) return 'default'
+    const canonical = defaultPersonaText(id)
+    if (t === canonical) return 'default'
+    const named = canonical.replace(/甲/g, names.a).replace(/乙/g, names.b).replace(/丙/g, names.c)
+    return t === named ? 'default' : 'custom'
+  }
+  return {
+    a: recognize(text.a, 'A'),
+    b: recognize(text.b, 'B'),
+    c: recognize(text.c, 'C'),
+  }
+}
+
 /** 清洗角色名:截断 12 字,空回落出厂名 */
 function sanitizeNames(v: unknown): { a: string; b: string; c: string } {
   const nm = (v ?? {}) as Record<string, unknown>
@@ -891,6 +926,7 @@ const FIELD_SANITIZERS: { [K in keyof AppConfig]: (v: unknown, all: Record<strin
   envNoteCooldownMin: sanitizeEnvNoteCooldownMin,
   breakReminder: sanitizeBreakReminder,
   persona: sanitizePersona,
+  personaSource: sanitizePersonaSource,
   names: sanitizeNames,
   memo: sanitizeMemo,
   groupChat: sanitizeGroupChat,

@@ -3,10 +3,10 @@
 // 内部实现(director/planner/catalog/discovery/store)不直接被外部 import,保持 seam 收口。
 
 import { useSyncExternalStore } from 'react'
-import { getTopicSnapshot, subscribeTopicState } from './store'
+import { getTopicSnapshot, subscribeTopicState, peekTopicState } from './store'
+import { peekStory } from '../storage/storyStore'
+import { createTopicCatalog, type TopicCatalog } from './catalog'
 import type { TopicSnapshot } from './types'
-
-export const TOPIC_PLANNER_VERSION = 1
 
 export type {
   AdoptResult,
@@ -29,7 +29,16 @@ export type {
   TopicSource,
   TopicStage,
   TopicStateV1,
+  TopicSuggestion,
 } from './types'
+export type {
+  CategoryStat,
+  HistoryPiece,
+  TopicCatalog,
+  TopicCatalogDeps,
+  TopicQueryCtx,
+  TopicQueryResult,
+} from './catalog'
 export { TOPIC_CATEGORIES } from './types'
 export {
   getTopicSnapshot,
@@ -62,15 +71,28 @@ export {
   PLANNER_VERSION,
 } from './planner'
 export {
-  CURATED_CARDS,
   cardsFromSeeds,
   manualCardFromText,
   anglesFor,
   pickAngle,
   focusForCard,
   ANGLES_BY_CATEGORY,
+  createTopicCatalog,
 } from './catalog'
 export { createTopicDirector, topicDirector, PLAN_TTL_MS, type TopicDirector, type TopicDirectorDeps } from './director'
+
+/** 话题目录应用单例:UI 面板与导演共用同一目录(AI 候选仓/真实往事在闭包内接入) */
+export const topicCatalog: TopicCatalog = createTopicCatalog({
+  getReservoir: () => peekTopicState()?.reservoir ?? [],
+  getHistoryPieces: () => {
+    const story = peekStory()
+    return (story?.threads ?? []).map((t) => ({
+      id: t.id,
+      title: t.text.slice(0, 40),
+      hook: `旧事没翻篇:${t.text.slice(0, 60)}`,
+    }))
+  },
+})
 export { migrateLegacyTopicOverride, type LegacyOverrideDeps } from './migration'
 export {
   maybeRestockTopicCandidates,

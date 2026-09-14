@@ -95,15 +95,18 @@ test('雷区零命中:候选含雷区词的卡在任意种子下都不可能被�
 
 test('最近20集指纹硬去重:recent 里的话题不会再被 dynamic 选中', async () => {
   const curated = mod.catalog.CURATED_CARDS.slice(0, 18)
+  // 环境卡(类别级兜底)也计入 recent:它们与精选一起构成"刚聊过"的窗口
+  const env = mod.planner.environmentCards(null, mod.planner.timeBucketOf(1_000_007), 1_000_007)
+  const recentPool = [...curated, ...env]
   await resetState({
-    recent: curated.map((c, i) => ({ fingerprint: c.fingerprint, title: c.title, category: c.category, source: 'curated', ts: i })),
+    recent: recentPool.map((c, i) => ({ fingerprint: c.fingerprint, title: c.title, category: c.category, source: c.source, ts: i })),
   })
   const seen = new Set()
   for (const seed of [5, 6, 7, 8, 9, 10]) {
     const { director } = makeDirector({ seed })
     const plan = await director.plan({ mode: 'daily', intent: 'new' })
     seen.add(plan.card.fingerprint)
-    assert.ok(!curated.some((c) => c.fingerprint === plan.card.fingerprint), `选中了 recent 里的: ${plan.card.title}`)
+    assert.ok(!recentPool.some((c) => c.fingerprint === plan.card.fingerprint), `选中了 recent 里的: ${plan.card.title}`)
   }
   assert.ok(seen.size > 1, '多个种子应能选出不同卡(防固定套路)')
 })
@@ -355,8 +358,66 @@ test('评分公式骨架: novelty 相似惩罚与疲劳惩罚方向正确', () =
   )
   assert.equal(withRecent, null, 'recent 内同指纹硬排除')
   // 与最近一集高相似的卡:要么被硬排除(null,最强惩罚),要么分数显著走低
-  const similar = mod.catalog.CURATED_CARDS.find((c) => c.title.includes('旅行'))
+  const similar = mod.catalog.CURATED_CARDS.find((c) => c.title === '旧手机里的回忆要不要删')
   const s1 = mod.planner.scoreCard(similar, ctx)
-  const s2 = mod.planner.scoreCard(similar, { ...ctx, recent: [{ fingerprint: 'other', title: '旅行的意义是拍照发朋友圈', category: 'health', source: 'curated' }] })
+  const s2 = mod.planner.scoreCard(similar, { ...ctx, recent: [{ fingerprint: 'other', title: '旧手机里的回忆要不要删', category: 'life', source: 'curated' }] })
   assert.ok(s2 === null || s2.score < s1.score)
+})
+
+test('分类疲劳软惩罚:同类 recent 越多得分单调下降', () => {
+  const ctx = { recent: [], verdicts: new Map(), legacyWeights: {}, interests: [], modeId: 'daily', modeTopicIds: new Set() }
+  const card = mod.catalog.CURATED_CARDS.find((c) => c.category === 'work')
+  const sameCat = mod.catalog.CURATED_CARDS.filter((c) => c.category === 'work' && c.id !== card.id)
+  const scores = []
+  for (let k = 0; k <= 5; k++) {
+    const recent = sameCat.slice(0, k).map((c) => ({ fingerprint: c.fingerprint, title: c.title, category: 'work', source: 'curated' }))
+    const s = mod.planner.scoreCard(card, { ...ctx, recent })
+    assert.ok(s, '同类近期不应导致硬排除(标题不相似)')
+    scores.push(s.score)
+  }
+  for (let i = 1; i < scores.length; i++) {
+    assert.ok(scores[i] <= scores[i - 1], `第 ${i} 档应不高于前一档: ${scores.join(', ')}`)
+  }
+  assert.ok(scores[5] < scores[0], `5 集同类后应明显走低: ${scores.join(', ')}`)
+})
+
+test('分类占比分布审计:多组种子 30 连抽,无单分类垄断(软惩罚的量级验证)', async () => {
+  const maxShares = []
+  for (const seed of [3, 11, 29, 47, 83, 137, 211, 307]) {
+    await resetState()
+    const { director } = makeDirector({ seed })
+    const tally = new Map()
+    for (let i = 0; i < 30; i++) {
+      const plan = await director.plan({ mode: 'daily', intent: 'new' })
+      const res = await director.adopt(plan)
+      assert.equal(res.status, 'adopted', '连续点播应可采纳(recent 推进)')
+      tally.set(plan.card.category, (tally.get(plan.card.category) ?? 0) + 1)
+    }
+    assert.equal([...tally.values()].reduce((a, b) => a + b, 0), 30)
+    maxShares.push(Math.max(...tally.values()) / 30)
+  }
+  const mean = maxShares.reduce((a, b) => a + b, 0) / maxShares.length
+  // 软惩罚不是硬配额:断言分布量级(审计值同时打印,便于后续收紧)
+  console.log(`[分类占比审计] 各种子最大单分类占比: ${maxShares.map((x) => x.toFixed(2)).join(', ')};均值 ${mean.toFixed(3)}`)
+  assert.ok(mean <= 0.4, `30 连抽的平均最大单分类占比应 ≤40%,实际 ${mean.toFixed(3)}`)
+  assert.ok(Math.max(...maxShares) <= 0.6, `极端种子也不应单类过半,实际 ${Math.max(...maxShares).toFixed(3)}`)
+})
+
+test('兴趣概率语义:命中即从兴趣卡直接择优(0.35/0.12 ≈ 动态通道最终命中率)', async () => {
+  await resetState()
+  const cfg = { userProfile: { banTopics: '', likes: '养猫,咖啡' } }
+  // daily 0.35:rng 恒 0.3 命中 → 选中卡来源为兴趣
+  const hit = await makeDirector({ cfg, rng: () => 0.3 }).director.plan({ mode: 'daily', intent: 'new' })
+  assert.equal(hit.card.source, 'interest', 'daily(0.35)在 0.3 处命中兴趣源')
+  assert.ok(hit.card.title.includes('养猫') || hit.card.title.includes('咖啡'))
+  // crosstalk 0.12:同一随机数不命中 → 走常规多源竞争
+  const miss = await makeDirector({ cfg, rng: () => 0.3 }).director.plan({ mode: 'crosstalk', intent: 'new' })
+  assert.notEqual(miss.card.source, 'interest', 'crosstalk(0.12)在 0.3 处不命中')
+  // 0.9 高于两档概率:都不命中(概率是"是否转用兴趣主题"的闸门)
+  const high = await makeDirector({ cfg, rng: () => 0.9 }).director.plan({ mode: 'daily', intent: 'new' })
+  assert.notEqual(high.card.source, 'interest', '0.9 不命中')
+  // 无兴趣词时不命中(即便概率满足)
+  const noLikes = await makeDirector({ cfg: { userProfile: { banTopics: '', likes: '' } }, rng: () => 0.3 })
+    .director.plan({ mode: 'daily', intent: 'new' })
+  assert.notEqual(noLikes.card.source, 'interest', '无兴趣词无兴趣卡')
 })

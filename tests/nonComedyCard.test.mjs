@@ -48,13 +48,14 @@ const fakePlan = (title) => ({
   allowedBranches: [],
   avoid: [],
   duration: 'once',
-  compatibility: { sessionRevision: 0, banHash: '', modeHash: '', plannerVersion: 1 },
+  compatibility: { sessionRevision: 0, banHash: '', modeHash: '', plannerVersion: 1, castHash: 'cast' },
 })
 const check = (over = {}) => ({
   intent: 'new',
   sessionRevision: 0,
   banHash: '',
   modeHash: '',
+  castHash: 'cast',
   plannerVersion: 1,
   recentFingerprints: [],
   now: 1e12,
@@ -135,7 +136,7 @@ test('预取缓存:无 secret 卡的剧本存→取往返后卡保留', async ()
       after: {},
     },
   })
-  const hit = await prefetch.peekCompatiblePrefetch('daily', check({ manualFingerprint: fakePlan('泡茶').card.fingerprint }))
+  const hit = await prefetch.peekCompatiblePrefetch('daily', check({ requestedFingerprint: fakePlan('泡茶').card.fingerprint }))
   assert.ok(hit, '预取条目命中')
   assert.equal(hit.script.card.secret, undefined)
   assert.equal(hit.script.card.scene, '周末的客厅')

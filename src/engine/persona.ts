@@ -28,6 +28,9 @@ export interface PersonaDimensions {
 
 export type ActorSlot = 'A' | 'B' | 'C'
 
+/** 人设来源(结构化事实):话题包门控等消费方据此判断,不再做人设文本比对 */
+export type PersonaSourceSlot = 'default' | 'custom'
+
 const DIMENSIONS: Record<ActorSlot, PersonaDimensions> = {
   A: {
     attention: '先看人和机会——谁有意思、哪里有便宜可占',
@@ -53,10 +56,20 @@ export function personaDimensions(id: ActorSlot): PersonaDimensions {
   return DIMENSIONS[id]
 }
 
+// 人设来源(结构化):'custom' = 用户自定义文本生效;'default' = 内置默认生效。
+// 设置页与启动加载经 setPersonaOverride 采纳;调用方未显式给出来源时按文本是否为空推导
+const sources: Record<ActorSlot, PersonaSourceSlot> = { A: 'default', B: 'default', C: 'default' }
+
 /** 该角色是否正使用用户自定义人设:cRule 等按此分档——自定义人设接管基础人格,
  *  任何模式分支都不得把默认人格(字面执行/团宠/毒舌)强加回自定义角色 */
 export function isPersonaCustomized(id: ActorSlot): boolean {
-  return overrides[id].length > 0
+  return sources[id] === 'custom'
+}
+
+/** 该角色是否正使用内置默认人设(默认职业话题包的可见性依据):只读结构化来源。
+ *  不做文本比对——defaultPersonaText 随改名而变、磁盘旧文案可能滞留,比对不可靠 */
+export function usesDefaultPersona(id: ActorSlot): boolean {
+  return sources[id] === 'default'
 }
 
 /** 四维画像提示词块:主演出注入,仅覆盖仍使用内置人设的角色——
@@ -146,11 +159,51 @@ export function pronounOf(id: ActorSlot): string {
   return genders[id] === '女' ? '她' : '他'
 }
 
-/** 应用用户自定义人设(主窗启动与保存设置后调用;空串 = 还原内置人设) */
-export function setPersonaOverride(a: string, b: string, c = ''): void {
+/** 应用用户自定义人设(主窗启动与保存设置后调用;空串 = 还原内置人设)。
+ *  source 为各槽位的人设来源(设置页持久化的结构化事实);缺省时按文本是否为空推导 */
+export function setPersonaOverride(
+  a: string,
+  b: string,
+  c = '',
+  source?: { a?: PersonaSourceSlot; b?: PersonaSourceSlot; c?: PersonaSourceSlot },
+): void {
   overrides.A = a.trim().slice(0, 600)
   overrides.B = b.trim().slice(0, 600)
   overrides.C = c.trim().slice(0, 600)
+  const adopt = (id: ActorSlot, declared?: PersonaSourceSlot): PersonaSourceSlot =>
+    declared ?? (overrides[id] ? 'custom' : 'default')
+  sources.A = adopt('A', source?.a)
+  sources.B = adopt('B', source?.b)
+  sources.C = adopt('C', source?.c)
+}
+
+/** 演员阵容内容指纹:人设文本+名字+性别任一变化都会变(跨重启稳定,不用进程内计数器)。
+ *  预生成剧本缓存兼容令牌之一:阵容变了,带旧名字/旧世界的剧本不得再播 */
+export function castHash(): string {
+  const payload = JSON.stringify({
+    persona: { A: overrides.A, B: overrides.B, C: overrides.C },
+    names: displayNames,
+    genders,
+  })
+  let h = 0x811c9dc5
+  for (let i = 0; i < payload.length; i++) {
+    h ^= payload.charCodeAt(i)
+    h = Math.imul(h, 0x01000193)
+  }
+  return (h >>> 0).toString(36)
+}
+
+/** 结构化配置 → 各槽位人设来源(话题卡 applicability 门控的输入)。
+ *  纯函数:缺失/非法值按 default 处理(旧配置未迁移字段时的保守回退) */
+export function actorWorldOf(cfg: {
+  personaSource?: { a?: PersonaSourceSlot; b?: PersonaSourceSlot; c?: PersonaSourceSlot } | null
+}): Record<ActorSlot, PersonaSourceSlot> {
+  const s = cfg?.personaSource
+  return {
+    A: s?.a === 'custom' ? 'custom' : 'default',
+    B: s?.b === 'custom' ? 'custom' : 'default',
+    C: s?.c === 'custom' ? 'custom' : 'default',
+  }
 }
 
 /** 内置默认人设全文(设置页"还原默认"时回填输入框用)。

@@ -11,6 +11,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { withFileLock } from '../storage/writeLock'
 import { inTauri } from '../storage/configStore'
+import type { ActorSlot } from '../engine/persona'
 import {
   TOPIC_CATEGORIES,
   TOPIC_SOURCES,
@@ -86,6 +87,32 @@ export function sanitizeTopicCard(raw: unknown, now = Date.now()): TopicCard | n
   const modeAffinity = Array.isArray(o.modeAffinity)
     ? o.modeAffinity.filter((m): m is string => typeof m === 'string').slice(0, 6)
     : undefined
+  // 卡专属切口/行为骨架/适用条件:越界条目丢弃,合法子集保留(AI 卡与旧文件可平滑携带)
+  const angles = Array.isArray(o.angles)
+    ? o.angles
+        .filter((a): a is string => typeof a === 'string' && a.trim() !== '')
+        .map((a) => a.trim().slice(0, 40))
+        .slice(0, 6)
+    : undefined
+  const rolesRaw = (o.roles ?? {}) as Record<string, unknown>
+  const roleText = (x: unknown): string | undefined => {
+    const s = typeof x === 'string' ? x.trim().slice(0, 60) : ''
+    return s || undefined
+  }
+  const roles =
+    rolesRaw.initiator !== undefined || rolesRaw.challenger !== undefined
+      ? {
+          ...(roleText(rolesRaw.initiator) ? { initiator: roleText(rolesRaw.initiator) } : {}),
+          ...(roleText(rolesRaw.challenger) ? { challenger: roleText(rolesRaw.challenger) } : {}),
+        }
+      : undefined
+  const gateRaw = ((o.applicability ?? {}) as Record<string, unknown>).actors ?? {}
+  const gate = gateRaw as Record<string, unknown>
+  const actorGate: Partial<Record<ActorSlot, 'default' | 'custom'>> = {}
+  if (gate.a === 'default' || gate.a === 'custom') actorGate.A = gate.a
+  if (gate.b === 'default' || gate.b === 'custom') actorGate.B = gate.b
+  if (gate.c === 'default' || gate.c === 'custom') actorGate.C = gate.c
+  const applicability = Object.keys(actorGate).length > 0 ? { actors: actorGate } : undefined
   const card: TopicCard = {
     id: str(o.id, 40) || `tc-${fingerprint}`,
     title,
@@ -98,6 +125,9 @@ export function sanitizeTopicCard(raw: unknown, now = Date.now()): TopicCard | n
     generatedAt: Number(o.generatedAt) || now,
   }
   if (modeAffinity && modeAffinity.length > 0) card.modeAffinity = modeAffinity
+  if (angles && angles.length > 0) card.angles = angles
+  if (roles) card.roles = roles
+  if (applicability) card.applicability = applicability
   if (typeof o.bridge === 'string' && o.bridge.trim()) card.bridge = o.bridge.trim().slice(0, 120)
   if (Number(o.expiresAt) > 0) card.expiresAt = Number(o.expiresAt)
   return card

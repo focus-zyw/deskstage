@@ -214,6 +214,11 @@ export async function getStory(): Promise<StoryData> {
   return clone(cache)
 }
 
+/** 同步读缓存(未预热返回 null):话题面板等纯查询场景用,不触发磁盘 IO */
+export function peekStory(): StoryData | null {
+  return cache ? clone(cache) : null
+}
+
 /** 变更落盘 */
 async function persist(next: StoryData): Promise<void> {
   cache = next

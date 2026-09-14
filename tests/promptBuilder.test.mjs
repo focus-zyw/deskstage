@@ -409,3 +409,30 @@ test('心情余波注入:位于长期关系之后,空缺时不出现占位文字
   const withoutMood = finalPrompt()
   assert.doesNotMatch(withoutMood, /心情余波/)
 })
+
+test('话题计划渲染:roles 输出角色动力学,sensitivity 输出敏感约束行', () => {
+  const base = tp('夜班交接时,收银台少了一块钱')
+  const all = (plan) => buildMessages('crosstalk', plan, []).map((m) => m.content).join('\n')
+  // roles 有值 → 渲染角色动力学;personal → 不得默认映射观众本人
+  const withRoles = all({
+    ...base,
+    card: {
+      ...base.card,
+      roles: { initiator: '犯错但嘴硬的人', challenger: '想弄清真相的人' },
+      sensitivity: 'personal',
+    },
+  })
+  assert.match(withRoles, /角色动力学/)
+  assert.match(withRoles, /犯错但嘴硬的人/)
+  assert.match(withRoles, /想弄清真相的人/)
+  assert.match(withRoles, /不得默认把话题中的困境映射成观众本人的真实状况/)
+
+  // sensitive → 只演绎角色,不得诊断观众
+  const sensitive = all({ ...base, card: { ...base.card, sensitivity: 'sensitive' } })
+  assert.match(sensitive, /不得诊断、断言或影射观众本人/)
+
+  // 无 roles + normal → 两行都回落"无"
+  const plain = all(base)
+  assert.match(plain, /角色动力学：无/)
+  assert.match(plain, /敏感约束：无/)
+})

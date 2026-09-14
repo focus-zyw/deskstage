@@ -52,7 +52,7 @@ const fakePlan = (over = {}) => ({
   allowedBranches: [],
   avoid: [],
   duration: 'once',
-  compatibility: { sessionRevision: 0, banHash: '', modeHash: 'mh', plannerVersion: 1 },
+  compatibility: { sessionRevision: 0, banHash: '', modeHash: 'mh', plannerVersion: 1, castHash: 'cast' },
   ...over,
 })
 
@@ -85,6 +85,7 @@ const check = (over = {}) => ({
   sessionRevision: 0,
   banHash: '',
   modeHash: 'mh',
+  castHash: 'cast',
   plannerVersion: 1,
   recentFingerprints: [],
   now: 1e12,
@@ -117,13 +118,30 @@ test('旧格式缓存(无 topicPlan)读取即失效,不消费', async () => {
 })
 
 test('兼容令牌:revision/雷区/模式/规划器版本任一不符即不消费', async () => {
-  await save({ compatibility: { sessionRevision: 0, banHash: '', modeHash: 'mh', plannerVersion: 1 } })
+  await save({ compatibility: { sessionRevision: 0, banHash: '', modeHash: 'mh', plannerVersion: 1, castHash: 'cast' } })
   assert.ok(await store.peekCompatiblePrefetch('crosstalk', check({ sessionRevision: 1 })) === null, 'revision 变更')
   assert.ok(await store.peekCompatiblePrefetch('crosstalk', check({ banHash: 'b' })) === null, '雷区变更')
   assert.ok(await store.peekCompatiblePrefetch('crosstalk', check({ modeHash: 'other' })) === null, '模式编辑')
   assert.ok(await store.peekCompatiblePrefetch('crosstalk', check({ plannerVersion: 2 })) === null, '规划器升级')
+  assert.ok(await store.peekCompatiblePrefetch('crosstalk', check({ castHash: 'other' })) === null, '阵容变更(人设/名字/性别)')
   const hit = await store.peekCompatiblePrefetch('crosstalk', check())
   await store.dropPrefetchEntry(hit)
+})
+
+test('点卡点播:明确点 A 卡不消费 B 卡预生成,同卡才消费', async () => {
+  // 预生成条目是精选卡 A(fp-weekly)
+  await save()
+  const auto = await store.peekCompatiblePrefetch('crosstalk', check())
+  assert.ok(auto, '自动请求可消费精选卡预生成')
+  // 明确点另一张卡 B:不消费(否则点 B 却播 A,面板展示与实际演出脱节)
+  assert.ok(
+    await store.peekCompatiblePrefetch('crosstalk', check({ requestedFingerprint: 'fp-other' })) === null,
+    '点 B 卡不得命中 A 卡缓存',
+  )
+  // 明确点同一张卡 A:消费
+  const pinned = await store.peekCompatiblePrefetch('crosstalk', check({ requestedFingerprint: 'fp-weekly' }))
+  assert.ok(pinned, '点同一张卡可复用其预生成')
+  await store.dropPrefetchEntry(pinned)
 })
 
 test('过期计划与 manual 归属:过期不消费;自动请求不消费手动计划', async () => {
@@ -131,7 +149,7 @@ test('过期计划与 manual 归属:过期不消费;自动请求不消费手动�
   assert.ok(await store.peekCompatiblePrefetch('crosstalk', check({ now: 2 })) === null, '计划过期')
   await save({ card: { ...fakePlan().card, source: 'manual' } })
   assert.ok(await store.peekCompatiblePrefetch('crosstalk', check()) === null, 'manual 计划不给自动请求')
-  const hit = await store.peekCompatiblePrefetch('crosstalk', check({ manualFingerprint: 'fp-weekly' }))
+  const hit = await store.peekCompatiblePrefetch('crosstalk', check({ requestedFingerprint: 'fp-weekly' }))
   assert.ok(hit, '同指纹手动请求可消费 manual 计划')
   await store.dropPrefetchEntry(hit)
 })
