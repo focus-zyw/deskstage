@@ -194,10 +194,34 @@ function dispatchNativePointer(
   )
 }
 
-function nativeTargetAt(root: HTMLElement, px: number, py: number): Element {
-  const point = toClientPoint(px, py)
+/** 命中元素归属的原生热区:按注册顺序取第一个 root 包含 hit 者。
+ *  Rust 钩子的矩形判定是"先注册者优先"——角色矩形(charA/B/C 注册最早)与
+ *  右键菜单等浮层矩形重叠时,点击会被判给角色:前端再按坐标 elementFromPoint
+ *  找到的是菜单项,但菜单不在角色 root 内就回落成角色本身,合成的点击于是
+ *  变成"戳角色"而不是菜单动作。点击的真实归属必须由 DOM 层级决定,
+ *  矩形只当拦截闸门。 */
+function owningNativeRegionId(hit: Element): string | null {
+  for (const [id, region] of regions) {
+    const root = region.nativePointerTarget?.()
+    if (root && root.contains(hit)) return id
+  }
+  return null
+}
+
+/** 原生点击的权威派发目标:以 elementFromPoint 的真实元素为准,
+ *  校正 Rust 矩形判定在重叠区可能出现的归属偏差 */
+function resolveNativeTarget(payload: NativePointerPayload): {
+  captureId: string
+  target: Element
+} | null {
+  const point = toClientPoint(payload.x, payload.y)
   const hit = document.elementFromPoint(point.x, point.y)
-  return hit && root.contains(hit) ? hit : root
+  const owner = hit ? owningNativeRegionId(hit) : null
+  const captureId = owner ?? payload.id
+  const regionRoot = regions.get(captureId)?.nativePointerTarget?.()
+  if (!regionRoot) return null
+  const target = hit && regionRoot.contains(hit) ? hit : regionRoot
+  return { captureId, target }
 }
 
 function onNativePointer(payload: NativePointerPayload): void {
@@ -205,9 +229,9 @@ function onNativePointer(payload: NativePointerPayload): void {
   if (panelsOpen) return
   if (payload.button === 2) {
     if (payload.kind === 'down') {
-      const root = regions.get(payload.id)?.nativePointerTarget?.()
-      if (!root) return
-      rightCapture = { id: payload.id, target: nativeTargetAt(root, payload.x, payload.y), x: payload.x, y: payload.y }
+      const resolved = resolveNativeTarget(payload)
+      if (!resolved) return
+      rightCapture = { id: resolved.captureId, target: resolved.target, x: payload.x, y: payload.y }
       return
     }
     if (payload.kind === 'up') {
@@ -228,20 +252,21 @@ function onNativePointer(payload: NativePointerPayload): void {
     return
   }
   if (payload.kind === 'down') {
-    const root = regions.get(payload.id)?.nativePointerTarget?.()
-    if (!root) return
-    const target = nativeTargetAt(root, payload.x, payload.y)
+    const resolved = resolveNativeTarget(payload)
+    if (!resolved) return
     nativeCapture = {
-      id: payload.id,
-      target,
+      id: resolved.captureId,
+      target: resolved.target,
       startX: payload.x,
       startY: payload.y,
     }
-    dispatchNativePointer(target, 'pointerdown', payload.x, payload.y)
+    dispatchNativePointer(resolved.target, 'pointerdown', payload.x, payload.y)
     return
   }
   if (payload.kind === 'up') {
-    if (!nativeCapture || nativeCapture.id !== payload.id) return
+    // down 时已按 DOM 归属确立捕获目标;up 的 payload.id 来自 Rust 矩形判定,
+    // 与 down 的归属(如重叠区:菜单被判成角色)可能不同,只认捕获槽不比对 id
+    if (!nativeCapture) return
     const capture = nativeCapture
     dispatchNativePointer(capture.target, 'pointerup', payload.x, payload.y)
     // 合成的 pointerdown/up 不会让浏览器自动再合成 click；短按时显式补发，
@@ -265,11 +290,10 @@ function onNativePointer(payload: NativePointerPayload): void {
     syncNativePointerRegions()
     return
   }
-  const root = regions.get(payload.id)?.nativePointerTarget?.()
-  if (!root) return
-  const target = nativeTargetAt(root, payload.x, payload.y)
+  const resolved = resolveNativeTarget(payload)
+  if (!resolved) return
   const point = toClientPoint(payload.x, payload.y)
-  target.dispatchEvent(
+  resolved.target.dispatchEvent(
     new WheelEvent('wheel', {
       bubbles: true,
       cancelable: true,
