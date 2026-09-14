@@ -300,7 +300,7 @@ test('record 事件幂等且可逆:改评/撤评/收藏切换/跳过80%口径', 
 test('口味反馈影响评分:被踩/跳过打穿的指纹不再被 dynamic 选中', async () => {
   await resetState()
   // 把"外卖满减红包的极限操作"标记多次跳过+踩
-  const target = mod.catalog.CURATED_CARDS.find((c) => c.title === '外卖满减红包的极限操作')
+  const target = mod.catalog.CURATED_CARDS.find((c) => c.title === '凑单凑出来的加购')
   const signals = {}
   for (let i = 0; i < 6; i++) {
     signals[`ep-skip-${i}`] = { fingerprint: target.fingerprint, category: target.category, source: 'curated', started: true, completed: false, skippedProgress: 0.2, rating: 'down', favored: false, updatedAt: i }
@@ -358,9 +358,9 @@ test('评分公式骨架: novelty 相似惩罚与疲劳惩罚方向正确', () =
   )
   assert.equal(withRecent, null, 'recent 内同指纹硬排除')
   // 与最近一集高相似的卡:要么被硬排除(null,最强惩罚),要么分数显著走低
-  const similar = mod.catalog.CURATED_CARDS.find((c) => c.title === '旧手机里的回忆要不要删')
+  const similar = mod.catalog.CURATED_CARDS.find((c) => c.title === '体检报告出来的那天')
   const s1 = mod.planner.scoreCard(similar, ctx)
-  const s2 = mod.planner.scoreCard(similar, { ...ctx, recent: [{ fingerprint: 'other', title: '旧手机里的回忆要不要删', category: 'life', source: 'curated' }] })
+  const s2 = mod.planner.scoreCard(similar, { ...ctx, recent: [{ fingerprint: 'other', title: '体检报告出来的那天', category: 'health', source: 'curated' }] })
   assert.ok(s2 === null || s2.score < s1.score)
 })
 

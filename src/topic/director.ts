@@ -14,7 +14,7 @@ import { getTopicWeights } from '../storage/memoryStore'
 import { getStory, type StoryArc, type StoryThread } from '../storage/storyStore'
 import { listPrefetchedArcIds } from '../storage/prefetchStore'
 import { reserveArcBeat } from '../engine/arcReservation'
-import { actorWorldOf, castHash } from '../engine/persona'
+import { castHash, castSnapshotOf } from '../engine/persona'
 import { envForegroundCategory } from '../engine/envAware'
 import { modeOf, type DialogMode, type Mode } from '../performer/modes'
 import { migrateLegacyTopicOverride } from './migration'
@@ -71,10 +71,11 @@ export interface StoryLease {
   release: () => void
 }
 
-/** 结构化子集:测试只需提供这些字段( AppConfig 可直接赋给本类型;personaSource 缺省按全默认世界) */
+/** 结构化子集:测试只需提供这些字段( AppConfig 可直接赋给本类型;characters/personaSource
+ *  缺省按"C 启用 + 全默认人设"处理) */
 export type TopicConfigSlice = Pick<
   AppConfig,
-  'userProfile' | 'topicPrefs' | 'envSense' | 'personaSource'
+  'userProfile' | 'topicPrefs' | 'envSense' | 'personaSource' | 'characters'
 > & {
   topicOverride?: string | null
 }
@@ -252,7 +253,7 @@ export function createTopicDirector(depsInput: Partial<TopicDirectorDeps> = {}) 
   ): TopicCard | null {
     const inState = state.reservoir.find((c) => c.id === pinCardId)
     if (inState) return inState
-    return catalog.resolve(pinCardId, { mode, actorWorld: actorWorldOf(cfg) })
+    return catalog.resolve(pinCardId, { mode, cast: castSnapshotOf(cfg) })
   }
 
   // ---------- 通道二:session(活跃会话推进) ----------
@@ -390,7 +391,7 @@ export function createTopicDirector(depsInput: Partial<TopicDirectorDeps> = {}) 
     envCat: string | null,
   ): Promise<TopicPlan> {
     const banWords = parseBanWords(cfg.userProfile.banTopics)
-    const actorWorld = actorWorldOf(cfg)
+    const cast = castSnapshotOf(cfg)
     const recentFps = state.recent.map((r) => r.fingerprint)
     // 模式专属池 = 硬领域(V2 §6):有专属池时精选源只收池卡,其他源按领域类别过滤
     const modePool = mode.topics ? cardsFromSeeds(mode.topics, mode.id) : []
@@ -400,7 +401,7 @@ export function createTopicDirector(depsInput: Partial<TopicDirectorDeps> = {}) 
 
     const likes = splitKeywords(cfg.userProfile.likes)
     // 精选源走目录深模块:角色 applicability 门控/雷区/近期 20 集排除/sensitive 过滤都在 catalog 内
-    const curatedPool = catalog.candidates({ mode, actorWorld, banWords, excludeFingerprints: recentFps })
+    const curatedPool = catalog.candidates({ mode, cast, banWords, excludeFingerprints: recentFps })
     const reservoir = state.reservoir.filter((c) => (!c.expiresAt || c.expiresAt > now) && !cardHitsBan(c, banWords))
     const bucket = timeBucketOf(now)
 
@@ -448,7 +449,7 @@ export function createTopicDirector(depsInput: Partial<TopicDirectorDeps> = {}) 
     const card =
       chosen?.card ??
       (() => {
-        const fallback = catalog.candidates({ mode, actorWorld, banWords })
+        const fallback = catalog.candidates({ mode, cast, banWords })
         const pool = fallback.length > 0 ? fallback : [manualCardFromText('今天到底聊点什么')]
         return pool[Math.floor(deps.rng() * pool.length)] ?? manualCardFromText('今天到底聊点什么')
       })()

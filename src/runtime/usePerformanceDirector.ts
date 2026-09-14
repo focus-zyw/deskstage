@@ -25,7 +25,7 @@ import {
 import { dialogue, newEpisodeId } from '../dialogue/director'
 import { planInterjectionTakeover, keepChoiceOpts } from '../dialogue/interjection'
 import { pushTurn, chatWindow } from '../dialogue/turnWindow'
-import { actorWorldOf, castHash, nameOf, soloShortPersona } from '../engine/persona'
+import { castHash, castSnapshotOf, nameOf, soloShortPersona } from '../engine/persona'
 import { recentMoodHint } from '../engine/moodState'
 import { diag } from '../diag/store'
 import { noteEpisodeAbandoned } from '../storage/moodStore'
@@ -764,7 +764,7 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
       ? (topicCatalog
           .resolve(req0.pinCardId, {
             mode: modeOf(m),
-            actorWorld: actorWorldOf(cfg),
+            cast: castSnapshotOf(cfg),
             banWords: parseBanWords(cfg.userProfile.banTopics),
           })
           ?.fingerprint ?? fingerprintOf(req0.topic ?? req0.pinCardId))

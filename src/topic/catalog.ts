@@ -4,7 +4,7 @@
 // 数据在 catalogContent.ts;指纹/雷区/评分等纯函数在 planner.ts;本文件只学习接口。
 // hook 与随机纪律:模块加载期不做任何随机,无手写 hook 的卡按标题哈希确定性选模板。
 
-import type { ActorSlot, PersonaSourceSlot } from '../engine/persona'
+import type { ActorSlot, CastSnapshot } from '../engine/persona'
 import type { DialogMode } from '../performer/modes'
 import type { TopicCard, TopicCategory, TopicSuggestion } from './types'
 import { cardHitsBan, fingerprintOf } from './planner'
@@ -72,14 +72,16 @@ function makeCard(
   return card
 }
 
-/** 结构化种子 → 卡(声明即文案;angles/roles/applicability 原样携带) */
+/** 结构化种子 → 卡(声明即文案;angles/positions/thirdParty/applicability 原样携带) */
 function makeSeedCard(seed: SeedCard, idPrefix: string): TopicCard {
   const card = makeCard(seed.title, seed.category, 'curated', idPrefix, { hook: seed.hook })
   if (seed.sensitivity) card.sensitivity = seed.sensitivity
   if (seed.angles && seed.angles.length > 0) card.angles = seed.angles
-  if (seed.roles) card.roles = seed.roles
-  if (seed.applicability?.actors && Object.keys(seed.applicability.actors).length > 0) {
-    card.applicability = seed.applicability
+  if (seed.positions) card.positions = seed.positions
+  if (seed.thirdParty) card.thirdParty = seed.thirdParty
+  const app = seed.applicability
+  if (app && ((app.requiresPresent?.length ?? 0) > 0 || Object.keys(app.personaSource ?? {}).length > 0)) {
+    card.applicability = app
   }
   return card
 }
@@ -173,8 +175,8 @@ export interface HistoryPiece {
 export interface TopicQueryCtx {
   /** 当前模式:专属池卡入池,亲和卡排序加分 */
   mode?: Pick<DialogMode, 'id' | 'topics'>
-  /** 各槽位人设来源(applicability 门控;缺省按全默认处理) */
-  actorWorld?: Partial<Record<ActorSlot, PersonaSourceSlot>>
+  /** 阵容快照(applicability 门控:requiresPresent + personaSource;缺省按全启用全默认处理) */
+  cast?: CastSnapshot
   banWords?: readonly string[]
   category?: TopicCategory
   text?: string
@@ -230,17 +232,23 @@ export function createTopicCatalog(deps: TopicCatalogDeps): TopicCatalog {
     }))
   }
 
-  /** applicability 门控:所列槽位的人设来源须与要求一致;未声明世界按全默认处理 */
-  function visibleInWorld(
-    card: TopicCard,
-    world?: Partial<Record<ActorSlot, PersonaSourceSlot>>,
-  ): boolean {
-    const actors = card.applicability?.actors
-    if (!actors) return true
-    for (const slot of Object.keys(actors) as ActorSlot[]) {
-      const required = actors[slot]
-      if (!required) continue
-      if ((world?.[slot] ?? 'default') !== required) return false
+  /** applicability 门控:requiresPresent 的槽位必须启用,personaSource 的槽位
+   *  人设来源须与要求一致;未声明世界按全启用全默认处理 */
+  function visibleForCast(card: TopicCard, cast?: CastSnapshot): boolean {
+    const app = card.applicability
+    if (!app) return true
+    if (app.requiresPresent) {
+      for (const slot of app.requiresPresent) {
+        if (!(cast?.actors[slot]?.enabled ?? true)) return false
+      }
+    }
+    const src = app.personaSource
+    if (src) {
+      for (const slot of Object.keys(src) as ActorSlot[]) {
+        const required = src[slot]
+        if (!required) continue
+        if ((cast?.actors[slot]?.personaSource ?? 'default') !== required) return false
+      }
     }
     return true
   }
@@ -248,7 +256,7 @@ export function createTopicCatalog(deps: TopicCatalogDeps): TopicCatalog {
   function gatedPool(ctx: TopicQueryCtx): TopicCard[] {
     const modePool = ctx.mode?.topics?.length ? cardsFromSeeds(ctx.mode.topics, ctx.mode.id) : []
     return [...CURATED_CARDS, ...PACK_CARDS, ...modePool, ...historyCards()]
-      .filter((c) => visibleInWorld(c, ctx.actorWorld))
+      .filter((c) => visibleForCast(c, ctx.cast))
       .filter((c) => !cardHitsBan(c, ctx.banWords ?? []))
       .filter((c) => !(ctx.excludeFingerprints ?? []).includes(c.fingerprint))
   }
@@ -260,8 +268,7 @@ export function createTopicCatalog(deps: TopicCatalogDeps): TopicCatalog {
       card.title,
       card.hook,
       ...card.tags,
-      card.roles?.initiator ?? '',
-      card.roles?.challenger ?? '',
+      ...(card.positions ?? []),
       ...(card.angles ?? []),
     ]
       .join('\n')
@@ -314,9 +321,9 @@ export function createTopicCatalog(deps: TopicCatalogDeps): TopicCatalog {
     if (!id) return null
     const inReservoir = deps.getReservoir().find((c) => c.id === id)
     if (inReservoir) return inReservoir
-    // 直接点播不套近期排除(用户意志优先),但保留世界门控与雷区
+    // 直接点播不套近期排除(用户意志优先),但保留阵容门控与雷区
     return (
-      gatedPool({ mode: ctx.mode, actorWorld: ctx.actorWorld, banWords: ctx.banWords }).find(
+      gatedPool({ mode: ctx.mode, cast: ctx.cast, banWords: ctx.banWords }).find(
         (c) => c.id === id,
       ) ?? null
     )

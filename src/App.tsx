@@ -7,7 +7,7 @@ import { CharacterSprite } from './stage/CharacterSprite'
 import { Bubble } from './stage/Bubble'
 import { startScreenshot, applyScreenshotHotkey } from './capture'
 import { applyAppHotkeys, setHotkeyHandler } from './hotkeys'
-import { setCharacterGenders, setCharacterNames, setPersonaOverride, nameOf } from './engine/persona'
+import { setCharacterGenders, setCharacterNames, setPersonaOverride, setCEnabled, nameOf } from './engine/persona'
 import { startEnvPolling } from './engine/envAware'
 import {
   setCaptureMode,
@@ -41,7 +41,7 @@ import { speak } from './engine/tts'
 import { topicDirector } from './topic/director'
 import { maybeRestockTopicCandidates, cancelDiscovery } from './topic/discovery'
 import { topicCatalog, useTopicSnapshot } from './topic'
-import { actorWorldOf } from './engine/persona'
+import { castSnapshotOf } from './engine/persona'
 import { parseBanWords } from './topic/planner'
 import type { TopicSuggestion } from './topic/types'
 import type { TopicCategory, TopicDistance, TopicDuration, TopicIntent } from './topic/types'
@@ -422,12 +422,12 @@ function App() {
   const topicSnap = useTopicSnapshot()
 
   // ---- 话题目录查询(纯查询,不耗随机数;同 seed 同结果) ----
-  const actorWorld = useMemo(() => actorWorldOf(config), [config])
+  const cast = useMemo(() => castSnapshotOf(config), [config])
   const banWords = useMemo(() => parseBanWords(config.userProfile.banTopics), [config.userProfile.banTopics])
   const recentFps = useMemo(() => topicSnap.recent.map((r) => r.fingerprint), [topicSnap.recent])
   const topicQueryCtx = useMemo(
-    () => ({ mode: modeOf(mode), actorWorld, banWords, excludeFingerprints: recentFps }),
-    [mode, actorWorld, banWords, recentFps],
+    () => ({ mode: modeOf(mode), cast, banWords, excludeFingerprints: recentFps }),
+    [mode, cast, banWords, recentFps],
   )
   // 分类按钮由目录 facets 动态生成:空分类自动隐藏,计数与实际可选同源
   const topicFacets = useMemo(() => topicCatalog.query({ ...topicQueryCtx, limit: 0 }).facets, [topicQueryCtx])
@@ -788,6 +788,8 @@ function App() {
       setCharacterGenders(c.genders.a, c.genders.b, c.genders.c)
       // 用户自定义人设:先应用,后续所有生成即采纳(来源一并采纳,供话题包门控)
       setPersonaOverride(c.persona.a, c.persona.b, c.persona.c, c.personaSource)
+      // C 的启用态:关闭后新演出不再出现 C,话题包/缓存同步收窄
+      setCEnabled(c.characters.C.enabled !== false)
       // 环境感知:按配置低频轮询本机状态(电量/前台应用分类等)
       // 环境感知或久坐提醒任一开启都需要轮询(久坐依赖键鼠空闲传感器,与环境感知解耦)
       if (c.envSense || c.breakReminder.enabled) startEnvPolling()

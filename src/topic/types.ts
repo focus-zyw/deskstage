@@ -3,7 +3,7 @@
 // TopicPlan 是不可变纯数据(可直接进 prefetch.json),TopicEvent 是可逆幂等的反馈事件。
 // 全部结构都可能持久化到 data/topic-state.json 或 prefetch.json,字段增删必须同步 store 的 sanitize。
 
-import type { ActorSlot } from '../engine/persona'
+import type { ActorSlot, PersonaSourceSlot } from '../engine/persona'
 import type { Mode } from '../performer/modes'
 
 // ---------- 封闭枚举(const 数组供 sanitize/白名单校验复用) ----------
@@ -68,11 +68,15 @@ export interface TopicCard {
   modeAffinity?: string[]
   /** 卡专属演出切口;缺省回落分类角度池 */
   angles?: string[]
-  /** 行为骨架:本话题里谁推进、谁阻挡——只描述行为,不绑定职业 */
-  roles?: { initiator?: string; challenger?: string }
-  /** 适用条件:所列槽位的人设来源须等于给定值(如 {A:'default',B:'default'})。
-   *  职业/世界观专属卡才带;多数固定卡不带(始终可见) */
-  applicability?: { actors?: Partial<Record<ActorSlot, 'default' | 'custom'>> }
+  /** 两种立场(无序二元组,数组顺序不代表角色槽位);未预先绑定角色,
+   *  生成时按当前人设分配,必要时交换。共同行动/共同保守秘密等对称卡不填 */
+  positions?: [string, string]
+  /** 可选第三参与者(情境职能,不是第三立场):C 启用时优先承担,
+   *  external-only 或 C 关闭时由路人/消息/电话等场外人物承担 */
+  thirdParty?: TopicThirdParty
+  /** 适用条件:requiresPresent 所列槽位必须启用;personaSource 所列槽位的
+   *  人设来源须等于给定值(职业/世界观专属卡才带;多数固定卡不带) */
+  applicability?: TopicApplicability
   sensitivity: 'normal' | 'personal' | 'sensitive'
   generatedAt: number
   /** AI 候选过期时间(14 天 TTL);精选/本地卡不过期 */
@@ -80,6 +84,25 @@ export interface TopicCard {
 }
 
 // ---------- TopicSuggestion:目录查询的轻量投影(面板展示用) ----------
+
+/** 第三参与者的情境职能(不是第三立场):C 只承担职能,不进入主轴立场 */
+export const TOPIC_THIRD_ROLES = ['catalyst', 'witness', 'affected', 'mediator', 'executor'] as const
+export type TopicThirdRole = (typeof TOPIC_THIRD_ROLES)[number]
+
+export interface TopicThirdParty {
+  role: TopicThirdRole
+  /** 职能指令:这个人/这个信息源在本集要做什么 */
+  instruction: string
+  /** cast-preferred = C 启用时优先承担;external-only = 必须是场外人物,不得由 C 顶替 */
+  binding: 'cast-preferred' | 'external-only'
+}
+
+export interface TopicApplicability {
+  /** 所列槽位必须处于启用状态(如 C 专属卡 requiresPresent:['C']) */
+  requiresPresent?: ActorSlot[]
+  /** 所列槽位的人设来源须等于给定值 */
+  personaSource?: Partial<Record<ActorSlot, PersonaSourceSlot>>
+}
 
 export interface TopicSuggestion {
   id: string
@@ -104,7 +127,7 @@ export interface PlanCompatibility {
   banHash: string
   /** 模式内容指纹:自定义模式编辑后旧剧本不误用 */
   modeHash: string
-  /** 演员阵容指纹(人设/名字/性别):阵容变了,带旧名字/旧世界的剧本不误用 */
+  /** 演员阵容指纹(人设/来源/名字/性别/C 启用):阵容变了,旧剧本不误播 */
   castHash: string
   /** 规划器版本:评分/prompt 口径升级时 +1,一次性作废旧缓存 */
   plannerVersion: number

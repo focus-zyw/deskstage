@@ -2,7 +2,7 @@ import type { DialogLine } from '../performer/player'
 import { modeOf, type Mode } from '../performer/modes'
 import type { Relationship } from '../performer/modes/relationships'
 import { currentTimeSlot } from './timeAware'
-import { fullPersona, isPersonaCustomized, nameOf, pronounOf } from './persona'
+import { fullPersona, isCharacterEnabled, isPersonaCustomized, nameOf, pronounOf } from './persona'
 import type { UserProfile } from '../storage/configStore'
 import type { TopicPlan, TopicStage } from '../topic/types'
 
@@ -119,7 +119,7 @@ export function cRuleFor(opts: {
   if (!isComedy) {
     return `
 
-${nameOf('C')}的角色分工（必须遵守）:${nameOf('C')}(小管家)是${nameOf('A')}${nameOf('B')}身边的常驻伙伴,不是电话或画外音。每段${pronounOf('C')}只说 1~4 句,可以大量用 reactions 做无声反应;不得机械地 A→B→C 轮流说话。${nameOf('C')}的参与方式完全按模式风格走(本集基调:${tone ?? '按模式风格'})。`
+${nameOf('C')}的角色分工（必须遵守）:${nameOf('C')}(小管家)是${nameOf('A')}${nameOf('B')}身边的常驻伙伴,不是电话或画外音。不要求每段都开口:本轮参与与否按剧情需要决定,参与时只说 0~3 句,不参与时大量用 reactions 做无声反应;不得机械地 A→B→C 轮流说话。${nameOf('C')}的参与方式完全按模式风格走(本集基调:${tone ?? '按模式风格'})。`
   }
   if (isCrosstalk) {
     const flavor = cCustomized
@@ -137,7 +137,7 @@ ${nameOf('C')}的角色分工（必须遵守）:${nameOf('C')}是本场固定在
     : `- ${nameOf('C')}是平等的对话伙伴:字面理解只是${pronounOf('C')}偶尔出现的特点,只有确实能推进当前场景时才用;不安排固定的"字面反击"桥段,不强制让${nameOf('A')}${nameOf('B')}下不来台,不得每集重复同一套路`
   return `
 
-${nameOf('C')}的角色分工（必须遵守）:${nameOf('C')}是常驻在场的桌面角色,不是电话或画外音。每段${pronounOf('C')}只说 1~4 句,可以大量用 reactions 做无声反应;不得机械地 A→B→C 轮流说话。
+${nameOf('C')}的角色分工（必须遵守）:${nameOf('C')}是常驻在场的桌面角色,不是电话或画外音。不要求每段都开口:本轮参与与否按剧情需要决定,参与时只说 0~3 句,不参与时大量用 reactions 做无声反应;不得机械地 A→B→C 轮流说话。
 ${tease ? `${tease}\n` : ''}${literal}
 - ${nameOf('C')}只在被逗能出梗、行动能改变局面或带来新信息时开口;最后一句优先由${nameOf('A')}或${nameOf('B')}收底
 - 若模式风格指令与本节冲突,以模式风格为准:模式要的不是默认喜剧件时,${nameOf('C')}按模式风格参与`
@@ -159,14 +159,21 @@ export function renderTopicPlan(plan: TopicPlan): string {
     payoff: '收尾(反转并回收前集伏笔)',
     pivot: '新题(换新话题,按转场线索衔接)',
   }
-  // 行为骨架:只描述谁推进/谁阻挡,不绑定职业——具体身份由当前人设实例化
-  const roleNote = plan.card.roles
-    ? [
-        plan.card.roles.initiator ? `推进方——${plan.card.roles.initiator}` : '',
-        plan.card.roles.challenger ? `阻挡/求证方——${plan.card.roles.challenger}` : '',
-      ]
-        .filter(Boolean)
-        .join(';')
+  // 两种立场(无序):未预先绑定角色,按当前人设分配,必要时交换
+  const positionsNote =
+    plan.card.positions && plan.card.positions.length === 2
+      ? `立场一——${plan.card.positions[0]};立场二——${plan.card.positions[1]}(立场未预先绑定角色,按当前人设分配,必要时可交换)`
+      : ''
+  // 第三参与者:C 启用且 cast-preferred 时由 C 承担职能;否则由场外人物承担
+  const third = plan.card.thirdParty
+  const thirdNote = third
+    ? (() => {
+        const byC = third.binding === 'cast-preferred' && isCharacterEnabled('C')
+        const bearer = byC
+          ? `${nameOf('C')}承担`
+          : `由场外人物承担(路人/消息/电话等,不由${nameOf('C')}扮演)`
+        return `职能 ${third.role}——${bearer}:${third.instruction}`
+      })()
     : ''
   const sensitivityNote =
     plan.card.sensitivity === 'personal'
@@ -178,7 +185,8 @@ export function renderTopicPlan(plan: TopicPlan): string {
 - 中心话题：${plan.card.title}
 - 本集切口：${plan.episodeFocus}
 - 话题阶段：${stageText[plan.stage]}
-- 角色动力学：${roleNote || '无'}
+- 两种立场：${positionsNote || '无（按中心话题自由展开）'}
+- 第三参与者：${thirdNote || '无'}
 - 允许自然延伸：${plan.allowedBranches.length ? plan.allowedBranches.join('、') : '无'}
 - 最近已聊过、不得重复：${plan.avoid.length ? plan.avoid.join('、') : '无'}
 - 转场线索：${plan.card.bridge ?? '无'}
@@ -280,12 +288,16 @@ ${moodNote.trim()}` : ''
   // 连续剧情节拍:本集是多集剧情线的一拍,话题让位,结尾留下一拍的钩子(语境由话题计划推导)
   const arcCtx = arcCtxFromPlan(topicPlan)
 
-  const cRule = cRuleFor({
-    isComedy,
-    isCrosstalk: mode === 'crosstalk',
-    cCustomized: isPersonaCustomized('C'),
-    tone,
-  })
+  // C 关闭时不注入任何 C 分工规则,输出协议收窄到 A/B
+  const cOn = isCharacterEnabled('C')
+  const cRule = cOn
+    ? cRuleFor({
+        isComedy,
+        isCrosstalk: mode === 'crosstalk',
+        cCustomized: isPersonaCustomized('C'),
+        tone,
+      })
+    : ''
 
   // 观众抉择点:由调用方掷骰决定(约 30% 的集数)。喜剧安排在中段冲突处站队;
   // 非喜剧只在自然停顿处征询意见,不要求汇合同一收束
@@ -301,12 +313,12 @@ ${moodNote.trim()}` : ''
 
   const protocol = `输出协议（严格遵守）：
 - 只输出一个 JSON 对象，不要输出任何其他文字
-- 先写场景卡再写台词，格式：{"card":{"relationship":"关系标签","scene":"具体场景一句话","goalA":"${nameOf('A')}想要什么","goalB":"${nameOf('B')}想要什么","roleC":"${nameOf('C')}本集的行动职责(可选,不写${nameOf('C')}就省略)","secret":${isComedy ? '"被隐瞒的关键信息(一方或双方知道)"' : '"本集的关键信息或情感内核(可选,模式不需要反转就不填)"'},"escalation":["节拍1","节拍2","节拍3"]${isComedy ? ',"callback":"结尾回收的本集铺垫"' : ''}},"dialog":[{"speaker":"A","text":"台词","action":"动作","target":"B","beatId":"节拍1"},...]}
+- 先写场景卡再写台词，格式：{"card":{"relationship":"关系标签","scene":"具体场景一句话","goalA":"${nameOf('A')}想要什么","goalB":"${nameOf('B')}想要什么"${cOn ? `,"roleC":"${nameOf('C')}本集的行动职责(可选,不写${nameOf('C')}就省略)"` : ''},"secret":${isComedy ? '"被隐瞒的关键信息(一方或双方知道)"' : '"本集的关键信息或情感内核(可选,模式不需要反转就不填)"'},"escalation":["节拍1","节拍2","节拍3"]${isComedy ? ',"callback":"结尾回收的本集铺垫"' : ''}},"dialog":[{"speaker":"A","text":"台词","action":"动作","target":"B","beatId":"节拍1"},...]}
 - dialog 必须逐拍实现 card.escalation；${isComedy ? 'secret 在结尾反转揭晓；callback 必须回收本集前面埋的线' : 'secret/callback 是可选字段,只在模式风格需要时才写,不需要就省略'}
-- 每句必填 "target"（这句对谁说："A"/"B"/"C"=指定听者；"audience"=对观众直说；"room"=对全场）和 "beatId"（这句话实现 card.escalation 的哪一拍,逐字引用该项${isComedy ? '；收底回收 callback 的句子标最后一拍' : ''}）
-- speaker 只能是 "A"、"B" 或 "C"；${nameOf('A')}和${nameOf('B')}承担${isComedy ? '主要语言冲突' : '主要对话'},${nameOf('C')}按上面的角色分工参与;台词文本里一律用角色真名,禁止出现"甲""乙""丙"(称呼与性别纪律见上)
+- 每句必填 "target"（这句对谁说："A"/"B"${cOn ? '"/"C"=指定听者' : '=指定听者'}；"audience"=对观众直说；"room"=对全场）和 "beatId"（这句话实现 card.escalation 的哪一拍,逐字引用该项${isComedy ? '；收底回收 callback 的句子标最后一拍' : ''}）
+- speaker 只能是 ${cOn ? '"A"、"B" 或 "C"' : '"A" 或 "B"'}；${nameOf('A')}和${nameOf('B')}承担${isComedy ? '主要语言冲突' : '主要对话'}${cOn ? `,${nameOf('C')}按上面的角色分工参与` : ''};台词文本里一律用角色真名,禁止出现"甲""乙""丙"(称呼与性别纪律见上)
 - action 只能是这些词之一（禁止用 card 的字段名或其他词）：${ACTIONS}
-- 一段共 ${isComedy ? '14~22' : '8~16'} 句；三人同场但禁止机械轮流（尤其不许固定 A→B→C 循环）
+- 一段共 ${isComedy ? '14~22' : '8~16'} 句；${cOn ? '三人同场但' : ''}禁止机械轮流${cOn ? '（尤其不许固定 A→B→C 循环）' : ''}
 - 每句口语化，不超过 25 个字
 - 台词可在 text/action 外带可选演出字段(用在该用的地方,没有就省略,别每句都加)：
   "reactions":{"B":"shy","C":"surprise"}(本句播出时其他角色的无声反应动作,键不含说话者自己,值同 action 词表;用了 reactions 就不要再写 listenerAction)、"delivery":"deadpan|excited|slow"(面瘫/兴奋/慢条斯理)、"pauseBefore":毫秒(${isComedy ? '包袱前' : '蓄势'}300~600)、"pauseAfter":毫秒(只给${isComedy ? '响底的' : '收尾的'}最后一句,900~1500 留白)
@@ -333,8 +345,8 @@ ${moodNote.trim()}` : ''
     {
       role: 'system',
       content: isComedy
-        ? `你是一位擅长传统相声和网络脱口秀的资深喜剧编剧,给桌面三人情景剧写段子。${persona}${bondCtx}${moodCtx}${relCtx}${arcCtx}${cRule}${profile}${storyCtx}${timeCtx}${choiceRule}\n\n${craft}\n\n${protocol}\n\n【模式风格（本集最高创作优先级）】\n${modeDef.prompt}\n(模式风格与上述默认喜剧手法(互怼/包袱/secret反转/逗弄)冲突时,一律以模式风格为准:台词内容、角色相互姿态、收尾方式都按模式风格走;场景卡仍需输出,但 secret/callback 只在模式风格需要反转或回收时使用,模式不需要就不硬塞。模式给了专属话题角度时,话题从那些角度里取。)`
-        : `你给桌面三人情景剧写台词,本集基调:${tone}——严格按模式风格创作,不要套用互怼喜剧的默认写法。${persona}${bondCtx}${moodCtx}${arcCtx}${cRule}${profile}${storyCtx}${timeCtx}${choiceRule}\n\n${craft}\n\n${protocol}\n\n【模式风格（本集最高创作优先级）】\n${modeDef.prompt}\n(模式风格是本集的主旋律:台词内容、角色相互姿态、收尾方式全部按模式风格与专属话题走。)`,
+        ? `你是一位擅长传统相声和网络脱口秀的资深喜剧编剧,给桌面${cOn ? '三' : '两'}人情景剧写段子。${persona}${bondCtx}${moodCtx}${relCtx}${arcCtx}${cRule}${profile}${storyCtx}${timeCtx}${choiceRule}\n\n${craft}\n\n${protocol}\n\n【模式风格（本集最高创作优先级）】\n${modeDef.prompt}\n(模式风格与上述默认喜剧手法(互怼/包袱/secret反转/逗弄)冲突时,一律以模式风格为准:台词内容、角色相互姿态、收尾方式都按模式风格走;场景卡仍需输出,但 secret/callback 只在模式风格需要反转或回收时使用,模式不需要就不硬塞。模式给了专属话题角度时,话题从那些角度里取。)`
+        : `你给桌面${cOn ? '三' : '两'}人情景剧写台词,本集基调:${tone}——严格按模式风格创作,不要套用互怼喜剧的默认写法。${persona}${bondCtx}${moodCtx}${arcCtx}${cRule}${profile}${storyCtx}${timeCtx}${choiceRule}\n\n${craft}\n\n${protocol}\n\n【模式风格（本集最高创作优先级）】\n${modeDef.prompt}\n(模式风格是本集的主旋律:台词内容、角色相互姿态、收尾方式全部按模式风格与专属话题走。)`,
     },
     {
       role: 'user',

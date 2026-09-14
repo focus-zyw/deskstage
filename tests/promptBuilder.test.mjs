@@ -211,7 +211,7 @@ test('C 分工规则(cRuleFor):喜剧默认保留逗弄分工,字面反击改偶
   assert.match(rule, /甲爱用夸张的吹牛和离谱的请求逗她/)
   assert.match(rule, /乙爱用毒舌反问/)
   assert.match(rule, /不许刻薄嘲笑/)
-  assert.match(rule, /1~4 句/)
+  assert.match(rule, /0~3 句/)
   assert.match(rule, /偶尔出现的特点/, '字面理解是偶发特点')
   assert.match(rule, /不安排固定的"字面反击"桥段/)
   assert.doesNotMatch(rule, /中后段安排一次/, '不再强制每集安排字面反击')
@@ -232,7 +232,8 @@ test('C 分工规则:C 自定义人设时,逗弄示例与默认人格描述全�
 test('C 分工规则:非喜剧骨架与相声默认分支各归各', () => {
   const casual = cRuleFor({ isComedy: false, isCrosstalk: false, cCustomized: false, tone: '日常闲聊' })
   assert.match(casual, /参与方式完全按模式风格走/)
-  assert.match(casual, /1~4 句/)
+  assert.match(casual, /0~3 句/)
+  assert.match(casual, /不要求每段都开口/)
   assert.doesNotMatch(casual, /把我咖啡变成冰的/)
   const xt = cRuleFor({ isComedy: true, isCrosstalk: true, cCustomized: false })
   assert.match(xt, /本场只占 0~2 句/)
@@ -410,29 +411,52 @@ test('心情余波注入:位于长期关系之后,空缺时不出现占位文字
   assert.doesNotMatch(withoutMood, /心情余波/)
 })
 
-test('话题计划渲染:roles 输出角色动力学,sensitivity 输出敏感约束行', () => {
-  const base = tp('夜班交接时,收银台少了一块钱')
+test('话题计划渲染:positions 输出两种立场,thirdParty 输出第三参与者,sensitivity 输出约束行', () => {
+  const base = tp('做饭的两种流派')
   const all = (plan) => buildMessages('crosstalk', plan, []).map((m) => m.content).join('\n')
-  // roles 有值 → 渲染角色动力学;personal → 不得默认映射观众本人
-  const withRoles = all({
+  // positions 有值 → 渲染两种立场(未绑定角色,可交换);personal → 不得默认映射观众本人
+  const withPositions = all({
     ...base,
     card: {
       ...base.card,
-      roles: { initiator: '犯错但嘴硬的人', challenger: '想弄清真相的人' },
+      positions: ['要求按步骤验证的人', '相信经验和手感的人'],
       sensitivity: 'personal',
     },
   })
-  assert.match(withRoles, /角色动力学/)
-  assert.match(withRoles, /犯错但嘴硬的人/)
-  assert.match(withRoles, /想弄清真相的人/)
-  assert.match(withRoles, /不得默认把话题中的困境映射成观众本人的真实状况/)
+  assert.match(withPositions, /两种立场/)
+  assert.match(withPositions, /要求按步骤验证的人/)
+  assert.match(withPositions, /相信经验和手感的人/)
+  assert.match(withPositions, /未预先绑定角色/)
+  assert.match(withPositions, /不得默认把话题中的困境映射成观众本人的真实状况/)
+
+  // thirdParty:cast-preferred 在 C 启用(默认)时由 C 承担
+  const withThird = all({
+    ...base,
+    card: {
+      ...base.card,
+      thirdParty: { role: 'witness', instruction: '用一句无心的话暴露双方忽略的事实', binding: 'cast-preferred' },
+    },
+  })
+  assert.match(withThird, /第三参与者/)
+  assert.match(withThird, /丙承担/)
+  assert.match(withThird, /用一句无心的话暴露双方忽略的事实/)
+
+  // external-only → 场外人物,不由 C 扮演
+  const external = all({
+    ...base,
+    card: {
+      ...base.card,
+      thirdParty: { role: 'catalyst', instruction: '以新加入者的身份提问', binding: 'external-only' },
+    },
+  })
+  assert.match(external, /场外人物/)
 
   // sensitive → 只演绎角色,不得诊断观众
   const sensitive = all({ ...base, card: { ...base.card, sensitivity: 'sensitive' } })
   assert.match(sensitive, /不得诊断、断言或影射观众本人/)
 
-  // 无 roles + normal → 两行都回落"无"
+  // 无 positions/thirdParty + normal → 回落"无"
   const plain = all(base)
-  assert.match(plain, /角色动力学：无/)
-  assert.match(plain, /敏感约束：无/)
+  assert.match(plain, /两种立场：无（按中心话题自由展开）/)
+  assert.match(plain, /第三参与者：无/)
 })

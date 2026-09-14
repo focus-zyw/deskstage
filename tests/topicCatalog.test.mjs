@@ -36,81 +36,114 @@ after(async () => {
   await server?.close()
 })
 
-test('精选池:核心 85 条、指纹唯一、分类分布、通用骨架不绑职业', () => {
+test('精选池:核心 93 条、指纹唯一、分类分布、全匿名骨架', () => {
   const cards = catalog.CURATED_CARDS
-  assert.equal(cards.length, 85)
+  assert.equal(cards.length, 93)
   const fps = new Set(cards.map((c) => c.fingerprint))
   assert.equal(fps.size, cards.length)
   const byCat = {}
   for (const c of cards) byCat[c.category] = (byCat[c.category] ?? 0) + 1
   assert.deepEqual(byCat, {
-    consumption: 16,
-    work: 12,
-    life: 17,
-    social: 10,
+    consumption: 6,
+    work: 10,
+    life: 16,
+    social: 18,
+    emotion: 16,
     technology: 8,
-    health: 9,
-    emotion: 7,
-    imagination: 6,
+    health: 6,
+    imagination: 13,
   })
+  let withPositions = 0
+  let personal = 0
   for (const c of cards) {
     assert.equal(c.source, 'curated')
     assert.ok(c.hook.length > c.title.length / 2, 'hook 必须比标题有信息量')
     assert.ok(c.hook !== c.title)
-    // 通用骨架纪律:核心池不携带默认职业门控(默认世界题在 TOPIC_PACKS)
+    assert.ok(!/[甲乙丙]/.test(c.title), `标题绑定角色:${c.title}`)
+    assert.ok(!/[甲乙丙]/.test(c.hook), `hook 绑定角色:${c.title}`)
+    assert.ok(c.angles && c.angles.length >= 2 && c.angles.length <= 4, `切口数量不足:${c.title}`)
     assert.equal(c.applicability, undefined)
-    // 角色往事不硬填:只允许来自真实故事数据(candidates 通道)
     assert.notEqual(c.category, 'character-history')
+    if (c.positions) {
+      withPositions++
+      assert.equal(c.positions.length, 2, 'positions 是二元组')
+    }
+    if (c.sensitivity === 'personal') personal++
   }
-  // 旅行换皮对已删除
+  assert.ok(withPositions >= 60, `positions 覆盖 ≥60,实际 ${withPositions}`)
+  assert.equal(personal, 2, '核心池 personal 敏感级恰好 2 条')
   assert.ok(!cards.some((c) => c.title.includes('旅行')))
 })
 
-test('默认人设专属包:仅分组不做门控,逐卡 applicability 覆盖,手写 hook', () => {
+test('默认人设专属包:世界包与 C 包分组,逐卡 applicability,手写 hook', () => {
   const packs = catalog.TOPIC_PACK_CARDS
-  assert.equal(packs.length, 1)
-  const pack = packs[0]
-  assert.equal(pack.id, 'default-world')
-  assert.ok(pack.cards.length >= 20 && pack.cards.length <= 30, '包规模 20~30')
+  assert.deepEqual(packs.map((p) => p.id), ['default-world', 'default-c'])
+  const world = packs[0]
+  assert.ok(world.cards.length >= 20 && world.cards.length <= 30, '世界包规模 20~30')
   let cross = 0
   let aOnly = 0
   let bOnly = 0
-  let cOnly = 0
-  for (const c of pack.cards) {
-    assert.ok(c.applicability?.actors && Object.keys(c.applicability.actors).length > 0, '包卡必须带 applicability')
-    assert.ok(c.hook && c.hook !== c.title, '包卡 hook 必须手写')
-    const a = c.applicability.actors
-    if (a.A === 'default' && a.B === 'default') cross++
-    else if (a.A === 'default') aOnly++
-    else if (a.B === 'default') bOnly++
-    else if (a.C === 'default') cOnly++
+  for (const c of world.cards) {
+    assert.ok(c.applicability?.personaSource && Object.keys(c.applicability.personaSource).length > 0, '世界包卡必须带 personaSource 门控')
+    assert.ok(c.hook && c.hook !== c.title, '世界包卡 hook 必须手写')
+    const s = c.applicability.personaSource
+    if (s.A === 'default' && s.B === 'default') cross++
+    else if (s.A === 'default') aOnly++
+    else if (s.B === 'default') bOnly++
   }
   assert.ok(cross >= 10, `A×B 交叉 ≥10,实际 ${cross}`)
   assert.ok(aOnly >= 4, `A 独立 ≥4,实际 ${aOnly}`)
   assert.ok(bOnly >= 4, `B 独立 ≥4,实际 ${bOnly}`)
-  assert.ok(cOnly >= 1, `C 相关 ≥1,实际 ${cOnly}`)
+  const cPack = packs[1]
+  assert.ok(cPack.cards.length >= 4 && cPack.cards.length <= 6, 'C 包规模 4~6')
+  for (const c of cPack.cards) {
+    assert.deepEqual(c.applicability?.requiresPresent, ['C'], 'C 包卡要求 C 在场')
+    assert.deepEqual(c.applicability?.personaSource, { C: 'default' }, 'C 包卡要求 C 默认人设')
+  }
 })
 
-test('applicability 门控矩阵:逐卡按人设来源可见性过滤,包分组不整体门控', () => {
-  const world = (a, b, c) => ({ A: a, B: b, C: c })
+test('applicability 门控矩阵:requiresPresent + personaSource 双维度', () => {
   const mk = () => catalog.createTopicCatalog({ getReservoir: () => [], getHistoryPieces: () => [] })
-  const full = new Set(mk().candidates({ actorWorld: world('default', 'default', 'default') }).map((c) => c.id))
-  const partial = new Set(mk().candidates({ actorWorld: world('default', 'custom', 'default') }).map((c) => c.id))
-  const none = new Set(mk().candidates({ actorWorld: world('custom', 'custom', 'custom') }).map((c) => c.id))
-  const packCards = catalog.TOPIC_PACK_CARDS[0].cards
-  const cross = packCards.filter((c) => c.applicability.actors.A && c.applicability.actors.B)
-  const bIndependent = packCards.filter((c) => c.applicability.actors.B && !c.applicability.actors.A)
-  assert.ok(cross.length >= 10)
-  assert.ok(bIndependent.length >= 4)
+  const cast = (over = {}) => ({
+    actors: {
+      A: { enabled: true, personaSource: 'default', ...over.A },
+      B: { enabled: true, personaSource: 'default', ...over.B },
+      C: { enabled: true, personaSource: 'default', ...over.C },
+    },
+  })
+  const ids = (ctx) => new Set(mk().candidates(ctx).map((c) => c.id))
+  const full = ids({ cast: cast() })
+  const bCustom = ids({ cast: cast({ B: { personaSource: 'custom' } }) })
+  const allCustom = ids({
+    cast: cast({
+      A: { personaSource: 'custom' },
+      B: { personaSource: 'custom' },
+      C: { personaSource: 'custom' },
+    }),
+  })
+  const cOff = ids({ cast: cast({ C: { enabled: false } }) })
+  const world = catalog.TOPIC_PACK_CARDS[0].cards
+  const cross = world.filter((c) => c.applicability.personaSource.A && c.applicability.personaSource.B)
+  const bOnly = world.filter((c) => c.applicability.personaSource.B && !c.applicability.personaSource.A)
+  const cPack = catalog.TOPIC_PACK_CARDS[1].cards
+  assert.ok(cross.length >= 10 && bOnly.length >= 4)
   for (const c of cross) {
     assert.ok(full.has(c.id), '双默认可见')
-    assert.equal(partial.has(c.id), false, 'B 自定义时交叉卡消失')
-    assert.equal(none.has(c.id), false, '双自定义消失')
+    assert.equal(bCustom.has(c.id), false, 'B 自定义时交叉卡消失')
+    assert.equal(allCustom.has(c.id), false, '双自定义消失')
   }
-  for (const c of bIndependent) {
+  for (const c of bOnly) {
     assert.ok(full.has(c.id), 'B 独立卡双默认可见')
-    assert.equal(partial.has(c.id), false, '仅 B 自定义时 B 独立卡(依赖默认 B)消失')
-    assert.equal(none.has(c.id), false, '双自定义时 B 独立卡消失')
+    assert.equal(bCustom.has(c.id), false, 'B 自定义时 B 独立卡消失')
+    assert.equal(allCustom.has(c.id), false, '双自定义时 B 独立卡消失')
+  }
+  for (const c of cPack) {
+    assert.equal(full.has(c.id), true, 'C 默认启用且默认人设时可见')
+    assert.equal(cOff.has(c.id), false, 'C 关闭时 C 包消失')
+    assert.equal(allCustom.has(c.id), false, 'C 自定义时 C 包消失')
+  }
+  for (const c of catalog.CURATED_CARDS) {
+    assert.ok(cOff.has(c.id) && allCustom.has(c.id), `核心卡应全态可见:${c.title}`)
   }
 })
 
@@ -135,21 +168,34 @@ test('query:同 seed 同结果、前缀稳定、排除近期、facets 与门控�
   assert.ok(!facets.some((f) => f.id === 'character-history'), '无真实往事时角色往事隐藏')
 })
 
-test('resolve:精选/包查找 + 世界门控失败回落 null;点卡 hook 与展示同源', () => {
+test('resolve:精选/包查找 + 阵容门控失败回落 null;点卡 hook 与展示同源', () => {
   const packCard = catalog.TOPIC_PACK_CARDS[0].cards[0]
   const cat = catalog.createTopicCatalog({ getReservoir: () => [], getHistoryPieces: () => [] })
-  const hit = cat.resolve(packCard.id, { actorWorld: { A: 'default', B: 'default', C: 'default' } })
+  const full = {
+    cast: {
+      actors: {
+        A: { enabled: true, personaSource: 'default' },
+        B: { enabled: true, personaSource: 'default' },
+        C: { enabled: true, personaSource: 'default' },
+      },
+    },
+  }
+  const hit = cat.resolve(packCard.id, full)
   assert.equal(hit?.id, packCard.id)
   assert.equal(hit.hook, packCard.hook, '点卡拿到的是原卡 hook')
-  // B 自定义 → 交叉卡门控失败
-  assert.equal(cat.resolve(packCard.id, { actorWorld: { A: 'default', B: 'custom', C: 'default' } }), null)
-  // 候选仓优先(点 AI 卡)
+  const bCustom = {
+    cast: {
+      actors: {
+        A: { enabled: true, personaSource: 'default' },
+        B: { enabled: true, personaSource: 'custom' },
+        C: { enabled: true, personaSource: 'default' },
+      },
+    },
+  }
+  assert.equal(cat.resolve(packCard.id, bCustom), null)
   const genCard = { ...packCard, id: 'gen-x', applicability: undefined }
   const withReservoir = catalog.createTopicCatalog({ getReservoir: () => [genCard], getHistoryPieces: () => [] })
-  assert.equal(withReservoir.resolve('gen-x', { actorWorld: world0() }).id, 'gen-x')
-  function world0() {
-    return { A: 'default', B: 'default', C: 'default' }
-  }
+  assert.equal(withReservoir.resolve('gen-x', full).id, 'gen-x')
 })
 
 test('candidates:自动池排除 sensitive;query(显式浏览)保留', () => {
@@ -209,13 +255,21 @@ test('castHash:同配置同哈希(跨重启稳定),人设/名字/性别任一变
   assert.notEqual(personaMod.castHash(), base, '改名 → 哈希变化(名字进提示词)')
   personaMod.setCharacterGenders('男', '男', '女')
   assert.notEqual(personaMod.castHash(), base, '改性别 → 哈希变化(代词纪律)')
+  personaMod.setCharacterNames('甲', '乙', '丙')
+  personaMod.setCharacterGenders('女', '男', '女')
+  assert.equal(personaMod.castHash(), base, '全部还原 → 同哈希')
+  personaMod.setCharactersEnabled(true, true, false)
+  assert.notEqual(personaMod.castHash(), base, 'C 关闭 → 哈希变化(缓存立即失效)')
+  personaMod.setCharactersEnabled(true, true, true)
+  assert.equal(personaMod.castHash(), base, '恢复启用 → 同哈希(可安全复用)')
 })
 
-test('角度按分类取,不再全局混配', () => {
-  const work = catalog.CURATED_CARDS.find((c) => c.title === '周报到底写给谁看')
-  assert.ok(work)
-  assert.ok(catalog.anglesFor(work).length > 0)
-  assert.deepEqual(catalog.anglesFor(work), catalog.ANGLES_BY_CATEGORY.work)
+test('角度:卡自身切口优先,无切口卡回落分类角度池', () => {
+  const withAngles = catalog.CURATED_CARDS.find((c) => c.angles?.length)
+  assert.ok(withAngles)
+  assert.deepEqual(catalog.anglesFor(withAngles), withAngles.angles)
+  const bare = { title: '随便聊聊', category: 'work' }
+  assert.deepEqual(catalog.anglesFor(bare), catalog.ANGLES_BY_CATEGORY.work)
 })
 
 test('模式专属池转换:modeAffinity 锁定 + 分类猜测', () => {

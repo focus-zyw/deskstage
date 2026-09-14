@@ -60,6 +60,20 @@ export function personaDimensions(id: ActorSlot): PersonaDimensions {
 // 设置页与启动加载经 setPersonaOverride 采纳;调用方未显式给出来源时按文本是否为空推导
 const sources: Record<ActorSlot, PersonaSourceSlot> = { A: 'default', B: 'default', C: 'default' }
 
+// 角色启用态:A/B 恒启用;C 由 config.characters.C.enabled 驱动(启动加载 + 广播差分采纳)。
+// C 关闭后:新剧本不得再出现 C(输出协议/人设块/称呼纪律全部收窄),C 专属话题自动隐藏
+const enabled: Record<ActorSlot, boolean> = { A: true, B: true, C: true }
+
+export function setCharactersEnabled(a: boolean, b: boolean, c: boolean): void {
+  enabled.A = a !== false
+  enabled.B = b !== false
+  enabled.C = c !== false
+}
+
+export function isCharacterEnabled(id: ActorSlot): boolean {
+  return enabled[id]
+}
+
 /** 该角色是否正使用用户自定义人设:cRule 等按此分档——自定义人设接管基础人格,
  *  任何模式分支都不得把默认人格(字面执行/团宠/毒舌)强加回自定义角色 */
 export function isPersonaCustomized(id: ActorSlot): boolean {
@@ -72,11 +86,11 @@ export function usesDefaultPersona(id: ActorSlot): boolean {
   return sources[id] === 'default'
 }
 
-/** 四维画像提示词块:主演出注入,仅覆盖仍使用内置人设的角色——
+/** 四维画像提示词块:主演出注入,仅覆盖仍使用内置人设且处于启用状态的角色——
  *  用户自定义人设接管该角色的行为维度,默认四维只是空人设时的兜底 */
 export function dimensionsPrompt(): string {
   const rows = (['A', 'B', 'C'] as const)
-    .filter((id) => !isPersonaCustomized(id))
+    .filter((id) => isCharacterEnabled(id) && !isPersonaCustomized(id))
     .map((id) => {
       const d = DIMENSIONS[id]
       return `- ${nameOf(id)}(speaker "${id}"):注意力——${d.attention};判断——${d.judgment};风险——${d.risk};情绪防御——${d.defense}`
@@ -90,9 +104,10 @@ ${rows.join('\n')}`
  *  仅喜剧基调注入(promptBuilder 按 isComedy 拼接)。
  *  C 半句是默认人格描述,C 有自定义人设时不强加 */
 export function comedyDynamics(): string {
-  const cPart = isPersonaCustomized('C')
-    ? ''
-    : `;${nameOf('C')}是两人都宠着都爱逗的桌面团宠,${pronounOf('C')}当真办事、呆萌反击`
+  const cPart =
+    isPersonaCustomized('C') || !isCharacterEnabled('C')
+      ? ''
+      : `;${nameOf('C')}是两人都宠着都爱逗的桌面团宠,${pronounOf('C')}当真办事、呆萌反击`
   return `- ${nameOf('A')}和${nameOf('B')}互怼但有默契,节奏像传统相声里的逗哏和捧哏${cPart};各自的生活片段都可以自然变成段子的舞台`
 }
 
@@ -159,6 +174,11 @@ export function pronounOf(id: ActorSlot): string {
   return genders[id] === '女' ? '她' : '他'
 }
 
+/** 应用用户设置的角色启用态(启动与保存设置后调用;A/B 恒启用,C 可开关) */
+export function setCEnabled(on: boolean): void {
+  enabled.C = on !== false
+}
+
 /** 应用用户自定义人设(主窗启动与保存设置后调用;空串 = 还原内置人设)。
  *  source 为各槽位的人设来源(设置页持久化的结构化事实);缺省时按文本是否为空推导 */
 export function setPersonaOverride(
@@ -177,13 +197,15 @@ export function setPersonaOverride(
   sources.C = adopt('C', source?.c)
 }
 
-/** 演员阵容内容指纹:人设文本+名字+性别任一变化都会变(跨重启稳定,不用进程内计数器)。
- *  预生成剧本缓存兼容令牌之一:阵容变了,带旧名字/旧世界的剧本不得再播 */
+/** 演员阵容内容指纹:人设文本+来源+名字+性别+C 启用任一变化都会变(跨重启稳定,
+ *  不用进程内计数器)。预生成剧本缓存兼容令牌之一:阵容变了,旧剧本不得再播 */
 export function castHash(): string {
   const payload = JSON.stringify({
     persona: { A: overrides.A, B: overrides.B, C: overrides.C },
+    sources,
     names: displayNames,
     genders,
+    enabled,
   })
   let h = 0x811c9dc5
   for (let i = 0; i < payload.length; i++) {
@@ -193,16 +215,33 @@ export function castHash(): string {
   return (h >>> 0).toString(36)
 }
 
-/** 结构化配置 → 各槽位人设来源(话题卡 applicability 门控的输入)。
- *  纯函数:缺失/非法值按 default 处理(旧配置未迁移字段时的保守回退) */
-export function actorWorldOf(cfg: {
+/** 单个槽位的阵容状态:启用 + 人设来源 */
+export interface CastMemberState {
+  enabled: boolean
+  personaSource: PersonaSourceSlot
+}
+
+/** 阵容快照:话题卡 applicability 门控与选题上下文的统一输入 */
+export interface CastSnapshot {
+  actors: Record<ActorSlot, CastMemberState>
+}
+
+/** 结构化配置 → 阵容快照(纯函数)。A/B 恒启用;C 缺省按启用处理(旧配置保守回退),
+ *  人设来源缺失按 default(与旧配置未迁移字段时的行为一致) */
+export function castSnapshotOf(cfg: {
+  characters?: { C?: { enabled?: boolean } | null } | null
   personaSource?: { a?: PersonaSourceSlot; b?: PersonaSourceSlot; c?: PersonaSourceSlot } | null
-}): Record<ActorSlot, PersonaSourceSlot> {
+}): CastSnapshot {
   const s = cfg?.personaSource
   return {
-    A: s?.a === 'custom' ? 'custom' : 'default',
-    B: s?.b === 'custom' ? 'custom' : 'default',
-    C: s?.c === 'custom' ? 'custom' : 'default',
+    actors: {
+      A: { enabled: true, personaSource: s?.a === 'custom' ? 'custom' : 'default' },
+      B: { enabled: true, personaSource: s?.b === 'custom' ? 'custom' : 'default' },
+      C: {
+        enabled: cfg?.characters?.C?.enabled !== false,
+        personaSource: s?.c === 'custom' ? 'custom' : 'default',
+      },
+    },
   }
 }
 
@@ -224,16 +263,22 @@ export function personaText(id: ActorSlot): string {
 
 /** 称呼与性别纪律:所有生成通道(主演出/短通道/弹幕/蒸馏/修复)统一注入的硬规则。
  *  真名即本名;指令与素材里的"甲/乙/丙"映射到配置名(兼容内建模式 prompt 与旧故事库);
- *  代词严格按结构化性别,解决"他/她"混用 */
+ *  代词严格按结构化性别,解决"他/她"混用。只列当前启用的角色 */
 export function namingDiscipline(): string {
-  const renamed = displayNames.A !== '甲' || displayNames.B !== '乙' || displayNames.C !== '丙'
+  const on = (['A', 'B', 'C'] as const).filter((id) => isCharacterEnabled(id))
+  const renamed = on.some((id) => displayNames[id] !== NAME_FALLBACKS[id])
+  const head = on.length === 3 ? '三人' : `${on.length === 2 ? '两人' : '独角'}组合`
+  const roster = on.map((id) => `${displayNames[id]}（speaker "${id}"）`).join('、')
+  const allNames = `["${on.map((id) => displayNames[id]).join('","')}"]`
   const mapping = renamed
-    ? `- 模式指令、角色世界素材、上集回顾等说明文字里出现的"甲/乙/丙"就是 ${displayNames.A}/${displayNames.B}/${displayNames.C} 三人;台词与场景卡里禁止再出现"甲""乙""丙"三个字`
-    : '- 场景卡与说明文字里的"甲/乙/丙"即三人本人'
+    ? `- 模式指令、角色世界素材、上集回顾等说明文字里出现的"甲/乙/丙"就是 ${on.map((id) => displayNames[id]).join('/')}${on.length === 3 ? '三人' : ''};台词与场景卡里禁止再出现"甲""乙""丙"三个字`
+    : `- 场景卡与说明文字里的"甲/乙/丙"即${head}本人`
   return `称呼与性别纪律（严格遵守）：
-- 三人真名：${displayNames.A}（speaker "A"）、${displayNames.B}（speaker "B"）、${displayNames.C}（speaker "C"）。台词、场景卡、旁白一律用真名互相称呼,speaker 字段才用 "A"/"B"/"C"
+- 真名与槽位：${roster}。台词、场景卡、旁白一律用真名互相称呼,speaker 字段只能取 ${allNames} 中的值
 ${mapping}
-- 性别与代词：${displayNames.A}是${genders.A}(代词用"${pronounOf('A')}"),${displayNames.B}是${genders.B}(代词用"${pronounOf('B')}"),${displayNames.C}是${genders.C}(代词用"${pronounOf('C')}");所有叙述与台词的他/她严格按此,不得混用`
+- 性别与代词：${on
+    .map((id) => `${displayNames[id]}是${genders[id]}(代词用"${pronounOf(id)}")`)
+    .join(';')};所有叙述与台词的他/她严格按此,不得混用`
 }
 
 /** 完整版:主演出(点播/预生成)的 system prompt 用。
@@ -242,13 +287,13 @@ ${mapping}
  *  「口头禅纪律」是通用质量规则,任何配置下恒在 */
 export function fullPersona(opts: { comedyDynamics?: boolean } = {}): string {
   const cDyn = opts.comedyDynamics ? `\n${comedyDynamics()}` : ''
-  const blocks = [
-    `角色设定：
-- ${nameOf('A')}（speaker 用 "A"）：${personaText('A')}
-- ${nameOf('B')}（speaker 用 "B"）：${personaText('B')}
-- ${nameOf('C')}（speaker 用 "C"）：${personaText('C')}
-- ${nameOf('A')}和${nameOf('B')}是熟悉的长期伙伴,具体相处方式服从当前模式风格与各自人设;${nameOf('C')}是常驻在场的桌面角色(不是电话或画外音)${cDyn}`,
-  ]
+  const on = (['A', 'B', 'C'] as const).filter((id) => isCharacterEnabled(id))
+  const roleLines = on.map((id) => `- ${nameOf(id)}（speaker 用 "${id}"）：${personaText(id)}`)
+  const cOn = isCharacterEnabled('C')
+  const castLine = `- ${nameOf('A')}和${nameOf('B')}是熟悉的长期伙伴,具体相处方式服从当前模式风格与各自人设${
+    cOn ? `;${nameOf('C')}是常驻在场的桌面角色(不是电话或画外音)` : ''
+  }${cDyn}`
+  const blocks = [`角色设定：\n${[...roleLines, castLine].join('\n')}`]
   const dims = dimensionsPrompt()
   if (dims) blocks.push(dims)
   blocks.push('- 口头禅/标志性语气词每集合计最多 1~2 次:角色差异靠行为底色与人设体现,不靠口头禅堆砌')

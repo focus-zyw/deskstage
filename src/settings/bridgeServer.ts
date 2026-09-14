@@ -11,6 +11,7 @@ import {
   type AppConfig,
 } from '../storage/configStore'
 import {
+  setCEnabled,
   setCharacterGenders,
   setCharacterNames,
   setPersonaOverride,
@@ -45,6 +46,9 @@ export function initConfigEffects(): void {
     if (base.persona !== next.persona || base.personaSource !== next.personaSource) {
       const p = next.persona // 空串 = 还原内置人设(persona 模块内回落)
       setPersonaOverride(p.a, p.b, p.c, next.personaSource)
+    }
+    if (base.characters !== next.characters) {
+      setCEnabled(next.characters.C.enabled !== false) // C 关闭/开启即时采纳(新演出与话题包同步收窄)
     }
     if (base.names !== next.names) setCharacterNames(next.names.a, next.names.b, next.names.c)
     if (base.genders !== next.genders) setCharacterGenders(next.genders.a, next.genders.b, next.genders.c) // 性别纪律立即采纳

@@ -5,8 +5,8 @@ import type { DialogMode } from '../performer/modes'
 import { TOPIC_CATEGORIES, type EpisodeTopicSignal, type TopicCard, type TopicDistance } from './types'
 
 /** 规划器版本:评分口径/prompt 结构/兼容规则变化时 +1,使旧预生成缓存全部失效。
- *  v2:TopicCard 增 angles/roles/applicability + PlanCompatibility 增 castHash */
-export const PLANNER_VERSION = 2
+ *  v3:roles→positions(无序二元组)+ thirdParty + applicability 新形 */
+export const PLANNER_VERSION = 3
 
 // ---------- 指纹与相似度 ----------
 
