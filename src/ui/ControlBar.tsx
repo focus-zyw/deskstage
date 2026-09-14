@@ -16,6 +16,46 @@ import { modeOf, type Mode } from '../performer/modes'
 import { performanceButton, type PerformanceState } from './performButton'
 import { PRIMARY_MIN_WIDTH } from './dockLayout'
 import type { CtrlBarPos } from '../storage/configStore'
+import { useSyncExternalStore } from 'react'
+import { listen } from '@tauri-apps/api/event'
+import {
+  computeGroupChatUnreadFromLog,
+  getGroupChatUnread,
+  publishGroupChatUnread,
+  subscribeGroupChatRead,
+} from '../storage/groupChatReadStore'
+import { subscribeChatLog } from '../storage/chatLogStore'
+
+/** 主窗群聊入口的未读角标(方案 §2/§14):游标在设置窗推进,经
+ *  'group-chat-read' 事件广播到这里;聊天日志有新写入(角色插话)时按日志+游标重算 */
+function useGroupChatUnreadBadge(): number {
+  const unread = useSyncExternalStore(subscribeGroupChatRead, getGroupChatUnread)
+  useEffect(() => {
+    let alive = true
+    let lastAt = 0
+    const refresh = (force = false) => {
+      const now = Date.now()
+      if (!force && now - lastAt < 1000) return
+      lastAt = now
+      void computeGroupChatUnreadFromLog().then((n) => {
+        if (alive) publishGroupChatUnread(n)
+      })
+    }
+    refresh(true)
+    const unEvent = listen<{ unreadCount?: number }>('group-chat-read', (e) => {
+      if (typeof e.payload?.unreadCount === 'number' && alive) {
+        publishGroupChatUnread(e.payload.unreadCount)
+      }
+    })
+    const unLog = subscribeChatLog(() => refresh())
+    return () => {
+      alive = false
+      void unEvent.then((f) => f())
+      unLog()
+    }
+  }, [])
+  return unread
+}
 
 interface Props {
   pos: CtrlBarPos
@@ -62,6 +102,7 @@ export function ControlBar({
   onModeMenuToggle,
   onMenuClose,
 }: Props) {
+  const groupUnread = useGroupChatUnreadBadge()
   const [hovered, setHovered] = useState<string | null>(null)
   // 悬停高亮:只关心栏内区域(角色/面板的悬停归 App 管)
   const barRef = useRef<HTMLDivElement>(null)
@@ -232,6 +273,11 @@ export function ControlBar({
         onClick={onChat}
       >
         聊天
+        {groupUnread > 0 && (
+          <span className="dock-unread" title={`群聊有 ${groupUnread} 条未读`}>
+            {groupUnread > 9 ? '9+' : groupUnread}
+          </span>
+        )}
       </button>
 
       <button

@@ -47,6 +47,29 @@ const WHO_SET = new Set<ChatWho>(['user', 'A', 'B', 'C'])
 const MAX_TEXT = 500
 const MAX_TURNS = 5000
 
+/** 稳定消息 ID(§3):新写入的消息必须都有 ID——appendChatTurns 对缺 ID 的条目
+ *  自动生成;它是持久已读游标的锚点,不能用 roomSeq(跨重启重新计数) */
+export function genEntryId(): string {
+  try {
+    if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID()
+  } catch {
+    // 旧 webview 无 randomUUID:退化为时间戳+随机串
+  }
+  return `e${Date.now()}${Math.random().toString(36).slice(2, 10)}`
+}
+
+/** 旧日志兼容键(§3):无 ID 的历史条目 = 文件序号 + 内容摘要,读取时稳定派生。
+ *  文件裁剪会让序号漂移——游标失配按"已读到末尾"处理(见 readController) */
+export function deriveLegacyId(index: number, text: string, ts: number): string {
+  let h = 0x811c9dc5
+  const payload = `${ts}|${text}`
+  for (let i = 0; i < payload.length; i++) {
+    h ^= payload.charCodeAt(i)
+    h = Math.imul(h, 0x01000193)
+  }
+  return `legacy-${index}-${(h >>> 0).toString(36)}`
+}
+
 // ---------- 订阅三件套(useSyncExternalStore):version 只增不回退,读侧拿它当 effect 依赖 ----------
 // 跨窗:写入发生在主窗,设置窗的模块实例感知不到——写入端 emit 'chatlog-bump',
 // 设置窗 installChatlogSync() 监听后 bump 本地 version(修既有跨窗缝隙)。
@@ -171,7 +194,7 @@ export async function appendChatTurns(
   }>,
 ): Promise<void> {
   const valid = turns
-    .map((t) => sanitizeChatEntry({ ...t, ts: t.ts ?? Date.now() }))
+    .map((t) => sanitizeChatEntry({ ...t, id: t.id ?? genEntryId(), ts: t.ts ?? Date.now() }))
     .filter((t): t is ChatLogEntry => t !== null)
   if (valid.length === 0) return
   try {

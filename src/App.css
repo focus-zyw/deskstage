@@ -4299,3 +4299,68 @@ body.settings-standalone .settings-window {
 body:has(.gal-page) {
   background: #f3efe7;
 }
+
+/* ---------- 群聊未读与视口控制(方案 §8/§9/§11) ---------- */
+
+/* 未读分割线:虚拟行,不落盘;游标越过/read 后消失 */
+.unread-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 8px 2px;
+  color: var(--accent, #e8a33d);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.unread-divider::before,
+.unread-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: color-mix(in srgb, var(--accent, #e8a33d) 45%, transparent);
+}
+
+/* 新消息悬浮胶囊:未读>0 且不在底部时显示 */
+.jump-latest {
+  align-self: center;
+  margin-bottom: 4px;
+  padding: 4px 14px;
+  border: none;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent, #e8a33d) 88%, #000);
+  color: #111;
+  font-size: 12px;
+  cursor: pointer;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+}
+.jump-latest:hover {
+  filter: brightness(1.1);
+}
+
+/* 角色思考状态(§11):collecting=正在看新消息 / invoking=正在想 */
+.actor-typing {
+  font-size: 11px;
+  opacity: 0.65;
+  padding: 0 2px 2px;
+}
+
+/* 主窗 Dock 聊天按钮的柔和角标 */
+.dock-btn {
+  position: relative;
+}
+.dock-unread {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 8px;
+  background: var(--accent, #e8a33d);
+  color: #111;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 14px;
+  text-align: center;
+  pointer-events: none;
+}

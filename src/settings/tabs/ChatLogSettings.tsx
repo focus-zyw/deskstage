@@ -7,9 +7,22 @@
 //  - 长演出(≥10 句)折叠成演出卡片避免刷屏,可展开通读;
 //  - 角色气泡悬停出现小型 ▶,从该句回放(不占整个气泡当按钮)。
 // 集管理(赞/踩/删除/收藏)仍在「演出历史」页。
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { ChangeEvent, KeyboardEvent } from 'react'
 import { emitTo, listen } from '@tauri-apps/api/event'
+import {
+  createGroupChatReadController,
+  type EntriesCause,
+  type GroupChatReadController,
+  type ReadEffect,
+} from '../../groupChat/readController'
+import {
+  flushGroupChatRead,
+  getGroupChatReadState,
+  loadGroupChatReadState,
+  publishGroupChatUnread,
+  setGroupChatReadCursor,
+} from '../../storage/groupChatReadStore'
 import { listEpisodes, type Episode } from '../../storage/historyStore'
 import {
   listChatTurns,
@@ -169,15 +182,23 @@ type MsgRow = {
   replay?: Episode
   /** 原始日志条目(带 memoryRefs/trace 时渲染"参考记忆"折叠块) */
   entry?: ChatLogEntry
+  /** 稳定消息 ID(§3):已读观察器与未读定位的锚点 */
+  eid?: string
 }
 type Row =
   | { kind: 'day'; key: string; label: string }
   | { kind: 'event'; key: string; ep: Episode; label: string }
   | { kind: 'card'; key: string; ep: Episode }
+  | { kind: 'unread-divider'; key: string; count: number }
   | MsgRow
 
-/** 把演出集与聊天消息编织成消息流:日期分隔/事件行/演出卡片/分组气泡 */
-function buildRows(visibleEps: Episode[], turns: ChatLogEntry[], expandedEps: Set<number>): Row[] {
+/** 把演出集与聊天消息编织成消息流:日期分隔/事件行/演出卡片/分组气泡/未读分割线(§8) */
+function buildRows(
+  visibleEps: Episode[],
+  turns: ChatLogEntry[],
+  expandedEps: Set<number>,
+  divider?: { beforeId: string; count: number } | null,
+): Row[] {
   const out: Row[] = []
   let prevWho: Speaker | 'user' | null = null
   let prevTs = 0
@@ -227,11 +248,17 @@ function buildRows(visibleEps: Episode[], turns: ChatLogEntry[], expandedEps: Se
       pushDay(e.ts)
       const who: Speaker | 'user' = e.who === 'user' ? 'user' : e.who
       const header = prevWho === null || who !== prevWho || e.ts - prevTs > REGROUP_GAP_MS
+      // 未读分割线:插在第一条未读角色消息之前(§8;虚拟行,不落盘)
+      if (divider && e.id === divider.beforeId) {
+        out.push({ kind: 'unread-divider', key: 'unread-divider', count: divider.count })
+        prevWho = null
+      }
       out.push({
         kind: 'msg',
         key: `chat${e.ts}-${out.length}`, // 同批应答共享 ts,按位置保唯一
         who,
         text: e.text,
+        eid: e.id,
         ts: e.ts,
         header,
         entry: e,
@@ -264,6 +291,28 @@ export function ChatLogSettings() {
   // 群设置抽屉 / 背景图 / 头像 / 长演出展开
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [actorStatus, setActorStatus] = useState<Partial<Record<'A' | 'B' | 'C', { status?: string; queueDepth?: number }>>>({})
+  // ---------- 未读与视口控制(方案 §5/§6):页面只喂事实、只执行效果 ----------
+  // active = 窗口有焦点(挂载中 ⟺ 当前就是群聊分页,条件等价于 §13 三条与)
+  const nameOf = (a: 'A' | 'B' | 'C') => (a === 'A' ? names.a : a === 'B' ? names.b : names.c)
+  const readCtlRef = useRef<GroupChatReadController | null>(null)
+  function readCtl(): GroupChatReadController {
+    if (!readCtlRef.current) {
+      readCtlRef.current = createGroupChatReadController({
+        getCursor: () => getGroupChatReadState().lastReadEntryId,
+        setCursor: (id) => setGroupChatReadCursor(id),
+        nameOf,
+      })
+    }
+    return readCtlRef.current
+  }
+  const readSnap = useSyncExternalStore(readCtl().subscribe, readCtl().getSnapshot)
+  const winActiveRef = useRef(true)
+  const distRef = useRef(9999)
+  const lastVisibleRef = useRef<string | null>(null)
+  const [winActive, setWinActive] = useState(true)
+  const viewSyncRafRef = useRef(0)
+  const prevTurnsRef = useRef<ChatLogEntry[] | null>(null)
+  const prependAnchorRef = useRef<{ id: string; offset: number } | null>(null)
   const [bgDataUrl, setBgDataUrl] = useState<string | null>(null)
   const [bgBusy, setBgBusy] = useState(false)
   const [bgTick, setBgTick] = useState(0)
@@ -301,7 +350,8 @@ export function ChatLogSettings() {
   const chatLogVersion = useChatLogVersion()
   useEffect(() => {
     let alive = true
-    void listChatTurns(MAX_TURNS).then((ts) => {
+    // 首拉前先装载持久游标(§4):initial 分类依赖它,避免误把历史判为未读
+    void Promise.all([listChatTurns(MAX_TURNS), loadGroupChatReadState()]).then(([ts]) => {
       if (alive) setTurns(ts)
     })
     void getMemory().then((m) => {
@@ -346,6 +396,44 @@ export function ChatLogSettings() {
     }
   }, [])
 
+  // 窗口焦点/可见性(§13):失焦即离开群聊 → 未读累计 + 立即落盘
+  useEffect(() => {
+    const onFocus = () => setWinActive(true)
+    const onBlur = () => setWinActive(false)
+    window.addEventListener('focus', onFocus)
+    window.addEventListener('blur', onBlur)
+    return () => {
+      window.removeEventListener('focus', onFocus)
+      window.removeEventListener('blur', onBlur)
+    }
+  }, [])
+  useEffect(() => {
+    winActiveRef.current = winActive
+    syncView()
+    if (!winActive) flushGroupChatRead()
+  }, [winActive])
+  useEffect(() => () => flushGroupChatRead(), [])
+
+  // 未读数发布给主窗(柔和角标,§2)
+  useEffect(() => {
+    publishGroupChatUnread(readSnap.unreadCount, { broadcast: true })
+  }, [readSnap.unreadCount])
+
+  // 角色思考状态文案(§11):「正在想」比「正在输入」准确——角色最后可能 listen
+  const thinkingLine = useMemo(() => {
+    const roster = (['A', 'B', 'C'] as const).map((id) => ({
+      name: id === 'A' ? names.a : id === 'B' ? names.b : names.c,
+      st: actorStatus[id]?.status,
+    }))
+    const invoking = roster.filter((r) => r.st === 'invoking')
+    const collecting = roster.filter((r) => r.st === 'collecting')
+    if (invoking.length >= 2) return '他们正在接话…'
+    if (invoking.length === 1) return `${invoking[0].name}正在想…`
+    if (collecting.length === 1) return `${collecting[0].name}正在看新消息…`
+    if (collecting.length >= 2) return '他们正在看新消息…'
+    return null
+  }, [actorStatus, names])
+
   // 兜底:窗口重新聚焦(从主窗切回来)时重拉一次列表——跨窗事件万一错漏也不丢消息
   useEffect(() => {
     const refetch = () => {
@@ -355,39 +443,98 @@ export function ChatLogSettings() {
     return () => window.removeEventListener('focus', refetch)
   }, [])
 
-  // 滚动:接近底部(40px 内)= 跟随模式,新消息自动滚到底;向上前置加载后保持视口。
-  // 双 rAF + 错峰补钉:等布局/头像封面图晚到撑高后再落位;钉底用最后一行
-  // scrollIntoView——即使实际滚动容器是祖先(样式变化),也能把视口带到最新消息
   const feedRef = useRef<HTMLDivElement>(null)
-  const stickRef = useRef(true)
-  const prevHeightRef = useRef(0)
   const prependAtRef = useRef(0)
   const [scrollable, setScrollable] = useState(false)
   const visibleEps = useMemo(() => takeNewestByLineBudget(allEps, budget), [allEps, budget])
-  const rows = useMemo(() => buildRows(visibleEps, turns, expandedEps), [visibleEps, turns, expandedEps])
+  const rows = useMemo(
+    () =>
+      buildRows(
+        visibleEps,
+        turns,
+        expandedEps,
+        readSnap.firstUnreadId ? { beforeId: readSnap.firstUnreadId, count: readSnap.unreadCount } : null,
+      ),
+    [visibleEps, turns, expandedEps, readSnap.firstUnreadId, readSnap.unreadCount],
+  )
+
+  // ---------- 效果应用(§5):页面只执行控制器给的效果 ----------
+  function applyReadEffect(effect: ReadEffect) {
+    const el = feedRef.current
+    if (!el) return
+    if (effect.type === 'scroll-bottom') {
+      el.scrollTop = el.scrollHeight
+    } else if (effect.type === 'scroll-message') {
+      const target = el.querySelector(`[data-eid="${effect.id}"]`)
+      target?.scrollIntoView({ block: 'start' })
+    }
+    // preserve-viewport:保持当前像素位置(§12 底部追加不做补偿)
+  }
+  function syncView() {
+    const el = feedRef.current
+    if (!el) return
+    distRef.current = el.scrollHeight - el.scrollTop - el.clientHeight
+    setScrollable(el.scrollHeight > el.clientHeight + 4)
+    applyReadEffect(
+      readCtl().setView({
+        active: winActiveRef.current,
+        distanceToBottom: distRef.current,
+        lastFullyVisibleId: lastVisibleRef.current,
+      }),
+    )
+  }
+
+  // 日志变化 → 识别 initial/append/prepend/clear,喂给控制器并执行效果(§12)
   useEffect(() => {
-    let raf2 = 0
-    const settle = () => {
+    const prev = prevTurnsRef.current
+    let cause: EntriesCause = 'append'
+    if (!prev) cause = 'initial'
+    else if (turns.length === 0) cause = 'clear'
+    else if (prev.length > 0 && turns.length >= prev.length && prev[0]?.id === turns[0]?.id) cause = 'append'
+    else if (turns.length >= prev.length && prev[prev.length - 1]?.id === turns[turns.length - 1]?.id) cause = 'prepend'
+    prevTurnsRef.current = turns
+    applyReadEffect(readCtl().setEntries(turns, cause))
+    // 顶部加载旧消息:渲染后按锚点恢复视口(§12)
+    if (cause === 'prepend' && prependAnchorRef.current) {
       const el = feedRef.current
-      if (!el) return
-      if (prevHeightRef.current === 0 || stickRef.current) {
-        el.scrollTop = el.scrollHeight
-        el.lastElementChild?.scrollIntoView({ block: 'end' })
-      } else {
-        el.scrollTop += el.scrollHeight - prevHeightRef.current
+      const anchor = prependAnchorRef.current
+      const target = el?.querySelector(`[data-eid="${anchor.id}"]`)
+      if (el && target) {
+        const delta = target.getBoundingClientRect().top - el.getBoundingClientRect().top - anchor.offset
+        el.scrollTop += delta
       }
-      prevHeightRef.current = el.scrollHeight
-      setScrollable(el.scrollHeight > el.clientHeight + 4)
+      prependAnchorRef.current = null
     }
-    settle()
-    raf2 = requestAnimationFrame(() => requestAnimationFrame(settle))
-    // 图片/字体晚到仍会把内容撑高:跟随模式下错峰补钉,保证落在最新消息
-    const timers = [80, 250, 600].map((d) => window.setTimeout(settle, d))
-    return () => {
-      cancelAnimationFrame(raf2)
-      timers.forEach((t) => window.clearTimeout(t))
-    }
-  }, [rows])
+  }, [turns])
+
+  // 完全可见观察器(§7):消息完全进入可视区才推进游标;按消息顺序取最后一条
+  const orderedEids = useMemo(() => turns.map((t) => t.id ?? ''), [turns])
+  useEffect(() => {
+    const el = feedRef.current
+    if (!el || typeof IntersectionObserver === 'undefined') return
+    const visible = new Map<string, boolean>()
+    const io = new IntersectionObserver(
+      (changes) => {
+        for (const c of changes) {
+          const id = (c.target as HTMLElement).dataset.eid
+          if (id) visible.set(id, c.intersectionRatio >= 1)
+        }
+        let last: string | null = null
+        for (let i = orderedEids.length - 1; i >= 0; i--) {
+          const id = orderedEids[i]
+          if (id && visible.get(id)) {
+            last = id
+            break
+          }
+        }
+        lastVisibleRef.current = last
+        syncView()
+      },
+      { root: el, threshold: 1 },
+    )
+    el.querySelectorAll('[data-eid]').forEach((n) => io.observe(n))
+    return () => io.disconnect()
+  }, [rows, orderedEids])
 
   // 输入框随内容自长(1 行起,封顶后内部滚动)
   useEffect(() => {
@@ -536,7 +683,8 @@ export function ChatLogSettings() {
     if (res === 'accepted') {
       setDraft('')
       setMention(null)
-      stickRef.current = true // 自己发言后回到跟随模式
+      // 自己发言:贴底跟随(§6),不产生未读
+      applyReadEffect(readCtl().notifyOwnSend())
     } else if (res === 'busy') {
       setSendHint('角色正忙,稍后再发…')
       window.setTimeout(() => setSendHint(''), 2500)
@@ -669,12 +817,28 @@ export function ChatLogSettings() {
         onScroll={() => {
           const el = feedRef.current
           if (!el) return
-          stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40
-          // 离开底部后顶到上方 80px 内自动前置加载(节流防惯性滚动连发);前置后视口锚定由 settle 负责。
-          // 要求已离开底部:总内容略超视口时,贴底状态的 scrollTop 绝对值本身就 < 80,不算"向上滚"
+          // 视口事实同步 rAF 节流:一帧最多一次
+          if (!viewSyncRafRef.current) {
+            viewSyncRafRef.current = requestAnimationFrame(() => {
+              viewSyncRafRef.current = 0
+              syncView()
+            })
+          }
+          // 离开底部后顶到上方 80px 内自动前置加载(节流防惯性滚动连发);
+          // 加载前采集锚点(§12):第一条可见消息 id + 相对容器顶的偏移
           const now = Date.now()
-          if (!stickRef.current && el.scrollTop < 80 && hasMore && now - prependAtRef.current > 150) {
+          if (el.scrollTop < 80 && hasMore && now - prependAtRef.current > 150) {
             prependAtRef.current = now
+            const containerRect = el.getBoundingClientRect()
+            let anchor: { id: string; offset: number } | null = null
+            el.querySelectorAll('[data-eid]').forEach((n) => {
+              if (anchor) return
+              const r = n.getBoundingClientRect()
+              if (r.bottom > containerRect.top) {
+                anchor = { id: (n as HTMLElement).dataset.eid ?? '', offset: r.top - containerRect.top }
+              }
+            })
+            prependAnchorRef.current = anchor
             setBudget((b) => b + PAGE_LINES)
           }
         }}
@@ -703,6 +867,13 @@ export function ChatLogSettings() {
                 <button title="从头播放这段演出" onClick={() => bridge.onReplay(row.ep)}>
                   ▶ 从头播放
                 </button>
+              </div>
+            )
+          }
+          if (row.kind === 'unread-divider') {
+            return (
+              <div className="unread-divider" key={row.key}>
+                <span>你离开后有 {row.count} 条消息</span>
               </div>
             )
           }
@@ -738,6 +909,7 @@ export function ChatLogSettings() {
           return (
             <div
               key={row.key}
+              data-eid={row.eid}
               className={[
                 'chatlog-row',
                 isMe ? 'me' : `spk-${row.who.toLowerCase()}`,
@@ -816,6 +988,15 @@ export function ChatLogSettings() {
       </div>
 
       <div className="group-input">
+        {readSnap.unreadCount > 0 && !readSnap.nearBottom && (
+          <button
+            className="jump-latest"
+            onClick={() => applyReadEffect(readCtl().requestJump())}
+          >
+            ↓ {readSnap.label ?? `${readSnap.unreadCount} 条新消息`}
+          </button>
+        )}
+        {thinkingLine && <div className="actor-typing">{thinkingLine}</div>}
         {sendHint && <div className="group-hint">{sendHint}</div>}
         {mention && mentionMatches.length > 0 && (
           <div className="group-mention">
