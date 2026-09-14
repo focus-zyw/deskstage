@@ -17,6 +17,15 @@ const STORE_ID = 'bubble-themes'
 /** 自定义气泡主题数量上限 */
 export const BUBBLE_THEME_LIMIT = 10
 
+export const BUBBLE_SHAPES = ['rounded', 'pill', 'square', 'cloud'] as const
+export type BubbleShape = (typeof BUBBLE_SHAPES)[number]
+
+export const BUBBLE_TAIL_STYLES = ['droplet', 'sharp', 'round', 'none'] as const
+export type BubbleTailStyle = (typeof BUBBLE_TAIL_STYLES)[number]
+
+export const BUBBLE_SHADOWS = ['none', 'soft', 'strong'] as const
+export type BubbleShadow = (typeof BUBBLE_SHADOWS)[number]
+
 /** hex 颜色(#RRGGBB);统一 6 位,透明度单独用 bgOpacity 字段表达 */
 const HEX = /^#[0-9a-fA-F]{6}$/
 
@@ -48,6 +57,20 @@ export interface BubbleTheme {
   maxWidth: number
   /** 圆角 6~28(默认 18) */
   radius: number
+  /** 轮廓预设:柔和圆角/胶囊/方角/云朵 */
+  shape: BubbleShape
+  /** 指向角外观:水滴/尖角/圆泡/隐藏 */
+  tailStyle: BubbleTailStyle
+  /** 阴影强度 */
+  shadow: BubbleShadow
+  /** 字重 400~800 */
+  fontWeight: number
+  /** 行高 1.2~1.9 */
+  lineHeight: number
+  /** 水平内边距 10~28 px */
+  paddingX: number
+  /** 垂直内边距 10~28 px */
+  paddingY: number
 }
 
 /** 校验并清洗一个自定义主题:任何关键字段不合法返回 null(坏数据宁可拒收) */
@@ -58,6 +81,8 @@ export function sanitizeBubbleTheme(raw: unknown): BubbleTheme | null {
   const label = typeof o.label === 'string' ? o.label.trim().slice(0, 10) : ''
   if (!label) return null
   const color = (v: unknown, fb: string): string => (typeof v === 'string' && HEX.test(v.trim()) ? v.trim() : fb)
+  const choice = <T extends string>(v: unknown, values: readonly T[], fb: T): T =>
+    typeof v === 'string' && values.includes(v as T) ? (v as T) : fb
   const theme: BubbleTheme = {
     id,
     label,
@@ -79,6 +104,13 @@ export function sanitizeBubbleTheme(raw: unknown): BubbleTheme | null {
     fontSize: clamp(o.fontSize, 12, 22, 16),
     maxWidth: clamp(o.maxWidth, 240, 480, 320),
     radius: clamp(o.radius, 6, 28, 18),
+    shape: choice(o.shape, BUBBLE_SHAPES, 'rounded'),
+    tailStyle: choice(o.tailStyle, BUBBLE_TAIL_STYLES, 'droplet'),
+    shadow: choice(o.shadow, BUBBLE_SHADOWS, 'soft'),
+    fontWeight: clamp(o.fontWeight, 400, 800, 650),
+    lineHeight: clamp(o.lineHeight, 1.2, 1.9, 1.58),
+    paddingX: clamp(o.paddingX, 10, 28, 17),
+    paddingY: clamp(o.paddingY, 10, 28, 15),
   }
   return theme
 }
@@ -238,30 +270,71 @@ const APPLIED_VARS = [
   '--bubble-font-size',
   '--bubble-max-w',
   '--bubble-radius',
+  '--bubble-border-radius',
+  '--bubble-tail-display',
+  '--bubble-tail-size',
+  '--bubble-tail-radius',
+  '--bubble-shadow',
+  '--bubble-font-weight',
+  '--bubble-line-height',
+  '--bubble-padding',
 ] as const
+
+function borderRadiusFor(shape: BubbleShape, radius: number): string {
+  if (shape === 'pill') return '999px'
+  if (shape === 'square') return `${Math.min(radius, 8)}px`
+  if (shape === 'cloud') return '48% 52% 46% 54% / 42% 46% 54% 58%'
+  return `${radius}px ${radius}px ${radius}px ${Math.min(9, radius)}px`
+}
+
+function tailVarsFor(style: BubbleTailStyle): { display: string; size: string; radius: string } {
+  if (style === 'none') return { display: 'none', size: '16px', radius: '4px 3px 12px 3px' }
+  if (style === 'sharp') return { display: 'block', size: '17px', radius: '1px' }
+  if (style === 'round') return { display: 'block', size: '14px', radius: '50%' }
+  return { display: 'block', size: '16px', radius: '4px 3px 12px 3px' }
+}
+
+function shadowFor(shadow: BubbleShadow): string {
+  if (shadow === 'none') return 'none'
+  if (shadow === 'strong') {
+    return '0 14px 38px var(--bubble-shadow-color), 0 3px 10px color-mix(in srgb, var(--bubble-edge) 24%, transparent)'
+  }
+  return '0 10px 28px var(--bubble-shadow-color)'
+}
 
 /** 把主题应用到根节点:theme=null 时清掉全部注入变量(回落 :root[data-bubble] 的内置变量集)。
  *  内联变量优先级高于 :root 规则,所以内置/自定义切换必须先清后写,不能只改 data 属性 */
 export function applyBubbleThemeTo(root: HTMLElement, theme: BubbleTheme | null): void {
   for (const v of APPLIED_VARS) root.style.removeProperty(v)
   if (!theme) return
-  const op = theme.bgOpacity
+  const clean = sanitizeBubbleTheme(theme)
+  if (!clean) return
+  const op = clean.bgOpacity
   const style = root.style
-  style.setProperty('--bubble-bg', withAlpha(theme.bg, op))
-  style.setProperty('--bubble-text', theme.text)
-  style.setProperty('--bubble-stroke', withAlpha(theme.stroke, 0.42))
-  style.setProperty('--bubble-stroke-w', `${theme.strokeW}px`)
-  style.setProperty('--bubble-blur', theme.blurPx > 0 ? `blur(${theme.blurPx}px)` : 'none')
-  style.setProperty('--bubble-acc-a', theme.accA)
-  style.setProperty('--bubble-acc-b', theme.accB)
-  style.setProperty('--bubble-acc-c', theme.accC)
-  style.setProperty('--bubble-bg-a', withAlpha(theme.bgA, op))
-  style.setProperty('--bubble-bg-b', withAlpha(theme.bgB, op))
-  style.setProperty('--bubble-bg-c', withAlpha(theme.bgC, op))
-  style.setProperty('--bubble-stroke-a', withAlpha(theme.strokeA, 0.5))
-  style.setProperty('--bubble-stroke-b', withAlpha(theme.strokeB, 0.5))
-  style.setProperty('--bubble-stroke-c', withAlpha(theme.strokeC, 0.5))
-  style.setProperty('--bubble-font-size', `${theme.fontSize}px`)
-  style.setProperty('--bubble-max-w', `${theme.maxWidth}px`)
-  style.setProperty('--bubble-radius', `${theme.radius}px`)
+  style.setProperty('--bubble-bg', withAlpha(clean.bg, op))
+  style.setProperty('--bubble-text', clean.text)
+  style.setProperty('--bubble-stroke', withAlpha(clean.stroke, 0.42))
+  style.setProperty('--bubble-stroke-w', `${clean.strokeW}px`)
+  style.setProperty('--bubble-blur', clean.blurPx > 0 ? `blur(${clean.blurPx}px)` : 'none')
+  style.setProperty('--bubble-acc-a', clean.accA)
+  style.setProperty('--bubble-acc-b', clean.accB)
+  style.setProperty('--bubble-acc-c', clean.accC)
+  style.setProperty('--bubble-bg-a', withAlpha(clean.bgA, op))
+  style.setProperty('--bubble-bg-b', withAlpha(clean.bgB, op))
+  style.setProperty('--bubble-bg-c', withAlpha(clean.bgC, op))
+  style.setProperty('--bubble-stroke-a', withAlpha(clean.strokeA, 0.5))
+  style.setProperty('--bubble-stroke-b', withAlpha(clean.strokeB, 0.5))
+  style.setProperty('--bubble-stroke-c', withAlpha(clean.strokeC, 0.5))
+  style.setProperty('--bubble-font-size', `${clean.fontSize}px`)
+  style.setProperty('--bubble-max-w', `${clean.maxWidth}px`)
+  style.setProperty('--bubble-radius', `${clean.radius}px`)
+  style.setProperty('--bubble-border-radius', borderRadiusFor(clean.shape, clean.radius))
+  const tail = tailVarsFor(clean.tailStyle)
+  style.setProperty('--bubble-tail-display', tail.display)
+  style.setProperty('--bubble-tail-size', tail.size)
+  style.setProperty('--bubble-tail-radius', tail.radius)
+  style.setProperty('--bubble-shadow', shadowFor(clean.shadow))
+  style.setProperty('--bubble-font-weight', String(clean.fontWeight))
+  style.setProperty('--bubble-line-height', String(clean.lineHeight))
+  style.setProperty('--bubble-padding', `${clean.paddingY}px ${clean.paddingX}px`)
 }

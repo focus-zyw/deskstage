@@ -13,6 +13,8 @@ const FEW_SHOT = [
     bgA: '#fff4eb', bgB: '#edf5ff', bgC: '#f5f0ff',
     strokeA: '#dd8b62', strokeB: '#688fd5', strokeC: '#8974d0',
     bgOpacity: 0.93, strokeW: 1, blurPx: 0, fontSize: 16, maxWidth: 320, radius: 18,
+    shape: 'rounded', tailStyle: 'droplet', shadow: 'soft',
+    fontWeight: 650, lineHeight: 1.58, paddingX: 17, paddingY: 15,
   },
   {
     label: '夜色玻璃',
@@ -21,6 +23,8 @@ const FEW_SHOT = [
     bgA: '#302328', bgB: '#1b2740', bgC: '#2b2343',
     strokeA: '#ffb066', strokeB: '#7db3ff', strokeC: '#a89bff',
     bgOpacity: 0.88, strokeW: 1, blurPx: 14, fontSize: 16, maxWidth: 320, radius: 18,
+    shape: 'rounded', tailStyle: 'sharp', shadow: 'strong',
+    fontWeight: 650, lineHeight: 1.58, paddingX: 17, paddingY: 15,
   },
 ]
 
@@ -37,6 +41,10 @@ function buildSystemPrompt(): string {
     '  "bgOpacity": 0.5~1 的底色不透明度(玻璃风低些,纸面风高些),',
     '  "strokeW": 1~3 描边宽px, "blurPx": 0~24 背景模糊px(0=无,玻璃风14左右),',
     '  "fontSize": 12~22 台词基准字号, "maxWidth": 240~480 最大宽度px, "radius": 6~28 圆角px',
+    '  "shape": "rounded|pill|square|cloud 之一(柔和/胶囊/方角/云朵轮廓)",',
+    '  "tailStyle": "droplet|sharp|round|none 之一(水滴/尖角/圆泡/隐藏)",',
+    '  "shadow": "none|soft|strong 之一, "fontWeight": 400~800 字重,',
+    '  "lineHeight": 1.2~1.9 行高, "paddingX": 10~28 左右留白px, "paddingY": 10~28 上下留白px',
     '}',
     '所有颜色一律 #RRGGBB 六位十六进制。三个角色的底色/名签色要有可辨识的区分(参考示例的思路:各自取主题色系)。深色底配浅色字,浅色底配深色字,保证可读。',
     '示例(仅供参考结构与取值范围):',
@@ -71,7 +79,7 @@ export async function generateBubbleTheme(
         { role: 'user', content: req },
       ],
       temperature: 0.8,
-      maxTokens: 800,
+      maxTokens: 900,
       jsonMode: true,
       timeoutMs: 60_000,
     })
