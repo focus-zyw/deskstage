@@ -273,6 +273,11 @@ export const SETTINGS_SEARCH_INDEX: { tab: SettingsTab; card: string; label: str
   { tab: 'model', card: '提取文字', label: 'OCR 接口地址', keywords: '视觉 识别 地址' },
   { tab: 'model', card: '提取文字', label: 'OCR 视觉模型', keywords: 'glm 视觉 识别' },
   { tab: 'model', card: '提取文字', label: '识别引擎', keywords: '本地 ai 自动 熔断 回退 引擎' },
+  // 群聊角色绑定与模型档案(自由群聊)
+  { tab: 'model', card: '群聊角色绑定', label: '群聊角色的模型绑定', keywords: '自由群聊 多角色 绑定 模型 档案 网页 接话 旁听 活跃度 自主' },
+  { tab: 'model', card: '群聊角色绑定', label: '甲乙丙各自的模型', keywords: '甲 乙 丙 A B C 角色 模型 网页站点 登录' },
+  { tab: 'model', card: '群聊角色绑定', label: '角色的活跃度档位', keywords: '安静 平衡 热闹 活跃 自主 频率 接话' },
+  { tab: 'model', card: '模型档案', label: '新增/编辑模型档案', keywords: '模型档案 api 端点 多模型 profile 厂商 地址 密钥 群聊' },
   // 基础设置
   { tab: 'general', card: '显示与布局', label: '气泡风格', keywords: '气泡 柔彩 夜色 玻璃 主题 外观 配色' },
   // 气泡工坊

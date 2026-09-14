@@ -2,45 +2,14 @@
 // 截屏快捷键的设置已挪到「快捷键」分页统一管理;本页只留捕获排除开关。
 // 网页版生成的窗口/状态轮询是本页私有的临时会话,挂载期间存活、切走即止。
 import { useEffect, useRef, useState } from 'react'
-import { WEBCHAT_SITES, webchatLogin, webchatProbe, webchatRestoreMain, type WebchatSite } from '../../engine/webchat'
+import { WEBCHAT_SITES, webchatLogin, webchatProbe, webchatRestoreMain } from '../../engine/webchat'
 import type { AppConfig } from '../../storage/configStore'
 import { toolList } from '../../tools/registry'
+import { SiteLoginRow } from '../SiteLoginRow'
 import { useSettings } from '../useSettingsSession'
 import { SettingsCard, SetField, SetLine, SetSwitch } from '../SettingsPrimitives'
 
-/** 站点登录行(AI 剧场用):甲乙各自登录/探测,状态本组件私有 */
-function SiteLogin({ label, site }: { label: string; site: WebchatSite }) {
-  const [status, setStatus] = useState('')
-  return (
-    <SetLine title={label} hint="打开可见 Edge 窗口登录一次,登录态长期有效">
-      <div className="shot-key-row">
-        <button
-          className="panel-btn"
-          onClick={() => {
-            setStatus('正在打开 Edge 窗口…')
-            void webchatLogin(site)
-              .then(() => setStatus('窗口已打开,登录成功后角色自动恢复'))
-              .catch((e) => setStatus(`打开失败:${String(e)}`))
-          }}
-        >
-          打开登录窗口
-        </button>
-        <button
-          className="panel-btn"
-          onClick={() => {
-            setStatus('检查中…')
-            void webchatProbe(site)
-              .then((p) => setStatus(p.ready ? '已就绪 ✓' : `未就绪:${p.detail}`))
-              .catch((e) => setStatus(`检查失败:${String(e)}`))
-          }}
-        >
-          查状态
-        </button>
-      </div>
-      {status && <div className="set-note">{status}</div>}
-    </SetLine>
-  )
-}
+// 站点登录行已抽为共享组件 SiteLoginRow(AI 剧场与群聊角色绑定共用)
 
 export function PrivacySettings() {
   const { form, setForm, saveField, flashCard } = useSettings()
@@ -51,12 +20,12 @@ export function PrivacySettings() {
   // 登录就绪轮询每 4 秒探测一次;切走本页/关窗即停,不留后台空转
   useEffect(() => () => window.clearInterval(webchatPollRef.current), [])
 
-  /** 打开 Edge 窗口给用户登录(角色暂时隐藏让路);轮询就绪后自动恢复角色 */
+  /** 打开 Edge 窗口给用户登录；角色保持显示，轮询站点是否就绪 */
   async function openWebchatWindow() {
     try {
       setWebchatStatusText('正在打开 Edge 窗口…')
       await webchatLogin(form.webchatSite)
-      setWebchatStatusText('Edge 已打开:登录一次,成功后角色自动恢复')
+      setWebchatStatusText('Edge 已打开:角色保持显示,登录完成后自动确认状态')
       startWebchatReadyPoll()
     } catch (e) {
       setWebchatStatusText(`打开失败:${String(e)}`)
@@ -80,7 +49,7 @@ export function PrivacySettings() {
             return
           }
           window.clearInterval(webchatPollRef.current)
-          setWebchatStatusText('已就绪 ✓ 登录成功,角色已恢复——可以直接点播了')
+          setWebchatStatusText('已就绪 ✓ 登录成功——可以直接点播了')
         })
         .catch((e) => setWebchatStatusText(`探测异常:${String(e)}`))
     }, 4000)
@@ -90,7 +59,7 @@ export function PrivacySettings() {
     try {
       setWebchatStatusText('检查中…')
       const p = await webchatProbe()
-      setWebchatStatusText(p.ready ? '已就绪 ✓(角色已恢复)' : `未就绪:${p.detail}`)
+      setWebchatStatusText(p.ready ? '已就绪 ✓' : `未就绪:${p.detail}`)
     } catch (e) {
       setWebchatStatusText(`状态获取失败:${String(e)}`)
     }
@@ -204,7 +173,7 @@ export function PrivacySettings() {
                 ))}
               </select>
             </SetField>
-            <SiteLogin label="甲登录" site={form.aiTheater.actorA} />
+            <SiteLoginRow label="甲登录" site={form.aiTheater.actorA} />
             <SetField label="乙的站点" htmlFor="cfg-theater-b">
               <select
                 id="cfg-theater-b"
@@ -222,7 +191,7 @@ export function PrivacySettings() {
                 ))}
               </select>
             </SetField>
-            <SiteLogin label="乙登录" site={form.aiTheater.actorB} />
+            <SiteLoginRow label="乙登录" site={form.aiTheater.actorB} />
             <div className="set-note">
               两个角色各绑一个网页会话,甲乙可同站(会话独立),建议选不同模型对比效果;演出时后台会开两个
               Edge 标签页,可最小化。两个站点都需要先登录一次。
