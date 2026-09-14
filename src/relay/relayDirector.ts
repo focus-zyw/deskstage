@@ -7,11 +7,11 @@
 // 流水线契约:yield 当前句**之前**预发下一角色的网页请求——播放器消费当前句
 // 的展示与 TTS 时间,正好遮住下一句的生成等待。
 // 失败语义(提交点):首句产出前失败允许抛错(调用方回退兜底剧本);之后不再
-// 抛错——单演员首次失败 reset 重建会话并附全量近况重发,二次失败 yield 另一
-// 角色的本地收尾句后 return {natural:false, reason:'failed'}。
+// 抛错——有回复但格式坏时先在原会话补发格式纠错；连接失败或纠错仍失败才
+// reset 重建会话并附全量近况重发，最终失败则由另一角色本地收尾。
 
 import { normalizeRelayText, parseRelayTurn, type ParsedRelayTurn } from './relaySchema'
-import { buildRelayTurnPrompt } from './relayPrompt'
+import { buildRelayFormatRepairPrompt, buildRelayTurnPrompt } from './relayPrompt'
 import type {
   PreparedRelaySource,
   RelayDirector,
@@ -74,9 +74,12 @@ async function* runRelay(
   let dupStreak = 0
   const recentNorms: string[] = []
   const startedAt = now()
-  const runtimes = new Map<string, { lastSeenSeq: number; failures: number; turnsSinceReset: number }>()
+  const runtimes = new Map<
+    string,
+    { lastSeenSeq: number; failures: number; turnsSinceReset: number; initialized: boolean }
+  >()
   for (const a of req.actors) {
-    runtimes.set(a.speaker, { lastSeenSeq: 0, failures: 0, turnsSinceReset: 0 })
+    runtimes.set(a.speaker, { lastSeenSeq: 0, failures: 0, turnsSinceReset: 0, initialized: false })
   }
 
   /** 接受一句入册:编号、重复窗口、阅读游标、意图 */
@@ -114,6 +117,7 @@ async function* runRelay(
   ): Promise<{ text: string; action: string; intent: 'continue' | 'end' } | null> {
     const rt = runtimes.get(actor.speaker)!
     const attempt = async (reset: boolean, recovery: boolean) => {
+      const fullContext = !rt.initialized || reset
       const raw = await deps.ask({
         actor,
         prompt: buildRelayTurnPrompt({
@@ -124,14 +128,27 @@ async function* runRelay(
           turnIndex,
           maxTurns: req.maxTurns,
           opening: turnIndex === 0,
+          fullContext,
           recovery,
         }),
         timeoutMs: req.perTurnTimeoutMs,
         reset,
         signal: req.signal,
       })
-      const parsed = parseRelayTurn(raw)
-      if (!parsed) throw new Error('模型输出不可解析')
+      let parsed = parseRelayTurn(raw)
+      if (!parsed) {
+        // 页面已经成功回复，说明连接仍健康；复用当前标签页，让模型只修正格式。
+        const repairedRaw = await deps.ask({
+          actor,
+          prompt: buildRelayFormatRepairPrompt(),
+          timeoutMs: req.perTurnTimeoutMs,
+          reset: false,
+          signal: req.signal,
+        })
+        parsed = parseRelayTurn(repairedRaw)
+        if (!parsed) throw new Error('模型格式纠错后仍不可解析')
+      }
+      rt.initialized = true
       return parsed
     }
     try {

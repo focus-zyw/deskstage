@@ -41,6 +41,7 @@ import { bumpMode } from '../storage/memoryStore'
 import { logDismiss, type DismissableKind } from '../storage/interactionStore'
 import { getConfig } from '../storage/configStore'
 import { createRelayDirector } from '../relay/relayDirector'
+import { AI_THEATER_TURN_POLICY } from '../relay/relayPolicy'
 import { askConversation, releaseConversation } from '../engine/webchatHub'
 import type {
   PreparedRelaySource,
@@ -635,8 +636,8 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
       eid,
       scene,
       actors,
-      minTurns: 4,
-      maxTurns: 8,
+      minTurns: AI_THEATER_TURN_POLICY.minTurns,
+      maxTurns: AI_THEATER_TURN_POLICY.maxTurns,
       timeBudgetMs: 6 * 60_000,
       perTurnTimeoutMs: 120_000,
       signal: ctrl.signal,

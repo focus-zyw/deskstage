@@ -117,7 +117,7 @@ export async function webchatAsk(
   }
 }
 
-/** 打开可见的 Edge 窗口给用户登录(隐藏主覆盖层让路);就绪轮询由设置面板负责 */
+/** 打开可见的 Edge 窗口给用户登录；主角色保持显示，就绪轮询由设置面板负责 */
 export async function webchatLogin(site: WebchatSite): Promise<void> {
   await invoke('webchat_login', { site })
 }

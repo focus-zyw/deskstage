@@ -334,6 +334,8 @@ pub trait CdpOps: Send + Sync + 'static {
     async fn list_pages(&self, port: u16) -> Result<Vec<(String, String)>, String>;
     async fn create_page(&self, port: u16, url: &str) -> Result<String, String>;
     async fn close_page(&self, port: u16, target_id: &str) -> Result<(), String>;
+    /// 将目标标签页切为当前活动页，避免站点在后台页暂停提交或生成。
+    async fn activate_page(&self, port: u16, target_id: &str) -> Result<(), String>;
     /// 页面求值(普通)
     async fn eval(
         &self,
@@ -421,6 +423,9 @@ fn edge_launch_args(profile: &Path, url: &str, port: u16) -> Vec<String> {
         format!("--user-data-dir={}", profile.display()),
         "--no-first-run".into(),
         "--no-default-browser-check".into(),
+        "--disable-background-timer-throttling".into(),
+        "--disable-backgrounding-occluded-windows".into(),
+        "--disable-renderer-backgrounding".into(),
         "--window-size=960,760".into(),
         url.into(),
     ]
@@ -724,6 +729,13 @@ impl CdpOps for RealCdpOps {
         browser
             .call("Target.closeTarget", json!({ "targetId": target_id }), 5000)
             .await?;
+        Ok(())
+    }
+
+    async fn activate_page(&self, port: u16, target_id: &str) -> Result<(), String> {
+        let mut cdp =
+            Cdp::new(connect_ws(format!("ws://127.0.0.1:{port}/devtools/page/{target_id}")).await?);
+        cdp.call("Page.bringToFront", json!({}), 5000).await?;
         Ok(())
     }
 
@@ -1223,6 +1235,10 @@ impl<O: CdpOps> HubState<O> {
         trace.mark(phase.name());
 
         // ---- Sent:写入校验与清空判定在 send_js 内(5 次重试逐字比对) ----
+        // 某些站点会暂停后台标签页的提交/生成；发送前选中本会话 target。
+        self.op(self.ops.activate_page(port, target_id), cancel, deadline)
+            .await?;
+        trace.mark("target_activated");
         let send_expr = format!("({})({})", a.send_js(), json_arg(prompt));
         let mut before_count: Option<u64> = None;
         let mut before_text: Option<String> = None;
@@ -1303,6 +1319,8 @@ impl<O: CdpOps> HubState<O> {
             } else if !resent {
                 resent = true;
                 trace.mark("safe_resend");
+                self.op(self.ops.activate_page(port, target_id), cancel, deadline)
+                    .await?;
                 if let Ok(v2) = self
                     .op(
                         self.ops.eval_await(port, target_id, &send_expr, 60_000),
@@ -1404,6 +1422,8 @@ impl<O: CdpOps> HubState<O> {
                             } else if !resent {
                                 resent = true;
                                 trace.mark("safe_resend");
+                                self.op(self.ops.activate_page(port, target_id), cancel, deadline)
+                                    .await?;
                                 // 重发后以这次发送的 before 值为新基线(否则
                                 // before_count=None 会让 ResponseStarted 永远无法判定)
                                 if let Ok(v2) = self
@@ -1855,10 +1875,9 @@ pub fn webchat_cancel(hub: State<'_, Arc<WebchatHub>>, request_id: String) -> Re
     Ok(())
 }
 
-/// 拉起可见的 Edge 窗口给用户登录(隐藏主覆盖层让路)。
+/// 拉起可见的 Edge 窗口给用户登录，主角色窗口保持显示。
 /// 实例已在跑 = 只开新标签页(其他站点标签页原样存活——多 AI 剧场两个站点
-/// 并存的关键);只有没在跑才冷启动(epoch 失效会话句柄)。成功才隐藏主覆盖层:
-/// 拉起失败没有可交互的 Edge 窗口,角色该留在屏幕上
+/// 并存的关键);只有没在跑才冷启动(epoch 失效会话句柄)。
 #[tauri::command]
 pub async fn webchat_login(
     app: AppHandle,
@@ -1870,7 +1889,6 @@ pub async fn webchat_login(
         .url;
     let profile = profile_dir(&app)?;
     hub.open_login(&profile, url).await?;
-    show_main(&app, false);
     Ok(())
 }
 
@@ -2044,6 +2062,16 @@ mod tests {
                 .any(|arg| arg == "--remote-debugging-address=127.0.0.1"),
             "调试端口必须只监听本机"
         );
+        for flag in [
+            "--disable-background-timer-throttling",
+            "--disable-backgrounding-occluded-windows",
+            "--disable-renderer-backgrounding",
+        ] {
+            assert!(
+                args.iter().any(|arg| arg == flag),
+                "专用 Edge 缺少后台生成保障参数: {flag}"
+            );
+        }
     }
 
     #[test]
@@ -2203,6 +2231,10 @@ mod tests {
         fail_next_send_with_context_lost: bool,
         /// eval_await 调用计数(安全重发恰一次断言用)
         send_calls: u32,
+        /// 需要活动标签页才能发送(复现后台页不启动生成)
+        require_active_for_send: bool,
+        active_target: Option<String>,
+        activation_calls: u32,
         /// location.href 的应答覆写(None = 默认 deepseek 宿主;宿主校验测试用)
         wrong_site_href: Option<String>,
     }
@@ -2262,6 +2294,16 @@ mod tests {
             Ok(())
         }
 
+        async fn activate_page(&self, _port: u16, target_id: &str) -> Result<(), String> {
+            let mut s = self.state();
+            if !s.pages.iter().any(|(id, _)| id == target_id) {
+                return Err("Target closed".into());
+            }
+            s.active_target = Some(target_id.to_string());
+            s.activation_calls += 1;
+            Ok(())
+        }
+
         async fn eval(
             &self,
             port: u16,
@@ -2318,6 +2360,9 @@ mod tests {
             let mut s = self.state();
             s.send_calls += 1;
             s.ports_seen.push(port);
+            if s.require_active_for_send && s.active_target.as_deref() != Some(target_id) {
+                return Err("后台标签页未激活,生成暂停".into());
+            }
             let fail_context_lost = s.fail_next_send_with_context_lost;
             s.fail_next_send_with_context_lost = false;
             if !s.pages.iter().any(|(id, _)| id == target_id) || fail_context_lost {
@@ -2409,6 +2454,18 @@ mod tests {
             hub.ops.state().ports_seen.iter().all(|port| *port == 9222),
             "create/eval 不得收到初始占位端口 0"
         );
+    }
+
+    #[tokio::test]
+    async fn generation_activates_target_before_send() {
+        let ops = FakeOps::new();
+        ops.state().require_active_for_send = true;
+        let hub = hub_with(ops);
+
+        let result = ask_conv(&hub, "needs-active-tab", "k1", 10_000).await;
+
+        assert!(result.is_ok(), "发送前应激活目标标签页,实际: {result:?}");
+        assert_eq!(hub.ops.state().activation_calls, 1);
     }
 
     #[tokio::test]

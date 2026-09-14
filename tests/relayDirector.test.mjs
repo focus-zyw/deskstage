@@ -8,6 +8,7 @@ import { createServer } from 'vite'
 
 let server
 let createRelayDirector
+let aiTheaterTurnPolicy
 
 before(async () => {
   server = await createServer({
@@ -16,6 +17,7 @@ before(async () => {
     logLevel: 'silent',
   })
   ;({ createRelayDirector } = await server.ssrLoadModule('/src/relay/relayDirector.ts'))
+  ;({ AI_THEATER_TURN_POLICY: aiTheaterTurnPolicy } = await server.ssrLoadModule('/src/relay/relayPolicy.ts'))
 })
 
 after(async () => {
@@ -87,7 +89,7 @@ test('PreparedRelaySource 契约:first 已产出,第二角色请求已预发(流
   assert.equal(prepared.first.speaker, 'A')
   assert.equal(calls.length, 2, '返回 first 前已预发第二角色请求')
   assert.match(calls[0].prompt, /本场由你先开口/)
-  assert.match(calls[1].prompt, /你上次发言后发生了/)
+  assert.match(calls[1].prompt, /开场至今发生了/)
   assert.match(calls[1].prompt, /1\. 甲:我没吃!/)
 })
 
@@ -103,8 +105,53 @@ test('双角色固定交替;maxTurns 收束且末轮 prompt 带收尾指令;两�
   assert.deepEqual(lines.map((l) => l.speaker), ['A', 'B', 'A', 'B'])
   assert.equal(result.natural, true)
   assert.equal(result.reason, 'max-turns')
-  assert.match(calls[3].prompt, /最后一句/)
+  assert.match(calls[3].prompt, /末句/)
   assert.deepEqual([...released].sort(), ['relay:e1:A', 'relay:e1:B'])
+})
+
+test('每个角色只在会话首轮接收完整设定,后续轮只收增量台词', async () => {
+  const { deps, calls } = makeDeps([
+    say('我没吃!'),
+    say('盒子上写着你的名字'),
+    say('那是恶作剧'),
+    say('行,算你狠'),
+  ])
+  const director = createRelayDirector(deps)
+  await consume(await director.prepareRelay(makeReq()))
+
+  assert.match(calls[0].prompt, /你的角色:甲:爱逞强,心虚/)
+  assert.match(calls[1].prompt, /你的角色:乙:精明,嘴快/)
+  assert.match(calls[0].prompt, /只输出一个 JSON 对象/)
+  assert.match(calls[1].prompt, /只输出一个 JSON 对象/)
+  assert.doesNotMatch(calls[2].prompt, /场景:|你的角色:|两人关系:|你的目标:/)
+  assert.doesNotMatch(calls[2].prompt, /只输出一个 JSON 对象|action 词表/)
+  assert.match(calls[2].prompt, /2\. 乙:盒子上写着你的名字/)
+  assert.doesNotMatch(calls[3].prompt, /场景:|你的角色:|两人关系:|你的目标:/)
+  assert.doesNotMatch(calls[3].prompt, /只输出一个 JSON 对象|action 词表/)
+  assert.match(calls[3].prompt, /3\. 甲:那是恶作剧/)
+})
+
+test('网页已有回复但解析失败:同一标签页补发格式纠错,不重建会话', async () => {
+  const { deps, calls } = makeDeps([
+    say('我没吃!'),
+    '盒子上明明写着你的名字', // B 有回复,但不是 JSON
+    say('盒子上明明写着你的名字'), // B 按纠错消息重写
+    say('那是恶作剧'),
+    say('行,算你狠'),
+  ])
+  const director = createRelayDirector(deps)
+  const { lines, result } = await consume(await director.prepareRelay(makeReq()))
+
+  assert.deepEqual(lines.map((l) => l.text), [
+    '我没吃!',
+    '盒子上明明写着你的名字',
+    '那是恶作剧',
+    '行,算你狠',
+  ])
+  assert.equal(result.reason, 'max-turns')
+  assert.equal(calls[2].speaker, 'B')
+  assert.equal(calls[2].reset, false, '格式纠错必须复用刚才回复所在的标签页')
+  assert.match(calls[2].prompt, /上一条回复无法解析|只输出一个 JSON 对象/)
 })
 
 test('intent:end 在 minTurns 前被忽略,达到后生效(model-ended)', async () => {
@@ -119,6 +166,22 @@ test('intent:end 在 minTurns 前被忽略,达到后生效(model-ended)', async 
   assert.equal(lines.length, 4)
   assert.equal(result.reason, 'model-ended')
   assert.equal(result.natural, true)
+})
+
+test('AI 剧场默认策略不会在约 5 句时因模型 end 提前收场', async () => {
+  const replies = Array.from({ length: 16 }, (_, i) => say(`第${i + 1}句`, 'end'))
+  const { deps, calls } = makeDeps(replies)
+  const director = createRelayDirector(deps)
+  const { lines, result } = await consume(
+    await director.prepareRelay(makeReq({
+      minTurns: aiTheaterTurnPolicy.minTurns,
+      maxTurns: aiTheaterTurnPolicy.maxTurns,
+    })),
+  )
+
+  assert.ok(lines.length >= 8, `默认场次至少应有 8 句,实际 ${lines.length} 句`)
+  assert.equal(result.reason, 'model-ended')
+  assert.match(calls[0].prompt, /展开:.*intent 填 continue/)
 })
 
 test('整场时间预算:超时按 timeout 中止(natural=false)', async () => {
@@ -157,6 +220,9 @@ test('两段式失败:首次失败 reset 重建重发,二次失败本地收尾(n
   const { lines, result } = await consume(await director.prepareRelay(makeReq({ maxTurns: 8 })))
   assert.equal(calls[2].reset, true, '恢复重试必须重建会话')
   assert.match(calls[2].prompt, /连接断了一下|演出继续/)
+  assert.match(calls[2].prompt, /你的角色:乙:精明,嘴快/, '重建 B 会话必须恢复完整人设')
+  assert.match(calls[4].prompt, /1\. 甲:我没吃!/, '重建 A 会话必须带回完整已演历史')
+  assert.match(calls[4].prompt, /2\. 乙:盒子上写着你的名字/)
   const last = lines[lines.length - 1]
   assert.equal(last.speaker, 'B', '由最近成功发言的角色(失败者的搭档)本地收尾')
   assert.equal(result.natural, false)
