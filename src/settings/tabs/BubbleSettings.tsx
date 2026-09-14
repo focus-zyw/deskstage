@@ -47,6 +47,15 @@ function useBubbleThemesV2(): BubbleThemeV2[] {
 }
 
 const TEMPLATES = listBubbleTemplates()
+/** 模板画廊直接渲染真实 Bubble,只把模板相关组切到目录默认值;不维护第二套近似骨架。 */
+const TEMPLATE_THUMB_THEMES = Object.fromEntries(TEMPLATES.map((tpl) => {
+  const retargeted = mutateBubbleTheme(BUILT_IN_BUBBLE_THEMES.comic, {
+    type: 'retarget-template',
+    templateId: tpl.id,
+    preserve: ['palette'],
+  })
+  return [tpl.id, mutateBubbleTheme(retargeted, { type: 'reset-to-template-defaults' })]
+})) as Record<BubbleTemplateId, BubbleThemeV2>
 const MATERIAL_LABEL: Record<BubbleMaterialId, string> = {
   solid: '纯色', gradient: '渐变', glass: '玻璃', paper: '纸张', neon: '霓虹',
 }
@@ -61,7 +70,7 @@ const NAMEPLATE_POS_LABEL: Record<BubbleNameplatePosition, string> = {
 }
 const SHADOW_LABEL: Record<BubbleShadowLevel, string> = { none: '无', soft: '柔和', strong: '明显' }
 const FONT_LABEL: Record<BubbleThemeV2['typography']['fontPreset'], string> = {
-  friendly: '友好', comic: '圆润', clean: '利落',
+  friendly: '友好', comic: '圆润', clean: '利落', pixel: '像素',
 }
 const ALIGN_LABEL: Record<BubbleThemeV2['typography']['align'], string> = { left: '左对齐', center: '居中' }
 
@@ -155,10 +164,11 @@ export function BubbleSettings() {
   const [note, setNote] = useState<string | null>(null)
   const [armedDelete, setArmedDelete] = useState<string | null>(null)
   const disarmTimer = useRef(0)
-  // 预览场景:文本长短/喊话 × 上下位置 × 桌面深浅
+  // 预览场景:文本长短/喊话 × 上下位置 × 桌面深浅 × 说话人(高级配色改 B/C 时必须能单独看)
   const [sceneText, setSceneText] = useState<SceneText>('short')
   const [sceneBelow, setSceneBelow] = useState(false)
   const [desk, setDesk] = useState<Desk>('light')
+  const [sceneSpeaker, setSceneSpeaker] = useState<'A' | 'B' | 'C' | 'all'>('A')
   const [compare, setCompare] = useState(false)
   const [advanced, setAdvanced] = useState(false)
   // AI 三候选
@@ -317,24 +327,46 @@ export function BubbleSettings() {
                 { value: 'clear', label: '透明桌面' },
               ]}
             />
+            <Seg<string>
+              value={sceneSpeaker}
+              onChange={(v) => setSceneSpeaker(v as 'A' | 'B' | 'C' | 'all')}
+              options={[
+                { value: 'A', label: '甲' },
+                { value: 'B', label: '乙' },
+                { value: 'C', label: '丙' },
+                { value: 'all', label: '三人' },
+              ]}
+            />
           </div>
           <div className={`bw-stage desk-${desk}${draft ? ' editing' : ''}`}>
             <div className="bw-stage-row">
               <BubbleThemeProvider theme={previewTheme}>
-                <Bubble
-                  text={SCENE_TEXT[sceneText]}
-                  speaker="A"
-                  below={sceneBelow}
-                  loud={sceneLoud}
-                  tailSide="left"
-                />
+                {(sceneSpeaker === 'all' ? (['A', 'B', 'C'] as const) : ([sceneSpeaker] as const)).map((sp) => (
+                  <Bubble
+                    key={sp}
+                    text={SCENE_TEXT[sceneText]}
+                    speaker={sp}
+                    below={sceneBelow}
+                    loud={sceneLoud}
+                    tailSide={sp === 'C' ? 'center' : 'left'}
+                  />
+                ))}
               </BubbleThemeProvider>
             </div>
             {compare && draft && (
               <div className="bw-stage-row">
                 <div className="bw-vs">保存前:{currentTheme.label}</div>
                 <BubbleThemeProvider theme={currentTheme}>
-                  <Bubble text={SCENE_TEXT[sceneText]} speaker="A" below={sceneBelow} loud={sceneLoud} tailSide="left" />
+                  {(sceneSpeaker === 'all' ? (['A', 'B', 'C'] as const) : ([sceneSpeaker] as const)).map((sp) => (
+                    <Bubble
+                      key={sp}
+                      text={SCENE_TEXT[sceneText]}
+                      speaker={sp}
+                      below={sceneBelow}
+                      loud={sceneLoud}
+                      tailSide={sp === 'C' ? 'center' : 'left'}
+                    />
+                  ))}
                 </BubbleThemeProvider>
               </div>
             )}
@@ -481,8 +513,10 @@ export function BubbleSettings() {
                   title={t.desc}
                   onClick={() => update((cur) => mutateBubbleTheme(cur, { type: 'retarget-template', templateId: t.id as BubbleTemplateId, preserve: ['palette', 'typography'] }))}
                 >
-                  <span className="bw-thumb" data-template={t.id} aria-hidden>
-                    <i />
+                  <span className="bw-thumb" aria-hidden>
+                    <BubbleThemeProvider theme={TEMPLATE_THUMB_THEMES[t.id]}>
+                      <Bubble text="预览" speaker="A" tailSide="center" />
+                    </BubbleThemeProvider>
                   </span>
                   <span className="bw-tpl-label">{t.label}</span>
                 </button>
@@ -514,7 +548,7 @@ export function BubbleSettings() {
                   onChange={(style) => update((cur) => ({ ...cur, nameplate: { ...cur.nameplate, style } }))}
                 />
               </div>
-              {draft.nameplate.style !== 'hidden' && draft.nameplate.style !== 'inline' && (
+              {draft.nameplate.style === 'badge' || draft.nameplate.style === 'tab' ? (
                 <div className="bubble-option">
                   <span>名签位置</span>
                   <Seg<BubbleNameplatePosition>
@@ -523,7 +557,7 @@ export function BubbleSettings() {
                     onChange={(position) => update((cur) => ({ ...cur, nameplate: { ...cur.nameplate, position } }))}
                   />
                 </div>
-              )}
+              ) : null}
             </div>
 
             {/* 配色:简洁 + 高级 */}
@@ -605,7 +639,9 @@ export function BubbleSettings() {
               <Num label="字号 12~22" value={draft.typography.size} min={12} max={22} onChange={(v) => update((cur) => ({ ...cur, typography: { ...cur.typography, size: v } }))} />
               <Num label="字重 400~800" value={draft.typography.weight} min={400} max={800} step={10} onChange={(v) => update((cur) => ({ ...cur, typography: { ...cur.typography, weight: v } }))} />
               <Num label="行高 1.2~1.9" value={draft.typography.lineHeight} min={1.2} max={1.9} step={0.05} onChange={(v) => update((cur) => ({ ...cur, typography: { ...cur.typography, lineHeight: v } }))} />
-              <Num label="尾巴大小 10~24" value={draft.tail.size} min={10} max={24} onChange={(v) => update((cur) => ({ ...cur, tail: { ...cur.tail, size: v } }))} />
+              {draft.tail.style !== 'none' && (
+                <Num label="尾巴大小 10~24" value={draft.tail.size} min={10} max={24} onChange={(v) => update((cur) => ({ ...cur, tail: { ...cur.tail, size: v } }))} />
+              )}
             </div>
 
             {/* 细节 */}
@@ -624,9 +660,13 @@ export function BubbleSettings() {
             </div>
             <div className="bubble-nums">
               <Num label="描边宽 0~4" value={draft.frame.outlineWidth} min={0} max={4} step={0.5} onChange={(v) => update((cur) => ({ ...cur, frame: { ...cur.frame, outlineWidth: v } }))} />
-              <Num label="圆角 6~28" value={draft.frame.radius} min={6} max={28} onChange={(v) => update((cur) => ({ ...cur, frame: { ...cur.frame, radius: v } }))} />
+              {tpl.radiusEditable && (
+                <Num label="圆角 6~28" value={draft.frame.radius} min={6} max={28} onChange={(v) => update((cur) => ({ ...cur, frame: { ...cur.frame, radius: v } }))} />
+              )}
               <Num label="辉光 0~100" value={draft.effects.glow} min={0} max={100} onChange={(v) => update((cur) => ({ ...cur, effects: { ...cur.effects, glow: v } }))} />
-              <Num label="纹理 0~100" value={draft.effects.texture} min={0} max={100} onChange={(v) => update((cur) => ({ ...cur, effects: { ...cur.effects, texture: v } }))} />
+              {draft.material.id === 'paper' && (
+                <Num label="纹理 0~100" value={draft.effects.texture} min={0} max={100} onChange={(v) => update((cur) => ({ ...cur, effects: { ...cur.effects, texture: v } }))} />
+              )}
               <Num label="最大宽 240~520" value={draft.layout.maxWidth} min={240} max={520} step={10} onChange={(v) => update((cur) => ({ ...cur, layout: { ...cur.layout, maxWidth: v } }))} />
               <Num label="左右留白 10~28" value={draft.layout.paddingX} min={10} max={28} onChange={(v) => update((cur) => ({ ...cur, layout: { ...cur.layout, paddingX: v } }))} />
               <Num label="上下留白 8~28" value={draft.layout.paddingY} min={8} max={28} onChange={(v) => update((cur) => ({ ...cur, layout: { ...cur.layout, paddingY: v } }))} />

@@ -20,7 +20,7 @@ export {
   type BubbleColorMode,
   type BubbleLightness,
   type BubbleThemeV2,
-  type BubbleContext,
+  type BubbleResolveOptions,
   type ResolvedBubbleAppearance,
   type BubbleSpeakerLook,
   type BubbleDesignIntent,

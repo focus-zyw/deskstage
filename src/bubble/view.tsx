@@ -5,16 +5,28 @@
 // below = 角色贴近屏幕顶部时气泡翻到下方,尾巴朝上;loud = 远距离喊话加大加粗;
 // tailSide 与立绘朝向共用同一事实源;action/delivery 只做轻量情绪装饰。
 // 超过 80 字的长句自动降字号(text-wrap/降级见 App.css .bubble-shell.long)。
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import { nameOf } from '../engine/persona'
 import { resolveBubbleAppearance } from './resolve'
 import { useBubbleTheme } from './adapter'
-import type { BubbleContext } from './types'
 
 const EXIT_MS = 160
 
 export type BubbleTailSide = 'left' | 'center' | 'right'
 type BubbleMood = 'angry' | 'shy' | 'excited' | undefined
+
+/** 系统"减弱动态效果"偏好:驱动 resolve 关入场动画(主题解析的唯一运行时输入) */
+function usePrefersReducedMotion(): boolean {
+  return useSyncExternalStore(
+    (onChange) => {
+      const mq = window.matchMedia('(prefers-reduced-motion: reduce)')
+      mq.addEventListener('change', onChange)
+      return () => mq.removeEventListener('change', onChange)
+    },
+    () => window.matchMedia('(prefers-reduced-motion: reduce)').matches,
+    () => false,
+  )
+}
 
 function moodFor(action?: string, delivery?: string, loud?: boolean): BubbleMood {
   if (action === 'angry') return 'angry'
@@ -63,19 +75,16 @@ export function Bubble({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [text])
   const shown = text ?? keptText
-  if (!shown) return null
-  const name = speaker === 'C' ? '场外' : speaker ? nameOf(speaker) : ''
+  const name = speaker ? nameOf(speaker) : ''
   const mood = moodFor(action, delivery, loud)
-  const ctx: BubbleContext = {
-    speaker: speaker ?? 'A',
-    placement: below ? 'below' : 'above',
-    tailSide,
-    emphasis: loud ? 'loud' : 'normal',
-    length: shown.length > 80 ? 'long' : 'normal',
-    mood,
-  }
-  // resolve 是无 DOM 测量的纯函数,直接同步调用;重渲染合并交给 React
-  const appearance = resolveBubbleAppearance(theme, ctx)
+  // resolve 是纯函数:主题与减弱动效不变就不重算(颜色转换/对比度循环/纸噪点拼接不随
+  // 每次重渲染重复);其余运行时状态全部转成 class/data 属性,由 CSS 消费
+  const reducedMotion = usePrefersReducedMotion()
+  const appearance = useMemo(
+    () => resolveBubbleAppearance(theme, { reducedMotion }),
+    [theme, reducedMotion],
+  )
+  if (!shown) return null
   const inlineName = appearance.nameplateStyle === 'inline'
   const showPlate = Boolean(name) && appearance.nameplateStyle !== 'hidden' && !inlineName
   return (

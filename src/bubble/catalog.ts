@@ -5,7 +5,6 @@ import type {
   BubbleTemplateId,
   BubbleThemeV2,
 } from './types'
-
 export interface BubbleTemplateDefaults {
   material: { opacity: number; blur: number }
   frame: { radius: number; outlineWidth: number }
@@ -22,7 +21,20 @@ export interface BubbleTemplateDef {
   desc: string
   materials: BubbleMaterialId[]
   defaultMaterial: BubbleMaterialId
+  /** 工坊是否应展示圆角调节;胶囊/锯齿/云朵的轮廓不消费 frame.radius */
+  radiusEditable: boolean
+  /** 模板附加装饰的目录元数据;具体绘制仍由同源 Bubble CSS 完成 */
+  decoration: 'none' | 'tape' | 'nameplate-slot'
   defaults: BubbleTemplateDefaults
+}
+
+/** 目录与内置主题是进程级事实源,递归冻结可防调用方意外污染嵌套对象/数组。 */
+function deepFreeze<T>(value: T): T {
+  if (value && typeof value === 'object' && !Object.isFrozen(value)) {
+    Object.freeze(value)
+    for (const child of Object.values(value as Record<string, unknown>)) deepFreeze(child)
+  }
+  return value
 }
 
 function defaults(over: Partial<BubbleTemplateDefaults>): BubbleTemplateDefaults {
@@ -38,13 +50,15 @@ function defaults(over: Partial<BubbleTemplateDefaults>): BubbleTemplateDefaults
   }
 }
 
-export const BUBBLE_TEMPLATES: Record<BubbleTemplateId, BubbleTemplateDef> = {
+export const BUBBLE_TEMPLATES: Record<BubbleTemplateId, BubbleTemplateDef> = deepFreeze({
   'soft-chat': {
     id: 'soft-chat',
     label: '柔和对话',
     desc: '常规圆角框 + 水滴尾,日常对话百搭',
     materials: ['solid', 'gradient', 'glass', 'paper', 'neon'],
     defaultMaterial: 'gradient',
+    radiusEditable: true,
+    decoration: 'none',
     defaults: defaults({}),
   },
   pill: {
@@ -53,6 +67,8 @@ export const BUBBLE_TEMPLATES: Record<BubbleTemplateId, BubbleTemplateDef> = {
     desc: '完整胶囊轮廓 + 小圆尾,短句卖萌',
     materials: ['solid', 'gradient', 'glass', 'neon'],
     defaultMaterial: 'solid',
+    radiusEditable: false,
+    decoration: 'none',
     defaults: defaults({
       frame: { radius: 28, outlineWidth: 1 },
       tail: { style: 'curve', size: 12 },
@@ -66,6 +82,8 @@ export const BUBBLE_TEMPLATES: Record<BubbleTemplateId, BubbleTemplateDef> = {
     desc: '锯齿轮廓 + 粗描边,喊话吐槽专用',
     materials: ['solid', 'neon'],
     defaultMaterial: 'solid',
+    radiusEditable: false,
+    decoration: 'none',
     defaults: defaults({
       material: { opacity: 0.97, blur: 0 },
       frame: { radius: 6, outlineWidth: 2.5 },
@@ -81,6 +99,8 @@ export const BUBBLE_TEMPLATES: Record<BubbleTemplateId, BubbleTemplateDef> = {
     desc: '多圆瓣边缘 + 圆泡尾,软萌内心戏',
     materials: ['solid', 'gradient', 'glass'],
     defaultMaterial: 'gradient',
+    radiusEditable: false,
+    decoration: 'none',
     defaults: defaults({
       material: { opacity: 0.95, blur: 0 },
       frame: { radius: 24, outlineWidth: 1 },
@@ -95,6 +115,8 @@ export const BUBBLE_TEMPLATES: Record<BubbleTemplateId, BubbleTemplateDef> = {
     desc: '不规则纸片 + 胶带 + 硬阴影,生活感',
     materials: ['solid', 'gradient', 'paper'],
     defaultMaterial: 'paper',
+    radiusEditable: true,
+    decoration: 'tape',
     defaults: defaults({
       material: { opacity: 0.98, blur: 0 },
       frame: { radius: 14, outlineWidth: 0 },
@@ -111,6 +133,8 @@ export const BUBBLE_TEMPLATES: Record<BubbleTemplateId, BubbleTemplateDef> = {
     desc: '方角双线 + 名字标签槽,故事扮演',
     materials: ['solid', 'glass', 'paper', 'neon'],
     defaultMaterial: 'solid',
+    radiusEditable: true,
+    decoration: 'nameplate-slot',
     defaults: defaults({
       material: { opacity: 0.96, blur: 0 },
       frame: { radius: 6, outlineWidth: 2 },
@@ -125,6 +149,8 @@ export const BUBBLE_TEMPLATES: Record<BubbleTemplateId, BubbleTemplateDef> = {
     desc: '无名签无尾的半透明横条,低干扰长文',
     materials: ['solid', 'glass', 'neon'],
     defaultMaterial: 'glass',
+    radiusEditable: true,
+    decoration: 'none',
     defaults: defaults({
       material: { opacity: 0.62, blur: 10 },
       frame: { radius: 10, outlineWidth: 0 },
@@ -135,7 +161,7 @@ export const BUBBLE_TEMPLATES: Record<BubbleTemplateId, BubbleTemplateDef> = {
       effects: { shadow: 'soft', glow: 0, texture: 0 },
     }),
   },
-}
+})
 
 /** 稳定 id:'comic'/'glass' 被 config.bubbleStyle、回退逻辑与既有配置引用,永不变 */
 export const BUILTIN_BUBBLE_THEME_IDS = ['comic', 'glass'] as const
@@ -145,7 +171,7 @@ export type BuiltinBubbleThemeId = (typeof BUILTIN_BUBBLE_THEME_IDS)[number]
  * 内置主题(不可变 V2):颜色以 overrides 全量写死(不走派生),
  * 与旧 :root[data-bubble] 静态变量集逐色一致;自定义主题走同一条渲染链路。
  */
-export const BUILT_IN_BUBBLE_THEMES: Record<BuiltinBubbleThemeId, BubbleThemeV2> = {
+export const BUILT_IN_BUBBLE_THEMES: Record<BuiltinBubbleThemeId, BubbleThemeV2> = deepFreeze({
   comic: {
     version: 2,
     id: 'comic',
@@ -212,11 +238,21 @@ export const BUILT_IN_BUBBLE_THEMES: Record<BuiltinBubbleThemeId, BubbleThemeV2>
     layout: { maxWidth: 320, paddingX: 17, paddingY: 15 },
     effects: { shadow: 'strong', glow: 0, texture: 0 },
   },
-}
+})
 
 export function isBuiltinBubbleThemeId(id: string): id is BuiltinBubbleThemeId {
   return (BUILTIN_BUBBLE_THEME_IDS as readonly string[]).includes(id)
 }
+
+/** 材质级默认表面参数:切材质时 blur/透明度跟材质走(模板默认多为 blur 0,
+ *  直接沿用会让"切到玻璃"经常得到 blur 0,玻璃名存实亡) */
+export const BUBBLE_MATERIAL_DEFAULTS: Record<BubbleMaterialId, { opacity: number; blur: number }> = deepFreeze({
+  solid: { opacity: 0.96, blur: 0 },
+  gradient: { opacity: 0.93, blur: 0 },
+  glass: { opacity: 0.86, blur: 14 },
+  paper: { opacity: 0.98, blur: 0 },
+  neon: { opacity: 0.94, blur: 0 },
+})
 
 /** 材质不在模板白名单时回落 defaultMaterial(normalize 与 resolve 双重兜底) */
 export function compatibleMaterial(templateId: BubbleTemplateId, materialId: BubbleMaterialId): BubbleMaterialId {

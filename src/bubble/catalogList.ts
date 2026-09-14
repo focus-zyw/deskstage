@@ -7,16 +7,22 @@ export interface BubbleTemplateSummary {
   id: BubbleTemplateId
   label: string
   desc: string
-  materials: BubbleMaterialId[]
+  materials: readonly BubbleMaterialId[]
   defaultMaterial: BubbleMaterialId
+  radiusEditable: boolean
+  decoration: 'none' | 'tape' | 'nameplate-slot'
 }
 
-export function listBubbleTemplates(): BubbleTemplateSummary[] {
-  return Object.values(BUBBLE_TEMPLATES).map(({ id, label, desc, materials, defaultMaterial }) => ({
+export function listBubbleTemplates(): readonly BubbleTemplateSummary[] {
+  return Object.freeze(Object.values(BUBBLE_TEMPLATES).map(({
+    id, label, desc, materials, defaultMaterial, radiusEditable, decoration,
+  }) => Object.freeze({
     id,
     label,
     desc,
-    materials,
+    materials: Object.freeze([...materials]),
     defaultMaterial,
-  }))
+    radiusEditable,
+    decoration,
+  })))
 }

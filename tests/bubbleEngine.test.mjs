@@ -50,6 +50,7 @@ test('目录:七个模板齐全,兼容材质非空且含默认材质', () => {
     list.map((t) => t.id).sort(),
     ['cloud', 'comic-burst', 'pill', 'rpg', 'soft-chat', 'sticker', 'caption'].sort(),
   )
+  assert.ok(bubble.BUBBLE_FONT_PRESETS.includes('pixel'))
 })
 
 test('目录:内置柔彩/夜色玻璃是合法 V2,normalize 后字段不变', () => {
@@ -59,6 +60,17 @@ test('目录:内置柔彩/夜色玻璃是合法 V2,normalize 后字段不变', (
     assert.ok(clean, `${id} 应为合法 V2`)
     assert.deepEqual(clean, t, `${id} normalize 幂等且逐字段一致`)
   }
+})
+
+test('目录:内置主题与公开模板摘要不可变,调用方不能污染目录事实源', () => {
+  assert.equal(Object.isFrozen(bubble.BUILT_IN_BUBBLE_THEMES), true)
+  assert.equal(Object.isFrozen(bubble.BUILT_IN_BUBBLE_THEMES.comic), true)
+  assert.equal(Object.isFrozen(bubble.BUILT_IN_BUBBLE_THEMES.comic.palette), true)
+  const list = bubble.listBubbleTemplates()
+  assert.equal(Object.isFrozen(list), true)
+  assert.ok(list.every((tpl) => Object.isFrozen(tpl) && Object.isFrozen(tpl.materials)))
+  assert.throws(() => list[0].materials.push('paper'), TypeError)
+  assert.equal(bubble.listBubbleTemplates()[0].materials.includes('paper'), true)
 })
 
 test('清洗 V2:钳位、材质降级、blur 非 glass 强制 0、坏 id/label 拒收', () => {
@@ -151,6 +163,29 @@ test('V1 迁移:玻璃主题保透明度与模糊;blurPx=0 时回渐变;统一�
   assert.equal(flat.effects.shadow, 'strong')
 })
 
+test('V1 迁移:最早期主题没有 shape 字段也能按旧字段组合识别,配色零丢失', () => {
+  // 最早版本连 shape 都没有:若误判为"残缺 V2"会只留 id/label、丢掉全部 12 色
+  const earlyV1 = {
+    id: 'custom_earliest', label: '最早',
+    bg: '#101426', text: '#e8f4ff', stroke: '#38e1ff',
+    accA: '#ff5ea8', accB: '#38e1ff', accC: '#b18cff',
+    bgA: '#1c1030', bgB: '#0f2233', bgC: '#1a1233',
+    strokeA: '#ff5ea8', strokeB: '#38e1ff', strokeC: '#b18cff',
+    bgOpacity: 0.86, strokeW: 2, blurPx: 0, fontSize: 17, maxWidth: 360, radius: 14,
+  }
+  const t = bubble.normalizeBubbleThemeAny(earlyV1)
+  assert.ok(t, '无 shape 的早期 V1 必须被识别并迁移')
+  assert.equal(t.templateId, 'soft-chat')
+  const ov = t.palette.overrides
+  assert.equal(ov.surface, '#101426')
+  assert.equal(ov.text, '#e8f4ff')
+  assert.equal(ov.accA, '#ff5ea8')
+  assert.equal(ov.surfaceC, '#1a1233')
+  assert.equal(t.typography.size, 17)
+  assert.equal(t.material.opacity, 0.86)
+  assert.deepEqual(bubble.normalizeBubbleTheme(t), t)
+})
+
 test('resolve:全部目录兼容组合产出合法外观(无 undefined/NaN/坏颜色)', () => {
   const combos = []
   for (const tpl of bubble.listBubbleTemplates()) {
@@ -159,7 +194,7 @@ test('resolve:全部目录兼容组合产出合法外观(无 undefined/NaN/坏�
   assert.ok(combos.length >= 7)
   for (const [templateId, materialId] of combos) {
     const t = bubble.normalizeBubbleTheme({ ...validV2(), templateId, material: { id: materialId, opacity: 0.9, blur: 10 } })
-    const ap = bubble.resolveBubbleAppearance(t, { speaker: 'A', placement: 'above', tailSide: 'center', emphasis: 'normal', length: 'normal' })
+    const ap = bubble.resolveBubbleAppearance(t)
     assert.equal(ap.templateId, templateId)
     assert.equal(ap.materialId, materialId)
     for (const [k, v] of Object.entries(ap.cssVars)) {
@@ -172,6 +207,38 @@ test('resolve:全部目录兼容组合产出合法外观(无 undefined/NaN/坏�
       assert.match(ap.speakers[sp].accent, HEX_RE)
     }
   }
+})
+
+test('resolve:阴影与辉光语义——漫画 none 即无滤镜;辉光独立于阴影档位生效', () => {
+  const themeOf = (over) => bubble.normalizeBubbleTheme({
+    ...validV2(),
+    templateId: 'comic-burst',
+    material: { id: 'solid', opacity: 0.95, blur: 0 },
+    ...over,
+  })
+  // 漫画 + 无阴影 + 无辉光:不再固定落 drop-shadow
+  const quiet = bubble.resolveBubbleAppearance(themeOf({ effects: { shadow: 'none', glow: 0, texture: 0 } }))
+  assert.equal(quiet.cssVars['--bub-filter'], 'none')
+  // 漫画 + 无阴影 + 有辉光:仅剩纯光晕滤镜(无投影层的 9px 纵向偏移)
+  const glowOnly = bubble.resolveBubbleAppearance(themeOf({ effects: { shadow: 'none', glow: 60, texture: 0 } }))
+  assert.match(glowOnly.cssVars['--bub-filter'], /drop-shadow\(0 0 \d+px/)
+  assert.ok(!/drop-shadow\(0 9px/.test(glowOnly.cssVars['--bub-filter']))
+  // 普通模板无阴影但有辉光:辉光以纯光晕 box-shadow 存在
+  const soft = bubble.resolveBubbleAppearance(bubble.normalizeBubbleTheme({ ...validV2(), effects: { shadow: 'none', glow: 50, texture: 0 } }))
+  assert.match(soft.cssVars['--bub-shadow'], /^0 0 \d+px/)
+  // 贴纸 strong:硬阴影 + 辉光
+  const sticker = bubble.resolveBubbleAppearance(bubble.normalizeBubbleTheme({ ...validV2(), templateId: 'sticker', effects: { shadow: 'strong', glow: 40, texture: 30 } }))
+  assert.match(sticker.cssVars['--bub-shadow'], /5px 6px 0/)
+  assert.ok(sticker.cssVars['--bub-shadow'].includes('var(--bub-glow-color)'))
+
+  // 云朵的轮廓由 mask 生成,阴影必须走 alpha-aware filter,不能退回矩形 box-shadow
+  const cloud = bubble.resolveBubbleAppearance(bubble.normalizeBubbleTheme({
+    ...validV2(),
+    templateId: 'cloud',
+    effects: { shadow: 'soft', glow: 0, texture: 0 },
+  }))
+  assert.equal(cloud.cssVars['--bub-shadow'], 'none')
+  assert.match(cloud.cssVars['--bub-filter'], /drop-shadow\(/)
 })
 
 test('resolve:内置柔彩与旧静态变量逐色一致', () => {
@@ -255,10 +322,20 @@ test('mutate:快捷动作语义正确', () => {
   assert.equal(reset.effects.shadow, 'soft')
 })
 
-test('mutate:set-material 越界降级为模板默认材质', () => {
+test('mutate:set-material 越界降级为模板默认材质;blur 跟材质默认走', () => {
   const sticker = bubble.normalizeBubbleTheme({ ...validV2(), templateId: 'sticker' })
   const bad = bubble.mutateBubbleTheme(sticker, { type: 'set-material', materialId: 'neon' })
   assert.equal(bad.material.id, 'paper')
+  assert.equal(bad.material.blur, 0)
+  // 切玻璃必须拿到玻璃默认模糊(模板默认 blur 多为 0,沿用会让玻璃名存实亡)
+  const glassy = bubble.mutateBubbleTheme(bubble.normalizeBubbleTheme({ ...validV2(), material: { id: 'solid', opacity: 0.9, blur: 0 } }), { type: 'set-material', materialId: 'glass' })
+  assert.equal(glassy.material.id, 'glass')
+  assert.equal(glassy.material.blur, 14)
+  // 换模板到白名单含玻璃的:rpg 默认 solid,但显式玻璃材质仍保有玻璃默认模糊
+  const glassTheme = bubble.normalizeBubbleTheme({ ...validV2(), material: { id: 'glass', opacity: 0.86, blur: 14 } })
+  const toRpg = bubble.mutateBubbleTheme(glassTheme, { type: 'retarget-template', templateId: 'rpg', preserve: ['palette'] })
+  assert.equal(toRpg.material.id, 'glass')
+  assert.equal(toRpg.material.blur, 14)
 })
 
 test('根兼容变量:注入 --bubble-acc-* 且 null 清理不残留', () => {
@@ -313,6 +390,35 @@ test('AI 候选:三槽位归位;坏输出按槽位补位,不整体失败', async
   assert.equal(mixed[0].theme.templateId, 'cloud')
   assert.equal(mixed[1].slot, 'expressive')
   assert.ok(bubble.normalizeBubbleTheme(mixed[1].theme))
+
+  // 三个完全相同的方案:程序必须保证差异(重复方向按槽位确定性替换)且 id 互不相同
+  const same = JSON.stringify([0, 1, 2].map(() => ({
+    slot: 'faithful', label: '千篇一律', templateId: 'soft-chat', materialId: 'solid',
+    mood: 'warm', lightness: 'light', primaryColor: '#e98050', typographyPreset: 'friendly', nameplateStyle: 'badge',
+  })))
+  const clones = await generateBubbleCandidates('随便来点', { complete: async () => same })
+  assert.equal(clones.length, 3)
+  const ids = new Set(clones.map((c) => c.theme.id))
+  assert.equal(ids.size, 3, `三个候选 id 必须互不相同:${[...ids].join(',')}`)
+  const dirs = new Set(clones.map((c) => `${c.theme.templateId}|${c.theme.material.id}|${c.theme.palette.primary}`))
+  assert.equal(dirs.size, 3, '三个候选方向(模板/材质/主色)不应完全相同')
+  assert.ok(clones.every((c) => bubble.normalizeBubbleTheme(c.theme)))
+
+  // 只换主色仍只算一个方向差异,不满足“模板/材质/主色至少两项不同”
+  const colorsOnly = JSON.stringify(['#ff0000', '#00ff00', '#0000ff'].map((primaryColor, i) => ({
+    slot: ['faithful', 'expressive', 'restrained'][i], label: `单色差异${i + 1}`,
+    templateId: 'soft-chat', materialId: 'solid', mood: 'warm', lightness: 'light',
+    primaryColor, typographyPreset: 'friendly', nameplateStyle: 'badge',
+  })))
+  const diversified = await generateBubbleCandidates('验证严格差异', { complete: async () => colorsOnly })
+  const directionOf = (candidate) => [candidate.theme.templateId, candidate.theme.material.id, candidate.theme.palette.primary]
+  for (let i = 0; i < diversified.length; i++) {
+    for (let j = i + 1; j < diversified.length; j++) {
+      const a = directionOf(diversified[i])
+      const b = directionOf(diversified[j])
+      assert.ok(a.filter((value, k) => value !== b[k]).length >= 2, `候选 ${i}/${j} 至少两项不同`)
+    }
+  }
 
   await assert.rejects(
     generateBubbleCandidates('   ', { complete: async () => good }),

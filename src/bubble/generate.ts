@@ -2,7 +2,7 @@
 // LLM 只产出设计决策(模板/材质/气质/主色),不再自由生成几十个 CSS 参数;
 // 槽位制保证三候选方向性差异(忠实/表现/克制),程序只做兼容修正与补位,不随机换模板。
 import { complete, type CompletionOptions } from '../engine/llmGateway'
-import { BUBBLE_TEMPLATES, compatibleMaterial } from './catalog'
+import { BUBBLE_MATERIAL_DEFAULTS, BUBBLE_TEMPLATES, compatibleMaterial } from './catalog'
 import { autoFixPalette } from './palette'
 import { normalizeBubbleTheme } from './normalize'
 import {
@@ -44,6 +44,34 @@ function fallbackIntent(slot: BubbleDesignIntent['slot'], mood: BubbleDesignInte
   }
 }
 
+/** 严格差异补位池:任意两项在模板、材质、主色三个维度上都完全不同。
+ * 最多只有两个已接纳候选,因此总能找到与它们分别至少两项不同的确定性方向。 */
+const DIVERSITY_PRESETS: ReadonlyArray<Omit<BubbleDesignIntent, 'slot' | 'label'>> = [
+  { templateId: 'soft-chat', materialId: 'gradient', mood: 'warm', lightness: 'light', primaryColor: '#e98050', typographyPreset: 'friendly', nameplateStyle: 'badge' },
+  { templateId: 'comic-burst', materialId: 'neon', mood: 'dramatic', lightness: 'dark', primaryColor: '#8f7ff0', typographyPreset: 'comic', nameplateStyle: 'badge' },
+  { templateId: 'caption', materialId: 'glass', mood: 'minimal', lightness: 'dark', primaryColor: '#7f8fa6', typographyPreset: 'clean', nameplateStyle: 'inline' },
+  { templateId: 'sticker', materialId: 'paper', mood: 'cute', lightness: 'light', primaryColor: '#d99058', typographyPreset: 'pixel', nameplateStyle: 'inline' },
+  { templateId: 'rpg', materialId: 'solid', mood: 'cool', lightness: 'dark', primaryColor: '#4b7bec', typographyPreset: 'clean', nameplateStyle: 'tab' },
+]
+
+function directionDistance(a: BubbleThemeV2, b: BubbleThemeV2): number {
+  return Number(a.templateId !== b.templateId)
+    + Number(a.material.id !== b.material.id)
+    + Number(a.palette.primary !== b.palette.primary)
+}
+
+function diverseFromAll(theme: BubbleThemeV2, accepted: readonly BubbleThemeV2[]): boolean {
+  return accepted.every((prior) => directionDistance(theme, prior) >= 2)
+}
+
+function diversityIntent(slot: BubbleDesignIntent['slot'], preset: (typeof DIVERSITY_PRESETS)[number]): BubbleDesignIntent {
+  return {
+    slot,
+    label: slot === 'faithful' ? '贴合版' : slot === 'expressive' ? '张扬版' : '克制版',
+    ...preset,
+  }
+}
+
 function buildSystemPrompt(): string {
   return [
     '你是桌面虚拟角色的"气泡美术总监"。根据用户描述,给出三个方向不同的台词气泡设计方案。',
@@ -60,7 +88,7 @@ function buildSystemPrompt(): string {
     '  "mood": "cute|cool|warm|dramatic|minimal",',
     '  "lightness": "light|dark",',
     '  "primaryColor": "#RRGGBB 主色(用户提到颜色/风格时优先贴合)",',
-    '  "typographyPreset": "friendly|comic|clean",',
+    '  "typographyPreset": "friendly|comic|clean|pixel",',
     '  "nameplateStyle": "badge|tab|inline|hidden"',
     '}',
     '三个候选的 templateId、materialId、primaryColor 至少两项彼此不同。',
@@ -111,7 +139,7 @@ export function compileIntent(intent: BubbleDesignIntent): { theme: BubbleThemeV
     id: 'custom_preview',
     label: intent.label,
     templateId: intent.templateId,
-    material: { id: materialId, opacity: tpl.defaults.material.opacity, blur: materialId === 'glass' ? tpl.defaults.material.blur : 0 },
+    material: { id: materialId, opacity: BUBBLE_MATERIAL_DEFAULTS[materialId].opacity, blur: BUBBLE_MATERIAL_DEFAULTS[materialId].blur },
     palette: {
       mode: 'per-speaker',
       primary: intent.primaryColor,
@@ -186,8 +214,25 @@ export async function generateBubbleCandidates(
     }
   })
   const intents = slots.map((slot) => bySlot[slot] ?? fallbackIntent(slot, FALLBACK_MOOD[slot]))
-  return intents.slice(0, 3).map((intent) => {
-    const { theme, fixes } = compileIntent(intent)
-    return { slot: intent.slot, theme: { ...theme, id: `custom_${Date.now().toString(36)}` }, fixes }
+  // 编译 + 严格差异保证:每一对候选在(模板,降级后材质,主色)里至少两项不同。
+  // 不足时从固定方向池轮换补位,不使用随机改写,相同输入得到稳定结构。
+  const accepted: BubbleThemeV2[] = []
+  const batchId = Date.now().toString(36)
+  return intents.slice(0, 3).map((intent, i) => {
+    let compiled = compileIntent(intent)
+    if (!diverseFromAll(compiled.theme, accepted)) {
+      const replacement = DIVERSITY_PRESETS
+        .map((preset) => compileIntent(diversityIntent(intent.slot, preset)))
+        .find((candidate) => diverseFromAll(candidate.theme, accepted))
+      if (!replacement) throw new Error('无法生成方向足够不同的气泡候选')
+      compiled = {
+        ...replacement,
+        fixes: [...replacement.fixes, '已轮换模板/材质方向,避免三个候选过于相似'],
+      }
+    }
+    accepted.push(compiled.theme)
+    // 槽位后缀保证同一批三个 id 互不相同(同毫秒生成也不撞)
+    const slotTag = ['-f', '-e', '-r'][i] ?? `-${i}`
+    return { slot: intent.slot, theme: { ...compiled.theme, id: `custom_${batchId}${slotTag}` }, fixes: compiled.fixes }
   })
 }

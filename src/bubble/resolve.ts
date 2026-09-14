@@ -3,12 +3,13 @@
 // 产物由组件原样铺到 .bubble-shell 上(data 属性 + style),CSS 只消费不计算。
 import { compatibleMaterial } from './catalog'
 import { deriveEffectivePalette, mixHex, withAlpha } from './palette'
-import type { BubbleContext, BubbleThemeV2, ResolvedBubbleAppearance } from './types'
+import type { BubbleResolveOptions, BubbleThemeV2, ResolvedBubbleAppearance } from './types'
 
 export const BUBBLE_FONT_STACKS: Record<BubbleThemeV2['typography']['fontPreset'], string> = {
   friendly: "'MiSans', 'HarmonyOS Sans SC', 'Microsoft YaHei UI', 'PingFang SC', sans-serif",
   comic: "'Yuanti SC', 'YouYuan', 'MiSans', 'Microsoft YaHei UI', 'PingFang SC', sans-serif",
   clean: "'Segoe UI', 'Source Han Sans SC', 'Noto Sans SC', 'Microsoft YaHei UI', sans-serif",
+  pixel: "'Fusion Pixel 12px Proportional SC', 'Zpix', 'SimSun', monospace",
 }
 
 /** paper 材质的噪点层:SVG feTurbulence data URI,透明度随纹理强度变化 */
@@ -52,27 +53,36 @@ function materialLayers(
   return { image: 'none', backdrop: 'none' }
 }
 
-/** 阴影/辉光/剪裁滤镜串:box-shadow 走 --bub-shadow,clip-path 模板(漫画)走 --bub-filter */
+/** 阴影/辉光/剪裁滤镜串:box-shadow 走 --bub-shadow,clip-path 模板(漫画)走 --bub-filter。
+ *  语义:shadow='none' 就真的无投影(漫画也不落 drop-shadow);辉光独立于阴影档位,
+ *  任何档位(含无阴影)都生效——无阴影时辉光以纯光晕形式单独存在 */
 function effectVars(theme: BubbleThemeV2): Record<string, string> {
   const { shadow, glow } = theme.effects
-  const isBurst = theme.templateId === 'comic-burst'
+  const usesShapeFilter = theme.templateId === 'comic-burst' || theme.templateId === 'cloud'
   const glowAmount = theme.material.id === 'neon' && glow === 0 ? 40 : glow
-  const glowLayer = glowAmount > 0 ? `, 0 0 ${Math.round((glowAmount / 100) * 24 + 5)}px var(--bub-glow-color)` : ''
+  const glowPx = `${Math.round((glowAmount / 100) * 24 + 5)}px`
+  const glowLayer = glowAmount > 0 ? `, 0 0 ${glowPx} var(--bub-glow-color)` : ''
   const soft = `0 10px 28px var(--bub-shadow-c)`
   const strong = `0 14px 38px var(--bub-shadow-c), 0 3px 10px color-mix(in srgb, var(--bub-edge) 24%, transparent)`
   const hard = `5px 6px 0 color-mix(in srgb, var(--bub-edge) 62%, transparent)`
   let shadowVar = 'none'
-  if (!isBurst) {
-    if (theme.templateId === 'sticker') shadowVar = shadow === 'none' ? 'none' : hard
-    else if (shadow === 'soft') shadowVar = soft
-    else if (shadow === 'strong') shadowVar = strong + glowLayer
-  }
   let filterVar = 'none'
-  if (isBurst) {
-    const layers = [`drop-shadow(0 9px 20px var(--bub-shadow-c))`]
-    if (shadow !== 'none') layers.push(`drop-shadow(0 2px 4px color-mix(in srgb, var(--bub-edge) 30%, transparent))`)
-    if (glowAmount > 0) layers.push(`drop-shadow(0 0 ${Math.round((glowAmount / 100) * 18 + 4)}px var(--bub-glow-color))`)
-    filterVar = layers.join(' ')
+  if (usesShapeFilter) {
+    const layers: string[] = []
+    if (shadow !== 'none') {
+      layers.push(`drop-shadow(0 9px 20px var(--bub-shadow-c))`)
+      layers.push(`drop-shadow(0 2px 4px color-mix(in srgb, var(--bub-edge) 30%, transparent))`)
+    }
+    if (glowAmount > 0) layers.push(`drop-shadow(0 0 ${glowPx} var(--bub-glow-color))`)
+    if (layers.length > 0) filterVar = layers.join(' ')
+  } else if (theme.templateId === 'sticker') {
+    if (shadow === 'soft') shadowVar = hard
+    else if (shadow === 'strong') shadowVar = hard + glowLayer
+    else if (glowAmount > 0) shadowVar = `0 0 ${glowPx} var(--bub-glow-color)`
+  } else {
+    if (shadow === 'soft') shadowVar = soft + glowLayer
+    else if (shadow === 'strong') shadowVar = strong + glowLayer
+    else if (glowAmount > 0) shadowVar = `0 0 ${glowPx} var(--bub-glow-color)`
   }
   return { '--bub-shadow': shadowVar, '--bub-filter': filterVar }
 }
@@ -87,8 +97,9 @@ function frameRadius(theme: BubbleThemeV2): string {
   return `${theme.frame.radius}px`
 }
 
-/** 主入口:主题 + 上下文 → 可直接落到 .bubble-shell 的完整外观 */
-export function resolveBubbleAppearance(theme: BubbleThemeV2, context?: Partial<BubbleContext>): ResolvedBubbleAppearance {
+/** 主入口:主题(+可选减弱动效)→ 可直接落到 .bubble-shell 的完整外观。
+ *  说话人/位置/朝向/喊话/长句/情绪等运行时状态由视图转成 class/data 属性,不进这里 */
+export function resolveBubbleAppearance(theme: BubbleThemeV2, options?: BubbleResolveOptions): ResolvedBubbleAppearance {
   const materialId = compatibleMaterial(theme.templateId, theme.material.id)
   const effectiveTheme: BubbleThemeV2 =
     materialId === theme.material.id ? theme : { ...theme, material: { ...theme.material, id: materialId } }
@@ -116,7 +127,7 @@ export function resolveBubbleAppearance(theme: BubbleThemeV2, context?: Partial<
     },
   }
   const layers = materialLayers(effectiveTheme, pal)
-  const reduceMotion = context?.reducedMotion === true
+  const reduceMotion = options?.reducedMotion === true
   const cssVars: Record<string, string> = {
     '--bub-text': pal.text,
     '--bub-surface': speakers.A.surface,

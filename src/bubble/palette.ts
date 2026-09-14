@@ -166,12 +166,27 @@ const TEXT_CONTRAST_MIN = 4.5
 const OUTLINE_CONTRAST_MIN = 1.3
 const ACCENT_CONTRAST_MIN = 1.15
 
+/** 诊断用代表桌面:舞台是透明窗口叠在真实桌面上,低透明度材质的实际底色取决于桌面 */
+const DESK_LIGHT = '#e9e6df'
+const DESK_DARK = '#1a1c26'
+const OPAQUE_ENOUGH = 0.97
+
+/** 文字对比度按实际量纲算:近不透明用主题底色;透明材质在浅/深代表桌面上按 opacity
+ *  合成后取最差——"4.5:1 合格"必须对最坏桌面成立才算可读 */
+function worstTextContrast(text: string, surface: string, opacity: number): number {
+  if (opacity >= OPAQUE_ENOUGH) return contrastRatio(text, surface)
+  return Math.min(
+    contrastRatio(text, mixHex(DESK_LIGHT, surface, opacity)),
+    contrastRatio(text, mixHex(DESK_DARK, surface, opacity)),
+  )
+}
+
 /** 诊断:文字可读性、描边可见性、角色区分度。只报告,不改动。 */
 export function diagnosePalette(theme: BubbleThemeV2): BubbleDiagnostic[] {
   const pal = deriveEffectivePalette(theme)
   const issues: BubbleDiagnostic[] = []
   for (const sp of ['A', 'B', 'C'] as const) {
-    const ratio = contrastRatio(pal.text, pal.surfaceX[sp])
+    const ratio = worstTextContrast(pal.text, pal.surfaceX[sp], theme.material.opacity)
     if (ratio < TEXT_CONTRAST_MIN) {
       issues.push({ kind: 'contrast-text', speaker: sp, message: `角色${sp}文字对比度 ${ratio.toFixed(2)}:1,低于 4.5:1,可能看不清` })
     }
@@ -200,12 +215,12 @@ export function diagnosePalette(theme: BubbleThemeV2): BubbleDiagnostic[] {
   return issues
 }
 
-/** 沿明度轴移动 text 直到达标(浅色模式压暗,深色模式提亮) */
-function pushTextContrast(text: string, surface: string, lightness: BubbleLightness): string {
+/** 沿明度轴移动 text 直到通过 check(浅色模式压暗,深色模式提亮);check 与诊断同量纲 */
+function pushTextContrast(text: string, lightness: BubbleLightness, check: (candidate: string) => boolean): string {
   const hsl = hexToHsl(text)
   for (let i = 1; i <= 30; i++) {
     const candidate = hslToHex(hsl.h, hsl.s, lightness === 'light' ? hsl.l - i * 0.02 : hsl.l + i * 0.02)
-    if (contrastRatio(candidate, surface) >= TEXT_CONTRAST_MIN) return candidate
+    if (check(candidate)) return candidate
   }
   return lightness === 'light' ? '#111018' : '#f7f8ff'
 }
@@ -220,58 +235,81 @@ function pushOutlineContrast(outline: string, surface: string, lightness: Bubble
 }
 
 /**
- * 自动修复:返回修复后的主题、仍存在的问题与人类可读的修复说明。
- * 只动 palette.overrides(无则补全),不碰骨架与版式,幂等(修完再跑无新增修复)。
+ * 自动修复:按依赖顺序修——①角色名签色(推色会连带改变 per-speaker 底色)
+ * → ②文字可读(在最终底色上判定)→ ③描边可见。每步只写 overrides,
+ * 返回修复说明,幂等(修完再跑无新增修复)。
  */
 export function autoFixPalette(theme: BubbleThemeV2): {
   theme: BubbleThemeV2
   diagnostics: BubbleDiagnostic[]
   fixes: string[]
 } {
-  const pal = deriveEffectivePalette(theme)
-  const ov: NonNullable<BubbleThemeV2['palette']['overrides']> = { ...theme.palette.overrides }
   const fixes: string[] = []
-  for (const sp of ['A', 'B', 'C'] as const) {
-    if (contrastRatio(pal.text, pal.surfaceX[sp]) < TEXT_CONTRAST_MIN) {
-      const fixed = pushTextContrast(ov.text ?? pal.text, pal.surfaceX[sp], theme.palette.lightness)
+  let work = theme
+
+  // ① 角色过近:把过近的一方向远处推色相
+  {
+    const pal = deriveEffectivePalette(work)
+    const ov = { ...work.palette.overrides }
+    const nextAcc = { A: ov.accA ?? pal.acc.A, B: ov.accB ?? pal.acc.B, C: ov.accC ?? pal.acc.C }
+    let changed = false
+    for (const [x, y] of [['A', 'B'], ['A', 'C'], ['B', 'C']] as const) {
+      const hx = hexToHsl(nextAcc[x])
+      const hy = hexToHsl(nextAcc[y])
+      const gap = Math.min(Math.abs(hx.h - hy.h), 360 - Math.abs(hx.h - hy.h))
+      if (contrastRatio(nextAcc[x], nextAcc[y]) < ACCENT_CONTRAST_MIN && gap < 20) {
+        const pushed = hslToHex(hy.h + (y === 'C' ? 60 : -60), hy.s, hy.l)
+        fixes.push(`角色${y}名签色调整为 ${pushed} 以拉开区分`)
+        nextAcc[y] = pushed
+        changed = true
+      }
+    }
+    if (changed) {
+      ov.accA = nextAcc.A
+      ov.accB = nextAcc.B
+      ov.accC = nextAcc.C
+      work = { ...work, palette: { ...work.palette, overrides: ov } }
+    }
+  }
+
+  // ② 文字可读:对三个角色底色(按材质透明度在深/浅桌面合成)全部达标才算修好
+  {
+    const pal = deriveEffectivePalette(work)
+    const ov = { ...work.palette.overrides }
+    const opacity = work.material.opacity
+    const textCheck = (candidate: string): boolean =>
+      (['A', 'B', 'C'] as const).every((sp) => worstTextContrast(candidate, pal.surfaceX[sp], opacity) >= TEXT_CONTRAST_MIN)
+    if (!textCheck(ov.text ?? pal.text)) {
+      const fixed = pushTextContrast(ov.text ?? pal.text, work.palette.lightness, textCheck)
       if (fixed !== (ov.text ?? pal.text)) {
         fixes.push(`文字色调整为 ${fixed} 以保证可读`)
         ov.text = fixed
+        work = { ...work, palette: { ...work.palette, overrides: ov } }
       }
     }
   }
-  if (theme.frame.outlineWidth > 0) {
+
+  // ③ 描边可见:贴底不可见的拉开
+  if (work.frame.outlineWidth > 0) {
+    const pal = deriveEffectivePalette(work)
+    const ov = { ...work.palette.overrides }
+    let changed = false
     for (const sp of ['A', 'B', 'C'] as const) {
-      if (contrastRatio(pal.outlineX[sp], pal.surfaceX[sp]) < OUTLINE_CONTRAST_MIN) {
-        const base = sp === 'A' ? (ov.outlineA ?? pal.outlineX.A) : sp === 'B' ? (ov.outlineB ?? pal.outlineX.B) : (ov.outlineC ?? pal.outlineX.C)
-        const fixed = pushOutlineContrast(base, pal.surfaceX[sp], theme.palette.lightness)
-        if (fixed !== base) {
-          fixes.push(`角色${sp}描边调整为 ${fixed} 以恢复轮廓`)
-          if (sp === 'A') ov.outlineA = fixed
-          else if (sp === 'B') ov.outlineB = fixed
-          else ov.outlineC = fixed
-        }
+      if (contrastRatio(pal.outlineX[sp], pal.surfaceX[sp]) >= OUTLINE_CONTRAST_MIN) continue
+      const base = sp === 'A' ? (ov.outlineA ?? pal.outlineX.A) : sp === 'B' ? (ov.outlineB ?? pal.outlineX.B) : (ov.outlineC ?? pal.outlineX.C)
+      const fixed = pushOutlineContrast(base, pal.surfaceX[sp], work.palette.lightness)
+      if (fixed !== base) {
+        fixes.push(`角色${sp}描边调整为 ${fixed} 以恢复轮廓`)
+        if (sp === 'A') ov.outlineA = fixed
+        else if (sp === 'B') ov.outlineB = fixed
+        else ov.outlineC = fixed
+        changed = true
       }
     }
+    if (changed) work = { ...work, palette: { ...work.palette, overrides: ov } }
   }
-  // 角色过近:把过近的一方向远处推色相
-  const nextAcc = { A: ov.accA ?? pal.acc.A, B: ov.accB ?? pal.acc.B, C: ov.accC ?? pal.acc.C }
-  for (const [x, y] of [['A', 'B'], ['A', 'C'], ['B', 'C']] as const) {
-    const hx = hexToHsl(nextAcc[x])
-    const hy = hexToHsl(nextAcc[y])
-    const gap = Math.min(Math.abs(hx.h - hy.h), 360 - Math.abs(hx.h - hy.h))
-    if (contrastRatio(nextAcc[x], nextAcc[y]) < ACCENT_CONTRAST_MIN && gap < 20) {
-      const pushed = hslToHex(hy.h + (y === 'C' ? 60 : -60), hy.s, hy.l)
-      fixes.push(`角色${y}名签色调整为 ${pushed} 以拉开区分`)
-      if (y === 'B') nextAcc.B = pushed
-      else nextAcc.C = pushed
-    }
-  }
-  if (fixes.length > 0) ov.accA = nextAcc.A
-  if (fixes.length > 0) ov.accB = nextAcc.B
-  if (fixes.length > 0) ov.accC = nextAcc.C
-  const next: BubbleThemeV2 = fixes.length > 0 ? { ...theme, palette: { ...theme.palette, overrides: ov } } : theme
-  return { theme: next, diagnostics: diagnosePalette(next), fixes }
+
+  return { theme: work, diagnostics: diagnosePalette(work), fixes }
 }
 
 // ---------- 随机微调 ----------

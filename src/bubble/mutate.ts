@@ -1,7 +1,7 @@
 // 统一改稿接口:UI/AI 的所有"局部修改"都走 mutateBubbleTheme,不直接拼主题对象。
 // 职责:换模板时按 preserve 决定哪些组跟随新模板默认值、材质不兼容自动降级、
 // 快捷动作(名签更简/阴影更弱/字体更活泼/随机微调)的语义实现。
-import { BUBBLE_TEMPLATES, compatibleMaterial } from './catalog'
+import { BUBBLE_MATERIAL_DEFAULTS, BUBBLE_TEMPLATES, compatibleMaterial } from './catalog'
 import { jitterPalette } from './palette'
 import { normalizeBubbleTheme } from './normalize'
 import type { BubbleThemeV2 } from './types'
@@ -40,14 +40,15 @@ export function mutateBubbleTheme(theme: BubbleThemeV2, action: BubbleMutation):
       const nextTpl = BUBBLE_TEMPLATES[action.templateId]
       const keep = new Set(action.preserve ?? ['palette'])
       const d = nextTpl.defaults
+      const nextMaterial = compatibleMaterial(nextTpl.id, theme.material.id)
       return clean({
         ...theme,
         templateId: nextTpl.id,
         material: {
-          // 材质不在新模板白名单时降级为它的默认材质( normalize 会再兜底一次)
+          // 材质不在新模板白名单时降级为它的默认材质;blur 跟(降级后的)材质默认走
           ...theme.material,
-          id: compatibleMaterial(nextTpl.id, theme.material.id),
-          blur: compatibleMaterial(nextTpl.id, theme.material.id) === 'glass' ? theme.material.blur : 0,
+          id: nextMaterial,
+          blur: BUBBLE_MATERIAL_DEFAULTS[nextMaterial].blur,
         },
         frame: { radius: d.frame.radius, outlineWidth: keep.has('effects') ? theme.frame.outlineWidth : d.frame.outlineWidth },
         typography: keep.has('typography') ? theme.typography : { ...theme.typography, align: d.typography.align, weight: d.typography.weight, lineHeight: d.typography.lineHeight },
@@ -59,10 +60,8 @@ export function mutateBubbleTheme(theme: BubbleThemeV2, action: BubbleMutation):
     }
     case 'set-material': {
       const id = compatibleMaterial(theme.templateId, action.materialId)
-      return clean({
-        ...theme,
-        material: { ...theme.material, id, blur: id === 'glass' ? Math.max(theme.material.blur, tpl.defaults.material.blur) : 0 },
-      })
+      // blur 跟材质默认走(玻璃 14、其余 0):模板默认 blur 多为 0,沿用会让玻璃名存实亡
+      return clean({ ...theme, material: { ...theme.material, id, blur: BUBBLE_MATERIAL_DEFAULTS[id].blur } })
     }
     case 'reset-to-template-defaults': {
       const d = tpl.defaults

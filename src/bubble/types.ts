@@ -15,8 +15,7 @@ export type BubbleTemplateId = (typeof BUBBLE_TEMPLATE_IDS)[number]
 export const BUBBLE_MATERIAL_IDS = ['solid', 'gradient', 'glass', 'paper', 'neon'] as const
 export type BubbleMaterialId = (typeof BUBBLE_MATERIAL_IDS)[number]
 
-/** 第一版不含 pixel:无授权字体资产,系统字体栈压不出稳定像素感 */
-export const BUBBLE_FONT_PRESETS = ['friendly', 'comic', 'clean'] as const
+export const BUBBLE_FONT_PRESETS = ['friendly', 'comic', 'clean', 'pixel'] as const
 export type BubbleFontPreset = (typeof BUBBLE_FONT_PRESETS)[number]
 
 export const BUBBLE_NAMEPLATE_STYLES = ['badge', 'tab', 'inline', 'hidden'] as const
@@ -110,14 +109,10 @@ export interface BubbleThemeV2 {
   }
 }
 
-/** 气泡运行时上下文:舞台/预览把自身状态翻译成它,resolve 据此出最终外观 */
-export interface BubbleContext {
-  speaker: 'A' | 'B' | 'C'
-  placement: 'above' | 'below'
-  tailSide: 'left' | 'center' | 'right'
-  emphasis: 'normal' | 'loud'
-  length: 'normal' | 'long'
-  mood?: 'angry' | 'shy' | 'excited'
+/** 气泡解析可选参数:运行时状态(说话人/位置/朝向/喊话/长句/情绪)由视图转成
+ *  class/data 属性消费,不进 resolve——接口面与真实杠杆对齐 */
+export interface BubbleResolveOptions {
+  /** 系统开启"减弱动态效果"时关入场动画(视图也会从 matchMedia 读取) */
   reducedMotion?: boolean
 }
 

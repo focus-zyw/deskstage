@@ -268,13 +268,21 @@ export function migrateBubbleThemeV1(v1: LegacyBubbleThemeV1): BubbleThemeV2 | n
   })
 }
 
-/** 归一化入口:V2 走清洗,V1(带 shape 字段的旧扁平结构)走迁移,其余拒收 */
+/** 归一化入口:V2 走清洗,V1(旧扁平结构)走迁移,其余拒收。
+ *  V1 识别不依赖 shape——最早期主题就没有该字段;bg/accA/bgOpacity 等键只出现在
+ *  V1 顶层(V2 顶层是 templateId/material/palette 嵌套),按字段组合判定最稳。 */
+const V1_ONLY_KEYS = [
+  'bg', 'text', 'stroke', 'accA', 'accB', 'accC',
+  'bgA', 'bgB', 'bgC', 'strokeA', 'strokeB', 'strokeC',
+  'bgOpacity', 'strokeW', 'blurPx', 'fontSize', 'maxWidth', 'radius',
+  'shape', 'tailStyle', 'shadow', 'fontWeight', 'lineHeight', 'paddingX', 'paddingY',
+] as const
+
 export function normalizeBubbleThemeAny(raw: unknown): BubbleThemeV2 | null {
-  if (typeof raw === 'object' && raw !== null && (raw as Record<string, unknown>).version === 2) {
-    return normalizeBubbleTheme(raw)
-  }
-  if (typeof raw === 'object' && raw !== null && 'shape' in (raw as Record<string, unknown>)) {
-    return migrateBubbleThemeV1(raw as LegacyBubbleThemeV1)
-  }
+  if (typeof raw !== 'object' || raw === null) return null
+  const o = raw as Record<string, unknown>
+  if (o.version === 2) return normalizeBubbleTheme(raw)
+  const looksV1 = (V1_ONLY_KEYS as readonly string[]).some((k) => k in o)
+  if (looksV1) return migrateBubbleThemeV1(raw as LegacyBubbleThemeV1)
   return normalizeBubbleTheme(raw)
 }

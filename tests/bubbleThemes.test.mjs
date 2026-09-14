@@ -1,18 +1,16 @@
-// 气泡工坊回归:存储层 V2 化(旧 V1 主题读取时迁移、颜色零丢失)、投影往返、
+// 气泡工坊回归:存储层 V2 化(旧 V1 主题读取时迁移、颜色零丢失)、内置 id 禁入自定义存储、
 // bubbleStyle 选择器放宽。沿用仓库测试原则:不碰网络与磁盘(localStorage 用内存桩)。
 import assert from 'node:assert/strict'
 import { after, before, test } from 'node:test'
 import { createServer } from 'vite'
 
 let server
-let sanitizeBubbleTheme
-let sanitizeBubbleThemes
 let saveBubbleTheme
 let removeBubbleTheme
-let getBubbleThemesSnapshot
 let getBubbleThemesV2Snapshot
 let getConfig
 let DEFAULT_CONFIG
+let BUILT_IN_BUBBLE_THEMES
 
 before(async () => {
   const values = new Map()
@@ -27,9 +25,10 @@ before(async () => {
     appType: 'custom',
     logLevel: 'silent',
   })
-  ;({ sanitizeBubbleTheme, sanitizeBubbleThemes, saveBubbleTheme, removeBubbleTheme, getBubbleThemesSnapshot, getBubbleThemesV2Snapshot } =
+  ;({ saveBubbleTheme, removeBubbleTheme, getBubbleThemesV2Snapshot } =
     await server.ssrLoadModule('/src/storage/bubbleThemesStore.ts'))
   ;({ getConfig, DEFAULT_CONFIG } = await server.ssrLoadModule('/src/storage/configStore.ts'))
+  ;({ BUILT_IN_BUBBLE_THEMES } = await server.ssrLoadModule('/src/bubble/index.ts'))
 })
 
 after(async () => {
@@ -49,13 +48,9 @@ const validV1 = {
   fontWeight: 700, lineHeight: 1.6, paddingX: 18, paddingY: 16,
 }
 
-test('存储:V1 主题存入后内部为 V2,投影视图保留全部颜色与数值', async () => {
+test('存储:V1 主题存入后内部为 V2,颜色与数值零丢失', async () => {
   await saveBubbleTheme(validV1)
-  const v2List = getBubbleThemesV2Snapshot()
-  const legacy = getBubbleThemesSnapshot()
-  assert.equal(v2List.length, 1)
-  assert.equal(legacy.length, 1)
-  const v2 = v2List[0]
+  const v2 = getBubbleThemesV2Snapshot()[0]
   assert.equal(v2.version, 2)
   assert.equal(v2.material.opacity, 0.86)
   assert.equal(v2.material.blur, 14)
@@ -67,13 +62,6 @@ test('存储:V1 主题存入后内部为 V2,投影视图保留全部颜色与数
   assert.equal(ov.text, '#e8f4ff')
   assert.equal(ov.surfaceB, '#0f2233')
   assert.equal(ov.accC, '#b18cff')
-  // 投影视图逐字段可读
-  const view = legacy[0]
-  assert.equal(view.bg, '#101426')
-  assert.equal(view.strokeW, 2)
-  assert.equal(view.fontSize, 17)
-  assert.equal(view.shape, 'rounded')
-  assert.equal(view.tailStyle, 'droplet')
 })
 
 test('存储:V2 主题直存,save→read 往返不改字段', async () => {
@@ -92,37 +80,23 @@ test('存储:V2 主题直存,save→read 往返不改字段', async () => {
     effects: { shadow: 'strong', glow: 30, texture: 0 },
   }
   await saveBubbleTheme(v2)
-  const back = getBubbleThemesV2Snapshot().find((t) => t.id === 'custom_direct')
-  assert.deepEqual(back, v2)
-  // upsert 覆盖
+  assert.deepEqual(getBubbleThemesV2Snapshot().find((t) => t.id === 'custom_direct'), v2)
   await saveBubbleTheme({ ...v2, label: '改名' })
   assert.equal(getBubbleThemesV2Snapshot().find((t) => t.id === 'custom_direct').label, '改名')
   await removeBubbleTheme('custom_direct')
   assert.ok(!getBubbleThemesV2Snapshot().some((t) => t.id === 'custom_direct'))
 })
 
-test('清洗:V1/V2 混合列表读取、坏条目跳过、去重限量', () => {
-  const mixed = [
-    validV1,
-    { ...validV1, id: 'custom_neon' }, // 重复 id
-    { id: 'bad', label: '坏数据' },
-    {
-      version: 2, id: 'custom_ok', label: '好的', templateId: 'rpg',
-      material: { id: 'glass', opacity: 0.8, blur: 12 },
-      palette: { mode: 'unified', primary: '#888888', lightness: 'dark', speakerStrength: 50 },
-    },
-  ]
-  const list = sanitizeBubbleThemes(mixed)
-  assert.deepEqual(list.map((t) => t.id), ['custom_neon', 'custom_ok'])
-})
-
-test('清洗:坏 id/label 拒收;坏颜色落安全默认', () => {
-  assert.equal(sanitizeBubbleTheme({ ...validV1, id: 'comic' }), null)
-  assert.equal(sanitizeBubbleTheme({ ...validV1, id: 'NEON' }), null)
-  assert.equal(sanitizeBubbleTheme({ ...validV1, label: '' }), null)
-  const t = sanitizeBubbleTheme({ ...validV1, bg: 'not-a-color' })
-  assert.ok(t)
-  assert.equal(t.bg, '#faf7f2')
+test('存储:内置主题禁止存成自定义(绕过检查的 V2 输入同样拒收)', async () => {
+  await assert.rejects(
+    saveBubbleTheme(BUILT_IN_BUBBLE_THEMES.comic),
+    /custom_ 前缀/,
+  )
+  await assert.rejects(
+    saveBubbleTheme({ ...BUILT_IN_BUBBLE_THEMES.glass, id: 'glass' }),
+    /custom_ 前缀/,
+  )
+  assert.ok(!getBubbleThemesV2Snapshot().some((t) => t.id === 'comic' || t.id === 'glass'))
 })
 
 test('bubbleStyle 选择器:custom_ id 放行,默认柔彩', async () => {

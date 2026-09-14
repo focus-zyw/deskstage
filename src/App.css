@@ -522,6 +522,20 @@
   left: 50%;
   transform: translateX(-50%);
 }
+/* 标签槽居中:同样骑在上边框中央 */
+.bubble-shell[data-nameplate-pos='top-center'][data-nameplate='tab'] .b-name {
+  top: -11px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+/* 徽章/标签槽选"框内":不骑边,落在内容区左上(tab 的开口边框复原) */
+.bubble-shell[data-nameplate-pos='inside'][data-nameplate='badge'] .b-name,
+.bubble-shell[data-nameplate-pos='inside'][data-nameplate='tab'] .b-name {
+  top: 6px;
+  left: 14px;
+  border-radius: 8px;
+  border-bottom-color: rgba(255, 255, 255, 0.58);
+}
 .bubble-shell[data-nameplate='tab'] .b-name {
   top: -11px;
   left: 10px;
@@ -622,11 +636,11 @@
   --bub-tail-x: 58%;
   --bub-tail-rotation: 35deg;
 }
-/* 气泡翻到角色下方:尾巴朝上 */
+/* 气泡翻到角色下方:尾巴朝上;水滴在原朝向角度上 +180°(不丢 left/right 朝向) */
 .bubble-shell.below .bubble-tail {
   bottom: auto;
   top: -7px;
-  transform: translateX(-50%) rotate(180deg);
+  transform: translateX(-50%) rotate(calc(var(--bub-tail-rotation) + 180deg));
 }
 .bubble-shell.below[data-tail='triangle'] .bubble-tail {
   top: calc(-1 * var(--bub-tail-size, 17px) + 7px);
@@ -714,12 +728,24 @@
   top: 8px;
   right: 16px;
 }
+/* 名签移入锯齿内部时为正文留出一行空间,避免徽章/标签槽压住首行。 */
+.bubble-shell[data-template='comic-burst'][data-nameplate='badge']:not([data-nameplate-pos='top-center']) .bubble-frame,
+.bubble-shell[data-template='comic-burst'][data-nameplate='tab']:not([data-nameplate-pos='top-center']) .bubble-frame {
+  padding-top: calc(var(--bub-pad-y, 15px) + 25px);
+}
 
-/* 云朵:圆瓣轮廓画在 frame 背景层(描边层在下、底色层在上),正文不参与 mask,多行不失真 */
+/* 云朵:SVG mask 云形(中央椭圆 + 外圈瓣并集)分别裁剪描边层与底色/材质层,
+   正文不参与 mask,多行不失真;玻璃的 backdrop 从 shell 迁到形状层(shell 无底色,
+   blur 留在 shell 上对玻璃组合不生效)。radial-gradient 做不了这件事——椭圆百分比
+   size 本就不合法,Chrome 会按 farthest-corner 铺成矩形 */
 .bubble-shell[data-template='cloud'] {
   padding: 0;
   background: none;
   border: none;
+  box-shadow: none;
+  filter: var(--bub-filter, none);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 .bubble-shell[data-template='cloud'] .bubble-frame {
   position: relative;
@@ -731,25 +757,19 @@
   position: absolute;
   inset: 0;
   z-index: -1;
-  border-radius: 32px;
-  background:
-    radial-gradient(circle at 12% 34%, var(--petal) 0 15px, transparent 16px),
-    radial-gradient(circle at 30% 14%, var(--petal) 0 19px, transparent 20px),
-    radial-gradient(circle at 54% 9%, var(--petal) 0 17px, transparent 18px),
-    radial-gradient(circle at 78% 18%, var(--petal) 0 18px, transparent 19px),
-    radial-gradient(circle at 94% 42%, var(--petal) 0 14px, transparent 15px),
-    radial-gradient(circle at 90% 74%, var(--petal) 0 16px, transparent 17px),
-    radial-gradient(circle at 70% 92%, var(--petal) 0 14px, transparent 15px),
-    radial-gradient(circle at 42% 90%, var(--petal) 0 16px, transparent 17px),
-    radial-gradient(circle at 10% 66%, var(--petal) 0 15px, transparent 16px),
-    linear-gradient(var(--petal), var(--petal));
+  --cloud-mask: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 58'><ellipse cx='50' cy='29' rx='36' ry='19'/><circle cx='50' cy='10' r='10'/><circle cx='33' cy='13' r='7.5'/><circle cx='67' cy='13' r='7.5'/><circle cx='13' cy='27' r='9'/><circle cx='13' cy='36' r='7'/><circle cx='87' cy='27' r='9'/><circle cx='87' cy='36' r='7'/><circle cx='50' cy='48' r='10'/><circle cx='32' cy='45' r='7'/><circle cx='68' cy='45' r='7'/><circle cx='22' cy='16' r='6.5'/><circle cx='78' cy='16' r='6.5'/><circle cx='22' cy='42' r='6.5'/><circle cx='78' cy='42' r='6.5'/></svg>") center / 100% 100% no-repeat;
+  -webkit-mask: var(--cloud-mask);
+  mask: var(--cloud-mask);
 }
 .bubble-shell[data-template='cloud'] .bubble-frame::after {
-  --petal: var(--bub-surface);
+  background-color: var(--bub-surface);
+  background-image: var(--bub-surface-image, none);
+  backdrop-filter: var(--bub-backdrop, none);
+  -webkit-backdrop-filter: var(--bub-backdrop, none);
 }
 .bubble-shell[data-template='cloud'] .bubble-frame::before {
-  --petal: var(--bub-edge);
-  inset: calc(-1 * var(--bub-outline-w, 1px) - 1px);
+  background-color: var(--bub-edge);
+  inset: calc(-1 * var(--bub-outline-w, 1px) - 0.5px);
 }
 
 /* 手账贴纸:轻微歪斜的纸片;硬偏移阴影由 resolve 输出;胶带挂在装饰层 */
@@ -793,6 +813,8 @@
 }
 .bubble-shell.loud {
   font-size: calc(var(--bub-font-size, 16px) + 1px);
+  /* 喊话加大加粗:字重在主题字重基础上 +100(上限 900) */
+  font-weight: min(900, calc(var(--bub-font-weight, 650) + 100));
   min-width: 190px;
   max-width: min(calc(var(--bub-max-w, 320px) + 40px), 80vw);
 }
@@ -817,6 +839,13 @@
 .bubble-shell.out {
   animation: bubble-out 0.16s ease forwards;
   pointer-events: none;
+}
+/* 系统"减弱动态效果":气泡动画与退场一并静止(与 resolve 的 --bub-in: none 双保险) */
+@media (prefers-reduced-motion: reduce) {
+  .bubble-shell,
+  .bubble-shell .b-text {
+    animation: none !important;
+  }
 }
 /* 场外角色(画外音)气泡:C 无立绘,以顶部居中的"来电"横幅呈现,区别于甲乙立绘旁气泡 */
 .guest-bubble {
@@ -3341,6 +3370,10 @@ body.settings-standalone .settings-window {
   gap: 14px;
   align-items: start;
 }
+.bw-preview-col {
+  position: sticky;
+  top: 12px;
+}
 @media (max-width: 1180px) {
   .bubble-workshop {
     grid-template-columns: 1fr;
@@ -3348,10 +3381,6 @@ body.settings-standalone .settings-window {
   .bw-preview-col {
     position: static;
   }
-}
-.bw-preview-col {
-  position: sticky;
-  top: 12px;
 }
 .bw-scenes {
   display: flex;
@@ -3475,69 +3504,23 @@ body.settings-standalone .settings-window {
   line-height: 1.2;
 }
 .bw-thumb {
-  display: block;
-  width: 52px;
-  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 60px;
+  height: 38px;
   position: relative;
+  pointer-events: none;
 }
-.bw-thumb i {
-  position: absolute;
-  inset: 0;
-  border: 1.5px solid color-mix(in srgb, var(--accent) 80%, #fff);
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
-  border-radius: 9px;
-  display: block;
+.bw-thumb .bubble-shell {
+  flex: none;
+  margin: 0;
+  animation: none;
+  scale: 0.3;
+  transform-origin: center;
 }
-.bw-thumb[data-template='pill'] i {
-  border-radius: 999px;
-}
-.bw-thumb[data-template='pill'] i::after {
-  content: '';
-  position: absolute;
-  left: 42%;
-  bottom: -5px;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: inherit;
-  border: inherit;
-  border-top: 0;
-}
-.bw-thumb[data-template='comic-burst'] i {
-  border: none;
-  background:
-    linear-gradient(color-mix(in srgb, var(--accent) 80%, #fff), color-mix(in srgb, var(--accent) 80%, #fff)) 0 0 / 100% 100%,
-    color-mix(in srgb, var(--accent) 16%, transparent);
-  clip-path: polygon(50% 0%, 61% 8%, 74% 3%, 78% 15%, 91% 14%, 89% 27%, 100% 33%, 92% 43%, 100% 54%, 89% 59%, 92% 72%, 79% 72%, 76% 86%, 64% 81%, 55% 92%, 45% 83%, 33% 91%, 29% 78%, 16% 79%, 19% 66%, 5% 62%, 13% 52%, 0% 44%, 11% 37%, 5% 25%, 18% 24%, 20% 11%, 33% 14%, 40% 3%);
-}
-.bw-thumb[data-template='cloud'] i {
-  border: none;
-  border-radius: 12px;
-  background:
-    radial-gradient(circle at 18% 100%, color-mix(in srgb, var(--accent) 80%, #fff) 0 5px, transparent 6px),
-    radial-gradient(circle at 50% 100%, color-mix(in srgb, var(--accent) 80%, #fff) 0 6px, transparent 7px),
-    radial-gradient(circle at 82% 100%, color-mix(in srgb, var(--accent) 80%, #fff) 0 5px, transparent 6px),
-    radial-gradient(circle at 0% 60%, color-mix(in srgb, var(--accent) 80%, #fff) 0 5px, transparent 6px),
-    radial-gradient(circle at 100% 60%, color-mix(in srgb, var(--accent) 80%, #fff) 0 5px, transparent 6px),
-    radial-gradient(circle at 15% 0%, color-mix(in srgb, var(--accent) 80%, #fff) 0 6px, transparent 7px),
-    radial-gradient(circle at 50% 0%, color-mix(in srgb, var(--accent) 80%, #fff) 0 7px, transparent 8px),
-    radial-gradient(circle at 85% 0%, color-mix(in srgb, var(--accent) 80%, #fff) 0 6px, transparent 7px),
-    color-mix(in srgb, var(--accent) 16%, transparent);
-}
-.bw-thumb[data-template='sticker'] i {
-  transform: rotate(-6deg);
-  border-radius: 8px 4px 9px 5px;
-  border-style: dashed;
-}
-.bw-thumb[data-template='rpg'] i {
-  border-radius: 3px;
-  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent);
-}
-.bw-thumb[data-template='caption'] i {
-  top: 8px;
-  height: 14px;
-  border-radius: 4px;
-  opacity: 0.75;
+.bw-thumb .bubble-shell .b-text {
+  animation: none;
 }
 /* AI 三候选并排 */
 .bw-candidates {
