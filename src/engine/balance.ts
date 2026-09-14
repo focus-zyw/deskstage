@@ -49,14 +49,46 @@ const toNum = (v: unknown): number => {
 const rawHead = (raw: string): string =>
   raw ? `:${raw.replace(/\s+/g, ' ').slice(0, 80)}` : ''
 
-/** 响应解析(纯函数,导出供测试):字段缺失/无法解析时抛带响应摘要的可读错误。
- *  供应商字段命名有差异,做宽容提取(Kimi 依次试 available_balance/total_balance/balance) */
+/** 从一条余额记录里提取数字(字段命名跨版本/跨供应商有差异,依次回落) */
+function extractBalanceEntry(entry: Record<string, unknown> | null): Omit<BalanceInfo, 'vendorId' | 'isAvailable'> | null {
+  if (!entry) return null
+  const total = Number(entry.total_balance ?? entry.available_balance ?? entry.balance)
+  if (!Number.isFinite(total)) return null
+  return {
+    currency: typeof entry.currency === 'string' && entry.currency ? entry.currency : 'CNY',
+    total,
+    granted: toNum(entry.granted_balance),
+    toppedUp: toNum(entry.topped_up_balance),
+  }
+}
+
+/** 响应解析(纯函数,导出供测试):形状宽容——balance_information 兼容数组/单对象/
+ *  顶层直挂;找不到余额数字时抛带响应摘要的可读错误 */
 export function parseBalanceResponse(vendor: BalanceVendorId, json: unknown, raw = ''): BalanceInfo {
   const head = rawHead(raw)
   const o = (json ?? {}) as Record<string, unknown>
   if (vendor === 'deepseek') {
-    const list = o.balance_information as unknown
-    if (!Array.isArray(list)) {
+    // 真实字段名是 balance_infos(复数,官方响应实测);balance_information 为旧文档别名,
+    // 数组/单对象/顶层直挂三种形态一并兼容
+    const rawInfo = (o.balance_infos ?? o.balance_information) as unknown
+    let entry: Record<string, unknown> | null = null
+    if (Array.isArray(rawInfo) && rawInfo.length === 0) {
+      throw new Error('账户暂无余额明细(可能还未产生计费)')
+    }
+    if (Array.isArray(rawInfo)) {
+      const infos = rawInfo.filter((x): x is Record<string, unknown> => !!x && typeof x === 'object')
+      // 选条优先级与 DeepSeek 余额小部件同口径:人民币且>0 → 任意>0 → 人民币 → 首条
+      const numOf = (x: Record<string, unknown>): number => Number(x.total_balance ?? x.available_balance ?? x.balance)
+      entry =
+        infos.find((x) => x.currency === 'CNY' && numOf(x) > 0) ??
+        infos.find((x) => numOf(x) > 0) ??
+        infos.find((x) => x.currency === 'CNY') ??
+        (infos[0] as Record<string, unknown> | undefined) ??
+        null
+    } else if (rawInfo && typeof rawInfo === 'object') entry = rawInfo as Record<string, unknown>
+    else if (o.total_balance !== undefined || o.available_balance !== undefined) entry = o
+    const ext = extractBalanceEntry(entry)
+    if (!ext) {
       // 网关/风控层可能返回带中文 message 的 JSON(如限流、地区限制),原样透传比"结构异常"有用
       const msg =
         typeof o.message === 'string' && o.message
@@ -66,33 +98,15 @@ export function parseBalanceResponse(vendor: BalanceVendorId, json: unknown, raw
             : ''
       throw new Error(msg ? `供应商返回:${msg}` : `接口结构异常${head}`)
     }
-    if (list.length === 0) throw new Error('账户暂无余额明细(可能还未产生计费)')
-    const b = (list[0] ?? {}) as Record<string, unknown>
-    const total = Number(b.total_balance)
-    if (!Number.isFinite(total)) throw new Error(`接口结构异常${head}`)
-    return {
-      vendorId: vendor,
-      isAvailable: o.is_available !== false,
-      currency: typeof b.currency === 'string' && b.currency ? b.currency : 'CNY',
-      total,
-      granted: toNum(b.granted_balance),
-      toppedUp: toNum(b.topped_up_balance),
-    }
+    return { vendorId: vendor, isAvailable: o.is_available !== false, ...ext }
   }
   const d = (o.data ?? {}) as Record<string, unknown>
-  const total = Number(d.available_balance ?? d.total_balance ?? d.balance)
-  if (!Number.isFinite(total)) {
+  const ext = extractBalanceEntry(d) ?? extractBalanceEntry(o)
+  if (!ext) {
     const msg = typeof o.message === 'string' && o.message ? `供应商返回:${o.message}` : `接口结构异常${head}`
     throw new Error(msg)
   }
-  return {
-    vendorId: 'moonshot',
-    isAvailable: true,
-    currency: typeof d.currency === 'string' && d.currency ? d.currency : 'CNY',
-    total,
-    granted: toNum(d.granted_balance),
-    toppedUp: toNum(d.topped_up_balance),
-  }
+  return { vendorId: 'moonshot', isAvailable: true, ...ext }
 }
 
 async function platformFetch(deps?: { fetchImpl?: typeof fetch }): Promise<typeof fetch> {

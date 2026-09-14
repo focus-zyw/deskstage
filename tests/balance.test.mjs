@@ -37,12 +37,13 @@ test('balanceEndpoint:DeepSeek 在域根(去 /v1),Kimi 在 /v1 之下', () => {
   assert.equal(mod.balanceEndpoint('https://api.moonshot.cn/v1', 'moonshot'), 'https://api.moonshot.cn/v1/users/me/balance')
 })
 
-test('parseBalanceResponse:DeepSeek 正常解析(取第一币种,含可用状态)', () => {
+test('parseBalanceResponse:DeepSeek 正常解析(balance_infos 复数形,选条 CNY 且>0 优先)', () => {
   const info = mod.parseBalanceResponse('deepseek', {
     is_available: true,
-    balance_information: [
-      { currency: 'CNY', total_balance: '110.00', granted_balance: '10.00', topped_up_balance: '100.00' },
+    balance_infos: [
       { currency: 'USD', total_balance: '5.00', granted_balance: '0', topped_up_balance: '5.00' },
+      { currency: 'CNY', total_balance: '110.00', granted_balance: '10.00', topped_up_balance: '100.00' },
+      { currency: 'CNY', total_balance: '0.00', granted_balance: '0', topped_up_balance: '0' },
     ],
   })
   assert.deepEqual(info, {
@@ -74,11 +75,32 @@ test('parseBalanceResponse:坏结构抛带响应摘要的可读错误,不返回�
     /接口结构异常.*quota/,
     '未知结构带上响应原文摘要,便于诊断',
   )
+  // 旧文档别名 balance_information(单数)仍兼容
+  const alias = mod.parseBalanceResponse('deepseek', {
+    is_available: true,
+    balance_information: [{ currency: 'CNY', total_balance: '9.90' }],
+  })
+  assert.equal(alias.total, 9.9)
   assert.throws(
-    () => mod.parseBalanceResponse('deepseek', { balance_information: [] }),
+    () => mod.parseBalanceResponse('deepseek', { balance_information: [] }, '{"balance_information":[]}'),
     /暂无余额明细/,
     '空余额明细(未产生计费)是独立场景,有专门文案',
   )
+  // 形状宽容:balance_information 为单对象(非数组)时直接使用
+  const asObject = mod.parseBalanceResponse('deepseek', {
+    is_available: true,
+    balance_information: { currency: 'CNY', total_balance: '42.00', granted_balance: '2', topped_up_balance: '40' },
+  })
+  assert.equal(asObject.total, 42)
+  assert.equal(asObject.granted, 2)
+  // 顶层直挂形态
+  const topLevel = mod.parseBalanceResponse('deepseek', { is_available: true, total_balance: '7', currency: 'CNY' })
+  assert.equal(topLevel.total, 7)
+  // 余额字段回落:total_balance 缺失时依次试 available_balance/balance
+  const fallback = mod.parseBalanceResponse('deepseek', {
+    balance_information: [{ available_balance: '33' }],
+  })
+  assert.equal(fallback.total, 33)
   assert.throws(() => mod.parseBalanceResponse('deepseek', { balance_information: [{}] }), /接口结构异常/)
   // 网关/风控层返回的中文 message 原样透传(比"结构异常"有用)
   assert.throws(
