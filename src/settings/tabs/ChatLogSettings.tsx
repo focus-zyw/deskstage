@@ -356,7 +356,8 @@ export function ChatLogSettings() {
   }, [])
 
   // 滚动:接近底部(40px 内)= 跟随模式,新消息自动滚到底;向上前置加载后保持视口。
-  // 双 rAF:等一轮布局再落位,防字体/图片晚到把内容撑高后停在半途
+  // 双 rAF + 错峰补钉:等布局/头像封面图晚到撑高后再落位;钉底用最后一行
+  // scrollIntoView——即使实际滚动容器是祖先(样式变化),也能把视口带到最新消息
   const feedRef = useRef<HTMLDivElement>(null)
   const stickRef = useRef(true)
   const prevHeightRef = useRef(0)
@@ -371,6 +372,7 @@ export function ChatLogSettings() {
       if (!el) return
       if (prevHeightRef.current === 0 || stickRef.current) {
         el.scrollTop = el.scrollHeight
+        el.lastElementChild?.scrollIntoView({ block: 'end' })
       } else {
         el.scrollTop += el.scrollHeight - prevHeightRef.current
       }
@@ -379,7 +381,12 @@ export function ChatLogSettings() {
     }
     settle()
     raf2 = requestAnimationFrame(() => requestAnimationFrame(settle))
-    return () => cancelAnimationFrame(raf2)
+    // 图片/字体晚到仍会把内容撑高:跟随模式下错峰补钉,保证落在最新消息
+    const timers = [80, 250, 600].map((d) => window.setTimeout(settle, d))
+    return () => {
+      cancelAnimationFrame(raf2)
+      timers.forEach((t) => window.clearTimeout(t))
+    }
   }, [rows])
 
   // 输入框随内容自长(1 行起,封顶后内部滚动)
