@@ -288,6 +288,25 @@ test('catch-up 摘要:超阈值积压折叠,用户消息原文进摘要、游标
   assert.equal(router.unreadCount('A'), 106)
 })
 
+test('连续失败 paused 的角色:每条用户消息都复位重试(§13 恢复,不再永久沉默)', async () => {
+  const clock = makeClock()
+  const adA = createFakeActorAdapter([
+    { fail: true }, { fail: true }, { fail: true }, { fail: true },
+    { speak: '甲恢复了' }, { listen: true },
+  ])
+  const { rt } = makeRuntime({ A: adA }, { clock })
+  await rt.sendUser('第一次')
+  await clock.advance(20_000) // 1s+2s+4s 退避后第 4 次失败 → paused
+  assert.equal(adA.calls.length, 4)
+  assert.equal(rt.getSnapshot().actors.A.status, 'paused')
+  // 新用户消息:失败计数复位,角色重试成功——而不是沉默到"停止→恢复"
+  await rt.sendUser('再说一次')
+  await clock.advance(autonomyPolicy.MERGE_WAIT_MS + 500)
+  const replies = rt.journal().list().filter((m) => m.author === 'A')
+  assert.equal(replies.length, 1)
+  assert.equal(rt.getSnapshot().actors.A.status, 'idle')
+})
+
 test('调用限流统计所有 invocation,60s 滑窗后恢复', () => {
   const limiter = autonomyPolicy.createInvocationLimiter(3)
   const t0 = 1_000_000

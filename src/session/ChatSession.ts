@@ -95,6 +95,7 @@ export function createChatSession(
   // ---------- 共享状态 ----------
   const listeners = new Set<() => void>()
   const chainTurn = new Map<string, string>() // journal 根消息 id → chatlog turnId
+  const chainReplied = new Set<string>() // 已有角色回复的因果链(整轮零回复时的兜底提示判定)
   const chainExtras = new Map<
     string,
     { factsLine?: string; briefLine?: string; toolNote?: string; memoryRefs?: ChatMemoryRef[] }
@@ -245,6 +246,7 @@ export function createChatSession(
       onCommit: (msg) => {
         if (!msg) return
         // 角色回复:落盘 + 短期窗口 + 呈现队列(消费者按 roomSeq 逐项 present→TTS)
+        chainReplied.add(msg.causalRootId)
         const rootTurnId = chainTurn.get(msg.causalRootId)
         pushTurn({ who: msg.author, text: msg.text })
         void appendChatTurns([
@@ -411,6 +413,24 @@ export function createChatSession(
       backgroundFacts(text, turnId)
       turn.wake()
       clock.setTimeout(() => host.clearUser(text), 400)
+      // 整轮零回复兜底(全员失败/全部 listen 且无 主回应人兜底):静止后给用户一句
+      // 可见的失败提示,而不是无声无息——chainReplied 由 onCommit 登记
+      const repliedChains = chainReplied
+      void runtimeOf()
+        .whenQuiescent()
+        .catch(() => undefined)
+        .then(() => {
+          if (mode !== 'actors') return
+          if (repliedChains.has(chainId)) {
+            diag.turnFinished(turnId, { outcome: 'spoke', totalMs: Date.now(), replyChars: 0, replySentences: 0 })
+          } else {
+            host.presentFallback({ speaker: primary, text: '（这会儿信号不好,没接上…再说一遍?)' })
+            diag.turnFinished(turnId, { outcome: 'failed', totalMs: Date.now(), replyChars: 0, replySentences: 0 })
+          }
+          diag.finish(turnId)
+          if (currentTurnId === turnId) currentTurnId = null
+          repliedChains.delete(chainId)
+        })
       return 'accepted'
     },
 

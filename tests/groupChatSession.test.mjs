@@ -230,6 +230,25 @@ test('clarify 短路:零模型调用;用户补充后新批次一次读完只答�
   await session.whenIdle()
 })
 
+test('整轮零回复:静止后给一句可见的失败兜底,不再无声无息', async () => {
+  const adA = createFakeActorAdapter([
+    { fail: true }, { fail: true }, { fail: true }, { fail: true },
+    { speak: '这次成了' }, { listen: true },
+  ])
+  const { session, calls, gates } = makeSession({ A: adA })
+  await session.send('你来回答')
+  // 4 连败(1+2+4s 退避)→ paused → 静止 → 兜底提示
+  await waitFor(() => calls.presentFallback.length >= 1, 25_000)
+  assert.equal(calls.presentFallback.length, 1)
+  await session.whenIdle()
+  // 下一条成功:正常回复,不再追加兜底
+  await session.send('再说一句')
+  await waitFor(() => calls.presentTurn.some((l) => l.text === '这次成了'), 15_000)
+  gates.forEach((g) => g.gate.resolve()) // 放行语音,让呈现队列排空
+  await session.whenIdle()
+  assert.equal(calls.presentFallback.length, 1, '成功轮不得误报兜底')
+})
+
 test('engine=legacy 分派:保留旧 busy 语义(回退开关)', async () => {
   const legacyFake = {
     send: async () => 'busy',

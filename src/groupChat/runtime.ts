@@ -244,11 +244,13 @@ export function createGroupChatRuntime(deps: GroupChatDeps): GroupChatRuntime {
         return { kind: 'stop' as const }
       }
       if (router.resume()) {
-        // 从暂停恢复:新 epoch,失败计数复位(其他角色继续聊的能力一并恢复)
+        // 从暂停恢复:新 epoch(失败复位对所有用户消息生效,见下)
         router.bumpEpoch()
-        for (const id of ids) workers[id].resetFailures()
         deps.onEvent?.({ type: 'resumed' })
       }
+      // 失败复位(§13):连续失败达阈值 paused 的角色,在每条用户消息时都获得
+      // 重试机会——否则一次网络抖动就让该角色沉默到下一次"停止→恢复"
+      for (const id of ids) workers[id].resetFailures()
       if (isDirectionChange(trimmed)) {
         router.bumpEpoch()
         deps.onEvent?.({ type: 'epoch', detail: 'direction-change' })
