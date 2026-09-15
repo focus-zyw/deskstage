@@ -176,7 +176,9 @@ fn foreground_info(include_title: bool) -> (Option<String>, Option<String>, Opti
         let title = if include_title {
             let mut tbuf = [0u16; 128];
             let n = GetWindowTextW(hwnd, &mut tbuf);
-            Some(String::from_utf16_lossy(&tbuf[..(n.max(0) as usize).min(120)]))
+            Some(String::from_utf16_lossy(
+                &tbuf[..(n.max(0) as usize).min(120)],
+            ))
         } else {
             None
         };
@@ -376,7 +378,9 @@ fn media_info() -> (bool, Option<String>) {
     let _ = wasapi::initialize_mta();
     let playing_pid = (|| -> Option<u32> {
         let enumerator = DeviceEnumerator::new().ok()?;
-        let device = enumerator.get_default_device(&wasapi::Direction::Render).ok()?;
+        let device = enumerator
+            .get_default_device(&wasapi::Direction::Render)
+            .ok()?;
         let manager = device.get_iaudiosessionmanager().ok()?;
         let sessions = manager.get_audiosessionenumerator().ok()?;
         let count = sessions.get_count().ok()?;
@@ -394,7 +398,10 @@ fn media_info() -> (bool, Option<String>) {
         return (false, None);
     };
     let mut sys = sysinfo::System::new();
-    sys.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[sysinfo::Pid::from_u32(pid)]), true);
+    sys.refresh_processes(
+        sysinfo::ProcessesToUpdate::Some(&[sysinfo::Pid::from_u32(pid)]),
+        true,
+    );
     let name = sys
         .process(sysinfo::Pid::from_u32(pid))
         .map(|p| p.name().to_string_lossy().to_lowercase());
@@ -409,7 +416,7 @@ fn media_info() -> (bool, Option<String>) {
 /// CPU/内存占用。CPU 占用率是"两次刷新差值",静态 System 跨轮询保存采样状态;
 /// 首帧只有一次采样,返回 None,下一帧起有值(60s 节奏下无感)。
 fn cpu_mem_percent() -> (Option<f32>, Option<f32>) {
-    use sysinfo::{MINIMUM_CPU_UPDATE_INTERVAL, System};
+    use sysinfo::{System, MINIMUM_CPU_UPDATE_INTERVAL};
     static SYS: std::sync::Mutex<Option<System>> = std::sync::Mutex::new(None);
     let Ok(mut guard) = SYS.lock() else {
         return (None, None);
