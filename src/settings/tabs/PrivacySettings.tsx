@@ -199,6 +199,21 @@ export function PrivacySettings() {
           </>
         )}
       </SettingsCard>
+      <SettingsCard card="表达导演" flash={flashCard} title="表达导演" desc="实验">
+        <SetLine title="启用表达导演" hint="每轮为角色规划怎么说话(动作/立场/长度/旧梗回收),让回复更像本人;实验功能,默认关">
+          <SetSwitch
+            checked={form.expressionV2}
+            label="启用表达导演"
+            onChange={(v) => {
+              setForm({ ...form, expressionV2: v })
+              saveField({ expressionV2: v }, true)
+            }}
+          />
+        </SetLine>
+        <div className="set-note">
+          只影响群聊角色回复的"说法",不改变谁说话与发言额度;规划在本地完成,不增加模型调用。关闭后立即回到旧版行为。
+        </div>
+      </SettingsCard>
       <SettingsCard card="角色工具" flash={flashCard} title="角色工具" desc="角色按对话自主使用">
         {toolList().map((t) => {
           const m = t.manifest

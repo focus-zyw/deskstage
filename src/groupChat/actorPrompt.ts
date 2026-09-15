@@ -37,6 +37,9 @@ export interface PromptBuildInput {
   briefLine?: string
   /** 附在特定消息后的工具观察块(工具系统渲染好的不可信资料),键 = 消息 id */
   toolNotes?: Record<string, string>
+  /** 表达导演的本轮指令(表达导演开启时每轮注入——两种形态都带:
+   *  网页会话复用远端上下文,增量轮也必须携带当轮策略) */
+  expressionLine?: string
   fullContext: boolean
   /** 断线恢复语(网页两段式恢复:重建会话 + 全量进度重发) */
   recovery?: boolean
@@ -114,6 +117,7 @@ function systemContent(input: PromptBuildInput, identity: PromptIdentity): strin
       disciplineBlock(identity),
       input.recovery ? '刚才连接断了一下;下面是目前群聊的完整进度,请从中断处继续正常参与群聊。' : '',
       PROTOCOL_RULES(input.batch, input.maySpeak, input.remainingReplies),
+      ...(input.expressionLine ? [input.expressionLine] : []),
     ]
       .filter(Boolean)
       .join('\n\n')
@@ -121,6 +125,7 @@ function systemContent(input: PromptBuildInput, identity: PromptIdentity): strin
   return [
     `继续群聊(你是 ${selfName},speaker "${input.actor}",人设与纪律同前)。`,
     PROTOCOL_RULES(input.batch, input.maySpeak, input.remainingReplies),
+    ...(input.expressionLine ? [input.expressionLine] : []),
   ].join('\n\n')
 }
 

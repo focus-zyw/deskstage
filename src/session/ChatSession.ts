@@ -22,7 +22,15 @@ import {
   type TurnMemoryContext,
 } from '../storage/memoryStore'
 import { extractFacts } from '../engine/llmClient'
-import { DEFAULT_CONFIG, getConfig, type AppConfig, type GroupModelBinding } from '../storage/configStore'
+import {
+  DEFAULT_CONFIG,
+  getConfig,
+  getConfigSnapshot,
+  type AppConfig,
+  type GroupModelBinding,
+} from '../storage/configStore'
+import { peekStory, selectStoryItems } from '../storage/storyStore'
+import { expressionDirector, type ExpressionTrace } from '../expression'
 import { speakTracked, prefetchVoice } from '../engine/tts'
 import { diag } from '../diag/store'
 import { createApiActorAdapter } from '../groupChat/adapters/apiActor'
@@ -104,7 +112,14 @@ export function createChatSession(
   const chainReplied = new Set<string>() // 已有角色回复的因果链(整轮零回复时的兜底提示判定)
   const chainExtras = new Map<
     string,
-    { factsLine?: string; briefLine?: string; toolNote?: string; memoryRefs?: ChatMemoryRef[] }
+    {
+      factsLine?: string
+      briefLine?: string
+      toolNote?: string
+      memoryRefs?: ChatMemoryRef[]
+      /** 只读预选的真实旧梗候选(表达导演回收旧梗的唯一来源) */
+      gags?: Array<{ id: string; text: string }>
+    }
   >()
   let mode: 'actors' | 'legacy' | null = null
   let configCache: AppConfig | null = null
@@ -230,9 +245,12 @@ export function createChatSession(
           factsLine: extra.factsLine,
           briefLine: extra.briefLine,
           toolNotes: extra.toolNote ? { [rootId]: extra.toolNote } : undefined,
+          gags: extra.gags,
           diagTurnId: chainTurn.get(rootId),
         }
       },
+      // 表达导演(实验):每次调用取最新开关——关闭返回 undefined,worker 行为与旧版一致
+      expression: () => (getConfigSnapshot().expressionV2 ? expressionDirector : undefined),
       onUserMessage: (msg, primary) => {
         // 用户消息:气泡上屏 + 短期窗口 + 落盘(entryId = 诊断轮 id)
         host.presentUser(msg.text, primary)
@@ -251,7 +269,7 @@ export function createChatSession(
           },
         ])
       },
-      onCommit: (msg) => {
+      onCommit: (msg, meta) => {
         if (!msg) return
         // 角色回复:落盘 + 短期窗口 + 呈现队列(消费者按 roomSeq 逐项 present→TTS)
         chainReplied.add(msg.causalRootId)
@@ -269,6 +287,7 @@ export function createChatSession(
             epoch: msg.epoch,
             causalRootId: msg.causalRootId,
             replyTo: msg.replyTo,
+            trace: expressionTraceOf(meta),
           },
         ])
         if (currentTurnId) diag.detailText(currentTurnId, { textKind: 'reply', text: msg.text })
@@ -305,6 +324,35 @@ export function createChatSession(
       p.dislikes ? `讨厌:${p.dislikes}` : '',
     ].filter(Boolean)
     return parts.length ? parts.join(';') : undefined
+  }
+
+  /** 旧梗候选:story.json 只读预选(selectStoryItems 同源),不写注入冷却、不烧主演出额度 */
+  function gagCandidatesOf(topic: string): Array<{ id: string; text: string }> | undefined {
+    try {
+      const story = peekStory()
+      if (!story || story.gags.length === 0) return undefined
+      const picked = selectStoryItems(story, topic, 1).gags
+      return picked.length > 0 ? picked.map((g) => ({ id: g.id, text: g.text })) : undefined
+    } catch {
+      return undefined
+    }
+  }
+
+  /** 表达 trace 落盘:仅枚举与 id、无正文;调试档(memoryDisplay==='debug')才落,
+   *  与 legacyChat 的 includeTrace 同款隐私闸 */
+  function expressionTraceOf(meta: { expression?: ExpressionTrace } | undefined): unknown {
+    const t = meta?.expression
+    if (!t || getConfigSnapshot().memoryDisplay !== 'debug') return undefined
+    return {
+      expression: {
+        id: t.id,
+        move: t.move,
+        stance: t.stance,
+        length: t.length,
+        surprise: t.surprise,
+        ...(t.callbackId ? { callbackId: t.callbackId } : {}),
+      },
+    }
   }
 
   /** 后台事实提取(用户消息触发一次;提取正文绝不入诊断) */
@@ -418,6 +466,7 @@ export function createChatSession(
         briefLine: briefLineOf(cfg),
         toolNote,
         memoryRefs: combinedRefs,
+        gags: gagCandidatesOf(text),
       })
       if (chainExtras.size > 8) {
         const oldest = chainExtras.keys().next().value

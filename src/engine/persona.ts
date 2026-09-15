@@ -261,6 +261,11 @@ export function personaText(id: ActorSlot): string {
   return overrides[id] || defaultPersonaText(id)
 }
 
+/** 内置默认口头禅(表达导演口头禅冷却用):只读结构化事实,不随改名变化 */
+export function defaultCatchphrases(id: ActorSlot): readonly string[] {
+  return DEFAULTS[id].catchphrases
+}
+
 /** 称呼与性别纪律:所有生成通道(主演出/短通道/弹幕/蒸馏/修复)统一注入的硬规则。
  *  真名即本名;指令与素材里的"甲/乙/丙"映射到配置名(兼容内建模式 prompt 与旧故事库);
  *  代词严格按结构化性别,解决"他/她"混用。只列当前启用的角色 */

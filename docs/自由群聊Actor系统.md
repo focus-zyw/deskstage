@@ -38,14 +38,18 @@
 | `actorSchema.ts` | 输出解析(容错 JSON)+ `validateActorReaction`(batchId/ackThrough/replyTo 任一非法 = invalid,不 ACK) |
 | `roomJournal.ts` | 内存消息日志,roomSeq 分配;`bootstrap` 从 chatlog 引导历史(context-only) |
 | `roomRouter.ts` | 批次连续前缀(≤12 条/4000 字/200ms 合并窗)、提交临界区(互斥串行)、epoch/停止、catchUpDigest、disabled 游标跟尾 |
-| `actorWorker.ts` | 单角色状态机 idle→collecting→invoking→committing/backoff/paused;用户抢占=作废在飞重收集 |
-| `actorPrompt.ts` | 输入协议(人设+纪律+用户最高指令权+未读+预算提示+输出协议);fullContext/recovery 双形态 |
+| `actorWorker.ts` | 单角色状态机 idle→collecting→invoking→committing/backoff/paused;用户抢占=作废在飞重收集;表达导演开启时:构建请求前 plan、提交前质量闸、提交成功后 noteSpoken 记账 |
+| `actorPrompt.ts` | 输入协议(人设+纪律+用户最高指令权+未读+预算提示+输出协议+表达指令行);fullContext/recovery 双形态,表达指令两种形态都每轮必达 |
 | `userAuthority.ts` | 停止/转向判词(从严)、@点名>甲乙轮换的主回应解析 |
 | `runtime.ts` | 唯一外部接口 sendUser/openUserTurn/cancel/reset/getSnapshot/whenQuiescent/presentationHold/dispose |
 | `presenter.ts` | 呈现管线:按 roomSeq 串行 present→TTS;徽标按 causalRootId 原子领取;持有静止闸 |
 | `adapters/types.ts` | ActorModelAdapter seam(react/prefersFullContext/invalidate/dispose) |
 | `adapters/apiActor.ts` | API 通道:llmGateway.complete + 模型档案(profileId 缺省/'main'=主模型) |
 | `adapters/webchatActor.ts` | 网页通道:四段会话键 + 两段式恢复 + 15 轮上下文卫生;新建实例首叫不 reset(重启/刷新复用 Rust 侧存活标签页) |
+
+**表达导演(src/expression/,实验开关 `expressionV2` 默认关)**:只提供每轮"怎么说"
+的表达计划(动作/立场/长度/旧梗),不参与"谁说话/何时说话"的任何裁定——
+运行时仍无导演。详见 docs/表达导演设计方案.md。
 
 ## 3. 模型绑定(设置 → AI 模型)
 
@@ -92,6 +96,7 @@ I8 cancel 后 Worker/当前 TTS/待播全停。
 | §13 追赶「暂停+摘要」 | 同左,但摘要由 Worker 到阈值即触发(不再被动退避空转) | |
 | §7 输出协议 | batchId/ackThrough 严格回显校验 | 评审要求 ACK 校验拒删队列;prompt 明示逐字照抄 |
 | 语音「句级提交」 | 改为 commit 即落盘,TTS 是下游消费者 | 文档 §8 语义;被打断的回复已入日志(群聊真实感) |
+| 「没有导演」 | 表达导演(expressionV2 默认关)只规划"怎么说",不碰"谁说话/何时说话/说几条" | 每轮表达指令需要 per-turn 规划;预算/队列/ACK 等机械规则全部不变,关闭即旧版逐字节一致 |
 
 ## 6. clarify 短路(队列语义)
 

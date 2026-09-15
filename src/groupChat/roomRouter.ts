@@ -37,6 +37,7 @@ import type {
   ActorRuntimeConfig,
   AutonomyLevel,
   Clock,
+  CommitMeta,
   CommitResult,
   ModelBinding,
   RoomMessage,
@@ -82,7 +83,12 @@ export interface RoomRouter {
   unreadOverThreshold(actor: ActorId): boolean
   anyUnread(): boolean
 
-  commitActorResult(actor: ActorId, batch: ActorBatch, reaction: ActorReaction): Promise<CommitResult>
+  commitActorResult(
+    actor: ActorId,
+    batch: ActorBatch,
+    reaction: ActorReaction,
+    meta?: CommitMeta,
+  ): Promise<CommitResult>
 
   /** 当前活跃链(最新用户消息的因果链;供 maySpeak 提示与 clarify 语义) */
   activeChain(): ConversationChainState | null
@@ -109,7 +115,7 @@ export interface RoomRouterOpts {
   /** 各角色生效配置(binding.kind==='disabled' 的角色仍保持游标对齐,只是不生成) */
   configs(): Record<ActorId, ActorRuntimeConfig>
   /** 提交完成通知(临界区内串行触发;speak 携带 reply,listen 也通知游标推进) */
-  onCommitted?(actor: ActorId, result: CommitResult): void
+  onCommitted?(actor: ActorId, result: CommitResult, meta?: CommitMeta): void
 }
 
 export function createRoomRouter(opts: RoomRouterOpts): RoomRouter {
@@ -321,10 +327,10 @@ export function createRoomRouter(opts: RoomRouterOpts): RoomRouter {
       return ids.some((id) => effectiveBindingOf(id).kind !== 'disabled' && unreadCountOf(id) > 0)
     },
 
-    async commitActorResult(actor, batch, reaction) {
+    async commitActorResult(actor, batch, reaction, meta) {
       const run = commitTail.then(() => {
         const result = commitOne(actor, batch, reaction)
-        if (result.outcome !== 'invalid') opts.onCommitted?.(actor, result)
+        if (result.outcome !== 'invalid') opts.onCommitted?.(actor, result, meta)
         return result
       })
       commitTail = run.catch(() => undefined)

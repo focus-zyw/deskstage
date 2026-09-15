@@ -9,6 +9,7 @@
 // 历史仅作上下文,不恢复待处理消息。
 import type { Speaker } from '../performer/dialogSchema'
 import type { GroupAutonomy, GroupModelBinding } from '../storage/configStore'
+import type { ExpressionTrace, GateIssue } from '../expression'
 
 export type ActorId = Speaker
 
@@ -139,4 +140,13 @@ export interface CommitResult {
   outcome: 'committed-speak' | 'committed-listen' | 'invalid'
   reply?: RoomMessage
   stale?: boolean
+}
+
+/** 提交附带信息(可选):表达导演 trace 与质量闸问题清单。必须随 commitActorResult
+ *  传入——宿主 onCommit 落盘时刻就要用,worker await 之后补传会晚于落盘 */
+export interface CommitMeta {
+  /** 表达导演本轮留痕(仅枚举与 id,无正文;聊天日志 trace 槽按隐私档落) */
+  expression?: ExpressionTrace
+  /** 质量闸在最终文本上仍存在的问题(repetition/echo 等不可修复项照常提交) */
+  gateIssues?: GateIssue[]
 }

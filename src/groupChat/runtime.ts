@@ -2,7 +2,8 @@
 //
 // 对外只有:sendUser / cancel / reset / getSnapshot / subscribe / whenQuiescent /
 // presentationHold / dispose。没有导演:谁说话由各角色模型自行判断,运行时只维护
-// 机械规则(排序/广播/原子提交/预算/停止)与安全不变量。
+// 机械规则(排序/广播/原子提交/预算/停止)与安全不变量。表达导演(可选 provider)
+// 只提供每轮"怎么说"的表达计划,不参与"谁说话/何时说话"的任何裁定。
 //
 // 一致性语义(与 docs/自由群聊Actor系统.md 对齐):
 // · busy = 尚未静止(任一 worker 仍会动作,或宿主播放闸未释放);send 在 busy 时照常受理;
@@ -17,6 +18,7 @@
 import { createActorWorker, type ActorWorker } from './actorWorker'
 import type { ActorModelAdapter } from './adapters/types'
 import type { PromptIdentity } from './actorPrompt'
+import type { ExpressionDirector, ExpressionTrace, GateIssue } from '../expression'
 import {
   INBOX_PAUSE_THRESHOLD,
   closeChain,
@@ -47,14 +49,24 @@ export interface GroupChatDeps {
   }
   /** 各角色模型适配;enabled 绑定但缺 Adapter 的角色不参与(等同 disabled) */
   adapters: Partial<Record<ActorId, ActorModelAdapter>>
-  /** 可选:附加 prompt 上下文(记忆事实/用户简报/工具观察块) */
+  /** 可选:附加 prompt 上下文(记忆事实/用户简报/工具观察块/旧梗候选) */
   prepareExtras?(batch: ActorBatchLike): Promise<{
     factsLine?: string
     briefLine?: string
     toolNotes?: Record<string, string>
+    /** 只读预选的真实旧梗候选(表达导演用;宿主从 story.json 预选) */
+    gags?: Array<{ id: string; text: string }>
   }>
-  /** 提交回调:committed-speak 携带回复(宿主负责落盘+呈现入队);listen 也通知(游标推进) */
-  onCommit?(msg: RoomMessage | null, meta: { actor: ActorId; result: CommitResult }): void
+  /** 表达导演(可选 provider):每次调用取最新开关(expressionV2 关 = undefined,
+   *  各 worker 行为与旧版完全一致)。运行时仍"没有导演":谁说话、何时说话由
+   *  各角色模型与预算规则决定,这里只提供"怎么说"的规划 */
+  expression?(): ExpressionDirector | undefined
+  /** 提交回调:committed-speak 携带回复(宿主负责落盘+呈现入队);listen 也通知(游标推进)。
+   *  meta.expression = 表达导演本轮留痕(落盘 trace 用;落盘时刻必须可用) */
+  onCommit?(
+    msg: RoomMessage | null,
+    meta: { actor: ActorId; result: CommitResult; expression?: ExpressionTrace; gateIssues?: GateIssue[] },
+  ): void
   /** 用户消息入列通知(宿主负责落盘+短期窗口;工具/记忆在 openUserTurn 间隙执行)。
    *  primary 为 null = 停止词分支(消息照常入列留痕,但全员暂停) */
   onUserMessage?(msg: RoomMessage, primary: ActorId | null): void
@@ -117,8 +129,13 @@ export function createGroupChatRuntime(deps: GroupChatDeps): GroupChatRuntime {
     journal,
     clock,
     configs: () => deps.config().actors,
-    onCommitted: (actor, result) => {
-      deps.onCommit?.(result.reply ?? null, { actor, result })
+    onCommitted: (actor, result, meta) => {
+      deps.onCommit?.(result.reply ?? null, {
+        actor,
+        result,
+        expression: meta?.expression,
+        gateIssues: meta?.gateIssues,
+      })
       router.trackDisabled()
       if (result.outcome === 'committed-speak') wakeAll()
       emit()
@@ -170,6 +187,7 @@ export function createGroupChatRuntime(deps: GroupChatDeps): GroupChatRuntime {
       clock,
       identity: () => identityOf(id),
       prepareExtras: deps.prepareExtras ? (batch) => deps.prepareExtras!(batch) : undefined,
+      expression: deps.expression,
       onEvent: (e) => {
         if (e.type === 'stale-drop') deps.onEvent?.({ type: 'stale-drop', actor: id })
         emit()

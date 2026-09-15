@@ -264,6 +264,9 @@ export interface AppConfig {
   modelProfileKeys: Record<string, string>
   /** 群聊角色绑定与生成引擎(自由群聊 Actor 系统) */
   groupChatActors: GroupChatActorsConfig
+  /** 表达导演(实验):生成前按角色规划"怎么说"(动作/立场/长度/旧梗回收);
+   *  灰度默认关,关闭时生成路径与旧版完全一致 */
+  expressionV2: boolean
 }
 
 /** AI 剧场配置 */
@@ -444,6 +447,7 @@ export const DEFAULT_CONFIG: AppConfig = {
     B: { binding: { kind: 'api' }, autonomy: 'quiet' },
     C: { binding: { kind: 'disabled' }, autonomy: 'natural' },
   },
+  expressionV2: false,
 }
 
 /** 角色工具系统偏好 */
@@ -1096,6 +1100,7 @@ const FIELD_SANITIZERS: { [K in keyof AppConfig]: (v: unknown, all: Record<strin
   modelProfiles: sanitizeModelProfiles,
   modelProfileKeys: sanitizeModelProfileKeys,
   groupChatActors: sanitizeGroupChatActors,
+  expressionV2: (v) => v === true,
   bubbleStyle: sanitizeBubbleStyle,
   memoryDisplay: (v) => (v === 'subtle' || v === 'debug' ? v : 'off'),
 }
