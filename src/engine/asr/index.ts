@@ -37,12 +37,18 @@ export const siliconflowAsrProvider: AsrProvider = {
   },
 }
 
-/** 二期接入 whisper.cpp/Rust 推理;在那之前明确拒绝,不静默装死 */
+/** 本地离线识别(二期已接入):Rust local_asr 模块进程内跑 SenseVoiceSmall int8
+ *  (sherpa-onnx),模型文件一次下载常驻 appdata;零延迟零配额,语音不出门 */
 export const localAsrProvider: AsrProvider = {
   id: 'local',
-  label: '本地识别(未接入)',
-  async transcribe() {
-    throw new Error('本地识别尚未接入,请在设置选择云端识别')
+  label: '本地 SenseVoice(离线)',
+  async transcribe(pcm, sampleRate) {
+    const bytes = new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength)
+    const wav = new Uint8Array(pcmToWav(bytes, sampleRate, 1, 16))
+    const r = await invoke<{ text: string }>('asr_transcribe_local', {
+      wavBase64: bytesToBase64(wav),
+    })
+    return r.text.trim()
   },
 }
 

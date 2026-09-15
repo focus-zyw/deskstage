@@ -5,9 +5,9 @@
 // 凭据库 asr:siliconflow(能力级,独立于 TTS 的 tts:voice——TTS 用 MiniMax 时
 // ASR 仍可单独配置硅基),前端从头到尾接触不到密钥。
 //
-// 硬化照 endpoint_proxy:仅 POST、禁重定向、连接超时 15s、总超时 60s、
+// 硬化照 endpoint_proxy:仅 POST、禁重定向、连接超时 15s、识别单次尝试 20s、
 // 请求体上限 32MB(30s/16k/i16 的 wav 约 1MB,余量给超长句);错误文案不带密钥。
-// v1 不做在途取消:识别通常 0.7~2s,打断靠前端代次丢弃迟到结果,请求最长 60s 自然结束。
+// v1 不做在途取消:识别通常 0.7~2s,打断靠前端代次丢弃迟到结果,单次尝试 20s,共 3 次。
 //
 // 连接测试(设置页)实测裁决(2026-09 排查「测试超时但识别成功」):
 // · 旧测试上传 1s 静音打到 /transcriptions,两个致命伤:服务端已改为对静音回
@@ -33,9 +33,12 @@ const MAX_WAV_BYTES: usize = 32 * 1024 * 1024;
 /// 连接 15s、总 60s:ASR 要上传整段音频(30s 语音约 1MB),慢上行下 20s 会把
 /// 正常的识别压成"发送失败"。设置页连接测试另走 10s×3 次的快速策略。
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
-const TOTAL_TIMEOUT: Duration = Duration::from_secs(60);
+/// 识别单次尝试预算 20s × 3 次(2026-09 实测:推理后端存在慢节点,同 utterance
+/// 偶发挂起 30s+;短预算快刀斩掉挂起尝试,健康后端 1-3s 内必答,最坏 ~62s 有界)。
+/// 长音频上传(30s 语音 ≈ 1MB)在常见上行下 20s 内充裕。
+const TRANSCRIBE_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(20);
+const TRANSCRIBE_ATTEMPTS: usize = 3;
 const CONNECTION_TEST_TIMEOUT: Duration = Duration::from_secs(10);
-const TRANSCRIBE_ATTEMPTS: usize = 2;
 /// 连接对同一端点存在约半数的「黑洞」形态(多 A 记录后端或代理节点,实测同分钟内
 /// 交替:挂起 >10s 与 0.2s 响应随机出现)——3 次尝试把单按钮失败率压到 ~12%,
 /// 最坏 ~31s 有界;挂起的尝试反正等不到响应,超时快刀反而更快进入下一次。
@@ -100,7 +103,7 @@ async fn send_with_retry(
         }
     }
     let hint = if last.contains("timed out") {
-        ";可能是代理/VPN 抖动或服务端排队(真实识别有 60s 预算与自动重试,可稍后再试)".to_string()
+        ";可能是代理/VPN 抖动或服务端排队(真实识别有 20s×3 次尝试,可稍后再试)".to_string()
     } else {
         String::new()
     };
@@ -238,7 +241,13 @@ async fn transcribe_with_policy(
 
 #[tauri::command]
 pub async fn asr_transcribe(wav_base64: String, model: String) -> Result<AsrResult, String> {
-    transcribe_with_policy(wav_base64, model, TOTAL_TIMEOUT, TRANSCRIBE_ATTEMPTS).await
+    transcribe_with_policy(
+        wav_base64,
+        model,
+        TRANSCRIBE_ATTEMPT_TIMEOUT,
+        TRANSCRIBE_ATTEMPTS,
+    )
+    .await
 }
 
 /// 设置页连接测试:验证 endpoint/key/model 三者。走 GET /v1/models(轻量 JSON,
@@ -288,7 +297,7 @@ mod tests {
     fn connection_test_policy_is_short_with_three_attempts() {
         assert_eq!(CONNECTION_TEST_TIMEOUT, Duration::from_secs(10));
         assert_eq!(CONNECTION_TEST_ATTEMPTS, 3);
-        assert!(CONNECTION_TEST_TIMEOUT < TOTAL_TIMEOUT);
+        assert!(CONNECTION_TEST_TIMEOUT < TRANSCRIBE_ATTEMPT_TIMEOUT);
     }
 
     #[test]
@@ -474,6 +483,126 @@ mod transport_probe_command {
                     started.elapsed().as_secs_f32()
                 ),
             }
+        });
+    }
+}
+
+#[cfg(test)]
+mod transport_probe_transcribe {
+    use super::*;
+
+    /// 真实识别命令探测:非静音音频(白噪声)走 asr_transcribe 命令路径——
+    /// 与语音对话完全同一条路(60s 预算 ×2 次尝试)。用于测量语音「正在想」里
+    /// ASR 段的真实延迟/挂起率。输出只有耗时与文本长度,无敏感内容。
+    #[test]
+    #[ignore = "真实请求冒烟;需已配置密钥"]
+    fn probe_transcribe_command() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let sample_rate = 16_000u32;
+            let mut pcm = vec![0i16; sample_rate as usize];
+            // 伪随机噪声模拟「有声音」:纯静音会被服务端 500 拒绝
+            let mut seed: u32 = 0x12345678;
+            for (i, v) in pcm.iter_mut().enumerate() {
+                seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                *v = ((seed >> 16) as i16) / 8;
+                let _ = i;
+            }
+            let mut bytes = vec![0u8; 0];
+            bytes.extend_from_slice(bytemuck_cast(&pcm));
+            let mut wav = vec![0u8; 44 + bytes.len()];
+            wav[0..4].copy_from_slice(b"RIFF");
+            wav[4..8].copy_from_slice(&((36 + bytes.len()) as u32).to_le_bytes());
+            wav[8..12].copy_from_slice(b"WAVE");
+            wav[12..16].copy_from_slice(b"fmt ");
+            wav[16..20].copy_from_slice(&16u32.to_le_bytes());
+            wav[20..22].copy_from_slice(&1u16.to_le_bytes());
+            wav[22..24].copy_from_slice(&1u16.to_le_bytes());
+            wav[24..28].copy_from_slice(&sample_rate.to_le_bytes());
+            wav[28..32].copy_from_slice(&(sample_rate * 2).to_le_bytes());
+            wav[32..34].copy_from_slice(&2u16.to_le_bytes());
+            wav[34..36].copy_from_slice(&16u16.to_le_bytes());
+            wav[36..40].copy_from_slice(b"data");
+            wav[40..44].copy_from_slice(&(bytes.len() as u32).to_le_bytes());
+            wav[44..].copy_from_slice(&bytes);
+            let b64 = base64::engine::general_purpose::STANDARD.encode(&wav);
+            let started = std::time::Instant::now();
+            match asr_transcribe(b64, "FunAudioLLM/SenseVoiceSmall".into()).await {
+                Ok(r) => println!(
+                    "[probe-asr] asr_transcribe -> Ok,耗时 {:.2}s,文本长度 {}",
+                    started.elapsed().as_secs_f32(),
+                    r.text.len()
+                ),
+                Err(e) => println!(
+                    "[probe-asr] asr_transcribe -> Err after {:.2}s: {e}",
+                    started.elapsed().as_secs_f32()
+                ),
+            }
+        });
+    }
+
+    fn bytemuck_cast(v: &[i16]) -> &[u8] {
+        unsafe { std::slice::from_raw_parts(v.as_ptr().cast(), std::mem::size_of_val(v)) }
+    }
+}
+
+#[cfg(test)]
+mod transport_probe_local {
+    use super::*;
+
+    /// 本地离线识别端到端探测:asr_transcribe_local(与语音对话同一条命令路径)。
+    /// 需先下载模型(设置页或调用 local_asr_download)。
+    #[test]
+    #[ignore = "本地模型冒烟;需已下载 SenseVoice 模型文件"]
+    fn probe_local_transcribe() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            // 用 tauri AppHandle 拿 appdata 路径在测试环境不可用(无 app);
+            // 直接按生产同款目录约定定位:appdata/models/sensevoice
+            let home = std::env::var("USERPROFILE").unwrap_or_default();
+            let dir = std::path::PathBuf::from(home.clone())
+                .join("AppData/Roaming/dev.virtualcharacter.app/models/sensevoice");
+            let model = dir.join("model.int8.onnx");
+            let tokens = dir.join("tokens.txt");
+            if !model.exists() || !tokens.exists() {
+                println!("[probe-local] 模型文件不存在,跳过({})", dir.display());
+                return;
+            }
+            // 推理内核直接构造(绕过 AppHandle;模型目录相同)
+            let config = sherpa_rs::sense_voice::SenseVoiceConfig {
+                model: model.to_string_lossy().into_owned(),
+                tokens: tokens.to_string_lossy().into_owned(),
+                language: "auto".into(),
+                use_itn: true,
+                num_threads: Some(2),
+                ..Default::default()
+            };
+            let started = std::time::Instant::now();
+            let mut recognizer = match sherpa_rs::sense_voice::SenseVoiceRecognizer::new(config) {
+                Ok(r) => r,
+                Err(e) => {
+                    println!(
+                        "[probe-local] 模型加载失败 after {:.2}s: {e}",
+                        started.elapsed().as_secs_f32()
+                    );
+                    return;
+                }
+            };
+            println!(
+                "[probe-local] 模型加载耗时 {:.2}s",
+                started.elapsed().as_secs_f32()
+            );
+            // 1s 16k 正弦波(有内容,非静音)
+            let samples: Vec<f32> = (0..16_000)
+                .map(|i| (((i as f32) * 440.0 * std::f32::consts::TAU / 16_000.0).sin()) * 0.3)
+                .collect();
+            let t1 = std::time::Instant::now();
+            let result = recognizer.transcribe(16_000, &samples);
+            println!(
+                "[probe-local] 推理耗时 {:.2}s,文本 = {:?}",
+                t1.elapsed().as_secs_f32(),
+                result.text
+            );
         });
     }
 }

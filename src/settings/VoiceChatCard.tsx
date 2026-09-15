@@ -5,8 +5,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listMics, rmsDbfs, startMic, MIC_SAMPLE_RATE, type MicDevice, type MicSession } from '../engine/mic'
-import { bytesToBase64 } from '../engine/asr'
-import { pcmToWav } from '../engine/tts/wav'
+import { asrProviderById } from '../engine/asr'
 import { saveConfig, type VoiceChatConfig, type VoiceConfig } from '../storage/configStore'
 import { recognitionTestOutcome, type AsrTestState } from './asrTest'
 import { useSettings } from './useSettingsSession'
@@ -14,6 +13,17 @@ import { SetField, SetLine, SetSwitch, SettingsCard } from './SettingsPrimitives
 
 const ASR_MODELS = ['FunAudioLLM/SenseVoiceSmall', 'TeleAI/TeleSpeechASR']
 const ASR_RECORD_MS = 3000
+/** 本地离线识别模型状态(local_asr_status 返回) */
+interface LocalAsrStatusInfo {
+  modelDir: string
+  modelReady: boolean
+  tokensReady: boolean
+  ready: boolean
+  downloading: boolean
+  progress: number | null
+  downloadingFile: string | null
+}
+
 
 function elapsedMs(startedAt: number): number {
   return Math.max(0, Math.round(performance.now() - startedAt))
@@ -93,6 +103,24 @@ export function VoiceChatCard() {
   const asrRunRef = useRef(0)
   const [asrAction, setAsrAction] = useState<'connection' | 'recognition' | null>(null)
   const [asrTest, setAsrTest] = useState<AsrTestState>({ state: 'idle', msg: '' })
+  // 本地离线识别模型状态:provider=local 时每 1.5s 轮询(下载中给进度,就绪给确认)
+  const [asrLocal, setAsrLocal] = useState<LocalAsrStatusInfo | null>(null)
+  useEffect(() => {
+    if (voice.asr.provider !== 'local') return // 非 local 的陈旧状态不渲染,无需清理
+    let alive = true
+    const refresh = () =>
+      invoke<LocalAsrStatusInfo>('local_asr_status')
+        .then((s) => {
+          if (alive) setAsrLocal(s)
+        })
+        .catch(() => {})
+    void refresh()
+    const timer = window.setInterval(refresh, 1500)
+    return () => {
+      alive = false
+      window.clearInterval(timer)
+    }
+  }, [voice.asr.provider])
 
   useEffect(() => {
     if (vc.mode === 'off') return
@@ -156,8 +184,8 @@ export function VoiceChatCard() {
     }, 2000)
   }
 
-  // ASR 连接测试:走 GET /v1/models 轻量端点,一次验证服务可达/密钥有效/模型在列,
-  // 不上传音频、不进推理后端(推理后端会拒静音且有慢节点);识别效果用「录音识别」。
+  // ASR 连接测试:云端 = GET /v1/models 轻量端点(服务可达/密钥/模型在列,不进推理后端);
+  // 本地 = 检查模型文件就绪。识别效果两条路都用「录音识别」验证。
   const testAsrConnection = async () => {
     const run = ++asrRunRef.current
     setAsrAction('connection')
@@ -165,6 +193,19 @@ export function VoiceChatCard() {
     setAsrTest({ state: 'testing', msg: '正在连接识别服务…' })
     try {
       await saveConfig({ voice: { ...voice, asr: voice.asr } })
+      if (voice.asr.provider === 'local') {
+        const s = await invoke<LocalAsrStatusInfo>('local_asr_status')
+        if (asrRunRef.current !== run) return
+        if (s.ready) {
+          setAsrTest({
+            state: 'ok',
+            msg: `本地模型就绪(${elapsedMs(startedAt)} ms);识别效果请用「录音识别」验证`,
+          })
+        } else {
+          setAsrTest({ state: 'fail', msg: '本地模型未下载:请先点「下载模型」' })
+        }
+        return
+      }
       await invoke<{ text: string }>('asr_test_connection', {
         model: voice.asr.model,
       })
@@ -211,15 +252,12 @@ export function VoiceChatCard() {
 
       const pcm = concatPcmFrames(frames)
       if (pcm.length === 0) throw new Error('没有采集到麦克风音频;请检查设备与系统麦克风权限')
-      const wav = new Uint8Array(pcmToWav(new Uint8Array(pcm.buffer), MIC_SAMPLE_RATE, 1, 16))
       setAsrTest({ state: 'testing', msg: '录音完成,正在识别…' })
       const startedAt = performance.now()
-      const result = await invoke<{ text: string }>('asr_transcribe', {
-        wavBase64: bytesToBase64(wav),
-        model: voice.asr.model,
-      })
+      const provider = asrProviderById(voice.asr.provider)
+      const text = await provider.transcribe(pcm, MIC_SAMPLE_RATE, voice.asr.model)
       if (asrRunRef.current !== run) return
-      setAsrTest(recognitionTestOutcome(result.text, elapsedMs(startedAt)))
+      setAsrTest(recognitionTestOutcome(text, elapsedMs(startedAt)))
     } catch (e) {
       if (asrRunRef.current !== run) return
       setAsrTest({ state: 'fail', msg: String(e) })
@@ -336,38 +374,77 @@ export function VoiceChatCard() {
           >
             <SetSwitch checked={vc.autoInterrupt} label="说话时允许语音打断" onChange={(v) => patch({ autoInterrupt: v })} />
           </SetLine>
-          <SetField
-            label="识别 API Key"
-            htmlFor="cfg-vc-asr-key"
-            hint="siliconflow.cn 的 API Key,只用于语音识别,与朗读/对话的 key 相互独立"
-          >
-            <input
-              id="cfg-vc-asr-key"
-              type="password"
-              placeholder="sk-...(siliconflow.cn)"
-              value={voice.asr.apiKey}
-              onChange={(e) => patchAsr({ apiKey: e.target.value })}
-              onBlur={(e) => patchAsr({ apiKey: e.target.value }, true)}
-            />
+          <SetField label="识别供应商" htmlFor="cfg-vc-asr-provider" hint="本地 = SenseVoice 进程内推理:完全离线、零延迟零配额,模型一次下载 228 MB;云端 = 硅基流动,免费模型当前推理较慢">
+            <select
+              id="cfg-vc-asr-provider"
+              value={voice.asr.provider}
+              onChange={(e) => {
+                const provider = e.target.value as 'siliconflow' | 'local'
+                patchAsr({ provider })
+              }}
+            >
+              <option value="local">本地离线(推荐)</option>
+              <option value="siliconflow">云端硅基流动</option>
+            </select>
           </SetField>
-          <SetField
-            label="识别模型"
-            htmlFor="cfg-vc-asr-model"
-            hint="SenseVoiceSmall 免费(有限流);TeleSpeechASR 按量计费;也可手动填官方模型列表里的其他值"
-          >
-            <input
-              id="cfg-vc-asr-model"
-              list="asr-model-suggestions"
-              value={voice.asr.model}
-              onChange={(e) => patchAsr({ model: e.target.value })}
-              onBlur={(e) => patchAsr({ model: e.target.value }, true)}
-            />
-            <datalist id="asr-model-suggestions">
-              {ASR_MODELS.map((m) => (
-                <option key={m} value={m} />
-              ))}
-            </datalist>
-          </SetField>
+          {voice.asr.provider === 'local' && asrLocal && (
+            <SetLine
+              title={
+                asrLocal.ready
+                  ? '本地模型就绪 ✓ 完全离线'
+                  : asrLocal.downloading
+                    ? `模型下载中 ${asrLocal.progress !== null ? Math.round(asrLocal.progress * 100) : 0}%…`
+                    : '本地模型未下载'
+              }
+              hint={`存放目录:${asrLocal.modelDir}`}
+            >
+              {!asrLocal.ready && !asrLocal.downloading && (
+                <button
+                  type="button"
+                  className="panel-btn"
+                  onClick={() => void invoke('local_asr_download').catch(() => {})}
+                >
+                  下载模型(约 228 MB,一次)
+                </button>
+              )}
+            </SetLine>
+          )}
+          {voice.asr.provider === 'siliconflow' && (
+            <SetField
+              label="识别 API Key"
+              htmlFor="cfg-vc-asr-key"
+              hint="siliconflow.cn 的 API Key,只用于语音识别,与朗读/对话的 key 相互独立"
+            >
+              <input
+                id="cfg-vc-asr-key"
+                type="password"
+                placeholder="sk-...(siliconflow.cn)"
+                value={voice.asr.apiKey}
+                onChange={(e) => patchAsr({ apiKey: e.target.value })}
+                onBlur={(e) => patchAsr({ apiKey: e.target.value }, true)}
+              />
+            </SetField>
+          )}
+          {voice.asr.provider === 'siliconflow' && (
+            <SetField
+              label="识别模型"
+              htmlFor="cfg-vc-asr-model"
+              hint="SenseVoiceSmall 免费(有限流,当前推理较慢);TeleSpeechASR 按量计费;也可手动填官方模型列表里的其他值"
+            >
+              <input
+                id="cfg-vc-asr-model"
+                list="asr-model-suggestions"
+                value={voice.asr.model}
+                onChange={(e) => patchAsr({ model: e.target.value })}
+                onBlur={(e) => patchAsr({ model: e.target.value }, true)}
+              />
+              <datalist id="asr-model-suggestions">
+                {ASR_MODELS.map((m) => (
+                  <option key={m} value={m} />
+                ))}
+              </datalist>
+            </SetField>
+          )}
           <SetLine
             title="识别服务与模型测试"
             hint={asrTest.msg || '先快速验证服务连接;要验证识别效果,请录音并说一句话'}

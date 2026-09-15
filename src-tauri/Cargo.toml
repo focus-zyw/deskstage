@@ -56,3 +56,6 @@ tauri-plugin-global-shortcut = "2.3.2"
 tauri-plugin-autostart = "2.5.1"
 # 系统通知(toast):全屏场景下角色气泡不可见,高优提醒走系统 toast
 tauri-plugin-notification = "2"
+# 本地离线语音识别:sherpa-onnx 的 Rust 绑定(SenseVoiceSmall int8 ONNX,纯 CPU)
+# download-binaries = 拉取预编译静态库,免本机 cmake/C++ 工具链
+sherpa-rs = { version = "0.6", default-features = false, features = ["download-binaries"] }

@@ -12,6 +12,7 @@ mod config_service;
 mod desktop_ops;
 mod endpoint_proxy;
 mod env;
+mod local_asr;
 mod mic_capture;
 mod ocr;
 mod pointer_hook;
@@ -187,6 +188,9 @@ pub fn run() {
             desktop_ops::toggle_mute,
             desktop_ops::window_action,
             desktop_ops::notify_send,
+            local_asr::local_asr_status,
+            local_asr::local_asr_download,
+            local_asr::asr_transcribe_local,
             video_save::video_save_from_url,
             video_save::reveal_in_explorer,
             bili_http::bili_http_request,
