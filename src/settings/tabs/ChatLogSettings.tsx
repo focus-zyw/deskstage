@@ -23,14 +23,14 @@ import {
   publishGroupChatUnread,
   setGroupChatReadCursor,
 } from '../../storage/groupChatReadStore'
-import { listEpisodes, type Episode } from '../../storage/historyStore'
+
 import {
   listChatTurns,
   clearChatLog,
-  buildFeed,
   useChatLogVersion,
   type ChatLogEntry,
 } from '../../storage/chatLogStore'
+import type { Episode } from '../../storage/historyStore'
 import { loadGroupBg, saveGroupBg, clearGroupBg } from '../../storage/groupBgStore'
 import {
   loadAvatars,
@@ -40,7 +40,6 @@ import {
   type AvatarKey,
   type AvatarMap,
 } from '../../storage/avatarStore'
-import { modeOf } from '../../performer/modes'
 import { useConfigSnapshot } from '../../storage/configStore'
 import { getMemory, type MemoryFact } from '../../storage/memoryStore'
 import { effectiveStatus } from '../../storage/memoryPolicy'
@@ -57,17 +56,12 @@ import {
 } from '../../ui/mention'
 import { useSettings } from '../useSettingsSession'
 
-/** 每页条数(集内台词逐句计数,至少保最新一集)与消息条数上限 */
-const PAGE_LINES = 80
+
+/** 消息条数上限 */
 const MAX_TURNS = 100
-/** 单次最多翻到的集数(与 listEpisodes 上限一致) */
-const MAX_EPS = 200
 /** 同一角色连续发言时,间隔超过该值重新显示头像/名字/时间 */
 const REGROUP_GAP_MS = 5 * 60 * 1000
-/** 长演出阈值:台词达到该数的集折叠成演出卡片 */
-const LONG_EP_LINES = 10
 const WEEKDAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
-const DELIVERY_LABEL: Record<string, string> = { deadpan: '面瘫', excited: '兴奋', slow: '慢条斯理' }
 
 function dayKey(ts: number): string {
   const d = new Date(ts)
@@ -153,19 +147,6 @@ async function cropToDataUrl(img: HTMLImageElement, ox: number, oy: number, scal
   return canvas.toDataURL('image/jpeg', 0.85)
 }
 
-/** 取最新若干集,累计台词不超过条数预算(至少保最新一集,长集完整呈现) */
-function takeNewestByLineBudget(eps: Episode[], budget: number): Episode[] {
-  const out: Episode[] = []
-  let used = 0
-  for (let i = eps.length - 1; i >= 0; i--) {
-    const ep = eps[i] // listEpisodes 倒序(新→旧)
-    if (out.length > 0 && used + ep.lines.length > budget) break
-    out.unshift(ep)
-    used += ep.lines.length
-  }
-  return out
-}
-
 // ---------- 信息流行渲染模型(纯结构,分组规则集中在此) ----------
 
 type MsgRow = {
@@ -176,8 +157,6 @@ type MsgRow = {
   ts: number
   /** true = 显示头像(+角色的名字/时间);false = 同人紧跟气泡 */
   header: boolean
-  /** 语气标注(仅角色台词,面瘫/兴奋/慢条斯理) */
-  deliveryLabel?: string
   /** 非空 = 悬停 ▶ 从该句回放(角色消息;用户消息不可回放) */
   replay?: Episode
   /** 原始日志条目(带 memoryRefs/trace 时渲染"参考记忆"折叠块) */
@@ -187,89 +166,50 @@ type MsgRow = {
 }
 type Row =
   | { kind: 'day'; key: string; label: string }
-  | { kind: 'event'; key: string; ep: Episode; label: string }
-  | { kind: 'card'; key: string; ep: Episode }
   | { kind: 'unread-divider'; key: string; count: number }
   | MsgRow
 
-/** 把演出集与聊天消息编织成消息流:日期分隔/事件行/演出卡片/分组气泡/未读分割线(§8) */
+/** 把聊天消息编织成消息流:日期分隔/分组气泡/未读分割线(§8)。
+ *  群聊页只显示群聊对话——日常/相声等演出模式生成的消息在「演出历史」页,
+ *  不再混入本信息流(产品决策) */
 function buildRows(
-  visibleEps: Episode[],
   turns: ChatLogEntry[],
-  expandedEps: Set<number>,
   divider?: { beforeId: string; count: number } | null,
 ): Row[] {
   const out: Row[] = []
   let prevWho: Speaker | 'user' | null = null
   let prevTs = 0
   let prevDay: string | null = null
-  const pushDay = (ts: number) => {
-    const k = dayKey(ts)
+  for (const e of turns) {
+    const k = dayKey(e.ts)
     if (k !== prevDay) {
-      out.push({ kind: 'day', key: `day${ts}-${out.length}`, label: dayLabel(ts) })
+      out.push({ kind: 'day', key: `day${e.ts}-${out.length}`, label: dayLabel(e.ts) })
       prevWho = null // 跨日期重新分组
       prevDay = k
     }
-  }
-  const pushEpLines = (ep: Episode, keyPrefix: string) => {
-    for (let i = 0; i < ep.lines.length; i++) {
-      const l = ep.lines[i]
-      const header = prevWho === null || l.speaker !== prevWho || ep.ts - prevTs > REGROUP_GAP_MS
-      out.push({
-        kind: 'msg',
-        key: `${keyPrefix}-${i}`,
-        who: l.speaker,
-        text: l.text,
-        ts: ep.ts,
-        header,
-        deliveryLabel: l.delivery ? DELIVERY_LABEL[l.delivery] : undefined,
-        replay: { ...ep, lines: ep.lines.slice(i) },
-      })
-      prevWho = l.speaker
-      prevTs = ep.ts
+    const who: Speaker | 'user' = e.who === 'user' ? 'user' : e.who
+    const header = prevWho === null || who !== prevWho || e.ts - prevTs > REGROUP_GAP_MS
+    // 未读分割线:插在第一条未读角色消息之前(§8;虚拟行,不落盘)
+    if (divider && e.id === divider.beforeId) {
+      out.push({ kind: 'unread-divider', key: 'unread-divider', count: divider.count })
+      prevWho = null
     }
-  }
-  for (const item of buildFeed(visibleEps, turns)) {
-    if (item.kind === 'episode') {
-      const ep = item.ep
-      pushDay(ep.ts)
-      prevWho = null // 演出边界重新分组
-      prevTs = ep.ts
-      if (ep.lines.length >= LONG_EP_LINES) {
-        // 长演出折叠成卡片;展开后紧随全部台词
-        out.push({ kind: 'card', key: `card${ep.ts}`, ep })
-        if (expandedEps.has(ep.ts)) pushEpLines(ep, `ep${ep.ts}`)
-        continue
-      }
-      out.push({ kind: 'event', key: `ev${ep.ts}`, ep, label: modeOf(ep.mode).label })
-      pushEpLines(ep, `ep${ep.ts}`)
-    } else {
-      const e = item.entry
-      pushDay(e.ts)
-      const who: Speaker | 'user' = e.who === 'user' ? 'user' : e.who
-      const header = prevWho === null || who !== prevWho || e.ts - prevTs > REGROUP_GAP_MS
-      // 未读分割线:插在第一条未读角色消息之前(§8;虚拟行,不落盘)
-      if (divider && e.id === divider.beforeId) {
-        out.push({ kind: 'unread-divider', key: 'unread-divider', count: divider.count })
-        prevWho = null
-      }
-      out.push({
-        kind: 'msg',
-        key: `chat${e.ts}-${out.length}`, // 同批应答共享 ts,按位置保唯一
-        who,
-        text: e.text,
-        eid: e.id,
-        ts: e.ts,
-        header,
-        entry: e,
-        replay:
-          who === 'user'
-            ? undefined
-            : { ts: e.ts, mode: 'daily', fav: false, lines: [{ speaker: who as Speaker, text: e.text, action: 'talk' }] },
-      })
-      prevWho = who
-      prevTs = e.ts
-    }
+    out.push({
+      kind: 'msg',
+      key: `chat${e.ts}-${out.length}`, // 同批应答共享 ts,按位置保唯一
+      who,
+      text: e.text,
+      eid: e.id,
+      ts: e.ts,
+      header,
+      entry: e,
+      replay:
+        who === 'user'
+          ? undefined
+          : { ts: e.ts, mode: 'daily', fav: false, lines: [{ speaker: who as Speaker, text: e.text, action: 'talk' }] },
+    })
+    prevWho = who
+    prevTs = e.ts
   }
   return out
 }
@@ -279,8 +219,6 @@ export function ChatLogSettings() {
   const config = useConfigSnapshot()
   const names = config.names
   const group = config.groupChat
-  const [allEps, setAllEps] = useState<Episode[]>([])
-  const [budget, setBudget] = useState(PAGE_LINES)
   const cfg = useConfigSnapshot()
   const [turns, setTurns] = useState<ChatLogEntry[]>([])
   /** 参考记忆 id → 事实(打开详情时解析;已删除的 id 解析不到 → 显示"已删除") */
@@ -288,7 +226,7 @@ export function ChatLogSettings() {
   const [memOpen, setMemOpen] = useState<Set<string>>(new Set())
   const [loading, setLoading] = useState(true)
   const [clearArmed, setClearArmed] = useState(false)
-  // 群设置抽屉 / 背景图 / 头像 / 长演出展开
+  // 群设置抽屉 / 背景图 / 头像
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [actorStatus, setActorStatus] = useState<Partial<Record<'A' | 'B' | 'C', { status?: string; queueDepth?: number }>>>({})
   // ---------- 未读与视口控制(方案 §5/§6):页面只喂事实、只执行效果 ----------
@@ -312,12 +250,10 @@ export function ChatLogSettings() {
   const [winActive, setWinActive] = useState(true)
   const viewSyncRafRef = useRef(0)
   const prevTurnsRef = useRef<ChatLogEntry[] | null>(null)
-  const prependAnchorRef = useRef<{ id: string; offset: number } | null>(null)
   const [bgDataUrl, setBgDataUrl] = useState<string | null>(null)
   const [bgBusy, setBgBusy] = useState(false)
   const [bgTick, setBgTick] = useState(0)
   const [avatars, setAvatars] = useState<AvatarMap>({ a: null, b: null, c: null, user: null })
-  const [expandedEps, setExpandedEps] = useState<Set<number>>(new Set())
   // 头像裁剪弹窗:cropKey 非 null 时打开;zoom 相对 cover 比例(1 = 恰好盖满),off = 图片左上角在视口内的偏移
   const [cropKey, setCropKey] = useState<AvatarKey | null>(null)
   const [cropImg, setCropImg] = useState<HTMLImageElement | null>(null)
@@ -333,26 +269,15 @@ export function ChatLogSettings() {
   const [sendHint, setSendHint] = useState('')
   const inputRef = useRef<HTMLTextAreaElement>(null)
 
-  // 演出集:一次拉足(与历史页同源,上限内),渲染侧按条数预算截取
-  useEffect(() => {
-    let alive = true
-    void listEpisodes(MAX_EPS).then((eps) => {
-      if (!alive) return
-      setAllEps(eps)
-      setLoading(false)
-    })
-    return () => {
-      alive = false
-    }
-  }, [])
-
   // 聊天消息:订阅落盘版本号——append/清空各 bump 一次,这里重拉(含挂载首拉)
   const chatLogVersion = useChatLogVersion()
   useEffect(() => {
     let alive = true
     // 首拉前先装载持久游标(§4):initial 分类依赖它,避免误把历史判为未读
     void Promise.all([listChatTurns(MAX_TURNS), loadGroupChatReadState()]).then(([ts]) => {
-      if (alive) setTurns(ts)
+      if (!alive) return
+      setTurns(ts)
+      setLoading(false)
     })
     void getMemory().then((m) => {
       if (alive) setMemFacts(new Map(m.facts.map((f) => [f.id, f])))
@@ -444,18 +369,10 @@ export function ChatLogSettings() {
   }, [])
 
   const feedRef = useRef<HTMLDivElement>(null)
-  const prependAtRef = useRef(0)
-  const [scrollable, setScrollable] = useState(false)
-  const visibleEps = useMemo(() => takeNewestByLineBudget(allEps, budget), [allEps, budget])
   const rows = useMemo(
     () =>
-      buildRows(
-        visibleEps,
-        turns,
-        expandedEps,
-        readSnap.firstUnreadId ? { beforeId: readSnap.firstUnreadId, count: readSnap.unreadCount } : null,
-      ),
-    [visibleEps, turns, expandedEps, readSnap.firstUnreadId, readSnap.unreadCount],
+      buildRows(turns, readSnap.firstUnreadId ? { beforeId: readSnap.firstUnreadId, count: readSnap.unreadCount } : null),
+    [turns, readSnap.firstUnreadId, readSnap.unreadCount],
   )
 
   // ---------- 效果应用(§5):页面只执行控制器给的效果 ----------
@@ -474,7 +391,6 @@ export function ChatLogSettings() {
     const el = feedRef.current
     if (!el) return
     distRef.current = el.scrollHeight - el.scrollTop - el.clientHeight
-    setScrollable(el.scrollHeight > el.clientHeight + 4)
     applyReadEffect(
       readCtl().setView({
         active: winActiveRef.current,
@@ -494,17 +410,6 @@ export function ChatLogSettings() {
     else if (turns.length >= prev.length && prev[prev.length - 1]?.id === turns[turns.length - 1]?.id) cause = 'prepend'
     prevTurnsRef.current = turns
     applyReadEffect(readCtl().setEntries(turns, cause))
-    // 顶部加载旧消息:渲染后按锚点恢复视口(§12)
-    if (cause === 'prepend' && prependAnchorRef.current) {
-      const el = feedRef.current
-      const anchor = prependAnchorRef.current
-      const target = el?.querySelector(`[data-eid="${anchor.id}"]`)
-      if (el && target) {
-        const delta = target.getBoundingClientRect().top - el.getBoundingClientRect().top - anchor.offset
-        el.scrollTop += delta
-      }
-      prependAnchorRef.current = null
-    }
   }, [turns])
 
   // 完全可见观察器(§7):消息完全进入可视区才推进游标;按消息顺序取最后一条
@@ -752,7 +657,6 @@ export function ChatLogSettings() {
 
   const speakerName = (s: Speaker) => (s === 'A' ? names.a : s === 'B' ? names.b : names.c)
   const bgActive = group.bg && !!bgDataUrl
-  const hasMore = visibleEps.length < allEps.length
   // 裁剪弹窗几何:显示尺寸与钳制后的偏移(拖拽/滑杆/滚轮共用一套钳制)
   const cs = cropImg ? coverScale(cropImg.naturalWidth, cropImg.naturalHeight) : 1
   const cropScale = cs * zoom
@@ -813,6 +717,7 @@ export function ChatLogSettings() {
       </div>
 
       <div
+        ref={feedRef}
         className="chatlog-feed"
         onScroll={() => {
           const el = feedRef.current
@@ -824,30 +729,8 @@ export function ChatLogSettings() {
               syncView()
             })
           }
-          // 离开底部后顶到上方 80px 内自动前置加载(节流防惯性滚动连发);
-          // 加载前采集锚点(§12):第一条可见消息 id + 相对容器顶的偏移
-          const now = Date.now()
-          if (el.scrollTop < 80 && hasMore && now - prependAtRef.current > 150) {
-            prependAtRef.current = now
-            const containerRect = el.getBoundingClientRect()
-            let anchor: { id: string; offset: number } | null = null
-            el.querySelectorAll('[data-eid]').forEach((n) => {
-              if (anchor) return
-              const r = n.getBoundingClientRect()
-              if (r.bottom > containerRect.top) {
-                anchor = { id: (n as HTMLElement).dataset.eid ?? '', offset: r.top - containerRect.top }
-              }
-            })
-            prependAnchorRef.current = anchor
-            setBudget((b) => b + PAGE_LINES)
-          }
         }}
       >
-        {hasMore && !scrollable && !loading && (
-          <button className="chatlog-earlier" onClick={() => setBudget((b) => b + PAGE_LINES)}>
-            加载更早
-          </button>
-        )}
         {loading && <div className="hist-empty">加载中…</div>}
         {!loading && rows.length === 0 && (
           <div className="hist-empty">还没有聊天记录——在下面说一句,或点 ▶ 来一段演出试试</div>
@@ -860,47 +743,10 @@ export function ChatLogSettings() {
               </div>
             )
           }
-          if (row.kind === 'event') {
-            return (
-              <div className="chatlog-event" key={row.key}>
-                小桌剧场开始了一段{row.label}
-                <button title="从头播放这段演出" onClick={() => bridge.onReplay(row.ep)}>
-                  ▶ 从头播放
-                </button>
-              </div>
-            )
-          }
           if (row.kind === 'unread-divider') {
             return (
               <div className="unread-divider" key={row.key}>
                 <span>你离开后有 {row.count} 条消息</span>
-              </div>
-            )
-          }
-          if (row.kind === 'card') {
-            const ep = row.ep
-            const expanded = expandedEps.has(ep.ts)
-            return (
-              <div className="stage-card" key={row.key}>
-                <div className="stage-cover">
-                  <b>{ep.topic || ep.card?.scene || '小桌剧场'}</b>
-                </div>
-                <div className="stage-info">
-                  <span>
-                    {modeOf(ep.mode).label} · {ep.lines.length} 句 · {hhmm(ep.ts)}
-                  </span>
-                  <span className="stage-acts">
-                    <button className="ghost" onClick={() => setExpandedEps((s) => {
-                      const next = new Set(s)
-                      if (next.has(ep.ts)) next.delete(ep.ts)
-                      else next.add(ep.ts)
-                      return next
-                    })}>
-                      {expanded ? '收起' : '展开对话'}
-                    </button>
-                    <button className="play" onClick={() => bridge.onReplay(ep)}>▶ 播放</button>
-                  </span>
-                </div>
               </div>
             )
           }
@@ -927,7 +773,6 @@ export function ChatLogSettings() {
                 {row.header && !isMe && (
                   <span className="chatlog-name">
                     {speakerName(row.who as Speaker)} · {hhmm(row.ts)}
-                    {row.deliveryLabel ? ` · ${row.deliveryLabel}` : ''}
                   </span>
                 )}
                 <div className="bubble-wrap">
