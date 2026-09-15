@@ -14,7 +14,7 @@ import { getStory, type StoryArc, type StoryThread } from '../storage/storyStore
 import { listPrefetchedArcIds } from '../storage/prefetchStore'
 import { reserveArcBeat } from '../engine/arcReservation'
 import { castHash, castSnapshotOf } from '../engine/persona'
-import { envForegroundCategory } from '../engine/envAware'
+import { envForegroundCategory } from '../world'
 import { modeOf, type DialogMode, type Mode } from '../performer/modes'
 import { migrateLegacyTopicOverride } from './migration'
 import {

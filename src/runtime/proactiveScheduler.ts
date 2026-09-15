@@ -9,7 +9,7 @@
 import { getCaps } from './runtimeMode'
 import { getConfig } from '../storage/configStore'
 import { isQuietHours } from '../engine/timeAware'
-import { isFullscreenApp, isUserActive } from '../engine/envAware'
+import { isFullscreenApp, isUserActive } from '../world'
 import { dismissCooldownMultiplier, type DismissableKind } from '../storage/interactionStore'
 
 const TICK_MS = 15_000

@@ -53,6 +53,8 @@ export interface GroupChatDeps {
   prepareExtras?(batch: ActorBatchLike): Promise<{
     factsLine?: string
     briefLine?: string
+    /** 世界注记(每用户回合一次;世界模型渲染好的情境事实) */
+    worldLine?: string
     toolNotes?: Record<string, string>
     /** 只读预选的真实旧梗候选(表达导演用;宿主从 story.json 预选) */
     gags?: Array<{ id: string; text: string }>

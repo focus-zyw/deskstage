@@ -42,6 +42,8 @@ export interface ActorWorkerDeps {
   prepareExtras?(batch: ActorBatch): Promise<{
     factsLine?: string
     briefLine?: string
+    /** 世界注记(每用户回合一次;世界模型渲染好的情境事实) */
+    worldLine?: string
     toolNotes?: Record<string, string>
     /** 只读预选的真实旧梗候选(story.json;表达导演回收旧梗的唯一来源) */
     gags?: Array<{ id: string; text: string }>
@@ -138,6 +140,7 @@ export function createActorWorker(deps: ActorWorkerDeps): ActorWorker {
     let extras: {
       factsLine?: string
       briefLine?: string
+      worldLine?: string
       toolNotes?: Record<string, string>
       gags?: Array<{ id: string; text: string }>
       diagTurnId?: string
@@ -178,6 +181,7 @@ export function createActorWorker(deps: ActorWorkerDeps): ActorWorker {
       remainingReplies: remaining,
       factsLine: extras.factsLine,
       briefLine: extras.briefLine,
+      worldLine: extras.worldLine,
       toolNotes: extras.toolNotes,
       expressionLine: expressionPlan?.instruction,
       fullContext,

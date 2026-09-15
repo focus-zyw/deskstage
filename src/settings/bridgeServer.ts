@@ -16,7 +16,7 @@ import {
   setCharacterNames,
   setPersonaOverride,
 } from '../engine/persona'
-import { startEnvPolling, stopEnvPolling } from '../engine/envAware'
+import { startWorld, stopWorld } from '../world'
 import { applyScreenshotHotkey } from '../capture'
 import { applyAppHotkeys } from '../hotkeys'
 import type { SettingsBridge } from './useSettingsSession'
@@ -41,8 +41,8 @@ export function initConfigEffects(): void {
     }
     // 环境感知或久坐提醒任一开启都需要轮询(久坐依赖键鼠空闲传感器,与环境感知解耦)
     if (base.envSense !== next.envSense || base.breakReminder !== next.breakReminder) {
-      if (next.envSense || next.breakReminder.enabled) startEnvPolling()
-      else stopEnvPolling()
+      if (next.envSense || next.breakReminder.enabled) startWorld()
+      else stopWorld()
     }
     if (base.persona !== next.persona || base.personaSource !== next.personaSource) {
       const p = next.persona // 空串 = 还原内置人设(persona 模块内回落)

@@ -8,7 +8,7 @@ import { Bubble } from './stage/Bubble'
 import { startScreenshot, applyScreenshotHotkey } from './capture'
 import { applyAppHotkeys, setHotkeyHandler } from './hotkeys'
 import { setCharacterGenders, setCharacterNames, setPersonaOverride, setCEnabled, nameOf } from './engine/persona'
-import { startEnvPolling } from './engine/envAware'
+import { startWorld, onWorldEvent } from './world'
 import {
   balanceVendorOf,
   cachedBalanceLine,
@@ -863,14 +863,19 @@ function App() {
       setPersonaOverride(c.persona.a, c.persona.b, c.persona.c, c.personaSource)
       // C 的启用态:关闭后新演出不再出现 C,话题包/缓存同步收窄
       setCEnabled(c.characters.C.enabled !== false)
-      // 环境感知:按配置低频轮询本机状态(电量/前台应用分类等)
+      // 世界感知:按配置低频轮询本机状态(前台应用/电量/媒体/系统负载等)
       // 环境感知或久坐提醒任一开启都需要轮询(久坐依赖键鼠空闲传感器,与环境感知解耦)
-      if (c.envSense || c.breakReminder.enabled) startEnvPolling()
+      if (c.envSense || c.breakReminder.enabled) startWorld()
       // 开机自启动:按配置对账系统注册状态(默认关;手改配置文件后重启同样生效)
       void applyLaunchOnBoot(c.launchOnBoot)
     })
     const unsubs = [
       onHoverChange(setHovered),
+      // 差分事件接线(首期唯一消费者):用户离开 ≥5 分钟后回到电脑 → 记一次互动,
+      // 主动调度的空闲/自发聊天计时随之校准(事件来自世界模型差分,不是定时器盲猜)
+      onWorldEvent((ev) => {
+        if (ev.kind === 'user-returned') noteActivity()
+      }),
       // 拖动中的角色命中区膨胀为全窗口:快速拖动时光标冲出角色矩形,
       // 否则穿透窗口会立刻恢复 ignoreCursorEvents,拖拽被中断
       registerHitRegion('charA', {

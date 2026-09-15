@@ -117,7 +117,9 @@ fn committed_or_file_config(app: &AppHandle) -> Result<Value, String> {
 fn is_valid_profile_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 48
-        && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
 /// 模型档案解析:先校验 profileId,再按对象键读取——不拼 JSON Pointer,
@@ -147,7 +149,10 @@ fn configured_base(app: &AppHandle, kind: &str, profile: Option<&str>) -> Result
     let (pointer, _) = kind_spec(kind)?;
     let v = committed_or_file_config(app)?;
     if kind == "llm" {
-        if let Some(pid) = profile.map(str::trim).filter(|p| !p.is_empty() && *p != "main") {
+        if let Some(pid) = profile
+            .map(str::trim)
+            .filter(|p| !p.is_empty() && *p != "main")
+        {
             return profile_base(&v, pid);
         }
     }
@@ -172,7 +177,10 @@ fn auth_header(kind: &str, profile: Option<&str>) -> Result<Option<String>, Stri
         return Ok(None);
     }
     if kind == "llm" {
-        if let Some(pid) = profile.map(str::trim).filter(|p| !p.is_empty() && *p != "main") {
+        if let Some(pid) = profile
+            .map(str::trim)
+            .filter(|p| !p.is_empty() && *p != "main")
+        {
             if !is_valid_profile_id(pid) {
                 return Err(format!("模型档案 id 不合法: {pid}"));
             }
@@ -252,12 +260,18 @@ pub async fn proxy_core(req: ProxyRequest<'_>) -> Result<u16, String> {
         // 快速失败,避免前端等满整个请求超时;非流式生成完成前 body 本就无数据,
         // 空闲判定会误杀长生成,仍由整体 timeout 兜底
         const STREAM_IDLE: Duration = Duration::from_secs(45);
-        let idle = if is_stream_req { Some(STREAM_IDLE) } else { None };
+        let idle = if is_stream_req {
+            Some(STREAM_IDLE)
+        } else {
+            None
+        };
         loop {
             let next = match idle {
                 Some(d) => match tokio::time::timeout(d, stream.next()).await {
                     Err(_) => {
-                        log::warn!("端点代理流空闲超时: host={host_for_log} idle={d:?} total={total}");
+                        log::warn!(
+                            "端点代理流空闲超时: host={host_for_log} idle={d:?} total={total}"
+                        );
                         return Err("响应体空闲超时(上游长时间无数据)".into());
                     }
                     Ok(next) => next,
@@ -320,11 +334,20 @@ pub async fn endpoint_request(
     profile: Option<String>,
     on_chunk: Channel<InvokeResponseBody>,
 ) -> Result<u16, String> {
-    log::info!("端点代理入口: kind={kind} path={path_and_query} body={}", body.len());
+    log::info!(
+        "端点代理入口: kind={kind} path={path_and_query} body={}",
+        body.len()
+    );
     let base = configured_base(&app, &kind, profile.as_deref())?;
     let auth = auth_header(&kind, profile.as_deref())?;
     let timeout = timeout_ms.unwrap_or(90_000).clamp(1_000, 300_000);
-    log::info!("端点代理参数就绪: host={}", url::Url::parse(&base).ok().and_then(|u| u.host_str().map(str::to_string)).unwrap_or_default());
+    log::info!(
+        "端点代理参数就绪: host={}",
+        url::Url::parse(&base)
+            .ok()
+            .and_then(|u| u.host_str().map(str::to_string))
+            .unwrap_or_default()
+    );
     proxy_core(ProxyRequest {
         state: &state,
         request_id: &request_id,

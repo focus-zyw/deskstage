@@ -223,6 +223,9 @@ export interface AppConfig {
   envSense: boolean
   /** 环境感知注入冷却分钟数:同一条感知在此窗口内不重复进入提示词 */
   envNoteCooldownMin: number
+  /** 上下文感知(敏感档,默认关):窗口标题采集 / 桌面文件数摘要。
+   *  开启语义是"才向 Rust 请求采集",不是"采了不渲染" */
+  contextSense: { windowTitle: boolean; desktopDigest: boolean }
   /** 久坐提醒(番茄钟):连续活跃 X 分钟后用角色口吻提醒休息 */
   breakReminder: { enabled: boolean; minutes: number }
   /** 用户自定义人设(甲/乙/丙的生效文本;空串 = 内置默认) */
@@ -424,6 +427,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   webchatSiteModes: {},
   envSense: true,
   envNoteCooldownMin: 360,
+  contextSense: { windowTitle: false, desktopDigest: false },
   breakReminder: { enabled: false, minutes: 45 },
   persona: { a: '', b: '', c: '' },
   personaSource: { a: 'default', b: 'default', c: 'default' },
@@ -969,6 +973,12 @@ function sanitizeBreakReminder(v: unknown): { enabled: boolean; minutes: number 
   }
 }
 
+/** 清洗上下文感知开关:窗口标题/桌面摘要属敏感档,默认关、只认显式 true(不认"非 false") */
+function sanitizeContextSense(v: unknown): AppConfig['contextSense'] {
+  const c = (v ?? {}) as Record<string, unknown>
+  return { windowTitle: c.windowTitle === true, desktopDigest: c.desktopDigest === true }
+}
+
 /** 清洗人设:与设置页 textarea 的 maxLength 一致(2000),写超长在这里被截断 */
 function sanitizePersona(v: unknown): { a: string; b: string; c: string } {
   const pr = (v ?? {}) as Record<string, unknown>
@@ -1103,6 +1113,7 @@ const FIELD_SANITIZERS: { [K in keyof AppConfig]: (v: unknown, all: Record<strin
   webchatSiteModes: sanitizeWebchatSiteModes,
   envSense: (v) => v !== false,
   envNoteCooldownMin: sanitizeEnvNoteCooldownMin,
+  contextSense: sanitizeContextSense,
   breakReminder: sanitizeBreakReminder,
   persona: sanitizePersona,
   personaSource: sanitizePersonaSource,

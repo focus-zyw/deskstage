@@ -37,7 +37,7 @@ import { moodHintLine, moodPromptBlock, type MoodEventCandidate } from './moodSt
 import { getMoods } from '../storage/moodStore'
 import { evaluateChoiceAsk } from '../dialogue/choiceGate'
 import type { TurnWho } from '../dialogue/turnWindow'
-import { envContext } from './envAware'
+import { worldNote } from '../world'
 import {
   clampPauseMs,
   parseGeneratedDialog,
@@ -229,7 +229,7 @@ export async function generateDialog(req: GenerateDialogRequest): Promise<Perfor
   // 非喜剧模式不注入互怼向关系卡,免得把基调拽回斗嘴
   const isComedy = isComedyMode(mode)
   const relationship = isComedy ? pickRelationship(mode) : undefined
-  const envNote = cfg.envSense ? envContext(cfg.envNoteCooldownMin * 60_000) : undefined
+  const envNote = cfg.envSense ? worldNote(cfg.envNoteCooldownMin * 60_000) : undefined
   // 长期关系底色:随互动缓慢漂移,给当集台词定相互态度;负面底色按基调分档(见 bondNoteFor)
   const bondNote = bondNoteFor(await getBond(), isComedy)
   // 心情余波:跨集情绪惯性(上集蒸馏入库的余波 + 观众互动小步),只影响开场姿态与前几句语气

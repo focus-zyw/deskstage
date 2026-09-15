@@ -1,14 +1,27 @@
-// 桌面环境感知:低敏感状态快照(仅分类,不读窗口标题/文档内容/剪贴板)。
+// 桌面环境感知:低敏感状态快照(仅分类与进程名,不读文档内容/剪贴板)。
 // 一次调用返回全部传感器,前端低频轮询并做规则/冷却,避免变成"新闻播报"。
 // - 电量/充电:GetSystemPowerStatus(255 = 无电池或未知 → null)
 // - 网络:TCP 连通性探测(500ms 超时)
 // - 前台应用:GetForegroundWindow → 进程名 → 本地分类映射(editor/browser/...),
-//   只返回类别不返回标题;自己前台时返回 None(别自己感知自己)
+//   返回类别 + exe 名;窗口标题属上下文感知,仅在前端显式传 includeTitle 时采集
+//   (采集即截断,防注入清洗在前端 world/normalizer 统一执行);自己前台时全 None
 // - 全屏应用:前台窗口矩形 ≈ 主显示器矩形
 // - 连续使用:GetLastInputInfo 系统级输入空闲时长
-// - 声音在播:WASAPI 默认渲染设备存在活动会话(复用 audio_capture 的枚举模式)
+// - 声音在播:WASAPI 默认渲染设备活动会话(附会话归属进程名,如 cloudmusic.exe;
+//   是"什么应用在播",不是歌曲名)
+// - CPU/内存:sysinfo 两次采样差值(CPU 采样需间隔 MINIMUM_CPU_UPDATE_INTERVAL)
+//
+// WASAPI 会话枚举与 CPU 双采样都有毫秒级阻塞,统一放 spawn_blocking 执行,
+// 不卡主事件循环(光标轮询会停摆,见 audio_capture 同款处理)。
 
 use serde::Serialize;
+
+/// 采集选项:窗口标题属上下文感知(默认不采,前端按设置开关显式传入)
+#[derive(Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvOptions {
+    include_title: Option<bool>,
+}
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -18,21 +31,44 @@ pub struct EnvSnapshot {
     network_ok: bool,
     /// 前台应用类别:editor/browser/terminal/media/other;自己在前台时为 None
     foreground: Option<String>,
+    /// 前台进程 exe 名(小写,如 idea64.exe);友好名映射在前端渲染层本地做
+    process_name: Option<String>,
+    /// 前台窗口标题(仅 includeTitle 时采集;已截断;null = 未开启或自己在前台)
+    active_window_title: Option<String>,
     fullscreen_app: bool,
     idle_minutes: u32,
     audio_playing: bool,
+    /// 正在发声的应用进程名(WASAPI 会话归属,如 cloudmusic.exe)
+    media_name: Option<String>,
+    cpu_percent: Option<f32>,
+    mem_percent: Option<f32>,
 }
 
 #[tauri::command]
-pub fn env_snapshot() -> Result<EnvSnapshot, String> {
+pub async fn env_snapshot(options: Option<EnvOptions>) -> Result<EnvSnapshot, String> {
+    let include_title = options.and_then(|o| o.include_title).unwrap_or(false);
+    tauri::async_runtime::spawn_blocking(move || env_snapshot_blocking(include_title))
+        .await
+        .map_err(|e| format!("任务调度失败:{e}"))?
+}
+
+fn env_snapshot_blocking(include_title: bool) -> Result<EnvSnapshot, String> {
+    let (foreground, process_name, active_window_title) = foreground_info(include_title);
+    let (audio_playing, media_name) = media_info();
+    let (cpu_percent, mem_percent) = cpu_mem_percent();
     Ok(EnvSnapshot {
         battery_percent: battery_percent(),
         charging: charging(),
         network_ok: network_ok(),
-        foreground: foreground_category(),
         fullscreen_app: fullscreen_app(),
         idle_minutes: idle_minutes(),
-        audio_playing: audio_playing(),
+        foreground,
+        process_name,
+        active_window_title,
+        audio_playing,
+        media_name,
+        cpu_percent,
+        mem_percent,
     })
 }
 
@@ -86,28 +122,29 @@ fn network_ok() -> bool {
     false
 }
 
-/// 前台应用进程名 → 本地分类。只取类别,不取窗口标题/内容。
+/// 前台应用三元组:(exe 名小写, 类别, 窗口标题)。只取类别/exe 名,标题按需;
+/// 自己在前台时返回全 None:别自己感知自己。
 #[cfg(windows)]
-fn foreground_category() -> Option<String> {
+fn foreground_info(include_title: bool) -> (Option<String>, Option<String>, Option<String>) {
     use windows::core::PWSTR;
     use windows::Win32::System::Threading::{
         OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
         PROCESS_QUERY_LIMITED_INFORMATION,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetAncestor, GetForegroundWindow, GetWindowThreadProcessId, GA_ROOT,
+        GetAncestor, GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId, GA_ROOT,
     };
 
     unsafe {
         let hwnd = GetForegroundWindow();
         if hwnd.0.is_null() {
-            return None;
+            return (None, None, None);
         }
         let mut pid: u32 = 0;
         GetWindowThreadProcessId(hwnd, Some(&mut pid));
         // 自己(主窗或控制台)前台时返回 None:别自己感知自己
         if pid == std::process::id() {
-            return None;
+            return (None, None, None);
         }
         // 取根所有者窗口的进程(对话框归属主程序)
         let root = GetAncestor(hwnd, GA_ROOT);
@@ -115,7 +152,11 @@ fn foreground_category() -> Option<String> {
         GetWindowThreadProcessId(root, Some(&mut root_pid));
         let pid = if root_pid != 0 { root_pid } else { pid };
 
-        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
+        let handle = match handle {
+            Ok(h) => h,
+            Err(_) => return (None, None, None),
+        };
         let mut buf = [0u16; 260];
         let mut size = buf.len() as u32;
         if QueryFullProcessImageNameW(
@@ -126,17 +167,26 @@ fn foreground_category() -> Option<String> {
         )
         .is_err()
         {
-            return None;
+            return (None, None, None);
         }
         let exe = String::from_utf16_lossy(&buf[..size as usize]);
         let base = exe.rsplit(['\\', '/']).next().unwrap_or("").to_lowercase();
-        Some(categorize(&base))
+        let category = categorize(&base);
+        // 标题取真实前台窗口(不是根所有者):用户看到的标题才是情境
+        let title = if include_title {
+            let mut tbuf = [0u16; 128];
+            let n = GetWindowTextW(hwnd, &mut tbuf);
+            Some(String::from_utf16_lossy(&tbuf[..(n.max(0) as usize).min(120)]))
+        } else {
+            None
+        };
+        (Some(base), Some(category), title)
     }
 }
 
 #[cfg(not(windows))]
-fn foreground_category() -> Option<String> {
-    None
+fn foreground_info(_include_title: bool) -> (Option<String>, Option<String>, Option<String>) {
+    (None, None, None)
 }
 
 /// 进程名 → 面向观众的类别(本地映射表,命中不了归 other)
@@ -317,40 +367,63 @@ fn idle_minutes() -> u32 {
     0
 }
 
-/// 默认渲染设备上是否有活动音频会话(听歌/看视频中)
+/// WASAPI 活动会话 → (是否在播, 归属进程名)。
+/// 会话展示名多为空,取进程名更有信息量("cloudmusic.exe" 前端映射成"网易云音乐");
+/// sysinfo 只刷单个 pid,不付全进程表的成本。
 #[cfg(windows)]
-fn audio_playing() -> bool {
-    try_audio_playing().unwrap_or(false)
-}
-
-#[cfg(windows)]
-fn try_audio_playing() -> Result<bool, String> {
+fn media_info() -> (bool, Option<String>) {
     use wasapi::{DeviceEnumerator, SessionState};
     let _ = wasapi::initialize_mta();
-    let enumerator = DeviceEnumerator::new().map_err(|e| e.to_string())?;
-    let device = enumerator
-        .get_default_device(&wasapi::Direction::Render)
-        .map_err(|e| e.to_string())?;
-    let manager = device
-        .get_iaudiosessionmanager()
-        .map_err(|e| e.to_string())?;
-    let sessions = manager
-        .get_audiosessionenumerator()
-        .map_err(|e| e.to_string())?;
-    let count = sessions.get_count().map_err(|e| e.to_string())?;
-    for i in 0..count {
-        if let Ok(control) = sessions.get_session(i) {
-            if let Ok(state) = control.get_state() {
-                if state == SessionState::Active {
-                    return Ok(true);
+    let playing_pid = (|| -> Option<u32> {
+        let enumerator = DeviceEnumerator::new().ok()?;
+        let device = enumerator.get_default_device(&wasapi::Direction::Render).ok()?;
+        let manager = device.get_iaudiosessionmanager().ok()?;
+        let sessions = manager.get_audiosessionenumerator().ok()?;
+        let count = sessions.get_count().ok()?;
+        for i in 0..count {
+            let control = sessions.get_session(i).ok()?;
+            if control.get_state().ok()? == SessionState::Active {
+                if let Ok(pid) = control.get_process_id() {
+                    return Some(pid);
                 }
             }
         }
-    }
-    Ok(false)
+        None
+    })();
+    let Some(pid) = playing_pid else {
+        return (false, None);
+    };
+    let mut sys = sysinfo::System::new();
+    sys.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[sysinfo::Pid::from_u32(pid)]), true);
+    let name = sys
+        .process(sysinfo::Pid::from_u32(pid))
+        .map(|p| p.name().to_string_lossy().to_lowercase());
+    (true, name)
 }
 
 #[cfg(not(windows))]
-fn audio_playing() -> bool {
-    false
+fn media_info() -> (bool, Option<String>) {
+    (false, None)
+}
+
+/// CPU/内存占用。CPU 占用率是"两次刷新差值",静态 System 跨轮询保存采样状态;
+/// 首帧只有一次采样,返回 None,下一帧起有值(60s 节奏下无感)。
+fn cpu_mem_percent() -> (Option<f32>, Option<f32>) {
+    use sysinfo::{MINIMUM_CPU_UPDATE_INTERVAL, System};
+    static SYS: std::sync::Mutex<Option<System>> = std::sync::Mutex::new(None);
+    let Ok(mut guard) = SYS.lock() else {
+        return (None, None);
+    };
+    let sys = guard.get_or_insert_with(System::new);
+    sys.refresh_cpu_usage();
+    std::thread::sleep(MINIMUM_CPU_UPDATE_INTERVAL);
+    sys.refresh_cpu_usage();
+    let cpu = sys.global_cpu_usage();
+    sys.refresh_memory();
+    let mem = if sys.total_memory() > 0 {
+        (sys.used_memory() as f32 / sys.total_memory() as f32 * 100.0).min(100.0)
+    } else {
+        0.0
+    };
+    (Some(cpu), Some(mem))
 }

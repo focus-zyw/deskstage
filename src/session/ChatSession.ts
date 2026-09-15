@@ -37,6 +37,7 @@ import { createGroupChatRuntime, type GroupChatRuntime } from '../groupChat/runt
 import { createRoomPresenter, type RoomPresenter } from '../groupChat/presenter'
 import type { ActorId, ActorRuntimeState, Clock } from '../groupChat/types'
 import { personaText } from '../engine/persona'
+import { worldNote } from '../world'
 import { createLegacyChatSession, type LegacyChatSession } from './legacyChat'
 import {
   GROUP_ASK_RE,
@@ -112,6 +113,8 @@ export function createChatSession(
     {
       factsLine?: string
       briefLine?: string
+      /** 世界注记(每用户回合算一次;世界模型渲染好的情境事实) */
+      worldLine?: string
       toolNote?: string
       memoryRefs?: ChatMemoryRef[]
       /** 只读预选的真实旧梗候选(表达导演回收旧梗的唯一来源) */
@@ -241,6 +244,7 @@ export function createChatSession(
         return {
           factsLine: extra.factsLine,
           briefLine: extra.briefLine,
+          worldLine: extra.worldLine,
           toolNotes: extra.toolNote ? { [rootId]: extra.toolNote } : undefined,
           gags: extra.gags,
           diagTurnId: chainTurn.get(rootId),
@@ -448,9 +452,12 @@ export function createChatSession(
       }
       const combinedRefs = [...memory.refs, ...toolRefs.filter((r) => !memory.refs.some((x) => x.id === r.id))]
       presenterOf().setBadge(chainId, combinedRefs)
+      // 世界注记:与演出通道(llmClient)共享同一冷却账本,同一条情境两边不会复读
+      const worldLine = cfg.envSense ? worldNote(cfg.envNoteCooldownMin * 60_000) : undefined
       chainExtras.set(chainId, {
         factsLine: memory.promptFacts.length ? memory.promptFacts.join(';') : undefined,
         briefLine: briefLineOf(cfg),
+        worldLine,
         toolNote,
         memoryRefs: combinedRefs,
         gags: gagCandidatesOf(text),

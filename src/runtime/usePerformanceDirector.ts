@@ -50,7 +50,7 @@ import type {
   RelayScene,
 } from '../relay/types'
 import { prefetchNext } from '../engine/dialogPrefetch'
-import { isFullscreenApp } from '../engine/envAware'
+import { isFullscreenApp } from '../world'
 import { topicDirector } from '../topic/director'
 import { topicCatalog } from '../topic'
 import {

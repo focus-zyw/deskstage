@@ -6,7 +6,7 @@
 //    每日最多 4 次尝试;一次生成 6 张;TTL 14 天;池上限 40
 //  · 隐私:输入只有类别级语境(见 prompt.ts),原始屏幕/窗口标题/剪贴板不进入
 import { complete, type CompletionOptions } from '../engine/llmGateway'
-import { envForegroundCategory } from '../engine/envAware'
+import { envForegroundCategory } from '../world'
 import { getConfig } from '../storage/configStore'
 import { getTopicState, mutateTopicState, MAX_RESERVOIR } from './store'
 import { parseBanWords, sanitizeGeneratedCard, timeBucketOf } from './planner'
