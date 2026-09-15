@@ -251,6 +251,8 @@ export function ChatLogSettings() {
   const distRef = useRef(9999)
   const lastVisibleRef = useRef<string | null>(null)
   const anchorRef = useRef<GroupChatViewAnchor | null>(null)
+  const pendingRestoreRef = useRef<GroupChatViewAnchor | null>(null)
+  const restoreTimersRef = useRef<number[]>([])
   const [winActive, setWinActive] = useState(true)
   const viewSyncRafRef = useRef(0)
   const prevTurnsRef = useRef<ChatLogEntry[] | null>(null)
@@ -347,6 +349,7 @@ export function ChatLogSettings() {
   useEffect(
     () => () => {
       // 卸载(切分页/关窗):保存离开时的视口锚点,重进回到原位置
+      restoreTimersRef.current.forEach((t) => window.clearTimeout(t))
       saveAnchor(true)
       flushGroupChatRead()
     },
@@ -391,6 +394,7 @@ export function ChatLogSettings() {
 
   // ---------- 效果应用(§5):页面只执行控制器给的效果 ----------
   function applyReadEffect(effect: ReadEffect) {
+    if (pendingRestoreRef.current && effect.type !== 'none') return // 恢复期间抑制滚动效果
     const el = feedRef.current
     if (!el) return
     if (effect.type === 'scroll-bottom') {
@@ -436,6 +440,40 @@ export function ChatLogSettings() {
     )
   }
 
+  // ---------- 位置恢复(§1 补全):挂起锚点,对齐到 ±2px 才算完成 ----------
+  function restoreNow(): boolean {
+    const pending = pendingRestoreRef.current
+    const el = feedRef.current
+    if (!pending || !el) return false
+    const target = el.querySelector(`[data-eid="${pending.id}"]`)
+    if (!target) return false // 行未渲染:等下一次重试
+    el.scrollTop += target.getBoundingClientRect().top - el.getBoundingClientRect().top - pending.offset
+    const nowRel = target.getBoundingClientRect().top - el.getBoundingClientRect().top
+    if (Math.abs(nowRel - pending.offset) <= 2) {
+      pendingRestoreRef.current = null
+      return true
+    }
+    return false
+  }
+  function scheduleRestoreRetries() {
+    if (restoreTimersRef.current.length > 0) return
+    restoreTimersRef.current = [60, 160, 320, 600, 1000].map((d) =>
+      window.setTimeout(() => {
+        if (!pendingRestoreRef.current) return
+        if (restoreNow()) {
+          restoreTimersRef.current.forEach((t) => window.clearTimeout(t))
+          restoreTimersRef.current = []
+        }
+      }, d),
+    )
+    // 兜底:超时放弃,恢复控制器滚动
+    window.setTimeout(() => {
+      restoreTimersRef.current.forEach((t) => window.clearTimeout(t))
+      restoreTimersRef.current = []
+      pendingRestoreRef.current = null
+    }, 1400)
+  }
+
   // 日志变化 → 识别 initial/append/prepend/clear,喂给控制器并执行效果(§12)
   useEffect(() => {
     const prev = prevTurnsRef.current
@@ -446,18 +484,18 @@ export function ChatLogSettings() {
     else if (turns.length >= prev.length && prev[prev.length - 1]?.id === turns[turns.length - 1]?.id) cause = 'prepend'
     prevTurnsRef.current = turns
     const effect = readCtl().setEntries(turns, cause)
-    // 位置恢复(§1 补全):有视口锚点回到原阅读位置,优先于未读跳转/贴底
-    const savedAnchor = cause === 'initial' ? getGroupChatReadState().viewAnchor : null
-    let restored = false
-    if (savedAnchor) {
-      const el = feedRef.current
-      const target = el?.querySelector(`[data-eid="${savedAnchor.id}"]`)
-      if (el && target) {
-        el.scrollTop += target.getBoundingClientRect().top - el.getBoundingClientRect().top - savedAnchor.offset
-        restored = true
+    // 位置恢复(§1 补全):有视口锚点回到原阅读位置,优先于未读跳转/贴底。
+    // 头像/字体晚到会把内容撑高——一次对齐常被漂移带走,这里挂起并在
+    // 双 rAF + 错峰重试中对齐到 ±2px,期间抑制控制器滚动效果
+    if (cause === 'initial') {
+      const saved = getGroupChatReadState().viewAnchor
+      if (saved) {
+        pendingRestoreRef.current = saved
+        if (!restoreNow()) scheduleRestoreRetries()
+        return
       }
     }
-    if (!restored) applyReadEffect(effect)
+    applyReadEffect(effect)
   }, [turns])
 
   // 完全可见观察器(§7):消息完全进入可视区才推进游标;按消息顺序取最后一条
