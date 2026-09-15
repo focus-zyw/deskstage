@@ -45,6 +45,7 @@ export async function webchatAsk(
   }
   signal?.addEventListener('abort', onAbort, { once: true })
   const t0 = Date.now()
+  // 轨迹按 requestId 拉取即删(Rust 侧有界表):双模型并行互不覆盖、不留积压
   const pullTrace = () => {
     if (!diagRef) return
     void invoke<{
@@ -52,7 +53,7 @@ export async function webchatAsk(
       stages: { stage: string; ms: number }[]
       total_ms: number
       error?: string
-    } | null>('webchat_last_trace')
+    } | null>('webchat_take_trace', { requestId })
       .then((trace) => {
         if (!trace || trace.request_id !== requestId) return
         diag.webchatStages(diagRef.turnId, {
@@ -146,4 +147,36 @@ export async function webchatProbe(site?: WebchatSite): Promise<ProbeResult> {
 /** 手动恢复主覆盖层(角色回屏) */
 export async function webchatRestoreMain(): Promise<void> {
   await invoke('webchat_main_visible', { show: true })
+}
+
+// ---------- 站点活性恢复状态与模式(方案 §十四;Hub 内存态) ----------
+
+export type WebchatSiteRuntimeMode = 'tab' | 'dedicatedPending' | 'dedicated'
+
+export interface WebchatSiteStatus {
+  site: WebchatSite
+  mode: WebchatSiteRuntimeMode
+  override: 'preferTab' | 'preferDedicated' | null
+  livenessFailures: number
+  recentPulses: number
+  healthyTurns: number
+  lastAction: string
+}
+
+/** 单站点恢复状态:模式、连续活性失败、近 5 轮脉冲依赖、最近动作 */
+export async function webchatSiteStatus(site: WebchatSite): Promise<WebchatSiteStatus> {
+  return invoke<WebchatSiteStatus>('webchat_site_status', { site })
+}
+
+/** 设置站点恢复模式:'auto' = 自动恢复(推荐)。持久化在配置,由调用方负责 */
+export async function webchatSetSiteMode(
+  site: WebchatSite,
+  mode: 'auto' | 'preferTab' | 'preferDedicated',
+): Promise<void> {
+  await invoke('webchat_site_mode', { site, mode: mode === 'auto' ? null : mode })
+}
+
+/** 手动降级:重新评估该站点,清自动升级状态回标签页模式 */
+export async function webchatReevaluateSite(site: WebchatSite): Promise<void> {
+  await invoke('webchat_site_reevaluate', { site })
 }

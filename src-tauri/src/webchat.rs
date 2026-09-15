@@ -96,8 +96,10 @@ pub struct TraceStage {
     pub ms: u64,
 }
 
-/// 只留最近一次(前端在 ask 结束后立即拉取;不放 Tauri state,避免动调用方装配)
-static LAST_TRACE: Mutex<Option<AskTrace>> = Mutex::new(None);
+/// 按 requestId 的有界轨迹表(方案 §十三):双模型并行时各自的轨迹不再互相
+/// 覆盖;前端按自己的 requestId 拉取并删除。同 id 重跑覆盖旧条目,超容量淘汰最旧
+static TRACES: Mutex<Vec<AskTrace>> = Mutex::new(Vec::new());
+const TRACES_CAP: usize = 64;
 
 /// 阶段记录器:阶段名 + 相对 ask 起点的毫秒数
 pub struct TraceBuilder {
@@ -130,16 +132,22 @@ impl TraceBuilder {
             total_ms,
             error,
         };
-        if let Ok(mut slot) = LAST_TRACE.lock() {
-            *slot = Some(trace);
+        if let Ok(mut table) = TRACES.lock() {
+            table.retain(|t| t.request_id != trace.request_id);
+            table.push(trace);
+            let excess = table.len().saturating_sub(TRACES_CAP);
+            table.drain(0..excess);
         }
     }
 }
 
-/// 最近一次 ask 的阶段轨迹(只读;前端在 ask 完成后拉取并挂到诊断会话上)
+/// 前端按自己的 requestId 拉取轨迹,取到即删(双模型并行互不覆盖、不留积压)
 #[tauri::command]
-pub fn webchat_last_trace() -> Option<AskTrace> {
-    LAST_TRACE.lock().ok().and_then(|slot| slot.clone())
+pub fn webchat_take_trace(request_id: String) -> Option<AskTrace> {
+    TRACES.lock().ok().and_then(|mut table| {
+        let idx = table.iter().position(|t| t.request_id == request_id)?;
+        Some(table.remove(idx))
+    })
 }
 
 // ---------- 取消注册表 ----------
@@ -669,14 +677,6 @@ impl PageSession {
             port,
             target_id: target_id.to_string(),
             cdp: None,
-        }
-    }
-
-    /// 导航重建标签页后改盯新目标(丢弃旧连接,下次调用重连)
-    fn retarget(&mut self, target_id: &str) {
-        if self.target_id != target_id {
-            self.target_id = target_id.to_string();
-            self.cdp = None;
         }
     }
 
@@ -2218,6 +2218,57 @@ pub async fn webchat_release_conversation(
     Ok(())
 }
 
+// ---------- 命令:站点恢复状态与模式覆盖(设置页,方案 §十四) ----------
+
+/// 单站点恢复状态(Hub 内存态;自动判断不持久化,Edge/应用重启后重新评估)
+#[tauri::command]
+pub fn webchat_site_status(
+    hub: State<'_, Arc<WebchatHub>>,
+    site: String,
+) -> Result<activity::SiteStatus, String> {
+    let status = hub
+        .site_health
+        .lock()
+        .map_err(|e| e.to_string())?
+        .status(&site);
+    Ok(status)
+}
+
+/// 用户模式覆盖:None/"auto" = 自动恢复(推荐);"preferTab" = 始终使用标签页
+/// (软唤醒与脉冲仍有效,仅禁止自动升级);"preferDedicated" = 始终独立窗口。
+/// 持久化在前端配置,应用启动时由前端回放到 Hub
+#[tauri::command]
+pub fn webchat_site_mode(
+    hub: State<'_, Arc<WebchatHub>>,
+    site: String,
+    mode: Option<String>,
+) -> Result<(), String> {
+    let o = match mode.as_deref() {
+        None | Some("auto") => None,
+        Some("preferTab") => Some(activity::ModeOverride::PreferTab),
+        Some("preferDedicated") => Some(activity::ModeOverride::PreferDedicated),
+        Some(other) => return Err(format!("未知站点模式: {other}")),
+    };
+    hub.site_health
+        .lock()
+        .map_err(|e| e.to_string())?
+        .set_override(&site, o);
+    Ok(())
+}
+
+/// 手动降级(「重新评估该站点」):清自动升级状态回 Tab;不动显式覆盖
+#[tauri::command]
+pub fn webchat_site_reevaluate(
+    hub: State<'_, Arc<WebchatHub>>,
+    site: String,
+) -> Result<(), String> {
+    hub.site_health
+        .lock()
+        .map_err(|e| e.to_string())?
+        .re_evaluate(&site);
+    Ok(())
+}
+
 // ---------- 取消 / 登录 / 探测 ----------
 
 /// 取消一次 ask:查活动请求注册表,找到才触发;找不到(已完成/未知)= no-op,
@@ -2546,7 +2597,7 @@ mod tests {
         server.await.unwrap();
     }
 
-    /// 阶段轨迹:阶段按序追加、毫秒数单调、finish 落库 LAST_TRACE 且可取回
+    /// 阶段轨迹:阶段按序追加、毫秒数单调、finish 落库按 requestId 表且取走即删
     #[test]
     fn trace_builder_records_and_publishes() {
         let request_id = format!("trace-test-{}", std::process::id());
@@ -2557,13 +2608,39 @@ mod tests {
         let err = Some("网页生成超时".to_string());
         let total_hint = trace.t0.elapsed().as_millis() as u64;
         trace.finish(err.clone());
-        let got = LAST_TRACE.lock().unwrap().clone().expect("轨迹应已落库");
+        let got = webchat_take_trace(request_id.clone()).expect("轨迹应已落库");
         assert_eq!(got.request_id, request_id);
         assert_eq!(got.stages.len(), 2);
         assert_eq!(got.stages[0].stage, "edge_ready");
         assert!(got.stages[1].ms >= got.stages[0].ms);
         assert!(got.total_ms >= total_hint.saturating_sub(1));
         assert_eq!(got.error, err);
+        assert!(
+            webchat_take_trace(request_id).is_none(),
+            "拉取即删,不留积压"
+        );
+    }
+
+    /// 并行轨迹互不覆盖:两个 requestId 各自可取回(双模型并行诊断)
+    #[test]
+    fn parallel_traces_are_kept_per_request() {
+        let base = std::process::id();
+        let id_a = format!("trace-a-{base}");
+        let id_b = format!("trace-b-{base}");
+        let mut ta = TraceBuilder::new(&id_a);
+        ta.mark("a_only");
+        ta.finish(None);
+        let mut tb = TraceBuilder::new(&id_b);
+        tb.mark("b_only");
+        tb.finish(None);
+        assert_eq!(
+            webchat_take_trace(id_a.clone()).unwrap().stages[0].stage,
+            "a_only"
+        );
+        assert_eq!(
+            webchat_take_trace(id_b.clone()).unwrap().stages[0].stage,
+            "b_only"
+        );
     }
 
     // ---------- 假传输层:内存簿记 + 可编排的失败注入 ----------

@@ -114,6 +114,7 @@ import {
   getConfig,
   saveConfig,
   useConfigSnapshot,
+  WEBCHAT_SITE_IDS,
 } from './storage/configStore'
 import { useBubbleThemesV2 } from './storage/bubbleThemesStore'
 import {
@@ -123,6 +124,7 @@ import {
   resolveGuestLook,
   syncBubbleCompatVars,
 } from './bubble'
+import { webchatSetSiteMode } from './engine/webchat'
 import { applyLaunchOnBoot } from './runtime/launchOnBoot'
 import { useOverlayHitRegions } from './runtime/useOverlayHitRegion'
 import { initSettingsBridgeServer } from './settings/bridgeServer'
@@ -1196,6 +1198,20 @@ function App() {
       chatSession.bootstrapHistory(turns.map((t) => ({ who: t.who, text: t.text, ts: t.ts })))
     })()
   }, [chatSession])
+
+  // 站点恢复模式回放:配置是持久事实源,Hub 是内存态(方案 §十四)。
+  // 非 auto 的覆盖在启动时推给 Rust;Hub 侧自动升级判断不持久化,重启重新评估
+  useEffect(() => {
+    void (async () => {
+      const cfg = await getConfig()
+      for (const site of WEBCHAT_SITE_IDS) {
+        const mode = cfg.webchatSiteModes?.[site]
+        if (mode && mode !== 'auto') {
+          await webchatSetSiteMode(site, mode).catch(() => {})
+        }
+      }
+    })()
+  }, [config.wizardDone])
 
   // 群聊页(设置窗)角色状态条:主窗节流推送快照(P4 可观测性;设置窗无会话实例)
   let lastActorPush = 0

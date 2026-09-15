@@ -160,7 +160,11 @@ export interface UserProfile {
 /** 网页模型站点 id 白名单:与 Rust 侧 src-tauri/src/webchat/sites.rs 的 adapter
  *  注册表一一对应。新增站点 = 这里加一个 id + engine/webchat.ts 加一条 label
  *  + sites.rs 加一个 adapter(三处齐了才可用,缺一处会被下面两个清洗函数挡掉) */
-export const WEBCHAT_SITE_IDS = ['deepseek', 'doubao', 'chatgpt', 'gemini', 'qianwen'] as const
+export const WEBCHAT_SITE_IDS = ['deepseek', 'doubao', 'chatgpt', 'gemini', 'qianwen']
+/** 站点恢复模式:auto = 自动(停滞时软唤醒→脉冲→必要时独立窗口);
+ *  preferTab = 始终标签页(仍软唤醒/脉冲,禁止升级);preferDedicated = 始终独立窗口 */
+export type WebchatSiteMode = 'auto' | 'preferTab' | 'preferDedicated'
+export const WEBCHAT_SITE_MODES: WebchatSiteMode[] = ['auto', 'preferTab', 'preferDedicated']
 export type WebchatSiteId = (typeof WEBCHAT_SITE_IDS)[number]
 
 export function isWebchatSite(v: unknown): v is WebchatSiteId {
@@ -212,6 +216,9 @@ export interface AppConfig {
   webchatEnabled: boolean
   /** 网页模型站点 */
   webchatSite: WebchatSiteId
+  /** 站点恢复模式覆盖(方案 §十四;缺省 auto = 自动恢复)。
+   *  持久化在配置;Hub 是内存态,应用启动时前端回放给 Rust */
+  webchatSiteModes: Partial<Record<WebchatSiteId, WebchatSiteMode>>
   /** 桌面环境感知(电量/前台应用分类等,仅本机分类不上传) */
   envSense: boolean
   /** 环境感知注入冷却分钟数:同一条感知在此窗口内不重复进入提示词 */
@@ -414,6 +421,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   },
   webchatEnabled: false,
   webchatSite: 'deepseek',
+  webchatSiteModes: {},
   envSense: true,
   envNoteCooldownMin: 360,
   breakReminder: { enabled: false, minutes: 45 },
@@ -510,6 +518,19 @@ function sanitizeTopicPrefs(v: unknown): TopicPrefsConfig {
 }
 
 /** 清洗 AI 剧场配置:站点只认白名单值;同站合法(会话本就独立) */
+/** 站点恢复模式覆盖清洗:未知站点/未知模式丢弃;'auto' 等价无覆盖也保留 */
+export function sanitizeWebchatSiteModes(v: unknown): Partial<Record<WebchatSiteId, WebchatSiteMode>> {
+  if (!v || typeof v !== 'object') return {}
+  const out: Partial<Record<WebchatSiteId, WebchatSiteMode>> = {}
+  for (const [k, m] of Object.entries(v as Record<string, unknown>)) {
+    if (!isWebchatSite(k)) continue
+    if (typeof m === 'string' && (WEBCHAT_SITE_MODES as string[]).includes(m)) {
+      out[k] = m as WebchatSiteMode
+    }
+  }
+  return out
+}
+
 function sanitizeAiTheater(v: unknown): AiTheaterConfig {
   const d = DEFAULT_CONFIG.aiTheater
   const o = (v ?? {}) as Record<string, unknown>
@@ -1079,6 +1100,7 @@ const FIELD_SANITIZERS: { [K in keyof AppConfig]: (v: unknown, all: Record<strin
   userInterests: (v) => (typeof v === 'string' ? v.trim() : ''),
   webchatEnabled: (v) => v === true,
   webchatSite: (v) => (isWebchatSite(v) ? v : 'deepseek'),
+  webchatSiteModes: sanitizeWebchatSiteModes,
   envSense: (v) => v !== false,
   envNoteCooldownMin: sanitizeEnvNoteCooldownMin,
   breakReminder: sanitizeBreakReminder,
