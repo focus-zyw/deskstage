@@ -9,6 +9,7 @@ mod audio_capture;
 mod bili_http;
 mod capture;
 mod config_service;
+mod desktop_ops;
 mod endpoint_proxy;
 mod env;
 mod mic_capture;
@@ -137,6 +138,7 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .manage(audio_capture::CaptureState::default())
         .manage(Arc::new(webchat::WebchatHub::new(Arc::new(
             webchat::RealCdpOps::default(),
@@ -176,6 +178,15 @@ pub fn run() {
             webchat::webchat_site_reevaluate,
             ocr::ocr_clipboard,
             ocr::clipboard_image_base64,
+            desktop_ops::desktop_files_list,
+            desktop_ops::clipboard_read_text,
+            desktop_ops::system_open,
+            desktop_ops::system_run_app,
+            desktop_ops::media_control,
+            desktop_ops::set_volume,
+            desktop_ops::toggle_mute,
+            desktop_ops::window_action,
+            desktop_ops::notify_send,
             video_save::video_save_from_url,
             video_save::reveal_in_explorer,
             bili_http::bili_http_request,

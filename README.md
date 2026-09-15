@@ -32,6 +32,12 @@ Windows 桌面虚拟角色(桌宠)应用:两个 Q 版角色(甲·便利店店员
   手机App扫码确认后自动回填,过期自动刷新)。
 - **记忆系统**:手填画像(称呼/身份/喜好/雷区)+ 机器自动提取的事实(pinned 置顶防遗忘),
   注入所有对话 prompt;行为信号(戳/收藏/重放)反馈到话题权重。
+- **世界感知与桌面操作**:`src/world` 世界模型层收口全部传感器(前台应用/窗口标题/键鼠空闲/
+  电量/媒体在播/CPU/内存/桌面文件数),归一+差分事件+显著性渲染(冷却账本+预算上限),
+  角色注记只吃"渲染过的事实"——演出与聊天共享同一份情境;按需工具:截屏/识字/看桌面/读剪贴板
+  (pull 制,默认关);确定性操作:打开网址/文件、启动应用、媒体控制、音量/静音、窗口管理、
+  系统通知——全部 external 风险级,执行前弹角色风格确认卡(可"记住允许"),敏感感知在
+  设置 → 工具与隐私里逐项开关,默认关的不采集。
 - **语音**:硅基流动 CosyVoice2 合成,甲乙各自音色,两级缓存(内存 blob → 磁盘 base64)逐句预合成;
   支持上传参考音频或直接录制任意应用/系统声音来**克隆音色**。
 - **活人感**:待机小动作、倾听倾斜、惊讶脉冲、连戳分级(害羞/生气)、LLM 即兴吐槽、
@@ -44,7 +50,9 @@ Windows 桌面虚拟角色(桌宠)应用:两个 Q 版角色(甲·便利店店员
 src/
   engine/     LLM 与语音:llmClient(厂商兼容/错误分类,走 llmGateway 通道)、llmGateway(通用请求网关)、
               promptBuilder(人设+画像+协议)、tts(CosyVoice2+克隆+缓存+通道仲裁)、
-              dialogPrefetch+topicSeeds(预生成/话题池)、timeAware、envAware(环境感知)
+              dialogPrefetch+topicSeeds(预生成/话题池)、timeAware
+  world/      世界模型:types(WorldState/事件)、normalizer(归一+防注入清洗)、render(冷却+预算注记)、
+              bus(差分事件)、engine(采样循环,全 DI)、index(单例入口 startWorld/worldNote)
   performer/  演出层:player(台词队列,LLM/硬编码剧本同一条路)、modes(模式注册表)
   runtime/    运行时地基:runtimeMode(统一状态机+capabilities)、proactiveScheduler(主动行为
               调度:优先级/配额/降频)、utilityTasks(工具任务状态)、liveDanmaku(主播模式管线:
@@ -65,7 +73,9 @@ src-tauri/
   src/audio_capture.rs  WASAPI 环回录音(按进程/整系统),OBS 式录制目标列表,结束事件回传前端
   src/capture.rs        冻结全屏→框选裁剪→写剪贴板(WDA_EXCLUDEFROMCAPTURE 角色不进截图)
   src/ocr.rs            剪贴板图片→文本行(Windows 自带 OCR,专用 STA 线程)+ PNG base64 导出(供视觉模型)
-  src/env.rs            桌面快照:电量/前台应用类别/全屏/键鼠空闲/音频在播
+  src/env.rs            桌面快照:电量/前台应用(类别+进程名,可选窗口标题)/全屏/键鼠空闲/媒体在播/CPU/内存
+  src/desktop_ops.rs    桌面确定性操作:桌面文件清单、剪贴板文本、打开网址/文件、启动应用、
+                        媒体键、音量/静音(IAudioEndpointVolume)、窗口管理、系统通知(双端硬校验)
 ```
 
 **命名约定:`A/B/C` 是 speaker 槽位标识**(LLM 协议、音色/反应键、历史落盘专用);

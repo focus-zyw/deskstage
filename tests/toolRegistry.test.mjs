@@ -53,9 +53,26 @@ after(async () => {
 
 const ctx = { isLive: true, phase: 'idle' }
 
-test('注册表形状:五个工具,id 即键,manifest 齐备', () => {
+test('注册表形状:十三个工具,id 即键,manifest 齐备', () => {
   const ids = Object.keys(mod.TOOLS)
-  assert.deepEqual([...ids].sort(), ['capture_screen', 'generate_video', 'recognize_text', 'search_memory', 'send_live_message'])
+  assert.deepEqual(
+    [...ids].sort(),
+    [
+      'capture_screen',
+      'generate_video',
+      'list_desktop_files',
+      'media_control',
+      'open_target',
+      'read_clipboard',
+      'recognize_text',
+      'run_app',
+      'search_memory',
+      'send_live_message',
+      'send_notification',
+      'set_volume',
+      'window_action',
+    ],
+  )
   for (const t of Object.values(mod.TOOLS)) {
     const m = t.manifest
     assert.ok(m.label && m.description)

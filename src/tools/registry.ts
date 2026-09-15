@@ -5,9 +5,17 @@
 import type { CharacterTool } from './types'
 import { captureScreenTool } from './adapters/captureScreen'
 import { generateVideoTool } from './adapters/generateVideo'
+import { listDesktopFilesTool } from './adapters/listDesktopFiles'
+import { mediaControlTool } from './adapters/mediaControl'
+import { openTargetTool } from './adapters/openTarget'
+import { readClipboardTool } from './adapters/readClipboard'
 import { recognizeTextTool } from './adapters/recognizeText'
+import { runAppTool } from './adapters/runApp'
 import { searchMemoryTool } from './adapters/searchMemory'
 import { sendLiveMessageTool } from './adapters/sendLiveMessage'
+import { sendNotificationTool } from './adapters/sendNotification'
+import { setVolumeTool } from './adapters/setVolume'
+import { windowActionTool } from './adapters/windowAction'
 
 export const TOOLS = {
   capture_screen: captureScreenTool,
@@ -15,6 +23,14 @@ export const TOOLS = {
   search_memory: searchMemoryTool,
   send_live_message: sendLiveMessageTool,
   generate_video: generateVideoTool,
+  read_clipboard: readClipboardTool,
+  list_desktop_files: listDesktopFilesTool,
+  open_target: openTargetTool,
+  run_app: runAppTool,
+  media_control: mediaControlTool,
+  set_volume: setVolumeTool,
+  window_action: windowActionTool,
+  send_notification: sendNotificationTool,
 } satisfies Record<string, CharacterTool>
 
 export type ToolId = keyof typeof TOOLS & string

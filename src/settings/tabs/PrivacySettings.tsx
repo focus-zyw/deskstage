@@ -254,6 +254,33 @@ export function PrivacySettings() {
           50 条),不上传。屏幕/剪贴板内容识别结果只作为当轮回复的资料,不写入长期记忆。
         </div>
       </SettingsCard>
+      <SettingsCard card="世界感知" flash={flashCard} title="世界感知" desc="敏感档,默认关">
+        <SetLine title="读取前台窗口标题" hint="角色知道你在哪个窗口忙;标题会截断清洗、仅本机进提示词,不上传;关闭时不采集">
+          <SetSwitch
+            checked={form.contextSense.windowTitle}
+            label="读取前台窗口标题"
+            onChange={(v) => {
+              const next = { ...form.contextSense, windowTitle: v }
+              setForm({ ...form, contextSense: next })
+              saveField({ contextSense: next }, true)
+            }}
+          />
+        </SetLine>
+        <SetLine title="桌面文件数摘要" hint="每 10 分钟统计一次桌面文件数量(不读文件名与内容),桌面太乱时角色可能会提一嘴">
+          <SetSwitch
+            checked={form.contextSense.desktopDigest}
+            label="桌面文件数摘要"
+            onChange={(v) => {
+              const next = { ...form.contextSense, desktopDigest: v }
+              setForm({ ...form, contextSense: next })
+              saveField({ contextSense: next }, true)
+            }}
+          />
+        </SetLine>
+        <div className="set-note">
+          「看桌面」与「读剪贴板」是按需工具,开关在下方「角色工具」卡里;读剪贴板默认关,只在明确要求时读取一次。
+        </div>
+      </SettingsCard>
       <SettingsCard card="隐私与数据" flash={flashCard} title="隐私与数据">
         <div className="set-note">
           所有设置、记忆与历史仅保存在本机;桌面环境感知只在本机给应用分类,不上传窗口内容;截屏只在你按快捷键时进行;备忘里别写密码、验证码这类敏感信息。
