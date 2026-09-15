@@ -212,8 +212,12 @@ impl ActivityTracker {
             .saturating_duration_since(self.last_progress_at)
             .as_millis() as u64;
         let wake_attempt = self.soft_wakes + self.pulses;
-        let action = if now_streaming {
+        // 流式停滞的定义是「busy 恒真且文本长时间不变」(§六):busy 已落
+        // (完成稳定窗/已收尾)不存在停滞,不派发任何恢复动作
+        let action = if now_streaming && snap.busy {
             self.streaming_ladder(now)
+        } else if now_streaming {
+            RecoveryAction::None
         } else {
             self.waiting_ladder(idle_ms)
         };
@@ -752,6 +756,13 @@ mod tests {
                 &snap(2, "同文续新", true),
                 95_000
             )),
+            RecoveryAction::None
+        );
+        // busy 已落(完成稳定窗):文本停变也不是停滞,不派发
+        let done = snap(3, "完整回复", false);
+        at(&mut t, AskPhase::ResponseStarted, &done, 96_000);
+        assert_eq!(
+            action_of(&at(&mut t, AskPhase::ResponseStarted, &done, 140_000)),
             RecoveryAction::None
         );
     }

@@ -333,10 +333,26 @@ pub trait CdpOps: Send + Sync + 'static {
     async fn probe_port(&self, profile: &Path) -> Option<u16>;
     /// (targetId, url) 列表(仅 page 型)
     async fn list_pages(&self, port: u16) -> Result<Vec<(String, String)>, String>;
-    async fn create_page(&self, port: u16, url: &str) -> Result<String, String>;
+    /// placement:Tab = 普通标签页(登录复用/会话重建);DedicatedWindow = 独立窗口
+    /// (Target.createTarget newWindow,同 profile 免登录;站点持续无法后台生成时)
+    async fn create_page(
+        &self,
+        port: u16,
+        url: &str,
+        placement: activity::TargetPlacement,
+    ) -> Result<String, String>;
     async fn close_page(&self, port: u16, target_id: &str) -> Result<(), String>;
     /// 将目标标签页切为当前活动页，避免站点在后台页暂停提交或生成。
     async fn activate_page(&self, port: u16, target_id: &str) -> Result<(), String>;
+    /// 生成期间的常驻页面会话(软唤醒的 Emulation 覆盖挂在它上面);
+    /// 打不开时软唤醒降级跳过,梯子仍有激活脉冲
+    async fn open_page_session(&self, port: u16, target_id: &str) -> Result<PageSession, String>;
+    /// 软唤醒(方案 §四):不切标签页、不抢用户焦点、不 reload、不重发。
+    /// 会话态的焦点/空闲覆盖挂常驻连接;单条失败整包报错,由调用方记轨迹继续
+    async fn soft_wake(&self, session: &mut PageSession) -> Result<(), String>;
+    /// 激活脉冲(方案 §五):一次性 bringToFront,命令结束即释放,
+    /// 不等待回复;调用方先过 PulseCoordinator 节流
+    async fn activation_pulse(&self, port: u16, target_id: &str) -> Result<(), String>;
     /// 页面求值(普通)
     async fn eval(
         &self,
@@ -633,6 +649,77 @@ fn json_arg(s: &str) -> String {
     serde_json::to_string(s).unwrap_or_else(|_| "\"\"".into())
 }
 
+/// 页面级常驻会话:生成期间持有同一 target 的 WS 连接(最多两条,双生成槽各一)。
+/// 软唤醒的 Emulation 覆盖(setFocusEmulationEnabled/setIdleOverride)是会话态——
+/// 短连接发完即断会被渲染进程复位,必须挂在常驻连接上才持续生效;ask 结束
+/// 断开即自动清除,无残留。页面导航销毁执行上下文后按同 target 重连
+pub struct PageSession {
+    port: u16,
+    target_id: String,
+    cdp: Option<Cdp>,
+}
+
+impl PageSession {
+    fn new(port: u16, target_id: &str) -> Self {
+        Self {
+            port,
+            target_id: target_id.to_string(),
+            cdp: None,
+        }
+    }
+
+    /// 导航重建标签页后改盯新目标(丢弃旧连接,下次调用重连)
+    fn retarget(&mut self, target_id: &str) {
+        if self.target_id != target_id {
+            self.target_id = target_id.to_string();
+            self.cdp = None;
+        }
+    }
+
+    async fn connect(&mut self) -> Result<(), String> {
+        if self.cdp.is_some() {
+            return Ok(());
+        }
+        let ws = connect_ws(format!(
+            "ws://127.0.0.1:{}/devtools/page/{}",
+            self.port, self.target_id
+        ))
+        .await?;
+        self.cdp = Some(Cdp::new(ws));
+        Ok(())
+    }
+
+    async fn call(
+        &mut self,
+        method: &str,
+        params: Value,
+        timeout_ms: u64,
+    ) -> Result<Value, String> {
+        self.connect().await?;
+        // 连接死亡(导航/空闲掐断)重连一次再试;target 真没了则持续失败,
+        // 由调用方按"软唤醒不可用"记录并继续梯子
+        let first = self
+            .cdp
+            .as_mut()
+            .expect("connect 已确保")
+            .call(method, params.clone(), timeout_ms)
+            .await;
+        match first {
+            Ok(v) => Ok(v),
+            Err(e) if is_context_lost(&e) => {
+                self.cdp = None;
+                self.connect().await?;
+                self.cdp
+                    .as_mut()
+                    .expect("connect 已确保")
+                    .call(method, params, timeout_ms)
+                    .await
+            }
+            Err(e) => Err(e),
+        }
+    }
+}
+
 /// 桌面端真实传输:每次操作新建短连接(本机 WS 连接毫秒级,轮询间隔 300ms 完全淹没)。
 /// Chromium 的浏览器级 WS 路径包含启动时生成的 UUID；probe 时从
 /// `/json/version` 读取并按端口缓存，Target 域操作必须复用该路径。
@@ -714,11 +801,21 @@ impl CdpOps for RealCdpOps {
         Ok(pages)
     }
 
-    async fn create_page(&self, port: u16, url: &str) -> Result<String, String> {
+    async fn create_page(
+        &self,
+        port: u16,
+        url: &str,
+        placement: activity::TargetPlacement,
+    ) -> Result<String, String> {
         let mut browser = self.browser_cdp(port).await?;
-        let res = browser
-            .call("Target.createTarget", json!({ "url": url }), 15_000)
-            .await?;
+        // newWindow=true = 独立窗口(同 profile、同进程,免登录);
+        // background=false = 前台激活——站点对完全不可见的窗口仍会暂停生成
+        let mut params = json!({ "url": url });
+        if placement == activity::TargetPlacement::DedicatedWindow {
+            params["newWindow"] = json!(true);
+            params["background"] = json!(false);
+        }
+        let res = browser.call("Target.createTarget", params, 15_000).await?;
         res.get("targetId")
             .and_then(Value::as_str)
             .map(String::from)
@@ -738,6 +835,49 @@ impl CdpOps for RealCdpOps {
             Cdp::new(connect_ws(format!("ws://127.0.0.1:{port}/devtools/page/{target_id}")).await?);
         cdp.call("Page.bringToFront", json!({}), 5000).await?;
         Ok(())
+    }
+
+    async fn open_page_session(&self, port: u16, target_id: &str) -> Result<PageSession, String> {
+        // 连接惰性建立:open 只登记 target,首条软唤醒命令时才连
+        Ok(PageSession::new(port, target_id))
+    }
+
+    async fn soft_wake(&self, session: &mut PageSession) -> Result<(), String> {
+        // 逐条执行;覆盖是会话态,断开自动清除,无残留(方案 §四)
+        session
+            .call(
+                "Page.setWebLifecycleState",
+                json!({ "state": "active" }),
+                5000,
+            )
+            .await?;
+        session
+            .call(
+                "Emulation.setFocusEmulationEnabled",
+                json!({ "enabled": true }),
+                5000,
+            )
+            .await?;
+        session
+            .call(
+                "Emulation.setIdleOverride",
+                json!({ "isUserActive": true, "isScreenUnlocked": true }),
+                5000,
+            )
+            .await?;
+        // window.focus 无用户手势通常被忽略,但配合焦点模拟对部分站点有效
+        session
+            .call(
+                "Runtime.evaluate",
+                json!({ "expression": "window.focus && window.focus()", "returnByValue": true }),
+                3000,
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn activation_pulse(&self, port: u16, target_id: &str) -> Result<(), String> {
+        self.activate_page(port, target_id).await
     }
 
     async fn eval(
@@ -843,6 +983,8 @@ pub struct HubState<O: CdpOps> {
     inflight: Mutex<Option<String>>,
     /// 活性恢复梯子阈值(测试注入快策略;默认值见 activity::ActivityPolicy)
     activity_policy: activity::ActivityPolicy,
+    /// 激活脉冲全局节流(两个生成任务同时停滞时不疯狂切标签页)
+    pulse: Mutex<activity::PulseCoordinator>,
 }
 
 /// 生成路由差异:target 解析与"丢失恢复"策略
@@ -863,6 +1005,7 @@ impl<O: CdpOps> HubState<O> {
             permits: Arc::new(Semaphore::new(HUB_PERMITS)),
             inflight: Mutex::new(None),
             activity_policy: activity::ActivityPolicy::default(),
+            pulse: Mutex::new(activity::PulseCoordinator::new()),
         }
     }
 
@@ -1031,8 +1174,13 @@ impl<O: CdpOps> HubState<O> {
         if let Some((id, _)) = pages.iter().rev().find(|p| p.1.contains(host)) {
             return Ok(id.clone());
         }
-        self.op(self.ops.create_page(port, url), cancel, deadline)
-            .await
+        self.op(
+            self.ops
+                .create_page(port, url, activity::TargetPlacement::Tab),
+            cancel,
+            deadline,
+        )
+        .await
     }
 
     /// 优先认领用户已打开并登录的同站点页；没有可用页时才创建会话页。
@@ -1056,7 +1204,12 @@ impl<O: CdpOps> HubState<O> {
             return Ok((id.clone(), false));
         }
         let tid = self
-            .op(self.ops.create_page(port, a.url), cancel, deadline)
+            .op(
+                self.ops
+                    .create_page(port, a.url, activity::TargetPlacement::Tab),
+                cancel,
+                deadline,
+            )
             .await?;
         claimed.insert(tid.clone());
         Ok((tid, true))
@@ -1074,7 +1227,12 @@ impl<O: CdpOps> HubState<O> {
             .url;
         let mut claimed = self.claimed_targets.lock().await;
         let tid = self
-            .op(self.ops.create_page(port, url), cancel, deadline)
+            .op(
+                self.ops
+                    .create_page(port, url, activity::TargetPlacement::Tab),
+                cancel,
+                deadline,
+            )
             .await?;
         claimed.insert(tid.clone());
         Ok(tid)
@@ -1292,9 +1450,12 @@ impl<O: CdpOps> HubState<O> {
         };
         phase = AskPhase::Sent;
         let mut resent = false;
-        // 活性梯子(方案 §二):发送确认时刻起跑。每拍快照喂入,
-        // 结论(动作+recovered 标记)由轮询循环消费
+        // 活性梯子(方案 §二):发送确认时刻起跑。每拍快照喂入,动作实时派发
         let mut activity = activity::ActivityTracker::begin(self.activity_policy, Instant::now());
+        // 常驻页面会话:软唤醒的会话态 Emulation 覆盖挂它上面;
+        // 打不开则软唤醒降级跳过,梯子仍有激活脉冲
+        let mut page_session: Option<PageSession> =
+            self.ops.open_page_session(port, target_id).await.ok();
 
         // ---- 发送结果未知的立即恢复:先查原 target 是否已有回复,
         //      确认无回复才安全重发一次(有回复再发会污染会话/触发限流) ----
@@ -1516,23 +1677,62 @@ impl<O: CdpOps> HubState<O> {
                     for m in &obs.marks {
                         trace.mark(m);
                     }
-                    if obs.action != activity::RecoveryAction::None {
-                        let attempt = obs.wake_attempt + 1;
-                        trace.mark(&format!(
-                            "activity:{}(pending)@{}s vis={} focus={}",
-                            match obs.action {
-                                activity::RecoveryAction::SoftWake =>
-                                    format!("soft_wake_{attempt}"),
-                                activity::RecoveryAction::ActivationPulse =>
-                                    format!("pulse_{attempt}"),
-                                _ => "promote".into(),
-                            },
-                            obs.idle_ms / 1000,
-                            act_snap.visibility,
-                            act_snap.focused
-                        ));
-                        // 只观察:消费掉梯子步进,避免每拍重复上报;阶段 2 换成真实派发
-                        activity.note_action(obs.action, true, Instant::now());
+                    let attempt = obs.wake_attempt + 1;
+                    match obs.action {
+                        activity::RecoveryAction::None => {}
+                        activity::RecoveryAction::SoftWake => match page_session.as_mut() {
+                            Some(session) => {
+                                let executed = self
+                                    .op(self.ops.soft_wake(session), cancel, deadline)
+                                    .await
+                                    .is_ok();
+                                activity.note_action(obs.action, executed, Instant::now());
+                                trace.mark(&format!(
+                                    "activity:soft_wake_{attempt} vis={} focus={} idle={}s{}",
+                                    act_snap.visibility,
+                                    act_snap.focused,
+                                    obs.idle_ms / 1000,
+                                    if executed { "" } else { "(failed)" }
+                                ));
+                            }
+                            None => {
+                                // 会话不可用:不计数,下一拍梯子重发请求;
+                                // 始终不可用时由脉冲路径兜底
+                                trace.mark(&format!(
+                                    "activity:soft_wake_{attempt}(session_unavailable)"
+                                ));
+                            }
+                        },
+                        activity::RecoveryAction::ActivationPulse => {
+                            // 全局节流:拒绝时不计数,下一拍重试(300ms 粒度)
+                            let granted = self
+                                .pulse
+                                .lock()
+                                .map(|mut c| c.try_acquire(target_id, Instant::now()))
+                                .unwrap_or(false);
+                            if granted {
+                                let executed = self
+                                    .op(
+                                        self.ops.activation_pulse(port, target_id),
+                                        cancel,
+                                        deadline,
+                                    )
+                                    .await
+                                    .is_ok();
+                                activity.note_action(obs.action, executed, Instant::now());
+                                trace.mark(&format!(
+                                    "activity:pulse_{attempt} vis={} focus={} idle={}s{}",
+                                    act_snap.visibility,
+                                    act_snap.focused,
+                                    obs.idle_ms / 1000,
+                                    if executed { "" } else { "(failed)" }
+                                ));
+                            }
+                        }
+                        // 升级判定在阶段 3 接入:先沉默(受总超时约束)
+                        activity::RecoveryAction::PromoteDedicated => {
+                            activity.suppress_promotion();
+                        }
                     }
                 }
                 // ResponseStarted:回复确已开始生成(busy/计数增长/文本变化任一)——
@@ -1599,7 +1799,9 @@ impl<O: CdpOps> HubState<O> {
     pub async fn open_login(&self, profile: &Path, url: &str) -> Result<LoginOutcome, String> {
         if let Some(port) = self.ops.probe_port(profile).await {
             // 复用路径:新标签页落在已有窗口(createTarget 默认前台激活)
-            self.ops.create_page(port, url).await?;
+            self.ops
+                .create_page(port, url, activity::TargetPlacement::Tab)
+                .await?;
             return Ok(LoginOutcome::Reused);
         }
         // 冷启动:先取消全部活动请求(在飞 ask 快速收场释放读租约),再取写租约
@@ -1611,7 +1813,9 @@ impl<O: CdpOps> HubState<O> {
         match self.ops.probe_port(profile).await {
             Some(port) => {
                 drop(w);
-                self.ops.create_page(port, url).await?;
+                self.ops
+                    .create_page(port, url, activity::TargetPlacement::Tab)
+                    .await?;
                 Ok(LoginOutcome::Reused)
             }
             None => {
@@ -2241,7 +2445,11 @@ mod tests {
         let ops = RealCdpOps::default();
         ops.remember_browser_path(port, "/devtools/browser/test-id");
         let target = ops
-            .create_page(port, "https://chat.deepseek.com/")
+            .create_page(
+                port,
+                "https://chat.deepseek.com/",
+                activity::TargetPlacement::Tab,
+            )
             .await
             .unwrap();
         assert_eq!(target, "target-1");
@@ -2301,6 +2509,13 @@ mod tests {
         activation_calls: u32,
         /// location.href 的应答覆写(None = 默认 deepseek 宿主;宿主校验测试用)
         wrong_site_href: Option<String>,
+        /// 软唤醒/激活脉冲执行计数(活性派发断言用)
+        wake_calls: u32,
+        pulse_calls: u32,
+        /// 软唤醒注入失败(PageSession 不可用降级路径)
+        fail_soft_wake: bool,
+        /// 独立窗口创建计数(placement=DedicatedWindow)
+        dedicated_creations: u32,
     }
 
     struct FakeOps {
@@ -2344,13 +2559,47 @@ mod tests {
             Ok(self.state().pages.clone())
         }
 
-        async fn create_page(&self, port: u16, url: &str) -> Result<String, String> {
+        async fn create_page(
+            &self,
+            port: u16,
+            url: &str,
+            placement: activity::TargetPlacement,
+        ) -> Result<String, String> {
             let mut s = self.state();
             s.ports_seen.push(port);
             s.next_id += 1;
             let id = format!("t{}", s.next_id);
             s.pages.push((id.clone(), url.to_string()));
+            if placement == activity::TargetPlacement::DedicatedWindow {
+                s.dedicated_creations += 1;
+            }
             Ok(id)
+        }
+
+        async fn open_page_session(
+            &self,
+            port: u16,
+            target_id: &str,
+        ) -> Result<PageSession, String> {
+            Ok(PageSession::new(port, target_id))
+        }
+
+        async fn soft_wake(&self, _session: &mut PageSession) -> Result<(), String> {
+            let mut s = self.state();
+            if s.fail_soft_wake {
+                return Err("PageSession 不可用".into());
+            }
+            s.wake_calls += 1;
+            Ok(())
+        }
+
+        async fn activation_pulse(&self, _port: u16, target_id: &str) -> Result<(), String> {
+            let mut s = self.state();
+            if !s.pages.iter().any(|(id, _)| id == target_id) {
+                return Err("Target closed".into());
+            }
+            s.pulse_calls += 1;
+            Ok(())
         }
 
         async fn close_page(&self, _port: u16, target_id: &str) -> Result<(), String> {
@@ -2489,6 +2738,115 @@ mod tests {
         )
         .await
         .map_err(|f| f.msg())
+    }
+
+    // ---------- 活性派发集成(快策略;默认 6s 阈值对单测太慢) ----------
+
+    // 阈值错开在 300ms 轮询边界之间(留 50ms 余量),tick 序列确定:
+    // tick1≈0ms 建基线 → tick2≈300ms 软唤醒 → tick3≈600ms 脉冲 → tick4≈900ms 二次唤醒
+    const FAST: activity::ActivityPolicy = activity::ActivityPolicy {
+        first_soft_wake_ms: 250,
+        first_pulse_ms: 550,
+        second_soft_wake_ms: 850,
+        second_pulse_ms: 1_150,
+        promote_ms: 1_450,
+        streaming_soft_wake_ms: 400,
+        streaming_pulse_ms: 800,
+    };
+
+    fn hub_fast(ops: FakeOps) -> Arc<HubState<FakeOps>> {
+        Arc::new(HubState::new(Arc::new(ops)).with_activity_policy(FAST))
+    }
+
+    /// 停滞快照:count=0(不高于发送前基线)、无文本、不忙——三无 = 无进展
+    fn idle_snap() -> Value {
+        json!({ "busy": false, "text": "", "count": 0 })
+    }
+
+    async fn ask_conv_trace(
+        hub: &Arc<HubState<FakeOps>>,
+        request_id: &str,
+        key: &str,
+        timeout_ms: u64,
+    ) -> (Result<String, String>, Vec<String>) {
+        let deadline = Deadline::after_ms(timeout_ms);
+        let mut trace = TraceBuilder::new(request_id);
+        let guard = RequestGuard::register(&hub.requests, request_id);
+        let cancel = guard.handle();
+        let r = run_conversation(
+            hub,
+            &profile(),
+            key,
+            "prompt",
+            "deepseek",
+            false,
+            &cancel,
+            deadline,
+            &mut trace,
+        )
+        .await;
+        let stages = trace.stages.iter().map(|s| s.stage.clone()).collect();
+        (r.map_err(|f| f.msg()), stages)
+    }
+
+    #[tokio::test]
+    async fn stalled_site_soft_wakes_then_recovers_without_resend() {
+        let ops = FakeOps::new();
+        // 前 2 拍停滞,第 3 拍出现 busy(软唤醒起效)→ 走默认快照稳定完成
+        ops.state().snap_script = vec![
+            idle_snap(),
+            idle_snap(),
+            json!({ "busy": true, "text": "", "count": 0 }),
+        ];
+        let hub = hub_fast(ops);
+        let (r, stages) = ask_conv_trace(&hub, "wake-ok", "k1", 30_000).await;
+        assert!(r.is_ok(), "软唤醒后应恢复正常完成: {r:?}");
+        let st = hub.ops.state();
+        assert_eq!(st.wake_calls, 1, "恰好一次软唤醒");
+        assert_eq!(st.send_calls, 1, "软唤醒绝不重发提示词");
+        assert_eq!(st.pulse_calls, 0, "唤醒起效就不需要脉冲");
+        assert!(
+            stages.iter().any(|s| s.starts_with("activity:soft_wake_1")),
+            "轨迹应记录软唤醒: {stages:?}"
+        );
+        assert!(
+            stages.iter().any(|s| *s == "activity:soft_wake_recovered"),
+            "轨迹应记录唤醒后恢复: {stages:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn stalled_site_escalates_to_activation_pulse() {
+        let ops = FakeOps::new();
+        // 全程停滞(脚本耗尽后回落默认快照,但总超时先到)
+        ops.state().snap_script = vec![idle_snap(); 8];
+        let hub = hub_fast(ops);
+        let (r, stages) = ask_conv_trace(&hub, "pulse", "k1", 1_400).await;
+        assert!(r.is_err(), "持续停滞以超时收场");
+        let st = hub.ops.state();
+        assert_eq!(st.send_calls, 1, "脉冲绝不重发提示词");
+        assert_eq!(st.wake_calls, 2, "双软唤醒按梯子执行(250ms/850ms)");
+        assert_eq!(
+            st.pulse_calls, 1,
+            "第二次脉冲被全局节流推迟(1.5s 闸),超时先到"
+        );
+        assert!(
+            stages.iter().any(|s| s.starts_with("activity:pulse_")),
+            "轨迹应记录脉冲: {stages:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn soft_wake_failure_degrades_to_pulse_without_counting() {
+        let ops = FakeOps::new();
+        ops.state().fail_soft_wake = true;
+        ops.state().snap_script = vec![idle_snap(); 8];
+        let hub = hub_fast(ops);
+        let (_r, _stages) = ask_conv_trace(&hub, "no-session", "k1", 1_400).await;
+        let st = hub.ops.state();
+        assert_eq!(st.wake_calls, 0, "会话不可用:软唤醒不执行也不计数");
+        assert!(st.pulse_calls >= 1, "梯子由脉冲路径兜底");
+        assert_eq!(st.send_calls, 1);
     }
 
     #[tokio::test]
@@ -2920,7 +3278,11 @@ mod tests {
                 .expect("kill_and_launch(端口文件 + 浏览器级 WS)");
             let port = ops.probe_port(&profile).await.expect("probe_port");
             let target = ops
-                .create_page(port, "https://chat.deepseek.com")
+                .create_page(
+                    port,
+                    "https://chat.deepseek.com",
+                    activity::TargetPlacement::Tab,
+                )
                 .await
                 .expect("Target.createTarget");
             // createTarget 返回时页面还在 about:blank,导航到站点是异步的——
