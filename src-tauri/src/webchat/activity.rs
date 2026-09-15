@@ -336,6 +336,17 @@ impl PulseCoordinator {
         }
     }
 
+    /// 测试注入快间隔(生产恒为 1.5s/10s)
+    #[cfg(test)]
+    pub fn with_gaps(global_gap: Duration, target_gap: Duration) -> Self {
+        Self {
+            global_gap,
+            target_gap,
+            last_at: None,
+            last_target: None,
+        }
+    }
+
     /// 全局两次脉冲至少间隔 1.5s;同一标签页至少间隔 10s。
     /// 两个目标同时停滞时,后到的自然让位——轮询 300ms 一拍,
     /// 先停滞者(last_progress_at 更早)先到先得

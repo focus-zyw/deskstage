@@ -252,6 +252,9 @@ enum AskFail {
     Cancelled,
     Timeout,
     LostAfterSend,
+    /// 页面活性失败:页面活着但软唤醒+双脉冲后模型仍不动(方案 §七/§九)。
+    /// 前端两段式恢复按普通失败接管,换代 + 全量上下文重发 → Hub 侧建独立窗口
+    Stalled,
     Failed(String),
 }
 
@@ -300,6 +303,7 @@ impl AskFail {
             AskFail::Cancelled => CANCELLED.into(),
             AskFail::Timeout => "网页生成超时".into(),
             AskFail::LostAfterSend => LOST_AFTER_SEND.into(),
+            AskFail::Stalled => "页面长时间无进展(已软唤醒与激活仍未恢复)".into(),
             AskFail::Failed(e) => e.clone(),
         }
     }
@@ -985,6 +989,8 @@ pub struct HubState<O: CdpOps> {
     activity_policy: activity::ActivityPolicy,
     /// 激活脉冲全局节流(两个生成任务同时停滞时不疯狂切标签页)
     pulse: Mutex<activity::PulseCoordinator>,
+    /// 站点健康总账(Tab/DedicatedPending/Dedicated + 用户覆盖;按站点分账)
+    site_health: Mutex<activity::SiteHealthBook>,
 }
 
 /// 生成路由差异:target 解析与"丢失恢复"策略
@@ -992,6 +998,13 @@ pub struct HubState<O: CdpOps> {
 enum Route {
     Shared { host: String },
     Conversation,
+}
+
+/// generation 的成功产物:回复正文 + 本轮是否动用过激活脉冲
+/// (后者是站点健康 3-of-5 规则的输入)
+struct GenerationOutcome {
+    text: String,
+    used_pulse: bool,
 }
 
 impl<O: CdpOps> HubState<O> {
@@ -1006,6 +1019,7 @@ impl<O: CdpOps> HubState<O> {
             inflight: Mutex::new(None),
             activity_policy: activity::ActivityPolicy::default(),
             pulse: Mutex::new(activity::PulseCoordinator::new()),
+            site_health: Mutex::new(activity::SiteHealthBook::default()),
         }
     }
 
@@ -1161,22 +1175,30 @@ impl<O: CdpOps> HubState<O> {
         }
     }
 
-    /// Shared 路由的站点标签页:复用同宿主页,没有才建
+    /// Shared 路由的站点标签页:复用同宿主页,没有才建。
+    /// 站点已升级(Pending/Dedicated)时直接开独立窗口
     async fn find_or_create_shared(
         &self,
         port: u16,
-        host: &str,
-        url: &str,
+        site: &str,
         cancel: &CancellationHandle,
         deadline: Deadline,
     ) -> Result<String, AskFail> {
+        let a = adapter(site).ok_or_else(|| AskFail::Failed(format!("未知站点: {site}")))?;
         let pages = self.op(self.ops.list_pages(port), cancel, deadline).await?;
-        if let Some((id, _)) = pages.iter().rev().find(|p| p.1.contains(host)) {
+        if let Some((id, _)) = pages.iter().rev().find(|p| p.1.contains(a.host)) {
             return Ok(id.clone());
         }
+        let placement = {
+            let book = self.site_health.lock();
+            if book.is_ok_and(|b| b.effective_mode(site) != activity::SiteMode::Tab) {
+                activity::TargetPlacement::DedicatedWindow
+            } else {
+                activity::TargetPlacement::Tab
+            }
+        };
         self.op(
-            self.ops
-                .create_page(port, url, activity::TargetPlacement::Tab),
+            self.ops.create_page(port, a.url, placement),
             cancel,
             deadline,
         )
@@ -1185,6 +1207,8 @@ impl<O: CdpOps> HubState<O> {
 
     /// 优先认领用户已打开并登录的同站点页；没有可用页时才创建会话页。
     /// claimed_targets 的锁覆盖“选择/创建/登记”，保证同站点并发会话不会抢同一页。
+    /// 站点已升级(Pending/Dedicated)时跳过认领,直接开独立窗口(§九/§十):
+    /// 只发生在会话重建点(reset/句柄丢失),进行中的会话绝不中途迁移
     async fn claim_or_create_conversation_target(
         &self,
         port: u16,
@@ -1193,6 +1217,27 @@ impl<O: CdpOps> HubState<O> {
         deadline: Deadline,
     ) -> Result<(String, bool), AskFail> {
         let a = adapter(site).ok_or_else(|| AskFail::Failed(format!("未知站点: {site}")))?;
+        let mode = self
+            .site_health
+            .lock()
+            .map(|book| book.effective_mode(site))
+            .unwrap_or(activity::SiteMode::Tab); // 毒化保守回落标签页(毒化仅 panics 时发生)
+        if mode != activity::SiteMode::Tab {
+            let tid = self
+                .op(
+                    self.ops
+                        .create_page(port, a.url, activity::TargetPlacement::DedicatedWindow),
+                    cancel,
+                    deadline,
+                )
+                .await?;
+            if let Ok(mut book) = self.site_health.lock() {
+                book.note_promoted(site, Instant::now());
+            }
+            let mut claimed = self.claimed_targets.lock().await;
+            claimed.insert(tid.clone());
+            return Ok((tid, true));
+        }
         let pages = self.op(self.ops.list_pages(port), cancel, deadline).await?;
         let mut claimed = self.claimed_targets.lock().await;
         if let Some((id, _)) = pages
@@ -1309,7 +1354,7 @@ impl<O: CdpOps> HubState<O> {
         cancel: &CancellationHandle,
         deadline: Deadline,
         trace: &mut TraceBuilder,
-    ) -> Result<String, AskFail> {
+    ) -> Result<GenerationOutcome, AskFail> {
         let a = adapter(site).ok_or_else(|| AskFail::Failed(format!("未知站点: {site}")))?;
         // 读租约已持有 = Connected;Disconnected 仅是进入本函数前的语义书档
         let mut phase = AskPhase::Connected;
@@ -1729,9 +1774,35 @@ impl<O: CdpOps> HubState<O> {
                                 ));
                             }
                         }
-                        // 升级判定在阶段 3 接入:先沉默(受总超时约束)
                         activity::RecoveryAction::PromoteDedicated => {
-                            activity.suppress_promotion();
+                            // §七 前置:输入框在(登录态/选择器正常)、页面无站点错误、
+                            // 用户未强制标签页模式——不满足者换窗口也没用,不算活性失败
+                            let book_ok = self.site_health.lock().ok().is_some_and(|book| {
+                                book.effective_mode(site) != activity::SiteMode::Dedicated
+                                    && book.override_of(site)
+                                        != Some(activity::ModeOverride::PreferTab)
+                            });
+                            let allowed = act_snap.input_ready && !act_snap.turn_error && book_ok;
+                            if !allowed {
+                                activity.suppress_promotion();
+                                trace.mark("activity:promote_rejected");
+                            } else {
+                                let changed = self
+                                    .site_health
+                                    .lock()
+                                    .map(|mut book| book.note_pulse_exhausted(site))
+                                    .unwrap_or(false);
+                                activity.suppress_promotion();
+                                trace.mark(if changed {
+                                    "activity:promote_pending"
+                                } else {
+                                    "activity:promote_pending(kept)"
+                                });
+                                // §九:当前消息已发送,不迁移;返回可恢复失败,
+                                // 前端换代 + 全量上下文重试 → 独立窗口在下一次
+                                // 会话重建点创建
+                                return Err(AskFail::Stalled);
+                            }
                         }
                     }
                 }
@@ -1755,7 +1826,10 @@ impl<O: CdpOps> HubState<O> {
                             trace.mark("stable_done");
                             phase = AskPhase::Completed;
                             trace.mark(phase.name());
-                            return Ok(text);
+                            return Ok(GenerationOutcome {
+                                text,
+                                used_pulse: activity.used_pulse(),
+                            });
                         }
                     } else {
                         last = text;
@@ -1779,10 +1853,10 @@ impl<O: CdpOps> HubState<O> {
         cancel: &CancellationHandle,
         deadline: Deadline,
     ) -> Result<String, AskFail> {
-        let a = adapter(site).ok_or_else(|| AskFail::Failed(format!("未知站点: {site}")))?;
         match route {
             Route::Shared { host } => {
-                self.find_or_create_shared(port, host, a.url, cancel, deadline)
+                let _ = host;
+                self.find_or_create_shared(port, site, cancel, deadline)
                     .await
             }
             Route::Conversation => {
@@ -1928,7 +2002,7 @@ pub async fn webchat_ask(
             .await?;
         let port = lease.port;
         let mut target_id = hub
-            .find_or_create_shared(port, a.host, a.url, &cancel, deadline)
+            .find_or_create_shared(port, &site, &cancel, deadline)
             .await?;
         trace.mark("page_ready");
         let result = hub
@@ -1946,7 +2020,7 @@ pub async fn webchat_ask(
             )
             .await;
         trace.finish(result.as_ref().err().map(|f| f.msg()));
-        result
+        result.map(|outcome| outcome.text)
     };
     let result = run.await;
     if let Ok(mut slot) = hub.inflight.lock() {
@@ -2094,8 +2168,23 @@ async fn run_conversation<O: CdpOps>(
             st.consecutive_failures = st.consecutive_failures.saturating_add(1);
         }
     }
+    // 站点健康分账(按站点,不影响其他站点):成功喂 3-of-5 规则;
+    // 仅活性失败(Stalled)计失败——登录/风控/丢失/取消换窗口也没用,不升级
+    match &result {
+        Ok(outcome) => {
+            if let Ok(mut book) = hub.site_health.lock() {
+                book.note_turn_success(site, outcome.used_pulse);
+            }
+        }
+        Err(AskFail::Stalled) => {
+            if let Ok(mut book) = hub.site_health.lock() {
+                book.note_turn_liveness_failure(site);
+            }
+        }
+        Err(_) => {}
+    }
     drop(permit);
-    result
+    result.map(|outcome| outcome.text)
 }
 
 /// 释放会话:先出总表(后续 ask 拿到的是全新槽),再等在飞 ask 收场
@@ -2755,7 +2844,18 @@ mod tests {
     };
 
     fn hub_fast(ops: FakeOps) -> Arc<HubState<FakeOps>> {
-        Arc::new(HubState::new(Arc::new(ops)).with_activity_policy(FAST))
+        let mut hub = HubState::new(Arc::new(ops)).with_activity_policy(FAST);
+        hub.pulse = Mutex::new(fast_pulse_coordinator());
+        Arc::new(hub)
+    }
+
+    /// 快策略配套的快节流(生产 1.5s/10s 对 FAST 的 600ms 梯子会把第二拍
+    /// 脉冲拒到超时;间隔可注入,生产路径不变)
+    fn fast_pulse_coordinator() -> activity::PulseCoordinator {
+        activity::PulseCoordinator::with_gaps(
+            Duration::from_millis(300),
+            Duration::from_millis(500),
+        )
     }
 
     /// 停滞快照:count=0(不高于发送前基线)、无文本、不忙——三无 = 无进展
@@ -2787,6 +2887,105 @@ mod tests {
         .await;
         let stages = trace.stages.iter().map(|s| s.stage.clone()).collect();
         (r.map_err(|f| f.msg()), stages)
+    }
+
+    // ---------- 站点健康与独立窗口升级集成(方案 §八/§九) ----------
+
+    async fn ask_conv_reset(
+        hub: &Arc<HubState<FakeOps>>,
+        request_id: &str,
+        key: &str,
+        timeout_ms: u64,
+        reset: bool,
+    ) -> Result<String, String> {
+        let deadline = Deadline::after_ms(timeout_ms);
+        let mut trace = TraceBuilder::new(request_id);
+        let guard = RequestGuard::register(&hub.requests, request_id);
+        let cancel = guard.handle();
+        run_conversation(
+            hub,
+            &profile(),
+            key,
+            "prompt",
+            "deepseek",
+            reset,
+            &cancel,
+            deadline,
+            &mut trace,
+        )
+        .await
+        .map_err(|f| f.msg())
+    }
+
+    const STALLED_MSG: &str = "页面长时间无进展(已软唤醒与激活仍未恢复)";
+
+    /// 双脉冲耗尽仍无进展 → typed Stalled + 站点标记 DedicatedPending;
+    /// 活性失败计入站点健康(登录/丢失/取消类错误不算——见后续用例)
+    #[tokio::test]
+    async fn double_pulse_stall_returns_stalled_and_marks_site_pending() {
+        let ops = FakeOps::new();
+        ops.state().snap_script = vec![idle_snap(); 16];
+        let hub = hub_fast(ops);
+        let (r, stages) = ask_conv_trace(&hub, "stall", "k1", 3_000).await;
+        assert_eq!(r.unwrap_err(), STALLED_MSG);
+        assert!(stages.iter().any(|s| *s == "activity:promote_pending"));
+        let st = hub.site_health.lock().unwrap().status("deepseek");
+        assert_eq!(st.mode, activity::SiteMode::DedicatedPending);
+        assert_eq!(st.liveness_failures, 1);
+    }
+
+    /// 升级后的恢复请求(reset:true)在会话重建点创建独立窗口(§九);
+    /// 进行中的会话绝不中途迁移
+    #[tokio::test]
+    async fn recovery_ask_after_promotion_creates_dedicated_window() {
+        let ops = FakeOps::new();
+        ops.state().snap_script = vec![idle_snap(); 16];
+        let hub = hub_fast(ops);
+        // 第一轮:升级 Pending(以 Stalled 收场)
+        let r1 = ask_conv_reset(&hub, "first", "k1", 3_000, false).await;
+        assert_eq!(r1.unwrap_err(), STALLED_MSG);
+        assert_eq!(hub.ops.state().dedicated_creations, 0, "已发送的消息不迁移");
+        // 第二轮(前端两段式恢复,reset:true):独立窗口落地
+        let r2 = ask_conv_reset(&hub, "retry", "k1", 1_200, true).await;
+        assert!(r2.is_err(), "停滞站点重建后仍以超时收场(不再断言成功)");
+        assert_eq!(
+            hub.ops.state().dedicated_creations,
+            1,
+            "恢复请求应创建独立窗口"
+        );
+        let st = hub.site_health.lock().unwrap().status("deepseek");
+        assert_eq!(st.mode, activity::SiteMode::Dedicated);
+    }
+
+    /// 用户强制标签页模式压制自动升级(§十四):仍走软唤醒/脉冲,但不换窗口
+    #[tokio::test]
+    async fn prefer_tab_override_blocks_promotion() {
+        let ops = FakeOps::new();
+        ops.state().snap_script = vec![idle_snap(); 16];
+        let hub = hub_fast(ops);
+        hub.site_health
+            .lock()
+            .unwrap()
+            .set_override("deepseek", Some(activity::ModeOverride::PreferTab));
+        let (r, stages) = ask_conv_trace(&hub, "forced-tab", "k1", 3_000).await;
+        assert_ne!(r.unwrap_err(), STALLED_MSG, "PreferTab 下不得升级");
+        assert!(stages.iter().any(|s| *s == "activity:promote_rejected"));
+        let st = hub.site_health.lock().unwrap().status("deepseek");
+        assert_eq!(st.mode, activity::SiteMode::Tab);
+        assert_eq!(hub.ops.state().dedicated_creations, 0);
+    }
+
+    /// LostAfterSend 等非活性失败不计入站点健康(§七:换窗口解决不了)
+    #[tokio::test]
+    async fn lost_after_send_not_counted_as_liveness_failure() {
+        let ops = FakeOps::new();
+        ops.state().drop_target_after_send = true;
+        let hub = hub_fast(ops);
+        let r = ask_conv_reset(&hub, "lost", "k1", 10_000, false).await;
+        assert_eq!(r.unwrap_err(), LOST_AFTER_SEND);
+        let st = hub.site_health.lock().unwrap().status("deepseek");
+        assert_eq!(st.liveness_failures, 0);
+        assert_eq!(st.mode, activity::SiteMode::Tab);
     }
 
     #[tokio::test]
@@ -2827,8 +3026,8 @@ mod tests {
         assert_eq!(st.send_calls, 1, "脉冲绝不重发提示词");
         assert_eq!(st.wake_calls, 2, "双软唤醒按梯子执行(250ms/850ms)");
         assert_eq!(
-            st.pulse_calls, 1,
-            "第二次脉冲被全局节流推迟(1.5s 闸),超时先到"
+            st.pulse_calls, 2,
+            "双脉冲按梯子执行(550ms/1150ms,快节流放行)"
         );
         assert!(
             stages.iter().any(|s| s.starts_with("activity:pulse_")),
