@@ -22,6 +22,8 @@ import {
   loadGroupChatReadState,
   publishGroupChatUnread,
   setGroupChatReadCursor,
+  setGroupChatViewAnchor,
+  type GroupChatViewAnchor,
 } from '../../storage/groupChatReadStore'
 
 import {
@@ -239,6 +241,7 @@ export function ChatLogSettings() {
         getCursor: () => getGroupChatReadState().lastReadEntryId,
         setCursor: (id) => setGroupChatReadCursor(id),
         nameOf,
+        hasRestorableAnchor: () => !!getGroupChatReadState().viewAnchor,
       })
     }
     return readCtlRef.current
@@ -247,6 +250,7 @@ export function ChatLogSettings() {
   const winActiveRef = useRef(true)
   const distRef = useRef(9999)
   const lastVisibleRef = useRef<string | null>(null)
+  const anchorRef = useRef<GroupChatViewAnchor | null>(null)
   const [winActive, setWinActive] = useState(true)
   const viewSyncRafRef = useRef(0)
   const prevTurnsRef = useRef<ChatLogEntry[] | null>(null)
@@ -335,9 +339,19 @@ export function ChatLogSettings() {
   useEffect(() => {
     winActiveRef.current = winActive
     syncView()
-    if (!winActive) flushGroupChatRead()
+    if (!winActive) {
+      saveAnchor(true)
+      flushGroupChatRead()
+    }
   }, [winActive])
-  useEffect(() => () => flushGroupChatRead(), [])
+  useEffect(
+    () => () => {
+      // 卸载(切分页/关窗):保存离开时的视口锚点,重进回到原位置
+      saveAnchor(true)
+      flushGroupChatRead()
+    },
+    [],
+  )
 
   // 未读数发布给主窗(柔和角标,§2)
   useEffect(() => {
@@ -387,10 +401,32 @@ export function ChatLogSettings() {
     }
     // preserve-viewport:保持当前像素位置(§12 底部追加不做补偿)
   }
+  /** 视口锚点(§1 补全):第一条(部分)可见的消息 id + 相对容器顶的偏移 */
+  function captureAnchor(): GroupChatViewAnchor | null {
+    const el = feedRef.current
+    if (!el) return null
+    const containerTop = el.getBoundingClientRect().top
+    let anchor: GroupChatViewAnchor | null = null
+    el.querySelectorAll('[data-eid]').forEach((n) => {
+      if (anchor) return
+      const r = n.getBoundingClientRect()
+      if (r.bottom > containerTop) {
+        const id = (n as HTMLElement).dataset.eid
+        if (id) anchor = { id, offset: r.top - containerTop }
+      }
+    })
+    return anchor
+  }
+  function saveAnchor(immediate = false) {
+    anchorRef.current = captureAnchor()
+    setGroupChatViewAnchor(anchorRef.current, { immediate })
+  }
   function syncView() {
     const el = feedRef.current
     if (!el) return
     distRef.current = el.scrollHeight - el.scrollTop - el.clientHeight
+    anchorRef.current = captureAnchor()
+    setGroupChatViewAnchor(anchorRef.current) // 存储侧 500ms 防抖
     applyReadEffect(
       readCtl().setView({
         active: winActiveRef.current,
@@ -409,7 +445,19 @@ export function ChatLogSettings() {
     else if (prev.length > 0 && turns.length >= prev.length && prev[0]?.id === turns[0]?.id) cause = 'append'
     else if (turns.length >= prev.length && prev[prev.length - 1]?.id === turns[turns.length - 1]?.id) cause = 'prepend'
     prevTurnsRef.current = turns
-    applyReadEffect(readCtl().setEntries(turns, cause))
+    const effect = readCtl().setEntries(turns, cause)
+    // 位置恢复(§1 补全):有视口锚点回到原阅读位置,优先于未读跳转/贴底
+    const savedAnchor = cause === 'initial' ? getGroupChatReadState().viewAnchor : null
+    let restored = false
+    if (savedAnchor) {
+      const el = feedRef.current
+      const target = el?.querySelector(`[data-eid="${savedAnchor.id}"]`)
+      if (el && target) {
+        el.scrollTop += target.getBoundingClientRect().top - el.getBoundingClientRect().top - savedAnchor.offset
+        restored = true
+      }
+    }
+    if (!restored) applyReadEffect(effect)
   }, [turns])
 
   // 完全可见观察器(§7):消息完全进入可视区才推进游标;按消息顺序取最后一条

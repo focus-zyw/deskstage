@@ -70,6 +70,9 @@ export interface GroupChatReadControllerOpts {
   setCursor(entryId: string | null): void
   /** 角色名(按钮文案"柯南回复了你") */
   nameOf(actor: ActorId): string
+  /** 存在可恢复的视口锚点(§1 补全):重新进入时优先回到原阅读位置,
+   *  不强制跳第一条未读——分割线与胶囊按钮仍在,未读不丢 */
+  hasRestorableAnchor?(): boolean
 }
 
 const USER_SET_CACHE = new WeakMap<ChatLogEntry[], Set<string>>()
@@ -209,10 +212,11 @@ export function createGroupChatReadController(opts: GroupChatReadControllerOpts)
       dirtySnapshot()
 
       if (!prevActive && active) {
-        // 重新进入群聊(§1):有未读 → 定位第一条未读;没有 → 保持视口
+        // 重新进入群聊(§1 + 位置恢复补全):有视口锚点优先回原位置;
+        // 否则有未读 → 定位第一条未读;再没有 → 保持视口
         opts.setCursor(cursorId) // 失焦期间可能有未落盘推进:激活即落盘
         const unread = unreadSlice().filter((u) => u.entry.who !== 'user')
-        if (unread.length > 0) {
+        if (unread.length > 0 && !opts.hasRestorableAnchor?.()) {
           return buildEffect({ type: 'scroll-message', id: unread[0].key })
         }
         return buildEffect({ type: 'none' })
