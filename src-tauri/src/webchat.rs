@@ -45,6 +45,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
+pub mod activity;
 pub mod sites;
 use sites::adapter;
 
@@ -259,7 +260,7 @@ enum AskFail {
 /// 单独保留以完整表达状态空间
 #[allow(dead_code)]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum AskPhase {
+pub(crate) enum AskPhase {
     Disconnected,
     Connected,
     PageReady,
@@ -840,6 +841,8 @@ pub struct HubState<O: CdpOps> {
     permits: Arc<Semaphore>,
     /// Shared 路由单飞(与旧通道外部行为一致:同时只允许一个 ask)
     inflight: Mutex<Option<String>>,
+    /// 活性恢复梯子阈值(测试注入快策略;默认值见 activity::ActivityPolicy)
+    activity_policy: activity::ActivityPolicy,
 }
 
 /// 生成路由差异:target 解析与"丢失恢复"策略
@@ -859,7 +862,15 @@ impl<O: CdpOps> HubState<O> {
             requests: Arc::new(Mutex::new(HashMap::new())),
             permits: Arc::new(Semaphore::new(HUB_PERMITS)),
             inflight: Mutex::new(None),
+            activity_policy: activity::ActivityPolicy::default(),
         }
+    }
+
+    /// 测试注入快策略:默认阈值(6s~60s)对单测太慢
+    #[cfg(test)]
+    fn with_activity_policy(mut self, policy: activity::ActivityPolicy) -> Self {
+        self.activity_policy = policy;
+        self
     }
 
     fn cancel_all(&self) {
@@ -1281,6 +1292,9 @@ impl<O: CdpOps> HubState<O> {
         };
         phase = AskPhase::Sent;
         let mut resent = false;
+        // 活性梯子(方案 §二):发送确认时刻起跑。每拍快照喂入,
+        // 结论(动作+recovered 标记)由轮询循环消费
+        let mut activity = activity::ActivityTracker::begin(self.activity_policy, Instant::now());
 
         // ---- 发送结果未知的立即恢复:先查原 target 是否已有回复,
         //      确认无回复才安全重发一次(有回复再发会污染会话/触发限流) ----
@@ -1471,6 +1485,56 @@ impl<O: CdpOps> HubState<O> {
                 let changed = before_text
                     .as_ref()
                     .is_some_and(|b| !text.is_empty() && &text != b);
+                // ---- 活性观察(方案实施第 1 步:只观察不恢复)----
+                // 每拍把快照归一化喂入梯子;动作与 recovered 标记先进轨迹,
+                // 真实的软唤醒/激活脉冲/升级派发在下一步接入
+                {
+                    let act_snap = activity::ActivitySnapshot {
+                        count: count.unwrap_or(0),
+                        text_hash: activity::ActivitySnapshot::text_hash(&text),
+                        text_len: text.len(),
+                        busy,
+                        input_ready: snap
+                            .get("inputReady")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(true),
+                        turn_error: snap
+                            .get("turnError")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false),
+                        visibility: snap
+                            .get("visibility")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_string(),
+                        focused: snap
+                            .get("focused")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false),
+                    };
+                    let obs = activity.observe(phase, &act_snap, Instant::now());
+                    for m in &obs.marks {
+                        trace.mark(m);
+                    }
+                    if obs.action != activity::RecoveryAction::None {
+                        let attempt = obs.wake_attempt + 1;
+                        trace.mark(&format!(
+                            "activity:{}(pending)@{}s vis={} focus={}",
+                            match obs.action {
+                                activity::RecoveryAction::SoftWake =>
+                                    format!("soft_wake_{attempt}"),
+                                activity::RecoveryAction::ActivationPulse =>
+                                    format!("pulse_{attempt}"),
+                                _ => "promote".into(),
+                            },
+                            obs.idle_ms / 1000,
+                            act_snap.visibility,
+                            act_snap.focused
+                        ));
+                        // 只观察:消费掉梯子步进,避免每拍重复上报;阶段 2 换成真实派发
+                        activity.note_action(obs.action, true, Instant::now());
+                    }
+                }
                 // ResponseStarted:回复确已开始生成(busy/计数增长/文本变化任一)——
                 // 此刻起延长观察窗,慢响应(深度思考等)不再被原总超时掐死
                 if !response_started && (busy || grew || changed) {
@@ -2330,6 +2394,21 @@ mod tests {
                     .unwrap_or_else(|| "https://chat.deepseek.com".into());
                 return Ok(json!(href));
             }
+            // 抓取快照:snap 脚本是唯一的 `(head) =>` 箭头签名(它现在也内嵌
+            // composer 选择器做 inputReady,不能用选择器字符串判别,否则和
+            // 输入框探测互相劫持);页面 JS 返回 JSON 字符串(外层 as_str 再解析)
+            if expr.contains("(head) =>") {
+                let delay = self.state().eval_delay_ms;
+                tokio::time::sleep(Duration::from_millis(delay)).await;
+                let mut s = self.state();
+                s.active_evals = s.active_evals.saturating_sub(1);
+                if !s.snap_script.is_empty() {
+                    return Ok(json!(s.snap_script.remove(0).to_string()));
+                }
+                return Ok(json!(
+                    json!({ "busy": false, "text": "回复文本", "count": 1 }).to_string()
+                ));
+            }
             // PageReady 输入框探测:按脚本应答(缺省 = 输入框可见)
             if expr.contains("composerSels") || expr.contains("chat-input") {
                 let mut s = self.state();
@@ -2340,11 +2419,6 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(delay)).await;
             let mut s = self.state();
             s.active_evals = s.active_evals.saturating_sub(1);
-            // 抓取快照:脚本序列逐次消费(耗尽后回落默认快照);
-            // 页面 JS 返回 JSON 字符串(外层 as_str 再解析)
-            if !s.snap_script.is_empty() {
-                return Ok(json!(s.snap_script.remove(0).to_string()));
-            }
             Ok(json!(
                 json!({ "busy": false, "text": "回复文本", "count": 1 }).to_string()
             ))

@@ -302,7 +302,8 @@ const SNAP_JS: &str = r#"(head) => {
     if (lastLine.startsWith('[') && !lastLine.endsWith(']')) truncated = true;
   }
   const turnError = /something went wrong|出错了|发送失败|failed to|发生错误|error occurred|出现了问题|请重试|try again|再生失败|regeneration failed/i.test(text.slice(0, 120));
-  return JSON.stringify({ count: roots.length, busy, text, truncated, turnError });
+  const inputReady = __COMPOSER_SELS__.some((s) => [...document.querySelectorAll(s)].some(visible));
+  return JSON.stringify({ count: roots.length, busy, text, truncated, turnError, inputReady, visibility: document.visibilityState, focused: document.hasFocus() });
 }"#;
 
 /// 就绪检查表达式:站点专属输入框可见即可发消息(未登录站点通常没有输入框)
@@ -402,6 +403,10 @@ impl SiteAdapter {
             .replace(
                 "__COMPLETE_SELS__",
                 &Self::selectors_json(self.complete_sels),
+            )
+            .replace(
+                "__COMPOSER_SELS__",
+                &Self::selectors_json(self.composer_sels),
             )
     }
 
