@@ -9,7 +9,6 @@ import { createServer } from 'vite'
 let server
 let initPointerManager
 let registerHitRegion
-let nativePointerState
 let originalNavigator
 let originalDocument
 

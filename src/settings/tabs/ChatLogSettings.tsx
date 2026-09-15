@@ -345,6 +345,9 @@ export function ChatLogSettings() {
       saveAnchor(true)
       flushGroupChatRead()
     }
+    // syncView/saveAnchor 只经 ref 读最新状态;效果有意只随 winActive 触发,
+    // 函数每次渲染都是新引用,加进依赖会逐渲染重跑反复扰动视口
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [winActive])
   useEffect(
     () => () => {
@@ -496,6 +499,9 @@ export function ChatLogSettings() {
       }
     }
     applyReadEffect(effect)
+    // readCtl 是 ref 单例,restore/apply 只走 ref;效果有意只随 turns 变化——
+    // cause 分类依赖 prevTurnsRef,若随不稳定函数重跑会把同一批 turns 误判成 append
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [turns])
 
   // 完全可见观察器(§7):消息完全进入可视区才推进游标;按消息顺序取最后一条
@@ -525,6 +531,8 @@ export function ChatLogSettings() {
     )
     el.querySelectorAll('[data-eid]').forEach((n) => io.observe(n))
     return () => io.disconnect()
+    // syncView 只经 ref 读状态;观察器只需随行集重建,rows/orderedEids 变化即全部语义
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows, orderedEids])
 
   // 输入框随内容自长(1 行起,封顶后内部滚动)
