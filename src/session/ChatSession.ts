@@ -140,8 +140,17 @@ export function createChatSession(
   }
 
   async function ensureConfig(): Promise<AppConfig> {
-    if (!configCache) configCache = await loadConfig()
-    return configCache
+    let cached: AppConfig | null | Promise<AppConfig> = configCache
+    if (!cached) {
+      const pending = loadConfig()
+      // 拒绝态不得滞留缓存:一次读取失败不该让之后所有发送永久失败
+      pending.catch(() => {
+        if (cached === pending) configCache = null
+      })
+      cached = await pending
+      configCache = cached
+    }
+    return cached
   }
 
   // ---------- 引擎分派 ----------
@@ -435,38 +444,54 @@ export function createChatSession(
       host.onUserActive()
 
       // —— 工具/记忆:用户入口只执行一次(评审④)——
-      // 缺省走真实记忆检索(测试注入 engine.prepareMemory 覆盖)
-      const memory: TurnMemoryContext =
-        (await (engine.prepareMemory ?? prepareTurnMemory)({ query: text, n: 3 }).catch(() => emptyTurnMemory())) ??
-        emptyTurnMemory()
-      diag.memorySelection(turnId, {
-        ms: 0,
-        selected: memory.selected.map((s) => ({ id: s.id, score: s.score, source: s.source })),
-        candidates: memory.candidates.map((c) => ({ id: c.id, score: c.score, outcome: c.outcome })),
-      })
-      presenterOf().setBadge(chainId, memory.refs)
+      // 消息到这一步已经入 journal(输入框清空依赖本次 send 正常返回):
+      // extras(记忆/工具/世界注记/旧梗)任何异常都不得让 send 抛错——
+      // 否则消息留在 journal 不 wake,表现为"发出去了但输入框不清空、群里没反应",
+      // 直到下一条用户消息才被连带投递
+      let memory: TurnMemoryContext = emptyTurnMemory()
       let toolNote: string | undefined
       let toolRefs: ChatMemoryRef[] = []
-      if (engine.tools) {
-        const prep = await engine.tools({ userText: text }, currentAbort.signal)
-        if (currentAbort.signal.aborted) {
-          diag.turnFinished(turnId, { outcome: 'cancelled', totalMs: Date.now(), replyChars: 0, replySentences: 0 })
-          diag.finish(turnId)
-          currentTurnId = null
-          return 'accepted'
+      let clarifyText: string | null = null
+      let cancelled = false
+      try {
+        memory =
+          (await (engine.prepareMemory ?? prepareTurnMemory)({ query: text, n: 3 }).catch(() => emptyTurnMemory())) ??
+          emptyTurnMemory()
+        diag.memorySelection(turnId, {
+          ms: 0,
+          selected: memory.selected.map((s) => ({ id: s.id, score: s.score, source: s.source })),
+          candidates: memory.candidates.map((c) => ({ id: c.id, score: c.score, outcome: c.outcome })),
+        })
+        presenterOf().setBadge(chainId, memory.refs)
+        if (engine.tools) {
+          const prep = await engine.tools({ userText: text }, currentAbort.signal)
+          if (currentAbort.signal.aborted) {
+            cancelled = true
+          } else if (prep.clarify) {
+            // clarify 短路:主回应人直接反问,链挂起等待补充,零模型调用
+            // (呈现/落盘由 runtime awaitUser 的 onCommit 通道完成,这里不重复入队)
+            clarifyText = prep.clarify
+          } else {
+            toolNote = prep.note
+            toolRefs = prep.memoryRefs ?? []
+          }
         }
-        if (prep.clarify) {
-          // clarify 短路:主回应人直接反问,链挂起等待补充,零模型调用
-          // (呈现/落盘由 runtime awaitUser 的 onCommit 通道完成,这里不重复入队)
-          turn.awaitUser(primary, prep.clarify)
-          diag.turnFinished(turnId, { outcome: 'spoke', totalMs: Date.now(), replyChars: prep.clarify.length, replySentences: 1 })
-          diag.finish(turnId)
-          currentTurnId = null
-          clock.setTimeout(() => host.clearUser(text), 400)
-          return 'accepted'
-        }
-        toolNote = prep.note
-        toolRefs = prep.memoryRefs ?? []
+      } catch {
+        // extras 失败不阻塞受理:按无附加上下文继续 wake
+      }
+      if (cancelled) {
+        diag.turnFinished(turnId, { outcome: 'cancelled', totalMs: Date.now(), replyChars: 0, replySentences: 0 })
+        diag.finish(turnId)
+        currentTurnId = null
+        return 'accepted'
+      }
+      if (clarifyText) {
+        turn.awaitUser(primary, clarifyText)
+        diag.turnFinished(turnId, { outcome: 'spoke', totalMs: Date.now(), replyChars: clarifyText.length, replySentences: 1 })
+        diag.finish(turnId)
+        currentTurnId = null
+        clock.setTimeout(() => host.clearUser(text), 400)
+        return 'accepted'
       }
       const combinedRefs = [...memory.refs, ...toolRefs.filter((r) => !memory.refs.some((x) => x.id === r.id))]
       presenterOf().setBadge(chainId, combinedRefs)

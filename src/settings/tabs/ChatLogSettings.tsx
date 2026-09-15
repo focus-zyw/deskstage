@@ -678,16 +678,17 @@ export function ChatLogSettings() {
   async function sendDraft() {
     const text = draft.trim()
     if (!text) return
-    const res = await bridge.onGroupSend(text)
-    if (res === 'accepted') {
-      setDraft('')
-      setMention(null)
-      // 自己发言:贴底跟随(§6),不产生未读
-      applyReadEffect(readCtl().notifyOwnSend())
-    } else if (res === 'busy') {
-      setSendHint('角色正忙,稍后再发…')
-      window.setTimeout(() => setSendHint(''), 2500)
-    }
+    // 乐观受理:消息一旦交给主窗就先清输入(主窗写盘/播报照常走),
+    // 往返超时或失败再把原稿回填——绝不让"已发出的消息"滞留输入框
+    setDraft('')
+    setMention(null)
+    // 自己发言:贴底跟随(§6),不产生未读
+    applyReadEffect(readCtl().notifyOwnSend())
+    const res = await bridge.onGroupSend(text).catch(() => 'busy' as const)
+    if (res === 'accepted') return
+    setDraft((cur) => (cur.trim() ? cur : text)) // 已有新输入就不覆盖
+    setSendHint(res === 'busy' ? '角色正忙,消息已保留在输入框…' : '发送失败,消息已保留在输入框…')
+    window.setTimeout(() => setSendHint(''), 3000)
   }
 
   function pickMention(c: MentionTarget) {
