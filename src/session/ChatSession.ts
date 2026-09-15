@@ -70,6 +70,9 @@ export interface ChatSession {
    * ——绝不乱序补史。
    */
   bootstrapHistory(entries: Array<{ who: ChatWho; text: string; ts: number }>): void
+  /** 系统公示:怪癖获得等状态变化以 control 消息进房间日志。
+   *  仅 actors 运行时已存在时生效,否则 no-op(不为公示唤醒运行时) */
+  announceControl(text: string): void
   getSnapshot(): ChatSnapshot
   subscribe(listener: () => void): () => void
   whenIdle(): Promise<void>
@@ -539,6 +542,13 @@ export function createChatSession(
         return { busy: s.busy, catchingUp: s.catchingUp, actors: s.actors }
       }
       return { busy: false, catchingUp: false, actors: emptyActors() }
+    },
+
+    announceControl(text: string): void {
+      const t = text.trim()
+      if (!t) return
+      // 只向已存在的 actors 运行时广播;不为公示唤醒运行时(legacy 群聊无 journal,no-op)
+      if (mode === 'actors' && runtime) runtime.announceControl(t)
     },
 
     subscribe(listener: () => void): () => void {

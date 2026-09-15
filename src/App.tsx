@@ -47,6 +47,7 @@ import { beginUtilityTask, type UtilityTaskHandle } from './runtime/utilityTasks
 import { FirstRunWizard } from './wizard/FirstRunWizard'
 import { resetDismissals } from './storage/interactionStore'
 import { ensureMoodLoaded } from './storage/moodStore'
+import { ensureColdStarts, ensureQuirksLoaded, setAnnounceSink } from './quirks'
 import { noteActivity } from './runtime/proactiveScheduler'
 import { speak } from './engine/tts'
 import { topicDirector } from './topic/director'
@@ -844,8 +845,10 @@ function App() {
     preloadResident() // 预热 C 的 WebM 片段,首次切换零等待
     preloadProps() // 预热道具 SVG,首次礼物/工具流程不闪
     void ensureMoodLoaded() // 情绪档预载:presenter 待机染色要同步读
+    void ensureQuirksLoaded() // 怪癖册预载:主演出注入要同步读
     void loadLinePacks() // 台词包存档预载:takePackLine 同步取句前必须先载入
     void getConfig().then((c) => {
+      if (c.quirkSystem) void ensureColdStarts() // 招牌怪癖开启时空位惰性补齐
       applyChars(c.characters)
       setRuntimeCharHidden(c.charactersHidden)
       setRuntimeDnd(c.dnd) // 勿扰状态进运行时(工具栏按钮/TTS 同步)
@@ -1233,6 +1236,12 @@ function App() {
       },
     }).catch(() => {})
   })
+
+  // 招牌怪癖公示 sink:怪癖获得 → 群聊房间 control 消息(会话未建时为 no-op)
+  useEffect(() => {
+    setAnnounceSink((text) => chatSession.announceControl(text))
+    return () => setAnnounceSink(null)
+  }, [chatSession])
 
   /** 聊天通道核心(主聊天框与群聊页共用)。返回受理结果供 UI 提示:
    *  'empty' 空文本 / 'busy' 仅旧引擎回退 / 'backpressure' 运行时销毁中 /

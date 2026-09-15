@@ -8,6 +8,100 @@ import type { Speaker } from '../../performer/dialogSchema'
 import { useConfigSnapshot } from '../../storage/configStore'
 import { useSettings } from '../useSettingsSession'
 import { SettingsCard, SetField, SetLine } from '../SettingsPrimitives'
+import {
+  generateForSlot,
+  getShape,
+  mutateShape,
+  onQuirkAcquired,
+  removeQuirk,
+  setQuirkLocked,
+  LOCK_CAP_PER_VALENCE,
+  type ActorSlot,
+  type QuirkBook,
+  type QuirkEntry,
+} from '../../quirks'
+
+const CAUSE_TYPE_LABELS: Record<QuirkEntry['causeType'], string> = {
+  memory: '来自经历',
+  interaction: '与你的互动',
+  inferred: '人设推导',
+}
+
+/** 招牌怪癖管理卡:红/蓝各 5 条配额、每色锁定 ≤3、清除与手动补一条。
+ *  仅 隐私与工具 页的实验开关开启时渲染(实验未开就不占设置页空间) */
+function QuirkCard() {
+  const names = useConfigSnapshot().names
+  const [book, setBook] = useState<QuirkBook | null>(null)
+  const [busy, setBusy] = useState('')
+
+  useEffect(() => {
+    void getShape().then((s) => setBook(s.quirks))
+    return onQuirkAcquired(() => void getShape().then((s) => setBook(s.quirks)))
+  }, [])
+
+  const slotName = (who: ActorSlot): string => names[who.toLowerCase() as 'a' | 'b' | 'c']
+
+  async function toggleLock(who: ActorSlot, q: QuirkEntry) {
+    await mutateShape((s) => {
+      const r = setQuirkLocked(s.quirks, who, q.id, !q.locked)
+      if (!r.ok) setBusy(`该色锁定已达上限(每色 ${LOCK_CAP_PER_VALENCE} 条)`)
+      return r.ok ? { ...s, quirks: r.book } : s
+    })
+    void getShape().then((s) => setBook(s.quirks))
+  }
+
+  async function remove(who: ActorSlot, id: string) {
+    await mutateShape((s) => ({ ...s, quirks: removeQuirk(s.quirks, who, id) }))
+    void getShape().then((s) => setBook(s.quirks))
+  }
+
+  async function addOne(who: ActorSlot) {
+    setBusy(`正在为${slotName(who)}生成怪癖…`)
+    const r = await generateForSlot(who, 'cold', { force: true })
+    setBusy(r === 'ok' ? '' : r === 'fail' ? '生成失败(检查 API 配置后再试)' : '没有可用空位(该色已满且全部锁定)')
+    void getShape().then((s) => setBook(s.quirks))
+  }
+
+  return (
+    <SettingsCard card="招牌怪癖" title="招牌怪癖" desc='模型生成 · 用户锁定/清除;红5/蓝5,每色可锁3'>
+      {(['A', 'B', 'C'] as const).map((who) => {
+        const list = book?.[who] ?? []
+        const count = { red: list.filter((q) => q.valence === 'red').length, blue: list.filter((q) => q.valence === 'blue').length }
+        return (
+          <SetLine key={who} title={`${slotName(who)}(${count.red}红/${count.blue}蓝)`} hint={undefined}>
+            <div className="set-note" style={{ textAlign: 'left', maxWidth: 480 }}>
+              {list.length === 0 && <div>暂无怪癖</div>}
+              {list.map((q) => (
+                <div key={q.id} style={{ marginBottom: 6 }}>
+                  <span style={{ color: q.valence === 'red' ? '#e05252' : '#5b8def' }}>●</span>{' '}
+                  <span style={{ textDecoration: q.locked ? 'underline dotted' : 'none' }}>
+                    {q.trigger} → {q.behavior}
+                  </span>{' '}
+                  <span>({q.type}·{CAUSE_TYPE_LABELS[q.causeType]}{q.locked ? '·已锁定' : ''})</span>
+                  <button className="panel-btn" onClick={() => void toggleLock(who, q)}>
+                    {q.locked ? '解锁' : '锁定'}
+                  </button>
+                  <button className="panel-btn" onClick={() => void remove(who, q.id)}>
+                    清除
+                  </button>
+                </div>
+              ))}
+              <button className="panel-btn" disabled={busy.startsWith('正在')} onClick={() => void addOne(who)}>
+                补一条怪癖
+              </button>
+            </div>
+          </SetLine>
+        )
+      })}
+      <div className="set-actions">
+        <span className="set-note">
+          怪癖是背景素材,偶尔自然出现,不是每集任务;红=怪/执拗(冲突向),蓝=温柔/仪式(陪伴向);新怪癖获得时会在群聊里公示一条。
+        </span>
+      </div>
+      {busy && <div className="set-note">{busy}</div>}
+    </SettingsCard>
+  )
+}
 
 /** 当前心情卡:展示三位角色的情绪余波(剧情蒸馏/被戳/掐断演出驱动),支持一键复位 */
 function MoodCard() {
@@ -191,6 +285,7 @@ export function PersonaSettings() {
           </button>
         </div>
       </SettingsCard>
+      {form.quirkSystem && <QuirkCard />}
       <MoodCard />
     </>
   )
