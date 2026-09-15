@@ -40,6 +40,19 @@ export function isMemorySlot(x: unknown): x is MemorySlot {
   return typeof x === 'string' && (MEMORY_SLOTS as readonly string[]).includes(x)
 }
 
+/** slot 的中文标签(设置页冲突卡/事实行展示用) */
+export const SLOT_LABEL: Record<MemorySlot, string> = {
+  'profile.name': '称呼',
+  'profile.currentResidence': '常居城市',
+  'profile.hometown': '家乡',
+  'profile.currentJob': '当前职业',
+  'profile.school': '学校',
+  'preference.food': '饮食喜好',
+  'preference.hobby': '爱好',
+  'health.allergy': '过敏',
+  'health.medication': '用药',
+}
+
 const REGION_SUFFIX = /(市|地区|自治州|盟|省|自治区|特别行政区)+$/
 
 /** 按 slot 规范化取值:同义写法("北京市"/"北京")必须归一,否则产生伪冲突替代 */

@@ -104,10 +104,10 @@ export interface ChatEngineDeps {
       trace?: unknown
     },
   ): void
-  facts: {
-    known(): Promise<string[]>
-    extract(text: string, known: string[], diagTurnId?: string): Promise<FactCandidateAlias[]>
-    merge(candidates: FactCandidateAlias[]): Promise<unknown>
+  /** 记忆摄取器(可选;缺省用生产单例):用户轮 → 长期事实的唯一入口,
+   *  内含 pending 账本/证据校验/冲突裁决,失败记 failed 不影响聊天 */
+  memoryIngestor?: {
+    ingestUserTurn(input: { turnId: string | null; text: string }): Promise<MemoryIngestReportAlias>
   }
   tts: {
     /** diag:诊断会话引用(可选),传入后 TTS 引擎按段发诊断事件 */
@@ -137,6 +137,6 @@ export interface ChatEngineDeps {
   clock: { setTimeout(fn: () => void, ms: number): () => void }
 }
 
-// 局部别名(避免本类型文件直接依赖 turnWindow/memoryStore 的运行时导出)
+// 局部别名(避免本类型文件直接依赖 turnWindow/memoryStore/ingestor 的运行时导出)
 type TurnWhoAlias = 'user' | Speaker
-type FactCandidateAlias = import('../storage/memoryStore').FactCandidate
+type MemoryIngestReportAlias = import('../memory/ingestor').MemoryIngestReport

@@ -4,17 +4,11 @@
 // 行为矩阵回归在 tests/chatSession.test.mjs(直接加载本文件)。
 import type { DialogLine, Speaker } from '../performer/player'
 import type { SpeechHandle } from '../engine/tts'
-import { generateTurnBatch, generateUserChatReply, extractFacts } from '../engine/llmClient'
+import { generateTurnBatch, generateUserChatReply } from '../engine/llmClient'
 import { pushTurn, chatWindow } from '../dialogue/turnWindow'
 import { appendChatTurns, type ChatMemoryRef } from '../storage/chatLogStore'
-import {
-  emptyTurnMemory,
-  getMemory,
-  prepareTurnMemory,
-  mergeFacts,
-  topFacts,
-  traceOf,
-} from '../storage/memoryStore'
+import { emptyTurnMemory, prepareTurnMemory, traceOf } from '../storage/memoryStore'
+import { memoryIngestor } from '../memory/ingestor'
 import { getConfig } from '../storage/configStore'
 import { speak, speakTracked, prefetchVoice } from '../engine/tts'
 import { streamVoiceReply } from '../engine/llmClient'
@@ -68,12 +62,8 @@ export function createLegacyChatSession(
         },
       ])
     },
-    facts: {
-      known: async () => topFacts(await getMemory(), 8),
-      extract: (text, known, diagTurnId) => extractFacts(text, known, diagTurnId),
-      merge: (candidates) => mergeFacts(candidates),
-    },
-    tts: {
+    // 记忆摄取:生产单例(测试可经 engine.memoryIngestor 注入假实现)
+    memoryIngestor,    tts: {
       speak: (who, text, d) => {
         void speak(who, text, undefined, 'chat', d)
       },
@@ -149,24 +139,15 @@ export function createLegacyChatSession(
     void (async () => {
       const t0 = Date.now()
       try {
-        const known = await deps.facts.known()
-        const candidates = await deps.facts.extract(text, known, turnId ?? undefined)
-        type MergeSummary = { changed: number; addedIds: string[]; supersededIds: string[]; rejected: number }
-        let merged: MergeSummary | null = null
-        if (candidates.length > 0) {
-          // 来源随候选入 evidence:turnId 可定位聊天轮,excerpt 是"它为什么知道"
-          const result: unknown = await deps.facts.merge(
-            candidates.map((c) => ({ ...c, turnId, excerpt: text.slice(0, 120) })),
-          )
-          merged = result as MergeSummary | null
-        }
+        // 摄取器内含账本/证据校验/冲突裁决;报告只含 id 级决策,提取正文绝不入诊断
+        const report = await (deps.memoryIngestor ?? memoryIngestor).ingestUserTurn({ turnId, text })
         if (turnId) {
           diag.memoryWrite(turnId, {
-            candidates: candidates.length,
-            changed: merged?.changed ?? 0,
-            addedIds: merged?.addedIds ?? [],
-            supersededIds: merged?.supersededIds ?? [],
-            rejected: merged?.rejected ?? 0,
+            candidates: report.candidateCount,
+            changed: report.appliedFactIds.length,
+            addedIds: report.appliedFactIds,
+            supersededIds: report.supersededFactIds,
+            rejected: report.rejected,
             ms: Date.now() - t0,
           })
         }

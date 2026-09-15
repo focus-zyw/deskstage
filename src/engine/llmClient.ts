@@ -894,6 +894,8 @@ export function sanitizeLiveReplyBatch(raw: string, batchLength: number): LiveBa
 /**
  * 记忆提取:从观众的一句话里挖"关于观众本人的长期事实",与已知事实去重后由调用方入库。
  * 6s 超时、不重试;失败抛错由调用方静默。
+ * V3 协议:每条事实必须带 evidenceQuote(逐字摘自本轮发言的原句证据,入库前本地校验,
+ * 编造的原句会被拒)与 assertion(用户明确说出/间接体现——决定权威档位)。
  */
 export async function extractFacts(
   userText: string,
@@ -905,7 +907,7 @@ export async function extractFacts(
   const cfg = await getConfig()
   // slot 白名单 = memorySlots 的封闭词表;白名单外的 slot 由清洗归 undefined
   const slotList = MEMORY_SLOTS.join('|')
-  // 第一道隐私闸:禁止规则在提取 prompt 就生效(第二道在 mergeFacts 入库前)
+  // 第一道隐私闸:禁止规则在提取 prompt 就生效(第二道在 ingestFacts 入库前)
   const { rules } = await getMemory()
   const ruleText = rules.length
     ? `以下内容用户已禁止自动保存,命中就不要提取:${rules.map((r) => `${r.scope}:${r.value}`).join(';')}。`
@@ -913,7 +915,7 @@ export async function extractFacts(
   const messages: { role: string; content: string }[] = [
     {
       role: 'system',
-      content: `从观众说的话里提取"关于观众本人的长期事实"(身份/喜好/习惯/身边人/重要事件)。已知事实(不要重复提取):${known.length ? known.join(';') : '(无)'}。${ruleText}只输出一个 JSON 对象:{"facts":[{"content":"事实","category":"identity|preference|habit|people|event|other","slot":"${slotList} 之一或省略","value":"槽位当前值","sensitivity":"normal|private|restricted","volatility":"stable|changeable|historical"}]}。slot 只在能对上白名单时给(住址/常居城市=profile.currentResidence,过敏=health.allergy,当前职业=profile.currentJob,姓名=profile.name 等);sensitivity:过敏/疾病/药物/证件/银行卡=restricted,住址/收入/联系方式=private;volatility:历史事件=historical,姓名/家乡=stable,其余=changeable。只提取观众明确透露的信息,不要推测;没有新事实就输出 {"facts":[]}。`,
+      content: `从观众说的话里提取"关于观众本人的长期事实"(身份/喜好/习惯/身边人/重要事件)。已知事实(不要重复提取):${known.length ? known.join(';') : '(无)'}。${ruleText}只输出一个 JSON 对象:{"facts":[{"content":"事实","category":"identity|preference|habit|people|event|other","slot":"${slotList} 之一或省略","value":"槽位当前值","assertion":"explicit|implicit","evidenceQuote":"支撑这条事实的用户原句摘录","sensitivity":"normal|private|restricted","volatility":"stable|changeable|historical"}]}。assertion:用户在这句话里明确说出该信息=explicit,只是间接体现=implicit;evidenceQuote 必须逐字摘自本轮发言原文(可以是其中一段),摘不出来就不要输出这条。slot 只在能对上白名单时给且必须同时给 value(住址/常居城市=profile.currentResidence,过敏=health.allergy,当前职业=profile.currentJob,姓名=profile.name 等);sensitivity:过敏/疾病/药物/证件/银行卡=restricted,住址/收入/联系方式=private;volatility:历史事件=historical,姓名/家乡=stable,其余=changeable。只提取观众明确透露的信息,不要推测;单轮最多 3 条;没有新事实就输出 {"facts":[]}。`,
     },
     { role: 'user', content: userText },
   ]
@@ -927,25 +929,39 @@ export async function extractFacts(
     const obj = JSON.parse(m[0]) as { facts?: unknown }
     if (!Array.isArray(obj.facts)) return []
     return obj.facts
-      .map((f) => (f && typeof f === 'object' ? (f as Record<string, unknown>) : null))
-      .filter(
-        (f): f is { content: string; category: string; slot?: unknown; value?: unknown; sensitivity?: unknown; volatility?: unknown } =>
-          typeof f?.content === 'string' && f.content.trim().length > 1,
-      )
-      .map((f) => ({
-        content: f.content.trim().slice(0, 120),
-        category: (cats.includes(f.category as FactCategory) ? f.category : 'other') as FactCategory,
-        slot: typeof f.slot === 'string' && (MEMORY_SLOTS as readonly string[]).includes(f.slot) ? (f.slot as FactCandidate['slot']) : undefined,
-        value: typeof f.value === 'string' ? f.value.slice(0, 80) : undefined,
-        sensitivity:
-          f.sensitivity === 'private' || f.sensitivity === 'restricted' || f.sensitivity === 'normal'
-            ? f.sensitivity
-            : undefined,
-        volatility:
-          f.volatility === 'stable' || f.volatility === 'historical' || f.volatility === 'changeable'
-            ? f.volatility
-            : undefined,
-      }))
+      .slice(0, 3) // 单轮事实数量上限
+      .flatMap((f) => {
+        const o = (f ?? {}) as Record<string, unknown>
+        if (typeof o.content !== 'string' || o.content.trim().length <= 1) return []
+        const slot =
+          typeof o.slot === 'string' && (MEMORY_SLOTS as readonly string[]).includes(o.slot)
+            ? (o.slot as FactCandidate['slot'])
+            : undefined
+        const value = typeof o.value === 'string' ? o.value.trim().slice(0, 80) || undefined : undefined
+        // slot 有值时必须提供非空 value,否则整条拒绝(不降级成含糊的开放事实)
+        if (slot && !value) return []
+        // 证据摘录必须非空;是否真的存在于原文由摄取器用 evidenceExcerptHolds 确定性校验
+        const excerpt = typeof o.evidenceQuote === 'string' ? o.evidenceQuote.trim().slice(0, 120) : ''
+        if (!excerpt) return []
+        return [
+          {
+            content: o.content.trim().slice(0, 120),
+            category: (cats.includes(o.category as FactCategory) ? o.category : 'other') as FactCategory,
+            slot,
+            value,
+            assertion: o.assertion === 'explicit' ? ('explicit' as const) : ('implicit' as const),
+            excerpt,
+            sensitivity:
+              o.sensitivity === 'private' || o.sensitivity === 'restricted' || o.sensitivity === 'normal'
+                ? (o.sensitivity as FactCandidate['sensitivity'])
+                : undefined,
+            volatility:
+              o.volatility === 'stable' || o.volatility === 'historical' || o.volatility === 'changeable'
+                ? (o.volatility as FactCandidate['volatility'])
+                : undefined,
+          },
+        ]
+      })
   } finally {
     clearTimeout(timer)
   }

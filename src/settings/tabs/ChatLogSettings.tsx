@@ -44,7 +44,7 @@ import {
 } from '../../storage/avatarStore'
 import { useConfigSnapshot } from '../../storage/configStore'
 import { getMemory, type MemoryFact } from '../../storage/memoryStore'
-import { effectiveStatus } from '../../storage/memoryPolicy'
+import { assessFact } from '../../storage/memoryPolicy'
 
 const MEM_SENS_LABEL: Record<string, string> = { normal: '普通', private: '私密', restricted: '高敏' }
 const SENS_LABEL_OR = (s: string | undefined): string => (s ? MEM_SENS_LABEL[s] ?? s : '')
@@ -895,7 +895,7 @@ export function ChatLogSettings() {
                     参考了 {row.entry.memoryRefs.length} 条自动记忆:
                     {row.entry.memoryRefs.map((r) => {
                       const f = memFacts.get(r.id)
-                      const eff = f ? effectiveStatus(f, Date.now()) : null
+                      const eff = f ? assessFact(f, { now: Date.now() }) : null
                       const debug = cfg.memoryDisplay === 'debug'
                       const tr = debug ? (row.entry?.trace as { candidates?: { id: string; score: number; outcome: string }[] } | undefined) : undefined
                       const cand = tr?.candidates?.find((c) => c.id === r.id)
@@ -903,7 +903,7 @@ export function ChatLogSettings() {
                         <div key={r.id}>
                           {f ? `"${f.content}"` : '该记忆已删除'}
                           {f ? ` · ${SENS_LABEL_OR(f.sensitivity)} · 首次 ${f.createdAt ? new Date(f.createdAt).toLocaleDateString() : ''}` : ''}
-                          {eff === 'needs_confirmation' && ' · 待确认'}
+                          {eff?.effectiveStatus === 'needs-confirmation' && ' · 待确认'}
                           {f?.status === 'superseded' && ' · 已被替代'}
                           {cand && ` · 检索分 ${cand.score.toFixed(2)}(${cand.outcome})`}
                           {r.source === 'search-tool' && ' · 经查记忆工具'}

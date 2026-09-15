@@ -124,7 +124,15 @@ function MemoryIdChip(props: { id: string }) {
         return
       }
       const state = f.status === 'superseded' ? '已被替代(旧值)' : '生效中'
-      setInfo(`${state} · ${redactText(f.content, 120)}${f.sourceExcerpt ? ` · 来源:${redactText(f.sourceExcerpt, 60)}` : ''}`)
+      const excerpt = f.evidence.reduceRight<string>(
+        (found, e) =>
+          found ||
+          ((e.kind === 'model-extraction' || e.kind === 'explicit-command') && e.excerpt) ||
+          (e.kind === 'user-edited' && e.text) ||
+          '',
+        '',
+      )
+      setInfo(`${state} · ${redactText(f.content, 120)}${excerpt ? ` · 来源:${redactText(excerpt, 60)}` : ''}`)
     } catch {
       setInfo('读取失败')
     }

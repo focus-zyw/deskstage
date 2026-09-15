@@ -1,6 +1,6 @@
-// 记忆库:使用者画像(手填)+ 自动记忆(带元数据的事实库)+ 禁止规则 + 显示模式。
-// 自动记忆的语义决策在 memoryPolicy(时效/敏感/检索),本页只做管理与确定性确认:
-// "这条信息可能已经过期:[仍然有效][修改][以后不记住]"——不做角色口头的自然确认。
+// 记忆库:使用者画像(手填)+ 自动记忆(V3 证据事实库)+ 冲突裁决 + 禁止规则 + 显示模式。
+// 自动记忆的语义决策在 memoryPolicy(权威/支持度/时效/敏感/检索),本页只做管理与确定性
+// 确认:"这条可能过期/来源不够明确/有冲突"——人工确认永不被机器提取静默覆盖。
 // 所有变更经 memoryStore 的 CAS(双窗并发安全);导出为显式动作(导入二期)。
 import { useEffect, useMemo, useState } from 'react'
 import { save } from '@tauri-apps/plugin-dialog'
@@ -15,12 +15,23 @@ import {
   getMemory,
   MAX_PINNED_SOFT,
   removeRule,
+  resolveConflict,
   resetAllMemory,
   togglePinFact,
+  type MemoryConflict,
+  type MemoryEvidence,
   type MemoryFact,
   type MemoryRule,
 } from '../../storage/memoryStore'
-import { effectiveStatus, scoreFact, type MemorySensitivity } from '../../storage/memoryPolicy'
+import {
+  assessFact,
+  authorityOf,
+  lastUserConfirmAtOf,
+  scoreFact,
+  type FactAssessment,
+  type MemorySensitivity,
+} from '../../storage/memoryPolicy'
+import { SLOT_LABEL } from '../../storage/memorySlots'
 import { getBond, getStory, removeArc, removeStoryItem, type StoryData } from '../../storage/storyStore'
 import { bondTierOf } from '../../engine/interactionRules'
 import { useSettings } from '../useSettingsSession'
@@ -44,9 +55,35 @@ const RULE_SCOPE_LABEL: Record<MemoryRule['scope'], string> = {
   phrase: '包含关键词',
 }
 
+/** 来源标签(取最高权威档;不给用户看数字分——人很难正确理解 0.72 意味着什么) */
+const AUTHORITY_LABEL: Record<ReturnType<typeof authorityOf>, string> = {
+  authored: '你亲自修改',
+  confirmed: '已由你确认',
+  verified: '由系统事件确认',
+  explicit: '你明确要求记住',
+  inferred: '从聊天中记下',
+  legacy: '旧版记忆',
+}
+
+/** 待确认原因三分:过期/来源不明确/冲突,不再统一显示"可能过期" */
+const ASSESS_REASON_LABEL: Record<string, string> = {
+  expired: '可能已经过期',
+  'low-support': '来源不够明确',
+  conflict: '发现了互相冲突的信息',
+}
+
 function dayLabel(ts: number): string {
   const d = new Date(ts)
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+/** 最近一条"它为什么知道"的证据摘录(倒序找最近的原句/编辑文本) */
+function evidenceExcerptOf(evs: MemoryEvidence[]): string {
+  for (const ev of [...evs].reverse()) {
+    if ((ev.kind === 'model-extraction' || ev.kind === 'explicit-command') && ev.excerpt) return ev.excerpt
+    if (ev.kind === 'user-edited' && ev.text) return ev.text
+  }
+  return ''
 }
 
 /** 按"这条事实"生成结构化禁止规则:slot 优先(最精确),其次敏感级,最后整类。
@@ -62,6 +99,7 @@ export function MemorySettings() {
   // 记忆系统的机器事实列表
   const [memoryFacts, setMemoryFacts] = useState<MemoryFact[]>([])
   const [rules, setRules] = useState<MemoryRule[]>([])
+  const [conflicts, setConflicts] = useState<MemoryConflict[]>([])
   const [query, setQuery] = useState('')
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editDraft, setEditDraft] = useState('')
@@ -82,6 +120,13 @@ export function MemorySettings() {
     const mem = await getMemory()
     setMemoryFacts(mem.facts)
     setRules(mem.rules)
+    setConflicts(mem.conflicts)
+  }
+
+  /** 冲突二选一(原子清冲突单);按钮文案即裁决语义 */
+  async function doResolve(id: string, choice: 'keep' | 'accept') {
+    await resolveConflict(id, choice)
+    await refreshMemoryFacts()
   }
 
   /** 刷新角色世界列表 + 长期关系摘要 */
@@ -102,9 +147,9 @@ export function MemorySettings() {
 
   const now = Date.now()
   const pinnedCount = memoryFacts.filter((f) => f.pinned).length
-  // 有效状态过滤:superseded / 动态 needs_confirmation 在列表里有专门标记
-  const withEff = memoryFacts.map((f) => ({ fact: f, eff: effectiveStatus(f, now) }))
-  const needsConfirm = withEff.filter((x) => x.eff === 'needs_confirmation')
+  // 有效状态过滤:superseded / 动态 needs-confirmation(含原因)在列表里有专门标记
+  const withEff = memoryFacts.map((f) => ({ fact: f, eff: assessFact(f, { now }) }))
+  const needsConfirm = withEff.filter((x) => x.eff.effectiveStatus === 'needs-confirmation' && x.eff.reason !== 'conflict')
   // 搜索:有 query 用策略相关性排序,否则固定优先 + 最近确认/看到
   const sorted = useMemo(() => {
     const list = query.trim()
@@ -115,7 +160,7 @@ export function MemorySettings() {
       : [...withEff].sort(
           (a, b) =>
             Number(b.fact.pinned) - Number(a.fact.pinned) ||
-            (b.fact.lastConfirmedAt ?? b.fact.lastSeen) - (a.fact.lastConfirmedAt ?? a.fact.lastSeen),
+            (lastUserConfirmAtOf(b.fact) ?? b.fact.lastSeen) - (lastUserConfirmAtOf(a.fact) ?? a.fact.lastSeen),
         )
     return list
   }, [withEff, query, now])
@@ -149,77 +194,83 @@ export function MemorySettings() {
     }
   }
 
-  const renderFactRow = (f: MemoryFact, eff: string) => (
-    <div className="mem-fact" key={f.id} style={eff === 'needs_confirmation' ? { opacity: 0.85 } : undefined}>
-      <span className="mem-cat">{MEM_CAT_LABEL[f.category]}</span>
-      {editingId === f.id ? (
-        <span className="mem-content" style={{ display: 'flex', gap: 6 }}>
-          <input
-            value={editDraft}
-            maxLength={120}
-            onChange={(e) => setEditDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') void doEdit(f.id)
-              if (e.key === 'Escape') setEditingId(null)
-            }}
-            style={{ flex: 1 }}
-          />
-          <button className="mem-btn" title="保存(视为你再次确认)" onClick={() => void doEdit(f.id)}>✓</button>
-          <button className="mem-btn" title="取消" onClick={() => setEditingId(null)}>↩</button>
-        </span>
-      ) : (
-        <span className="mem-content" title={f.content}>
-          {f.content}
-          {f.status === 'superseded' && ' (已被新信息替代)'}
-        </span>
-      )}
-      <button
-        className={`mem-btn${f.pinned ? ' on' : ''}`}
-        title={f.pinned ? '取消固定' : `固定(不自动淘汰${pinnedCount >= MAX_PINNED_SOFT ? ';固定条数已多,建议清理' : ''})`}
-        onClick={() => void (async () => { await togglePinFact(f.id); await refreshMemoryFacts() })()}
-      >
-        📌
-      </button>
-      <button
-        className="mem-btn"
-        title="编辑这条记忆(视为你再次确认)"
-        onClick={() => {
-          setEditingId(f.id)
-          setEditDraft(f.content)
-        }}
-      >
-        ✏️
-      </button>
-      <button
-        className="mem-btn"
-        title="重新确认(这条仍然有效)"
-        onClick={() => void (async () => { await confirmFact(f.id); await refreshMemoryFacts() })()}
-      >
-        ✓
-      </button>
-      <button
-        className="mem-btn"
-        title={`删除,并${suggestRule(f).why}`}
-        onClick={() => void (async () => { await doForbid(f) })()}
-      >
-        🚫
-      </button>
-      <button
-        className="mem-btn"
-        title="忘记这条(同类信息以后仍可能从新对话重新记住;想彻底禁止用 🚫)"
-        onClick={() => void (async () => { await deleteFact(f.id); await refreshMemoryFacts() })()}
-      >
-        ✕
-      </button>
-      <div className="mem-meta">
-        {dayLabel(f.createdAt)} 从聊天记下
-        {f.lastConfirmedAt ? ` · 确认于 ${dayLabel(f.lastConfirmedAt)}` : ' · 尚未经你确认'}
-        {eff === 'needs_confirmation' && ' · 可能已过期(暂时不用)'}
-        {f.sensitivity !== 'normal' && ` · ${SENS_LABEL[f.sensitivity]}`}
-        {f.sourceExcerpt && ` · 来源:"${f.sourceExcerpt.slice(0, 40)}"`}
+  const renderFactRow = (f: MemoryFact, eff: FactAssessment) => {
+    const confirmedAt = lastUserConfirmAtOf(f)
+    const excerpt = evidenceExcerptOf(f.evidence)
+    return (
+      <div className="mem-fact" key={f.id} style={eff.effectiveStatus === 'needs-confirmation' ? { opacity: 0.85 } : undefined}>
+        <span className="mem-cat">{MEM_CAT_LABEL[f.category]}</span>
+        {editingId === f.id ? (
+          <span className="mem-content" style={{ display: 'flex', gap: 6 }}>
+            <input
+              value={editDraft}
+              maxLength={120}
+              onChange={(e) => setEditDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void doEdit(f.id)
+                if (e.key === 'Escape') setEditingId(null)
+              }}
+              style={{ flex: 1 }}
+            />
+            <button className="mem-btn" title="保存(视为你再次确认)" onClick={() => void doEdit(f.id)}>✓</button>
+            <button className="mem-btn" title="取消" onClick={() => setEditingId(null)}>↩</button>
+          </span>
+        ) : (
+          <span className="mem-content" title={f.content}>
+            {f.content}
+            {f.status === 'superseded' && ' (已被新信息替代)'}
+          </span>
+        )}
+        <button
+          className={`mem-btn${f.pinned ? ' on' : ''}`}
+          title={f.pinned ? '取消常用' : `常用:提高被想起的优先级,不代表信息永远有效${pinnedCount >= MAX_PINNED_SOFT ? ';常用条数已多,建议清理' : ''}`}
+          onClick={() => void (async () => { await togglePinFact(f.id); await refreshMemoryFacts() })()}
+        >
+          📌
+        </button>
+        <button
+          className="mem-btn"
+          title="编辑这条记忆(视为你再次确认)"
+          onClick={() => {
+            setEditingId(f.id)
+            setEditDraft(f.content)
+          }}
+        >
+          ✏️
+        </button>
+        <button
+          className="mem-btn"
+          title="重新确认(这条仍然有效)"
+          onClick={() => void (async () => { await confirmFact(f.id); await refreshMemoryFacts() })()}
+        >
+          ✓
+        </button>
+        <button
+          className="mem-btn"
+          title={`删除,并${suggestRule(f).why}`}
+          onClick={() => void (async () => { await doForbid(f) })()}
+        >
+          🚫
+        </button>
+        <button
+          className="mem-btn"
+          title="忘记这条(同类信息以后仍可能从新对话重新记住;想彻底禁止用 🚫)"
+          onClick={() => void (async () => { await deleteFact(f.id); await refreshMemoryFacts() })()}
+        >
+          ✕
+        </button>
+        <div className="mem-meta">
+          {AUTHORITY_LABEL[eff.authority]}
+          {eff.authority === 'inferred' && ` · ${dayLabel(f.createdAt)}记下`}
+          {confirmedAt ? ` · 确认于 ${dayLabel(confirmedAt)}` : ''}
+          {eff.effectiveStatus === 'needs-confirmation' && eff.reason && ` · ${ASSESS_REASON_LABEL[eff.reason]}(暂时不用)`}
+          {f.sensitivity !== 'normal' && ` · ${SENS_LABEL[f.sensitivity]}`}
+          {f.slot && ` · ${SLOT_LABEL[f.slot]}`}
+          {excerpt && ` · 来源:"${excerpt.slice(0, 40)}"`}
+        </div>
       </div>
-    </div>
-  )
+    )
+  }
 
   return (
     <>
@@ -288,17 +339,56 @@ export function MemorySettings() {
 
       <div className="set-note">AI 话题发现与长期话题偏好已移到「演出话题」设置页。</div>
 
+      {conflicts.length > 0 && (
+        <SettingsCard
+          card="信息需要确认"
+          flash={flashCard}
+          title={`信息需要确认(${conflicts.length})`}
+          desc="新旧信息有冲突,角色暂时不再主动使用这些内容;由你拍板用哪个值"
+        >
+          {conflicts.map((c) => {
+            const existing = memoryFacts.find((f) => f.id === c.existingFactId)
+            const proposedQuote = evidenceExcerptOf(c.proposed.evidence)
+            return (
+              <div className="mem-fact" key={c.id}>
+                <span className="mem-cat">{c.slot ? SLOT_LABEL[c.slot] : '待确认'}</span>
+                <span className="mem-content">
+                  你之前确认:"{existing?.content ?? '(已删除)'}";最近似乎提到:"{c.proposed.content}"
+                  {proposedQuote && `(来源:"${proposedQuote.slice(0, 40)}")`}
+                </span>
+                <button
+                  className="mem-btn"
+                  title="保留旧值(标记为已确认)"
+                  onClick={() => void doResolve(c.id, 'keep')}
+                >
+                  保留旧值
+                </button>
+                <button
+                  className="mem-btn"
+                  title="改成新值(旧值标记为已被替代)"
+                  onClick={() => void doResolve(c.id, 'accept')}
+                >
+                  改成新值
+                </button>
+              </div>
+            )
+          })}
+        </SettingsCard>
+      )}
+
       {needsConfirm.length > 0 && (
         <SettingsCard
           card="可能过期"
           flash={flashCard}
-          title={`可能已经过期(${needsConfirm.length})`}
-          desc="这些信息过了一段时间没有确认,角色暂时不再主动使用;确认后恢复"
+          title={`需要你确认(${needsConfirm.length})`}
+          desc="这些信息角色暂时不再主动使用;确认后恢复"
         >
-          {needsConfirm.map(({ fact: f }) => (
+          {needsConfirm.map(({ fact: f, eff }) => (
             <div className="mem-fact" key={f.id}>
               <span className="mem-cat">待确认</span>
-              <span className="mem-content">这条信息可能已经过期:"{f.content}"</span>
+              <span className="mem-content">
+                {eff.reason ? ASSESS_REASON_LABEL[eff.reason] : '需要确认'}:"{f.content}"
+              </span>
               <button
                 className="mem-btn"
                 title="仍然有效"
@@ -376,7 +466,7 @@ export function MemorySettings() {
           </span>
         }
       >
-        <SetField label="搜索记忆" htmlFor="cfg-mem-search" hint={`固定 ${pinnedCount} 条(建议不超过 ${MAX_PINNED_SOFT});🚫 会按这条事实建立禁止规则并删除`}>
+        <SetField label="搜索记忆" htmlFor="cfg-mem-search" hint={`常用 ${pinnedCount} 条(建议不超过 ${MAX_PINNED_SOFT});🚫 会按这条事实建立禁止规则并删除`}>
           <input
             id="cfg-mem-search"
             placeholder="输入关键词过滤"

@@ -61,8 +61,7 @@ function makeEngine(over = {}) {
     turnBatch: [],
     singleReply: [],
     recordTurn: [],
-    factsExtract: [],
-    factsMerge: [],
+    factsIngest: [],
     tts: [],
   }
   const engine = {
@@ -80,14 +79,13 @@ function makeEngine(over = {}) {
     prepareMemory: async () =>
       over.memory ?? { selected: [], candidates: [], queriedAt: 0, promptFacts: [], refs: [] },
     includeTrace: async () => false,
-    facts: {
-      known: async () => ['已知:喜欢 Rust'],
-      extract: async (text, known) => {
-        calls.factsExtract.push({ text, known })
+    // 记忆摄取缝(V3):引擎交给摄取器,这里只记调用;factsFail 模拟摄取整体失败
+    memoryIngestor: {
+      ingestUserTurn: async (input) => {
+        calls.factsIngest.push(input)
         if (over.factsFail) throw new Error('提取失败')
-        return []
+        return { status: 'skipped', candidateCount: 0, appliedFactIds: [], supersededFactIds: [], conflictIds: [], rejected: 0 }
       },
-      merge: async (candidates) => calls.factsMerge.push(candidates),
     },
     tts: {
       speak: (who, text) => {
@@ -166,7 +164,7 @@ test('落盘成功但事实提取失败:静默不吞,无 unhandled rejection', a
   await session.whenIdle()
   await new Promise((r) => setTimeout(r, 20))
   assert.ok(ecalls.recordTurn.length >= 2) // 用户句 + 应答句都落盘了
-  assert.equal(ecalls.factsExtract.length, 1)
+  assert.equal(ecalls.factsIngest.length, 1)
   assert.equal(calls.presentTurn.length, 1)
 })
 

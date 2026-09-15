@@ -61,8 +61,16 @@ export const searchMemoryTool: CharacterTool = {
     // 隐私规则照样拦截);refs 随 result.data 穿透,并入回合总注入集合
     const ctx = await prepareTurnMemory({ query: String(v.value.query), purpose: 'explicit-search', n: 5 })
     if (ctx.selected.length === 0) return { ok: true, summary: '记忆里没有找到相关内容' }
+    // 待确认后缀按原因区分:过期/来源不明确/冲突,不再一律说"可能已过期"
+    const PENDING_LABEL: Record<string, string> = {
+      expired: '可能已过期',
+      'low-support': '来源不够明确',
+      conflict: '正等待你确认新旧信息',
+    }
     const hits = ctx.selected.map((s) =>
-      s.effectiveStatus === 'needs_confirmation' ? `${s.text}(待确认:这条信息可能已过期)` : s.text,
+      s.effectiveStatus === 'needs-confirmation' && s.reason
+        ? `${s.text}(待确认:${PENDING_LABEL[s.reason] ?? '可能已过期'})`
+        : s.text,
     )
     return {
       ok: true,

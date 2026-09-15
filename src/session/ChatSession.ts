@@ -15,13 +15,10 @@ import { pushTurn } from '../dialogue/turnWindow'
 import { appendChatTurns, type ChatMemoryRef, type ChatWho } from '../storage/chatLogStore'
 import {
   emptyTurnMemory,
-  getMemory,
-  mergeFacts,
   prepareTurnMemory,
-  topFacts,
   type TurnMemoryContext,
 } from '../storage/memoryStore'
-import { extractFacts } from '../engine/llmClient'
+import { memoryIngestor } from '../memory/ingestor'
 import {
   DEFAULT_CONFIG,
   getConfig,
@@ -355,24 +352,14 @@ export function createChatSession(
     }
   }
 
-  /** 后台事实提取(用户消息触发一次;提取正文绝不入诊断) */
+  /** 后台事实提取(用户消息触发一次;所有入口共享摄取器的同一套可靠性规则:
+   *  pending 账本 → 提取 → 证据校验 → 原子入库,失败记 failed 不影响聊天) */
   function backgroundFacts(text: string, turnId: string | null): void {
-    void (async () => {
-      try {
-        const facts = engine.facts ?? {
-          known: async () => topFacts(await getMemory(), 8),
-          extract: (t: string, known: string[], d?: string) => extractFacts(t, known, d),
-          merge: (c: unknown[]) => mergeFacts(c as never),
-        }
-        const known = await facts.known()
-        const candidates = await facts.extract(text, known, turnId ?? undefined)
-        if (candidates.length > 0) {
-          await facts.merge(candidates.map((c) => ({ ...c, turnId, excerpt: text.slice(0, 120) })))
-        }
-      } catch {
-        // 后台提取失败不影响聊天
-      }
-    })()
+    void (engine.memoryIngestor ?? memoryIngestor)
+      .ingestUserTurn({ turnId, text })
+      .catch(() => {
+        // 后台提取失败不影响聊天(摄取器内部已把账本记为 failed)
+      })
   }
 
   return {
