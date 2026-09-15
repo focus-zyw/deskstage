@@ -49,6 +49,8 @@ export interface GroupChatDeps {
   }
   /** 各角色模型适配;enabled 绑定但缺 Adapter 的角色不参与(等同 disabled) */
   adapters: Partial<Record<ActorId, ActorModelAdapter>>
+  /** 语音回合的强制 API 适配器(产品裁决:语音回复统一走 API;batch.channel=voice 时生效) */
+  voiceAdapter?: (actor: ActorId) => ActorModelAdapter
   /** 可选:附加 prompt 上下文(记忆事实/用户简报/工具观察块/旧梗候选) */
   prepareExtras?(batch: ActorBatchLike): Promise<{
     factsLine?: string
@@ -85,7 +87,7 @@ export interface GroupChatRuntime {
    * 打开用户回合但不唤醒任何 Worker:消息入列、链建立,工具/记忆由宿主在此间隙
    * 执行一次(评审④)。普通结果调 handle.wake();工具 clarify 调 handle.awaitUser。
    */
-  openUserTurn(text: string): Promise<
+  openUserTurn(text: string, opts?: { voice?: boolean }): Promise<
     | { kind: 'empty' }
     | { kind: 'backpressure' }
     | { kind: 'stop' }
@@ -188,6 +190,7 @@ export function createGroupChatRuntime(deps: GroupChatDeps): GroupChatRuntime {
       // 动态分发:绑定切换后无需重建 worker;disabled/缺适配的角色不会被唤醒,
       // 万一被唤醒,react 抛错走退避,不会产生任何副作用
       adapter: dynamicAdapter(id),
+      voiceAdapter: deps.voiceAdapter,
       clock,
       identity: () => identityOf(id),
       prepareExtras: deps.prepareExtras ? (batch) => deps.prepareExtras!(batch) : undefined,
@@ -246,7 +249,7 @@ export function createGroupChatRuntime(deps: GroupChatDeps): GroupChatRuntime {
       return 'accepted'
     },
 
-    async openUserTurn(text: string) {
+  async openUserTurn(text: string, opts?: { voice?: boolean }) {
       const trimmed = text.trim()
       if (!trimmed) return { kind: 'empty' as const }
       if (disposed) return { kind: 'backpressure' as const }
@@ -281,6 +284,7 @@ export function createGroupChatRuntime(deps: GroupChatDeps): GroupChatRuntime {
       rotation = primary.rotation
       const { message, chain } = router.appendUser({
         text: trimmed,
+        voice: opts?.voice === true,
         epoch: router.currentEpoch(),
         primaryActor: primary.actor,
         primaryAutonomy: cfg.actors[primary.actor]?.autonomy ?? 'natural',

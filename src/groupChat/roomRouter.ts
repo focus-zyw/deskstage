@@ -64,6 +64,8 @@ export interface RoomRouter {
 
   /** 用户消息入列:关旧链、开新链(档位=主回应角色),返回消息与链 */
   appendUser(input: {
+    /** 来源 = 语音对话(openUserTurn 透传;批次据此强制 API) */
+    voice?: boolean
     text: string
     epoch: number
     primaryActor: ActorId
@@ -180,6 +182,7 @@ export function createRoomRouter(opts: RoomRouterOpts): RoomRouter {
       primaryUserMessageId: primary?.id,
       epoch,
       inputHash: hashOf(picked.map((m) => `${m.id}:${m.author}:${m.text}`).join('\n')),
+      ...(picked.some((m) => m.voice === true) ? { channel: 'voice' as const } : {}),
     }
     cursor.deliveredThrough = throughSeq
     return { status: 'ready', batch }
@@ -277,6 +280,7 @@ export function createRoomRouter(opts: RoomRouterOpts): RoomRouter {
         causalRootId: '',
         depth: 0,
         replyTo: [],
+        voice: input.voice,
       })
       message.causalRootId = message.id
       const chain = createConversationChain(message.id, input.epoch, input.primaryAutonomy, clock.now())

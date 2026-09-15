@@ -156,6 +156,19 @@ export function createChatSession(
     return cfg.groupChatActors[slot].binding
   }
   const realAdapters = new Map<ActorId, { key: string; adapter: ActorModelAdapter }>()
+  // 语音回复统一走 API(产品裁决):API 绑定沿用各自档案,网页绑定回落主档案
+  const voiceAdapters = new Map<string, ActorModelAdapter>()
+  const voiceAdapterFor = (slot: ActorId): ActorModelAdapter => {
+    const cfg = configCache ?? getConfigSnapshot()
+    const binding = effectiveBinding(cfg, slot)
+    const profileId = binding.kind === 'api' ? binding.profileId : undefined
+    const key = `api:${profileId ?? 'main'}`
+    const hit = voiceAdapters.get(key)
+    if (hit) return hit
+    const adapter = createApiActorAdapter({ profileId })
+    voiceAdapters.set(key, adapter)
+    return adapter
+  }
   function resolveReal(slot: ActorId, cfg: AppConfig): ActorModelAdapter | undefined {
     const binding = effectiveBinding(cfg, slot)
     if (binding.kind === 'disabled') return undefined
@@ -238,6 +251,7 @@ export function createChatSession(
         B: opts.adapters?.B ?? slotAdapter('B'),
         C: opts.adapters?.C ?? slotAdapter('C'),
       },
+      voiceAdapter: (slot) => voiceAdapterFor(slot),
       prepareExtras: async (batch) => {
         // 工具观察块/记忆事实只随"直接回应这条用户消息"的批次注入(一次执行,全员可见)
         const rootId = batch.primaryUserMessageId
@@ -394,7 +408,8 @@ export function createChatSession(
       currentAbort = new AbortController()
       const turnId = newTurnId()
       currentTurnId = turnId
-      const turn = await runtimeOf().openUserTurn(text)
+      // 语音来源随 turn 标记进 room:含该消息的批次 channel=voice,回复强制走 API
+      const turn = await runtimeOf().openUserTurn(text, { voice: opts2.voice === true })
       if (turn.kind === 'stop') {
         // 停止词:消息已留痕并全员暂停;恢复由下一条用户消息开启
         diag.beginTurn({ id: turnId, source: opts2.voice ? 'voice' : 'chat', text, target: 'A', groupAsk: false, voice: !!opts2.voice, ts: Date.now() })

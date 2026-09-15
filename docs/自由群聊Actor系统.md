@@ -59,6 +59,10 @@
   + autonomy 档位;`engine: 'actors'|'legacy'` 回退开关。
 - 迁移默认(控费用):A=主模型+natural、B=主模型+quiet、C=disabled。
 - `characters.C.enabled=false` 只在运行时算 `effectiveBinding.C=disabled`,不回写配置。
+- **语音回合统一走 API(2026-09 裁决)**:来源 = 语音对话的用户消息带 `voice` 标记,
+  含它的批次 `channel:'voice'` → worker 强制走 `voiceAdapter`(API 适配器:API 绑定沿用
+  各自档案,网页绑定回落主档案),**不消费该角色的网页会话**——网页链路秒级~分钟级延迟
+  与慢节点挂起不适合语音交互;文字回合不受影响。
 - profileId 白名单 `^[a-zA-Z0-9_-]{1,48}$`,`'main'` 保留;Rust 端先校验再按对象键
   读取(**不拼 JSON Pointer**);Key 由 Rust 从凭据注入,前端不碰地址与密钥。
 

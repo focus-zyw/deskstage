@@ -19,6 +19,8 @@ export interface RoomJournal {
     causalRootId: string
     depth: number
     replyTo?: string[]
+    /** 来源 = 语音对话(透传到消息上,批次据此标 channel) */
+    voice?: boolean
   }): RoomMessage
   /** 全量快照(旧在后);只读视图,调用方不得改写 */
   list(): readonly RoomMessage[]
@@ -50,6 +52,7 @@ export function createRoomJournal(clock: Clock): RoomJournal {
         causalRootId: input.causalRootId,
         depth: input.depth,
         replyTo: [...(input.replyTo ?? [])],
+        ...(input.voice ? { voice: true as const } : {}),
       }
       messages.push(msg)
       if (messages.length > MAX_MEMORY_MESSAGES) {

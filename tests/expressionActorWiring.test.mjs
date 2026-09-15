@@ -67,7 +67,7 @@ const identityFor = (actor) => ({
 })
 
 /** 场景 harness:发一条用户消息,worker 消费一轮,捕获请求与提交 meta */
-async function runTurn({ text, script, director, extraDeps = {}, actor = 'A' } = {}) {
+async function runTurn({ text, script, director, extraDeps = {}, actor = 'A', voice = false } = {}) {
   const clock = makeClock()
   const journal = createRoomJournal(clock)
   const committed = []
@@ -93,11 +93,34 @@ async function runTurn({ text, script, director, extraDeps = {}, actor = 'A' } =
     epoch: router.currentEpoch(),
     primaryActor: actor,
     primaryAutonomy: 'natural',
+    ...(voice ? { voice: true } : {}),
   })
   worker.wake()
   await clock.settle()
   return { journal, router, adapter, worker, committed, requests: adapter.calls.map((c) => c.req) }
 }
+
+test('语音回合(channel=voice)强制走 voiceAdapter,普通回合仍走绑定适配器', async () => {
+  // 语音回合:voiceAdapter 被调用,绑定适配器不动
+  const voiceSpy = createFakeActorAdapter([{ listen: true }])
+  const voiceRun = await runTurn({
+    text: '语音说的一句话',
+    script: [{ listen: true }],
+    extraDeps: { voiceAdapter: () => voiceSpy },
+    voice: true,
+  })
+  assert.equal(voiceSpy.calls.length, 1, '语音回合应走 voiceAdapter')
+  assert.equal(voiceRun.adapter.calls.length, 0, '绑定适配器不应被调用')
+  // 普通回合:voiceAdapter 不参与
+  const voiceSpy2 = createFakeActorAdapter([{ listen: true }])
+  const chatRun = await runTurn({
+    text: '普通消息',
+    script: [{ listen: true }],
+    extraDeps: { voiceAdapter: () => voiceSpy2 },
+  })
+  assert.equal(chatRun.adapter.calls.length, 1, '普通回合走绑定适配器')
+  assert.equal(voiceSpy2.calls.length, 0, 'voiceAdapter 不应参与普通回合')
+})
 
 const spyOf = (director, calls) => ({
   plan: (input) => {

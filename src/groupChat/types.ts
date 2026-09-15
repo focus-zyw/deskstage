@@ -36,6 +36,8 @@ export interface RoomMessage {
   depth: number
   /** 明确回应的消息 id(可多条;必须是本批次真实包含的 id) */
   replyTo: string[]
+  /** 来源 = 语音对话(仅用户消息;含它的批次 channel=voice,回复强制走 API) */
+  voice?: true
 }
 
 /** 单角色投递批次:该角色未读 FIFO 的连续前缀(不跳过中间消息) */
@@ -50,6 +52,8 @@ export interface ActorBatch {
   epoch: number
   /** 批次内容指纹(诊断/去重辅助) */
   inputHash: string
+  /** 'voice' = 批次含语音用户消息:worker 强制走 API 适配器(网页链路延迟不适合语音) */
+  channel?: 'voice'
 }
 
 /** 模型输出协议(protocolVersion 固定 1):decision=speak 时必须携带合法 reply */

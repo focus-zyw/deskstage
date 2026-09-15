@@ -120,6 +120,22 @@ test('批次 = 未读 FIFO 的连续前缀,受条数上限约束;primary 取批�
   assert.equal(info.batch.primaryUserMessageId, 'm12')
 })
 
+test('语音来源的用户消息:含它的批次 channel=voice;普通消息无通道标记', () => {
+  const clock = makeClock()
+  const { router } = makeRouter(clock)
+  userSay(router, '普通文字消息')
+  const info = router.nextBatchInfo('A', clock.now())
+  assert.equal(info.status, 'ready')
+  assert.equal(info.batch.channel, undefined)
+
+  const clock2 = makeClock()
+  const { router: router2 } = makeRouter(clock2)
+  userSay(router2, '语音说的一句话', { voice: true })
+  const info2 = router2.nextBatchInfo('A', clock2.now())
+  assert.equal(info2.status, 'ready')
+  assert.equal(info2.batch.channel, 'voice')
+})
+
 test('批次受字符上限约束,但不跳过中间消息', () => {
   const clock = makeClock()
   const { router } = makeRouter(clock)

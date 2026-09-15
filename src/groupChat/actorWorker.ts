@@ -35,6 +35,8 @@ export interface ActorWorkerDeps {
   router: RoomRouter
   journal: RoomJournal
   adapter: ActorModelAdapter
+  /** 语音回合的强制 API 适配器(batch.channel=voice 时取代绑定适配器;宿主按角色提供) */
+  voiceAdapter?: (actor: ActorId) => ActorModelAdapter
   clock: Clock
   /** 身份与人设(运行时按当前配置组装;每次取最新,改名/换人设即生效) */
   identity(): PromptIdentity
@@ -71,6 +73,8 @@ export interface ActorWorker {
 
 export function createActorWorker(deps: ActorWorkerDeps): ActorWorker {
   const { actor, router, journal, adapter, clock } = deps
+  // 当前批次实际生效的适配器:语音回合(batch.channel=voice)由 buildRequest 切到 voiceAdapter
+  let reactAdapter = adapter
   let status: ActorStatus = 'idle'
   let failures = 0
   let running = false
@@ -136,7 +140,9 @@ export function createActorWorker(deps: ActorWorkerDeps): ActorWorker {
   async function buildRequest(batch: ActorBatch) {
     const now = clock.now()
     const identity = deps.identity()
-    const fullContext = adapter.prefersFullContext?.() ?? true
+    // 语音回合(batch.channel=voice)强制 API 适配器:网页链路秒级~分钟级延迟不适合语音交互
+    reactAdapter = batch.channel === "voice" && deps.voiceAdapter ? deps.voiceAdapter(actor) : adapter
+    const fullContext = reactAdapter.prefersFullContext?.() ?? true
     let extras: {
       factsLine?: string
       briefLine?: string
@@ -276,7 +282,7 @@ export function createActorWorker(deps: ActorWorkerDeps): ActorWorker {
         limiter.count(actor, clock.now())
         let reaction
         try {
-          reaction = await adapter.react(request, currentAbort.signal)
+          reaction = await reactAdapter.react(request, currentAbort.signal)
         } catch (e) {
           currentAbort = null
           if (isAbort(e)) {
