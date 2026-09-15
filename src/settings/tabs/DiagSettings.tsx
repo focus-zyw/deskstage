@@ -16,9 +16,8 @@ import { buildDiagExportJson } from '../../diag/store'
 import { redactText } from '../../diag/redact'
 import type { DiagEvent, DiagSession } from '../../diag/types'
 import { getMemory } from '../../storage/memoryStore'
-import { writeTextFile, mkdir } from '@tauri-apps/plugin-fs'
-import { appDataDir } from '@tauri-apps/api/path'
 import { inTauri } from '../../storage/configStore'
+import { writeDiagExportFile } from '../../diag/exportFile'
 
 const SOURCE_LABEL: Record<string, string> = {
   chat: '聊天',
@@ -236,11 +235,7 @@ export function DiagSettings() {
     }
     try {
       const json = buildDiagExportJson(sessions, { includeDetailText: includeDetail })
-      const dir = await appDataDir()
-      const dataDir = `${dir}data`.replace(/\\/g, '/')
-      await mkdir(dataDir, { recursive: true }).catch(() => {})
-      const file = `${dataDir}/diag-export-${Date.now()}.json`
-      await writeTextFile(file, json)
+      const file = await writeDiagExportFile(json)
       setExportMsg(`已导出 ${sessions.length} 个会话 → ${file}`)
     } catch (e) {
       setExportMsg(`导出失败:${String((e as Error)?.message ?? e).slice(0, 120)}`)

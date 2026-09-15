@@ -415,7 +415,8 @@ export function speak(
   // 进函数即领序号:若先发的句子合成慢,完成时序号已落后,不会反向覆盖新句
   const my = ++epoch
   flushWaiters()
-  if (diagRef) {
+  const recordRequest = () => {
+    if (!diagRef) return
     diag.ttsRequest(diagRef.turnId, {
       seg: diagRef.segIndex ?? 0,
       speaker,
@@ -429,15 +430,18 @@ export function speak(
     try {
       const cfg = await getConfig()
       if (cfg.dnd) {
+        recordRequest()
         markEnded(my)
         if (diagRef) diag.ttsSegment(diagRef.turnId, { seg: diagRef.segIndex ?? 0, epoch: my, outcome: 'silent', reason: '勿扰(夜间免打扰)开启,全静' })
         return
       }
       if (!cfg.voice.enabled) {
         markEnded(my)
-        if (diagRef) diag.ttsSegment(diagRef.turnId, { seg: diagRef.segIndex ?? 0, epoch: my, outcome: 'silent', reason: '角色语音开关关闭' })
         return
       }
+      // 语音总开关是 TTS 之前的门禁；关闭时不记录 TTS，
+      // 避免诊断面板误报“TTS 0/N 段出声”。
+      recordRequest()
       const spec = await resolveLine(cfg, speaker, text, delivery)
       if (!spec || my !== epoch) {
         markEnded(my)
