@@ -332,6 +332,8 @@ export interface TranslationConfig {
   style: TranslationStyle
   /** 翻译完成后自动朗读结果 */
   autoSpeak: boolean
+  /** 打开翻译面板时自动读取剪贴板文字并翻译(关 = 只提示,点「翻译剪贴板」再动手) */
+  autoClipboard: boolean
 }
 
 /** 提取文字的 AI 识别配置:视觉模型(OpenAI 兼容)优先,失败自动回退本地 Windows OCR。
@@ -440,7 +442,13 @@ export const DEFAULT_CONFIG: AppConfig = {
   dnd: false,
   dailyLinePack: true,
   proactivity: 'balanced',
-  translation: { sourceLanguage: 'auto', targetLanguage: 'zh-CN', style: 'natural', autoSpeak: false },
+  translation: {
+    sourceLanguage: 'auto',
+    targetLanguage: 'zh-CN',
+    style: 'natural',
+    autoSpeak: false,
+    autoClipboard: false,
+  },
   ocr: {
     apiKey: '',
     baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
@@ -1049,6 +1057,7 @@ function sanitizeTranslation(v: unknown): TranslationConfig {
         ? t.style
         : DEFAULT_CONFIG.translation.style,
     autoSpeak: t.autoSpeak === true,
+    autoClipboard: t.autoClipboard === true,
   }
 }
 

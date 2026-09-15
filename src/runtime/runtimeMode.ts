@@ -196,6 +196,15 @@ export function closeAllOverlays(): void {
   set({ overlays: [] })
 }
 
+/// 固定面板(📌)语义:点外部收起其他面板时,被固定的面板留下
+export function closeAllOverlaysExcept(keep: OverlayId): void {
+  if (!state.overlays.includes(keep)) {
+    closeAllOverlays()
+    return
+  }
+  set({ overlays: state.overlays.filter((x) => x === keep) })
+}
+
 // ---------- flags ----------
 
 export function setDnd(v: boolean): void {

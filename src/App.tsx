@@ -93,6 +93,7 @@ import {
   openOverlayExclusive,
   closeOverlay,
   closeAllOverlays,
+  closeAllOverlaysExcept,
   setDnd as setRuntimeDnd,
   setCharHidden as setRuntimeCharHidden,
 } from './runtime/runtimeMode'
@@ -374,6 +375,12 @@ function App() {
   }, [chatOpen])
   // 翻译面板:开合由 runtime overlays 管;OCR 链路注入的原文(auto=截图翻译入口,填入即自动翻)
   const translationOpen = rt.overlays.includes('translation')
+  // 翻译面板固定(📌):点外部/Esc 不收起,只能 ✕ 关闭;会话内记住偏好
+  const [translationPinned, setTranslationPinned] = useState(false)
+  const translationPinnedRef = useRef(false)
+  translationPinnedRef.current = translationPinned
+  const overlaysRef = useRef(rt.overlays)
+  overlaysRef.current = rt.overlays
   const toolsOpen = rt.overlays.includes('tools')
   const overlaysOpen = rt.overlays.length > 0
   // 模式菜单没有输入框，仍由原生钩子派发点击；只有真正的输入面板才让
@@ -1008,6 +1015,12 @@ function App() {
       if (e.key !== 'Escape') return
       if (getCaps().recording && settingsOpen) return
       const target = getCaps().escapeTarget
+      // 翻译面板固定中:Esc 不收起它(改关它下面的面板;没有就直接忽略)
+      if (target === 'translation' && translationPinnedRef.current) {
+        const below = overlaysRef.current.filter((x) => x !== 'translation')
+        if (below.length > 0) closeOverlay(below[below.length - 1])
+        return
+      }
       if (target) closeOverlay(target)
     }
     window.addEventListener('keydown', onKey)
@@ -1575,7 +1588,11 @@ function App() {
         // 点在面板/工具栏之外 → 收起已打开的面板(穿透窗口下 e.target 即 .stage 本体)
         // 录音中点击外部不收面板(防止丢失停止入口)
         if (rt.mode.type === 'recording' && settingsOpen) return
-        if (e.target === e.currentTarget) closeAllOverlays()
+        if (e.target === e.currentTarget) {
+          // 翻译面板固定(📌)时不收它,其余面板照常收起
+          if (translationPinnedRef.current) closeAllOverlaysExcept('translation')
+          else closeAllOverlays()
+        }
         // 点在C菜单外(其他角色/工具)也收起C菜单;但点在菜单项上绝不能在
         // pointerdown 就收起——原生钩子的 click 补发在 pointerup 之后,
         // 菜单先卸载会让 click 落在游离节点上,onClick 永远不触发(菜单关了、动作没了)
@@ -2218,6 +2235,8 @@ function App() {
               innerRef={trPanelRef}
               pos={ctrlBar}
               inject={trInject}
+              pinned={translationPinned}
+              onPinChange={setTranslationPinned}
               onClose={() => closeOverlay('translation')}
               onScreenshotTranslate={startScreenshotFlow}
               onTranslated={translateQuip}

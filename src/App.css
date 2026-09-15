@@ -3040,15 +3040,30 @@ body.settings-standalone .settings-window {
   color: rgba(255, 255, 255, 0.85);
 }
 .tr-detected {
-  flex: 1;
+  margin-left: 4px;
   font-size: 11px;
   color: rgba(255, 255, 255, 0.5);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+}
+.tr-pin {
+  margin-left: auto;
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 6px;
+  transform: rotate(0deg);
+}
+.tr-pin:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.1);
+}
+.tr-pin.on {
+  color: #b9a8ff;
+  background: rgba(124, 108, 240, 0.22);
 }
 .tr-close {
-  margin-left: auto;
   border: none;
   background: transparent;
   color: rgba(255, 255, 255, 0.55);
@@ -3084,9 +3099,67 @@ body.settings-standalone .settings-window {
   background: #1c1c2e;
   color: #fff;
 }
-.tr-arrow {
-  color: rgba(255, 255, 255, 0.5);
-  font-size: 13px;
+.tr-swap {
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 14px;
+  line-height: 1;
+  padding: 5px 9px;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
+}
+.tr-swap:hover {
+  color: #fff;
+  background: rgba(124, 108, 240, 0.35);
+}
+
+/* 原文/译文分段标签(方案:标签 + 分隔线) */
+.tr-label {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.55);
+  padding-bottom: 5px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+/* 剪贴板提示条:检测到内容 → [翻译剪贴板],不动输入框 */
+.tr-clip-hint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border: 1px solid rgba(124, 108, 240, 0.4);
+  border-radius: var(--radius-input);
+  background: rgba(124, 108, 240, 0.14);
+  animation: panel-in 0.16s ease;
+}
+.tr-clip-text {
+  flex: 1;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.8);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tr-clip-hint .panel-btn {
+  padding: 3px 10px;
+  font-size: 12px;
+  flex: none;
+}
+.tr-clip-dismiss {
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 6px;
+}
+.tr-clip-dismiss:hover {
+  color: #fff;
 }
 .tr-styles {
   display: flex;
@@ -3152,9 +3225,19 @@ body.settings-standalone .settings-window {
   padding-top: 10px;
   border-top: 1px solid rgba(255, 255, 255, 0.1);
 }
-.tr-result-label {
+.tr-result-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.tr-result-head .tr-label {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+.tr-result-head .tr-actions .panel-btn {
+  padding: 3px 10px;
   font-size: 12px;
-  color: rgba(255, 255, 255, 0.65);
 }
 .tr-result {
   font-size: 13px;
@@ -3183,9 +3266,33 @@ body.settings-standalone .settings-window {
   color: rgba(255, 255, 255, 0.8);
   font-size: 11px;
 }
+.tr-clear {
+  margin-left: auto;
+  color: rgba(255, 255, 255, 0.5);
+}
+.tr-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.tr-clip-auto {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.6);
+  cursor: pointer;
+  white-space: nowrap;
+  user-select: none;
+}
+.tr-clip-auto input {
+  accent-color: rgba(124, 108, 240, 0.95);
+}
 .tr-privacy {
   font-size: 11px;
   color: var(--panel-text-faint, rgba(255, 255, 255, 0.4));
+  text-align: right;
 }
 
 /* ---------- 工具任务浮层卡(右下角,备忘提醒同款视觉语言) ---------- */
