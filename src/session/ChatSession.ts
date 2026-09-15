@@ -12,7 +12,7 @@
 // 本文件不做发言决策、不碰队列与游标——那些都在 src/groupChat;呈现契约见 chatTypes。
 import type { Speaker } from '../performer/player'
 import { pushTurn } from '../dialogue/turnWindow'
-import { appendChatTurns, type ChatMemoryRef } from '../storage/chatLogStore'
+import { appendChatTurns, type ChatMemoryRef, type ChatWho } from '../storage/chatLogStore'
 import {
   emptyTurnMemory,
   getMemory,
@@ -58,6 +58,12 @@ export interface ChatSession {
   cancel(): void
   /** 统一清空:清 journal/队列/待播与网页会话代(legacy 模式为 no-op) */
   reset(): void
+  /**
+   * 启动引导:注入 chatlog 尾部历史,重启/刷新后角色接续同一会话(复用已有窗口),
+   * 而不是拿空 journal 开新场(legacy 引擎为 no-op)。运行时已创建且有过消息时忽略
+   * ——绝不乱序补史。
+   */
+  bootstrapHistory(entries: Array<{ who: ChatWho; text: string; ts: number }>): void
   getSnapshot(): ChatSnapshot
   subscribe(listener: () => void): () => void
   whenIdle(): Promise<void>
@@ -108,6 +114,8 @@ export function createChatSession(
   let presenter: RoomPresenter | null = null
   let runtime: GroupChatRuntime | null = null
   let legacy: LegacyChatSession | null = null
+  /** 启动引导暂存:运行时懒创建,首次创建时一次性注入(运行时已有消息则丢弃) */
+  let pendingBootstrap: Array<{ author: 'user' | ActorId; text: string; ts: number }> | null = null
 
   function emit(): void {
     listeners.forEach((l) => l())
@@ -279,6 +287,11 @@ export function createChatSession(
       },
     })
     runtime.subscribe(emit)
+    if (pendingBootstrap) {
+      const entries = pendingBootstrap
+      pendingBootstrap = null
+      runtime.bootstrapHistory(entries)
+    }
     return runtime
   }
 
@@ -452,11 +465,26 @@ export function createChatSession(
       chainTurn.clear()
       chainExtras.clear()
       currentTurnId = null
+      pendingBootstrap = null
       if (mode === 'actors' && runtime) {
         presenterOf().cancel()
         runtime.reset()
       }
       emit()
+    },
+
+    bootstrapHistory(entries: Array<{ who: ChatWho; text: string; ts: number }>): void {
+      const mapped = entries
+        .filter((e) => e.text.trim())
+        .map((e) => ({ author: e.who as 'user' | ActorId, text: e.text, ts: e.ts }))
+      if (mapped.length === 0) return
+      // 运行时已有消息(用户先发话说完一轮)→ 不乱序补史,本次引导放弃
+      if (runtime) {
+        if (runtime.journal().maxSeq() > 0) return
+        runtime.bootstrapHistory(mapped)
+        return
+      }
+      pendingBootstrap = mapped
     },
 
     getSnapshot(): ChatSnapshot {

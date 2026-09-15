@@ -278,3 +278,35 @@ test('engine=legacy 分派:保留旧 busy 语义(回退开关)', async () => {
   assert.equal(res, 'busy')
   assert.equal(session.getSnapshot().busy, true)
 })
+
+test('bootstrapHistory 接线:启动引导历史,新批次只答新消息且 prompt 带上下文', async () => {
+  const adA = createFakeActorAdapter([{ speak: '新问题的回答' }, { speak: '继续' }])
+  const { session, calls, gates } = makeSession({ A: adA })
+  // 模拟 App 启动:chatlog 尾部先行注入(运行时懒创建,此刻尚未建立)
+  session.bootstrapHistory([
+    { who: 'user', text: '昨天的问题', ts: 1 },
+    { who: 'A', text: '昨天的回答', ts: 2 },
+  ])
+  await session.send('新问题')
+  await waitFor(() => calls.presentTurn.length >= 1)
+  const req = adA.calls[0].req
+  assert.deepEqual(
+    req.batch.messages.map((m) => m.text),
+    ['新问题'],
+    '新批次只含新消息,不重答引导的历史',
+  )
+  assert.match(req.prompt, /昨天的问题/, '全量 prompt 携带引导的历史上下文')
+  gates[0].gate.resolve()
+  // 运行时已有消息后再引导:忽略,绝不乱序补史
+  session.bootstrapHistory([{ who: 'user', text: '迟到的历史', ts: 0 }])
+  await session.send('继续')
+  await waitFor(() => calls.presentTurn.length >= 2)
+  const later = adA.calls[1].req
+  assert.equal(
+    later.batch.messages.some((m) => m.text === '迟到的历史'),
+    false,
+    '迟到的引导被忽略',
+  )
+  gates.forEach((g) => g.gate.resolve())
+  await session.whenIdle()
+})

@@ -1187,6 +1187,16 @@ function App() {
   // busy 消费走外部 store:演出/抉择等待不算忙(session 与导演状态分界)
   const chatBusy = useSyncExternalStore(chatSession.subscribe, () => chatSession.getSnapshot().busy)
 
+  // 启动引导:把 chatlog 尾部注入群聊运行时——重启/刷新后角色接续同一会话
+  // (复用已有窗口),不再拿空 journal 每次从零开新场;用户先发话则本次引导放弃
+  useEffect(() => {
+    void (async () => {
+      const turns = await listChatTurns(60).catch(() => [])
+      if (turns.length === 0) return
+      chatSession.bootstrapHistory(turns.map((t) => ({ who: t.who, text: t.text, ts: t.ts })))
+    })()
+  }, [chatSession])
+
   // 群聊页(设置窗)角色状态条:主窗节流推送快照(P4 可观测性;设置窗无会话实例)
   let lastActorPush = 0
   chatSession.subscribe(() => {

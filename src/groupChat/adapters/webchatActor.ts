@@ -1,8 +1,13 @@
 // 网页 Actor Adapter:群聊角色绑定网页模型站点,经 Rust WebchatHub 的独立会话调用。
 //
 // 会话键四段式(评审):`group:<roomId>:<actorId>:<bindingRevision>:<generation>`——
-// 绑定切换(指纹变)/会话作废(转向、停止时在飞废弃、清空、上下文卫生)都让键变化,
+// 绑定切换(指纹变)/显式作废(转向、停止时在飞废弃、清空、上下文卫生)都让键变化,
 // 旧键页面被释放,旧内容绝不污染新批次(幽灵回复防护)。
+//
+// 复用已有窗口(重启/刷新不换窗):前端刷新会重建 Adapter,但 Rust Hub 的会话槽与
+// 标签页仍存活。新建实例的首叫(fresh)不 reset——同键命中旧槽即复用标签页,站点
+// 会话原样续聊,全量上下文随本轮 prompt 兜底(槽丢失/页面被清时也能自愈)。
+// 只有显式 invalidate(换代语义)才 release 旧页 + reset 重建。
 //
 // 两段式失败恢复(复用 RelayDirector 验证过的协议):
 // · 首叫失败 → generation+1(换新键重建标签页)+ rebuildPrompt 全量上下文重发一次;
@@ -34,14 +39,15 @@ function isAbort(e: unknown): boolean {
 
 export function createWebchatActorAdapter(opts: WebchatActorAdapterOpts): ActorModelAdapter {
   let generation = 1
-  let invalidated = true // 首叫必须建会话
+  let invalidated = false // 显式作废(转向/停止/清空):换代重建标签页
+  let fresh = true // 尚未成功用过:首叫复用已有会话(见头部说明),全量上下文兜底
   let turnCount = 0
   let lastKey: string | null = null
 
   const keyOf = () => `group:${opts.roomId()}:${opts.actor}:${opts.bindingRevision()}:${generation}`
 
   return {
-    prefersFullContext: () => invalidated || turnCount === 0,
+    prefersFullContext: () => fresh || invalidated || turnCount === 0,
 
     invalidate() {
       if (lastKey) releaseConversation(lastKey)
@@ -83,6 +89,7 @@ export function createWebchatActorAdapter(opts: WebchatActorAdapterOpts): ActorM
       }
       lastKey = keyOf()
       invalidated = false
+      fresh = false
       turnCount += 1
       return parseValidReaction(raw, req.batch)
     },

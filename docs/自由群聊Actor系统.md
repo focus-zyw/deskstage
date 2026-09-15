@@ -45,7 +45,7 @@
 | `presenter.ts` | 呈现管线:按 roomSeq 串行 present→TTS;徽标按 causalRootId 原子领取;持有静止闸 |
 | `adapters/types.ts` | ActorModelAdapter seam(react/prefersFullContext/invalidate/dispose) |
 | `adapters/apiActor.ts` | API 通道:llmGateway.complete + 模型档案(profileId 缺省/'main'=主模型) |
-| `adapters/webchatActor.ts` | 网页通道:四段会话键 + 两段式恢复 + 15 轮上下文卫生 |
+| `adapters/webchatActor.ts` | 网页通道:四段会话键 + 两段式恢复 + 15 轮上下文卫生;新建实例首叫不 reset(重启/刷新复用 Rust 侧存活标签页) |
 
 ## 3. 模型绑定(设置 → AI 模型)
 
@@ -109,6 +109,11 @@ I8 cancel 后 Worker/当前 TTS/待播全停。
 `group:<roomId>:<actorId>:<bindingRevision>:<sessionGeneration>`
 
 - 换代事件:绑定切换(指纹变)/转向(epoch)/停止时在飞作废/清空/连续 15 轮卫生重建。
+- 复用已有窗口:前端刷新/重启会重建 Adapter,但 Rust Hub 的会话槽与标签页仍存活。
+  新建实例的首叫(fresh)不 reset——同键命中旧槽即续聊同一站点会话,全量上下文随
+  prompt 兜底;只有显式 invalidate/失败恢复才 release 旧页 + reset 重建。
+- 启动引导:App 启动把 chatlog 尾部经 `ChatSession.bootstrapHistory` 注入 journal
+  (运行时已有消息则放弃,绝不乱序补史),roomSeq 跨重启连续,角色接续原对话。
 - 两段式恢复:首叫失败 → 换代 + `rebuildPrompt` 全量进度重发恰一次;再失败交 Worker
   退避(批次未 ACK)。
 - 旧键页面 `webchat_release_conversation` 释放——幽灵回复不可能进入新批次。
@@ -131,8 +136,10 @@ I8 cancel 后 Worker/当前 TTS/待播全停。
 - `tests/groupChatCore.test.mjs`(18):批次前缀/合并窗/ACK 校验/旧 epoch/重复/预算
   并发/awaiting-user/停止/catch-up/限流 + Runtime 集成(自由聊/抢占/停止恢复/重启/
   C 跟尾/presentationHold/dispose)。
-- `tests/groupChatSession.test.mjs`(5):呈现序=TTS 序=roomSeq、打断全停、whenIdle
-  等 TTS 排空、clarify 零调用、legacy 分派。
+- `tests/groupChatSession.test.mjs`(7):呈现序=TTS 序=roomSeq、打断全停、whenIdle
+  等 TTS 排空、clarify 零调用、legacy 分派、bootstrapHistory 接线(引导只答新消息)。
+- `tests/webchatActorReuse.test.mjs`(4):首叫复用同键不 reset、刷新重建零 release、
+  显式 invalidate 换代、两段式恢复恰一次。
 - `tests/groupActorsConfig.test.mjs`(9)+ Rust endpoint_proxy 档案测试;旧矩阵
   `tests/chatSession.test.mjs` 指向 legacyChat 继续有效。
 - Tauri 实机待验:同站点三会话并行、网页角色两段式恢复、真实站点 JSON 输出合规率。
