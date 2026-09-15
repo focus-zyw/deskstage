@@ -5,9 +5,21 @@
 // 凭据库 asr:siliconflow(能力级,独立于 TTS 的 tts:voice——TTS 用 MiniMax 时
 // ASR 仍可单独配置硅基),前端从头到尾接触不到密钥。
 //
-// 硬化照 endpoint_proxy:仅 POST、禁重定向、连接超时 10s、总超时 20s、
+// 硬化照 endpoint_proxy:仅 POST、禁重定向、连接超时 15s、总超时 60s、
 // 请求体上限 32MB(30s/16k/i16 的 wav 约 1MB,余量给超长句);错误文案不带密钥。
-// v1 不做在途取消:识别通常 0.7~2s,打断靠前端代次丢弃迟到结果,请求最长 20s 自然结束。
+// v1 不做在途取消:识别通常 0.7~2s,打断靠前端代次丢弃迟到结果,请求最长 60s 自然结束。
+//
+// 连接测试(设置页)实测裁决(2026-09 排查「测试超时但识别成功」):
+// · 旧测试上传 1s 静音打到 /transcriptions,两个致命伤:服务端已改为对静音回
+//   「HTTP 500 空响应体」(原假设「静音 → 200 空文本」被服务端变更杀死);且推理
+//   后端存在慢节点——多 A 记录轮换(实测见 139.196.x/47.102.x/47.103.x/101.132.x),
+//   部分 backend 建连成功后对请求永不响应(真机 netstat:ESTABLISHED 挂满 10s),
+//   单次 10s 测试大概率撞死,而识别(60s×2)总能 ride 过去——这正是「按钮超时但
+//   录音识别成功」的完整解释;
+// · 现测试改打 GET /v1/models:轻量 JSON 端点,不进推理后端、不耗配额,一次验证
+//   服务可达 + 密钥有效(401/403 前置)+ 模型名在官方列表(还能抓出模型名笔误);
+// · 一次性独立 Client(不复用长寿命共享池)+ 10s×3 次尝试(600ms 间隔):对抗
+//   慢节点/陈旧连接,按钮最坏 ~31s 有界,健康时 0.1s 级。识别质量由「录音识别」把关。
 
 use std::time::Duration;
 
@@ -15,14 +27,19 @@ use base64::Engine;
 use serde::Serialize;
 
 const ENDPOINT: &str = "https://api.siliconflow.cn/v1/audio/transcriptions";
+/// 连接测试专用:轻量模型列表端点,不进推理后端(推理后端对静音拒/挂,见文件头裁决)
+const MODELS_ENDPOINT: &str = "https://api.siliconflow.cn/v1/models";
 const MAX_WAV_BYTES: usize = 32 * 1024 * 1024;
 /// 连接 15s、总 60s:ASR 要上传整段音频(30s 语音约 1MB),慢上行下 20s 会把
-/// 正常的识别压成"发送失败"。设置页连接测试另走 10s/不重试的快速策略。
+/// 正常的识别压成"发送失败"。设置页连接测试另走 10s×3 次的快速策略。
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const TOTAL_TIMEOUT: Duration = Duration::from_secs(60);
 const CONNECTION_TEST_TIMEOUT: Duration = Duration::from_secs(10);
 const TRANSCRIBE_ATTEMPTS: usize = 2;
-const CONNECTION_TEST_ATTEMPTS: usize = 1;
+/// 连接对同一端点存在约半数的「黑洞」形态(多 A 记录后端或代理节点,实测同分钟内
+/// 交替:挂起 >10s 与 0.2s 响应随机出现)——3 次尝试把单按钮失败率压到 ~12%,
+/// 最坏 ~31s 有界;挂起的尝试反正等不到响应,超时快刀反而更快进入下一次。
+const CONNECTION_TEST_ATTEMPTS: usize = 3;
 
 /// 错误链:reqwest 的 Display 只给顶层「error sending request」,真正原因
 /// (DNS 失败 / 连接超时 / TLS 握手 / 连接被重置)藏在 source 链里。
@@ -36,6 +53,28 @@ fn error_chain(e: &(dyn std::error::Error + 'static)) -> String {
         cur = s.source();
     }
     out
+}
+
+fn client() -> &'static reqwest::Client {
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .connect_timeout(CONNECT_TIMEOUT)
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .expect("reqwest client 构建失败")
+    })
+}
+
+/// 连接测试专用:一次性独立 Client。长寿命共享池里的陈旧 keep-alive/过期 DNS
+/// 只会毒化"复用它"的第一跳——真机故障形态(共享池下按钮 10s 无响应,同刻
+/// 独立进程同请求 0.2s 有响应)指向的就是它;测试每次新建,永不复用。
+fn fresh_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .connect_timeout(CONNECT_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .expect("reqwest client 构建失败")
 }
 
 /// 发送一次,连接类失败(建连失败/超时,多为网络抖动或代理握手)自动重试一次。
@@ -60,33 +99,28 @@ async fn send_with_retry(
             }
         }
     }
-    Err(format!("识别请求失败:{last}"))
+    let hint = if last.contains("timed out") {
+        ";可能是代理/VPN 抖动或服务端排队(真实识别有 60s 预算与自动重试,可稍后再试)".to_string()
+    } else {
+        String::new()
+    };
+    Err(format!("识别请求失败:{last}{hint}"))
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Debug)]
 pub struct AsrResult {
     pub text: String,
 }
 
-fn client() -> &'static reqwest::Client {
-    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
-    CLIENT.get_or_init(|| {
-        reqwest::Client::builder()
-            .connect_timeout(CONNECT_TIMEOUT)
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .expect("reqwest client 构建失败")
-    })
-}
-
-/// 转写一段 wav(PCM16)。模型由前端传(设置里选,官方列表:SenseVoiceSmall /
-/// TeleSpeechASR,或用户自填,连接测试验证)。返回识别文本(可能为空串 = 没听清)。
-async fn transcribe_with_policy(
+/// 校验输入并把请求发到端点,返回 (HTTP 状态, 响应体)——判读交给调用方
+/// (真实识别与连接测试对同一批状态码语义不同,见两个 map 函数)。
+async fn send_asr_request(
+    client: &reqwest::Client,
     wav_base64: String,
     model: String,
     total_timeout: Duration,
     max_attempts: usize,
-) -> Result<AsrResult, String> {
+) -> Result<(u16, String), String> {
     let key = crate::secrets::read_secret("asr:siliconflow")?
         .filter(|k| !k.trim().is_empty())
         .ok_or("未配置语音识别密钥(设置 → 角色语音 → 语音对话)")?;
@@ -114,7 +148,7 @@ async fn transcribe_with_policy(
 
     let resp = send_with_retry(
         || {
-            client()
+            client
                 .post(ENDPOINT)
                 .bearer_auth(&key)
                 .multipart(build_form())
@@ -126,10 +160,15 @@ async fn transcribe_with_policy(
 
     let status = resp.status().as_u16();
     let body = resp.text().await.unwrap_or_default();
+    Ok((status, body))
+}
+
+/// 真实识别的判读:只有 200 带文本才算成功。
+fn map_transcribe_response(status: u16, body: &str) -> Result<AsrResult, String> {
     match status {
         200 => {
             let v: serde_json::Value =
-                serde_json::from_str(&body).map_err(|e| format!("识别响应解析失败:{e}"))?;
+                serde_json::from_str(body).map_err(|e| format!("识别响应解析失败:{e}"))?;
             let text = v
                 .get("text")
                 .and_then(|t| t.as_str())
@@ -147,23 +186,82 @@ async fn transcribe_with_policy(
     }
 }
 
+/// 连接测试的判读:目标是「服务可达 + 密钥有效 + 模型名真实存在」。
+/// 走 GET /v1/models(轻量 JSON 端点,不进推理后端):200 的模型列表里能找到
+/// 配置的模型名 = 三者全过;200 但找不到 = 模型名笔误(旧静音测试抓不出这类错);
+/// 401/403 = 密钥无效;429 限流 = 密钥已被接受,判可达。识别质量仍由
+/// 「录音识别」按钮把关。
+fn map_test_response(status: u16, body: &str, model: &str) -> Result<AsrResult, String> {
+    match status {
+        200 => {
+            let listed = serde_json::from_str::<serde_json::Value>(body)
+                .ok()
+                .and_then(|v| {
+                    v.get("data").and_then(|d| d.as_array()).map(|arr| {
+                        arr.iter()
+                            .any(|m| m.get("id").and_then(|i| i.as_str()) == Some(model))
+                    })
+                });
+            match listed {
+                Some(true) => Ok(AsrResult {
+                    text: String::new(),
+                }),
+                Some(false) => Err(format!(
+                    "识别模型 {model} 不在硅基流动模型列表中,请在设置里核对模型名"
+                )),
+                None => Err("模型列表响应解析失败".into()),
+            }
+        }
+        429 => Ok(AsrResult {
+            text: String::new(),
+        }),
+        401 | 403 => Err("语音识别密钥无效".into()),
+        _ => {
+            let snippet: String = body.chars().take(160).collect();
+            Err(format!("识别失败(HTTP {status}):{snippet}"))
+        }
+    }
+}
+
+/// 转写一段 wav(PCM16)。模型由前端传(设置里选,官方列表:SenseVoiceSmall /
+/// TeleSpeechASR,或用户自填,连接测试验证)。返回识别文本(可能为空串 = 没听清)。
+async fn transcribe_with_policy(
+    wav_base64: String,
+    model: String,
+    total_timeout: Duration,
+    max_attempts: usize,
+) -> Result<AsrResult, String> {
+    let (status, body) =
+        send_asr_request(client(), wav_base64, model, total_timeout, max_attempts).await?;
+    map_transcribe_response(status, &body)
+}
+
 #[tauri::command]
 pub async fn asr_transcribe(wav_base64: String, model: String) -> Result<AsrResult, String> {
     transcribe_with_policy(wav_base64, model, TOTAL_TIMEOUT, TRANSCRIBE_ATTEMPTS).await
 }
 
-/// 设置页只验证 endpoint/key/model 是否可用:短超时且不重试,避免按钮跨越两个
-/// 60 秒窗口。传入静音 WAV 是为了走与真实识别相同的 multipart/API 校验路径；
-/// 返回文本没有质量含义,前端不会把空串展示成“识别成功”。
+/// 设置页连接测试:验证 endpoint/key/model 三者。走 GET /v1/models(轻量 JSON,
+/// 不进推理后端——2026-09 实测推理后端对静音样本会拒/会挂,且多 A 记录后端中
+/// 有慢节点):一次性独立 Client 隔离共享池陈旧状态,10s×3 次尝试有界快速反馈。
 #[tauri::command]
-pub async fn asr_test_connection(wav_base64: String, model: String) -> Result<AsrResult, String> {
-    transcribe_with_policy(
-        wav_base64,
-        model,
+pub async fn asr_test_connection(model: String) -> Result<AsrResult, String> {
+    let key = crate::secrets::read_secret("asr:siliconflow")?
+        .filter(|k| !k.trim().is_empty())
+        .ok_or("未配置语音识别密钥(设置 → 角色语音 → 语音对话)")?;
+    if model.trim().is_empty() || model.trim().len() > 200 {
+        return Err("未配置识别模型".into());
+    }
+    let client = fresh_client();
+    let resp = send_with_retry(
+        || client.get(MODELS_ENDPOINT).bearer_auth(&key),
         CONNECTION_TEST_TIMEOUT,
         CONNECTION_TEST_ATTEMPTS,
     )
-    .await
+    .await?;
+    let status = resp.status().as_u16();
+    let body = resp.text().await.unwrap_or_default();
+    map_test_response(status, &body, model.trim())
 }
 
 #[cfg(test)]
@@ -187,11 +285,44 @@ mod tests {
     }
 
     #[test]
-    fn connection_test_policy_is_short_and_never_retries() {
+    fn connection_test_policy_is_short_with_three_attempts() {
         assert_eq!(CONNECTION_TEST_TIMEOUT, Duration::from_secs(10));
-        assert_eq!(CONNECTION_TEST_ATTEMPTS, 1);
+        assert_eq!(CONNECTION_TEST_ATTEMPTS, 3);
         assert!(CONNECTION_TEST_TIMEOUT < TOTAL_TIMEOUT);
-        assert!(CONNECTION_TEST_ATTEMPTS < TRANSCRIBE_ATTEMPTS);
+    }
+
+    #[test]
+    fn test_response_mapping_models_list_and_rate_limit() {
+        // 连接测试走 GET /v1/models:200 且列表含配置模型 = 全过;
+        // 200 但找不到 = 模型名笔误(旧静音测试抓不出);429 = 密钥已被接受,判可达。
+        let list =
+            r#"{"data":[{"id":"FunAudioLLM/SenseVoiceSmall"},{"id":"deepseek-ai/DeepSeek-V3"}]}"#;
+        assert!(map_test_response(200, list, "FunAudioLLM/SenseVoiceSmall").is_ok());
+        let e = map_test_response(200, list, "SenseVoiceSmall").unwrap_err();
+        assert!(e.contains("SenseVoiceSmall") && e.contains("模型列表"));
+        assert!(map_test_response(429, "", "FunAudioLLM/SenseVoiceSmall").is_ok());
+        assert!(map_test_response(401, "", "x")
+            .unwrap_err()
+            .contains("密钥"));
+        let e = map_test_response(503, "unavailable", "x").unwrap_err();
+        assert!(e.contains("503") && e.contains("unavailable"));
+        // 响应不是预期 JSON → 明确报解析失败,不静默放行
+        assert!(map_test_response(200, "not-json", "FunAudioLLM/SenseVoiceSmall").is_err());
+    }
+
+    #[test]
+    fn transcribe_response_mapping_only_200_with_text_passes() {
+        let ok = map_transcribe_response(200, r#"{"text":" 你好 "}"#).unwrap();
+        assert_eq!(ok.text, "你好");
+        assert!(map_transcribe_response(429, "")
+            .unwrap_err()
+            .contains("频繁"));
+        assert!(map_transcribe_response(500, "")
+            .unwrap_err()
+            .contains("HTTP 500"));
+        assert!(map_transcribe_response(401, "")
+            .unwrap_err()
+            .contains("密钥"));
     }
 }
 
@@ -223,6 +354,125 @@ mod transport_probe {
             {
                 Ok(r) => println!("[probe] multipart POST -> HTTP {}", r.status().as_u16()),
                 Err(e) => println!("[probe] multipart POST FAILED: {}", error_chain(&e)),
+            }
+        });
+    }
+
+    /// 真实链路计时探测:真密钥(凭据库读入内存,不打印)+ 1s 静音 WAV + 真模型,
+    /// 与连接测试(asr_test_connection)完全同形。用于区分「传输层不通」与
+    /// 「服务端对有效请求的处理延迟超过 10s 测试预算」——401 探测在排队前就被拒,
+    /// 测不出后者。输出只有耗时/状态/文本长度,无任何敏感内容。
+    /// 可用 ASR_PROBE_MODEL 覆盖模型;ASR_PROBE_TIMEOUT_MS 覆盖预算(默认 60s)。
+    #[test]
+    #[ignore = "真实请求冒烟(消耗一次识别配额);cargo test probe_real_request -- --ignored --nocapture"]
+    fn probe_real_request() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let key = match crate::secrets::read_secret("asr:siliconflow") {
+                Ok(Some(k)) if !k.trim().is_empty() => k,
+                Ok(_) => {
+                    println!("[probe-real] 未配置密钥,跳过");
+                    return;
+                }
+                Err(e) => {
+                    println!("[probe-real] 凭据库读取失败: {e}");
+                    return;
+                }
+            };
+            let model = std::env::var("ASR_PROBE_MODEL")
+                .unwrap_or_else(|_| "FunAudioLLM/SenseVoiceSmall".into());
+            let budget = std::env::var("ASR_PROBE_TIMEOUT_MS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .map(Duration::from_millis)
+                .unwrap_or(Duration::from_secs(60));
+            // 1s 静音 16k/mono/i16 —— 与前端连接测试同形
+            let sample_rate = 16_000u32;
+            let pcm = vec![0u8; sample_rate as usize * 2];
+            let mut wav = vec![0u8; 44 + pcm.len()];
+            wav[0..4].copy_from_slice(b"RIFF");
+            wav[4..8].copy_from_slice(&((36 + pcm.len()) as u32).to_le_bytes());
+            wav[8..12].copy_from_slice(b"WAVE");
+            wav[12..16].copy_from_slice(b"fmt ");
+            wav[16..20].copy_from_slice(&16u32.to_le_bytes());
+            wav[20..22].copy_from_slice(&1u16.to_le_bytes());
+            wav[22..24].copy_from_slice(&1u16.to_le_bytes());
+            wav[24..28].copy_from_slice(&sample_rate.to_le_bytes());
+            wav[28..32].copy_from_slice(&(sample_rate * 2).to_le_bytes()); // byte rate = 采样率×声道×2B
+            wav[32..34].copy_from_slice(&2u16.to_le_bytes()); // wBlockAlign
+            wav[34..36].copy_from_slice(&16u16.to_le_bytes()); // wBitsPerSample
+            wav[40..44].copy_from_slice(&(pcm.len() as u32).to_le_bytes());
+            wav[44..].copy_from_slice(&pcm);
+
+            let part = reqwest::multipart::Part::bytes(wav)
+                .file_name("utterance.wav")
+                .mime_str("audio/wav")
+                .expect("内置 mime 常量必然合法");
+            let form = reqwest::multipart::Form::new()
+                .text("model", model.clone())
+                .part("file", part);
+            let started = std::time::Instant::now();
+            match client()
+                .post(ENDPOINT)
+                .bearer_auth(key.trim())
+                .multipart(form)
+                .timeout(budget)
+                .send()
+                .await
+            {
+                Ok(r) => {
+                    let status = r.status().as_u16();
+                    let body = r.text().await.unwrap_or_default();
+                    let text_len = serde_json::from_str::<serde_json::Value>(&body)
+                        .ok()
+                        .and_then(|v| {
+                            v.get("text").and_then(|t| t.as_str()).map(|s| s.trim().len())
+                        })
+                        .unwrap_or(0);
+                    println!(
+                        "[probe-real] model={model} -> HTTP {status},耗时 {:.2}s,返回文本长度 {text_len}(预算 {:?})",
+                        started.elapsed().as_secs_f32(),
+                        budget
+                    );
+                    if status != 200 {
+                        // 错误响应体不含凭据,打印片段定位服务端拒绝原因
+                        let snippet: String = body.chars().take(240).collect();
+                        println!("[probe-real] 非 200 响应体片段: {snippet}");
+                    }
+                }
+                Err(e) => println!(
+                    "[probe-real] model={model} FAILED after {:.2}s(预算 {:?}): {}",
+                    started.elapsed().as_secs_f32(),
+                    budget,
+                    error_chain(&e)
+                ),
+            }
+        });
+    }
+}
+
+#[cfg(test)]
+mod transport_probe_command {
+    use super::*;
+
+    /// 端到端命令探测:直接调用 asr_test_connection(与设置页按钮同一条命令路径,
+    /// 含 fresh_client + 模型列表判读)。预期 Ok(服务可达)。
+    /// cargo test probe_test_connection -- --ignored --nocapture
+    #[test]
+    #[ignore = "真实请求冒烟;需已配置密钥"]
+    fn probe_test_connection() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let started = std::time::Instant::now();
+            match asr_test_connection("FunAudioLLM/SenseVoiceSmall".into()).await {
+                Ok(_) => println!(
+                    "[probe-cmd] asr_test_connection -> Ok(服务可达),耗时 {:.2}s",
+                    started.elapsed().as_secs_f32()
+                ),
+                Err(e) => println!(
+                    "[probe-cmd] asr_test_connection -> Err after {:.2}s: {e}",
+                    started.elapsed().as_secs_f32()
+                ),
             }
         });
     }

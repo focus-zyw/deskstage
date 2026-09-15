@@ -136,7 +136,7 @@ function findButton(node, label) {
   return null
 }
 
-test('静音连接测试走短超时命令,不把空文本显示成识别结果', async () => {
+test('连接测试走 models 轻量端点命令,成功文案不再提静音样本', async () => {
   const tree = VoiceChatCard()
   const button = findButton(tree, '测试连接')
   assert.ok(button, '应找到识别连接测试按钮')
@@ -149,7 +149,7 @@ test('静音连接测试走短超时命令,不把空文本显示成识别结果'
   assert.deepEqual(testingState, { state: 'testing', msg: '正在连接识别服务…' })
   assert.equal(invocations.at(-1), 'asr_test_connection')
   assert.equal(outcome?.state, 'ok')
-  assert.match(outcome?.msg ?? '', /^服务可连接\(\d+ ms\);静音样本不用于判断识别质量$/)
+  assert.match(outcome?.msg ?? '', /^服务可连接,密钥有效,模型在列\(\d+ ms\);识别效果请用「录音识别」验证$/)
   assert.doesNotMatch(outcome?.msg ?? '', /识别返回|:空/)
 })
 

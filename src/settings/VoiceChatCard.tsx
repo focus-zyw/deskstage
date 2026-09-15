@@ -156,7 +156,8 @@ export function VoiceChatCard() {
     }, 2000)
   }
 
-  // ASR 连接测试:静音只走 endpoint/key/model 校验,10s 截止且不重试。
+  // ASR 连接测试:走 GET /v1/models 轻量端点,一次验证服务可达/密钥有效/模型在列,
+  // 不上传音频、不进推理后端(推理后端会拒静音且有慢节点);识别效果用「录音识别」。
   const testAsrConnection = async () => {
     const run = ++asrRunRef.current
     setAsrAction('connection')
@@ -164,16 +165,13 @@ export function VoiceChatCard() {
     setAsrTest({ state: 'testing', msg: '正在连接识别服务…' })
     try {
       await saveConfig({ voice: { ...voice, asr: voice.asr } })
-      const pcm = new Int16Array(MIC_SAMPLE_RATE) // 1 秒静音:只验 key+模型+连通
-      const wav = new Uint8Array(pcmToWav(new Uint8Array(pcm.buffer), MIC_SAMPLE_RATE, 1, 16))
       await invoke<{ text: string }>('asr_test_connection', {
-        wavBase64: bytesToBase64(wav),
         model: voice.asr.model,
       })
       if (asrRunRef.current !== run) return
       setAsrTest({
         state: 'ok',
-        msg: `服务可连接(${elapsedMs(startedAt)} ms);静音样本不用于判断识别质量`,
+        msg: `服务可连接,密钥有效,模型在列(${elapsedMs(startedAt)} ms);识别效果请用「录音识别」验证`,
       })
     } catch (e) {
       if (asrRunRef.current !== run) return
