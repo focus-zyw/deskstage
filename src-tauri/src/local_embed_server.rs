@@ -2,15 +2,17 @@
 // 本地嵌入(方案:docs/经历记忆本地嵌入设计方案.md「自动启动」章节)。
 //
 // 职责边界:
-//   · 只管「应用托管的」那个 llama-server;用户手动另起的服务不走这里,由 coldLocal
-//     代理直连配置地址。托管实例就绪时代理解析优先它(current_base),配置地址回退。
+//   · 只管「应用托管的」那个 llama-server;用户手动另起的服务不走这里(managed=off
+//     时 cold_local_gate 放行到配置地址)。托管实例就绪时代理解析优先它(current_base)。
 //   · 启动参数固定带 --embeddings(新版拼写,把服务限制为只做嵌入);早退即换旧版
 //     --embedding 重试一次。模型必须是专用 embedding 模型(带 pooling 头)——对话
 //     模型出不了有效向量,设置页与设计文档都明确建议。
-//   · 端口用临时空闲端口,避免与手动服务冲突。请求路径不触发拉起(代理保持纯粹,
-//     服务没起走 fail-open);启动时机 = 应用启动(autoStart 开且路径齐)+ 设置页按钮。
-//   · 生命周期:应用退出杀子进程(lib.rs RunEvent::Exit);崩溃不自动重启(避免崩溃
-//     循环),状态置 failed + stderr 截尾,设置页可一键重启(启动 = 重启语义)。
+//   · 端口用临时空闲端口,避免与手动服务冲突。托管模式三态:off=手动不碰;boot=
+//     随应用启动拉起;lazy=按需拉起——嵌入请求发现没跑就后台拉起,本次请求返回
+//     可读错误(fail-open 照旧),就绪自愈,用户无感知。
+//   · 冷却窗:启动失败后 60s 内不再因请求反复拉起(防坏配置拉起循环);设置页手动
+//     启动不受限。生命周期:应用退出杀子进程(lib.rs RunEvent::Exit);崩溃不立即
+//     自动重启(避免崩溃循环),但 boot/lazy 模式下一次请求会再触发。
 
 use std::io::Read;
 use std::net::TcpListener;
@@ -53,8 +55,47 @@ static SERVER: Mutex<Option<Managed>> = Mutex::new(None);
 static STATUS: Mutex<(String, Option<String>)> = Mutex::new((String::new(), None));
 /// 就绪后的服务端口;0 = 无就绪实例(探活通过才置位,进程退出/停止即清零)
 static READY_PORT: AtomicU16 = AtomicU16::new(0);
-/// start 进行中去重(设置页命令与启动自拉起并发)
+/// start 进行中去重(设置页命令、启动自拉起与请求路径拉起并发)
 static SPAWNING: AtomicBool = AtomicBool::new(false);
+/// 最近一次启动失败时刻(请求路径拉起的冷却窗基准)
+static LAST_START_FAIL: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+
+/// 托管模式:'off' 手动 / 'boot' 随应用启动 / 'lazy' 按需拉起
+fn managed_mode_of(cold: &Value) -> &'static str {
+  // 老配置布尔 autoStart:true 迁移为 boot(managed 缺失或非法时)
+  let legacy_boot = cold.get("autoStart").and_then(Value::as_bool) == Some(true);
+  match cold.get("managed").and_then(Value::as_str) {
+    Some("boot") => "boot",
+    Some("lazy") => "lazy",
+    _ => {
+      if legacy_boot {
+        "boot"
+      } else {
+        "off"
+      }
+    }
+  }
+}
+
+/// 托管路径三要素(serverPath/modelPath/extraArgs);缺任一必填项返回 None
+fn managed_paths_of(cold: &Value) -> Option<(String, String, String)> {
+  let trim = |key: &str| -> Option<String> {
+    cold
+      .get(key)
+      .and_then(Value::as_str)
+      .map(str::trim)
+      .filter(|s| !s.is_empty())
+      .map(str::to_string)
+  };
+  let server = trim("serverPath")?;
+  let model = trim("modelPath")?;
+  let extra = trim("extraArgs").unwrap_or_default();
+  Some((server, model, extra))
+}
+
+fn is_local_provider(cold: &Value) -> bool {
+  cold.get("provider").and_then(Value::as_str) == Some("local")
+}
 
 /// 启动旗标拼写:新版 llama.cpp 用复数形式(限定服务只做嵌入),旧版单数;
 /// 参数不认识会启动即退,按早退窗判定后换拼写重试
@@ -201,26 +242,6 @@ fn read_config(app: &AppHandle) -> Result<Value, String> {
   crate::endpoint_proxy::committed_or_file_config(app)
 }
 
-/// 从配置取托管三要素(provider=local + 程序路径 + 模型路径);缺任一返回 None
-fn managed_config_of(cfg: &Value) -> Option<(String, String, String)> {
-  let cold = cfg.get("coldMemory")?;
-  if cold.get("provider").and_then(Value::as_str) != Some("local") {
-    return None;
-  }
-  let trim = |key: &str| -> Option<String> {
-    cold
-      .get(key)
-      .and_then(Value::as_str)
-      .map(str::trim)
-      .filter(|s| !s.is_empty())
-      .map(str::to_string)
-  };
-  let server = trim("serverPath")?;
-  let model = trim("modelPath")?;
-  let extra = trim("extraArgs").unwrap_or_default();
-  Some((server, model, extra))
-}
-
 /// 托管实例就绪后的代理解析地址;无就绪实例返回 None(走配置地址)
 pub fn current_base() -> Option<String> {
   let port = READY_PORT.load(Ordering::Acquire);
@@ -335,19 +356,23 @@ fn spawn_lifecycle(port: u16) {
 }
 
 /// 启动(重启语义:先清旧实例)。成功后状态 starting→ready 由生命周期任务推进;
-/// 失败置 failed 并带 stderr 截尾。
+/// 失败置 failed 并带 stderr 截尾,同时记录失败时刻(请求路径拉起的冷却窗基准)
 pub async fn start_managed(app: AppHandle) -> Result<(), String> {
   if SPAWNING.swap(true, Ordering::AcqRel) {
     return Err("本地嵌入服务已在启动中".into());
   }
   let result = start_inner(&app).await;
+  if result.is_err() {
+    *LAST_START_FAIL.lock().expect("冷却锁") = Some(Instant::now());
+  }
   SPAWNING.store(false, Ordering::Release);
   result
 }
 
 async fn start_inner(app: &AppHandle) -> Result<(), String> {
   let cfg = read_config(app)?;
-  let Some((server_path, model_path, extra)) = managed_config_of(&cfg) else {
+  let cold = cfg.get("coldMemory").cloned().unwrap_or(Value::Null);
+  let Some((server_path, model_path, extra)) = managed_paths_of(&cold) else {
     return Err("请先填写 llama-server 程序路径与 embedding 模型路径".into());
   };
 
@@ -397,25 +422,74 @@ async fn start_inner(app: &AppHandle) -> Result<(), String> {
   Err(format!("llama-server 启动失败:{shown}"))
 }
 
-/// 应用启动自拉起:autoStart 开、provider=local 且路径齐全才动手;失败只记日志
-/// (fail-open,绝不影响应用启动)
+/// 请求路径拉起的冷却窗:失败后 60s 内不因请求反复拉起(防坏配置拉起循环);
+/// 设置页手动启动不走此闸
+const LAZY_RETRY_COOLDOWN: Duration = Duration::from_secs(60);
+
+/// 冷却判定(纯函数,elapsed = 距上次启动失败的时长;None = 从未失败)
+fn lazy_cooldown_ok(elapsed: Option<Duration>) -> bool {
+  elapsed.map_or(true, |d| d >= LAZY_RETRY_COOLDOWN)
+}
+
+/// coldLocal 请求闸门(代理在 current_base 未命中时调用):
+///   Ready(base)   托管实例就绪(极端竞态下重新拿到),代理直接用它
+///   Manual        手动模式(off):代理回退配置地址
+///   Refuse(msg)   拒绝本次请求并给出可读错误(启动中/冷却/配置不全);
+///                 lazy/boot 且配置齐全时顺带后台拉起——本次失败 fail-open,就绪自愈
+pub enum ColdLocalGate {
+  Ready(String),
+  Manual,
+  Refuse(String),
+}
+
+pub fn cold_local_gate(app: &AppHandle) -> ColdLocalGate {
+  if let Some(base) = current_base() {
+    return ColdLocalGate::Ready(base);
+  }
+  let cold = read_config(app)
+    .ok()
+    .and_then(|cfg| cfg.get("coldMemory").cloned())
+    .unwrap_or(Value::Null);
+  // 手动模式:没托管的份,配置地址说话
+  if !is_local_provider(&cold) || managed_mode_of(&cold) == "off" {
+    return ColdLocalGate::Manual;
+  }
+  let (status, _) = STATUS.lock().expect("状态锁").clone();
+  if status == ST_STARTING {
+    return ColdLocalGate::Refuse("本地嵌入服务正在后台启动,本次先略过,稍后自动恢复".into());
+  }
+  // stopped/failed:冷却窗内不反复拉起(坏配置防循环);窗外且路径齐全就再试一次
+  let elapsed = LAST_START_FAIL
+    .lock()
+    .expect("冷却锁")
+    .map(|t| t.elapsed());
+  if !lazy_cooldown_ok(elapsed) {
+    return ColdLocalGate::Refuse(
+      "本地嵌入服务最近一次启动失败,冷却中(约 1 分钟后自动重试,或到设置页手动启动看报错)".into(),
+    );
+  }
+  if managed_paths_of(&cold).is_none() {
+    return ColdLocalGate::Refuse("请先在设置里填写 llama-server 程序路径与 embedding 模型路径".into());
+  }
+  tauri::async_runtime::spawn(start_managed(app.clone()));
+  ColdLocalGate::Refuse("本地嵌入服务正在后台启动,本次先略过,稍后自动恢复".into())
+}
+
+/// 应用启动自拉起:managed=boot 且路径齐全才动手;失败只记日志(fail-open,
+/// 绝不影响应用启动——lazy 模式会在首条嵌入请求时再拉)
 pub async fn auto_start_if_configured(app: AppHandle) {
   let cfg = match read_config(&app) {
     Ok(v) => v,
     Err(_) => return,
   };
-  let auto = cfg
-    .get("coldMemory")
-    .and_then(|c| c.get("autoStart"))
-    .and_then(Value::as_bool)
-    == Some(true);
-  if !auto {
+  let cold = cfg.get("coldMemory").cloned().unwrap_or(Value::Null);
+  if !is_local_provider(&cold) || managed_mode_of(&cold) != "boot" {
     return;
   }
-  match managed_config_of(&cfg) {
-    Some(_) => log::info!("本地嵌入服务随应用启动拉起"),
-    None => return, // 路径没配齐:静默跳过,设置页状态可见
+  if managed_paths_of(&cold).is_none() {
+    return; // 路径没配齐:静默跳过,设置页状态可见
   }
+  log::info!("本地嵌入服务随应用启动拉起");
   if let Err(e) = start_managed(app).await {
     log::warn!("本地嵌入服务自动启动失败(经历记忆停用): {e}");
   }
@@ -511,28 +585,50 @@ mod tests {
   }
 
   #[test]
-  fn managed_config_requires_local_and_both_paths() {
+  fn managed_mode_reads_new_field_and_migrates_legacy_boolean() {
+    // 新枚举直读
+    let m: Value = serde_json::from_str(r#"{"provider":"local","managed":"lazy"}"#).unwrap();
+    assert_eq!(managed_mode_of(&m), "lazy");
+    let b: Value = serde_json::from_str(r#"{"provider":"local","managed":"boot"}"#).unwrap();
+    assert_eq!(managed_mode_of(&b), "boot");
+    // 老布尔 autoStart:true → boot;缺省 → off
+    let legacy: Value = serde_json::from_str(r#"{"provider":"local","autoStart":true}"#).unwrap();
+    assert_eq!(managed_mode_of(&legacy), "boot");
+    let off: Value = serde_json::from_str(r#"{"provider":"local"}"#).unwrap();
+    assert_eq!(managed_mode_of(&off), "off");
+  }
+
+  #[test]
+  fn managed_paths_requires_both_paths_and_trims_extra() {
     let full: Value = serde_json::from_str(
-      r#"{"coldMemory":{"provider":"local","autoStart":true,
-        "serverPath":"D:/tools/llama-server.exe","modelPath":"D:/m/bge.gguf","extraArgs":" --pooling mean "}}"#,
+      r#"{"provider":"local","managed":"lazy",
+        "serverPath":"D:/tools/llama-server.exe","modelPath":"D:/m/bge.gguf","extraArgs":" --pooling mean "}"#,
     )
     .unwrap();
-    let (server, model, extra) = managed_config_of(&full).unwrap();
+    let (server, model, extra) = managed_paths_of(&full).unwrap();
     assert_eq!(server, "D:/tools/llama-server.exe");
     assert_eq!(model, "D:/m/bge.gguf");
     assert_eq!(extra, "--pooling mean");
 
-    // 非 local 不托管
-    let endpoint: Value = serde_json::from_str(
-      r#"{"coldMemory":{"provider":"endpoint","serverPath":"x","modelPath":"y"}}"#,
-    )
-    .unwrap();
-    assert!(managed_config_of(&endpoint).is_none());
     // 缺模型路径不托管
     let no_model: Value = serde_json::from_str(
-      r#"{"coldMemory":{"provider":"local","serverPath":"x"}}"#,
+      r#"{"provider":"local","serverPath":"x"}"#,
     )
     .unwrap();
-    assert!(managed_config_of(&no_model).is_none());
+    assert!(managed_paths_of(&no_model).is_none());
+    assert!(is_local_provider(&full));
+    assert!(is_local_provider(&no_model)); // local 但缺路径
+    let endpoint: Value = serde_json::from_str(r#"{"provider":"endpoint"}"#).unwrap();
+    assert!(!is_local_provider(&endpoint));
+  }
+
+  #[test]
+  fn lazy_cooldown_blocks_within_window_only() {
+    assert!(lazy_cooldown_ok(None)); // 从未失败
+    assert!(!lazy_cooldown_ok(Some(Duration::from_secs(1))));
+    assert!(lazy_cooldown_ok(Some(LAZY_RETRY_COOLDOWN)));
+    assert!(lazy_cooldown_ok(Some(
+      LAZY_RETRY_COOLDOWN + Duration::from_secs(1)
+    )));
   }
 }

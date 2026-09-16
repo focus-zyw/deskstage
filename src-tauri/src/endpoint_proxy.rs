@@ -150,15 +150,17 @@ fn profile_base(v: &Value, profile_id: &str) -> Result<String, String> {
 }
 
 /// 解析端点 base:kind 指针为缺省路径;kind=llm 且带 profile(非缺省/'main')时
-/// 改走模型档案;kind=coldLocal 时应用托管的 llama-server 实例优先(临时端口,
-/// 就绪才有),配置地址是手动模式与回退。地址由 Rust 从 config.json 解析,
-/// 前端从头到尾接触不到完整 URL。
+/// 改走模型档案;kind=coldLocal 时应用托管的 llama-server 实例优先(临时端口),
+/// 按需拉起模式在此闸门里触发后台拉起,手动模式回退配置地址。地址由 Rust 从
+/// config.json 解析,前端从头到尾接触不到完整 URL。
 fn configured_base(app: &AppHandle, kind: &str, profile: Option<&str>) -> Result<String, String> {
     let (pointer, _) = kind_spec(kind)?;
     let v = committed_or_file_config(app)?;
     if kind == "coldLocal" {
-        if let Some(base) = crate::local_embed_server::current_base() {
-            return Ok(base);
+        match crate::local_embed_server::cold_local_gate(app) {
+            crate::local_embed_server::ColdLocalGate::Ready(base) => return Ok(base),
+            crate::local_embed_server::ColdLocalGate::Refuse(msg) => return Err(msg),
+            crate::local_embed_server::ColdLocalGate::Manual => {}
         }
     }
     if kind == "llm" {

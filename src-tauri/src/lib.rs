@@ -219,7 +219,7 @@ pub fn run() {
             spawn_cursor_poll(app.handle().clone());
             pointer_hook::spawn(app.handle().clone());
             spawn_topmost_watchdog(app.handle().clone());
-            // 本地嵌入服务自拉起:冷记忆选了本地 llama.cpp 且开了托管(autoStart)
+            // 本地嵌入服务自拉起:冷记忆选了本地 llama.cpp 且托管模式为随应用启动(boot)
             // 才动手;异步进行不阻塞启动,失败只记日志(fail-open,经历记忆停用)
             tauri::async_runtime::spawn(local_embed_server::auto_start_if_configured(
                 app.handle().clone(),

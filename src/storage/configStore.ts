@@ -276,9 +276,11 @@ export interface ColdMemoryConfig {
   /** local 模式:llama-server 服务地址(含 /v1);空则用 COLD_LOCAL_URL_DEFAULT。
    *  托管实例就绪时代理会优先走它的临时端口,此地址是手动模式与回退 */
   localUrl?: string
-  /** local 托管:应用启动时自动拉起 llama-server(需 serverPath/modelPath 齐全);
-   *  设置页也可随时手动启停。缺省 false(false 不落盘) */
-  autoStart?: boolean
+  /** local 托管模式:'off' 手动(缺省,自己起服务填地址);'boot' 随应用启动拉起
+   *  (常驻,响应零等待);'lazy' 按需拉起(聊天用到而服务没跑时后台自动拉起,
+   *  本次请求略过、就绪自愈,用户无感知)。缺省 off(off 不落盘);
+   *  老配置布尔 autoStart:true 由清洗迁移为 'boot' */
+  managed?: 'off' | 'boot' | 'lazy'
   /** local 托管:llama-server 可执行文件路径 */
   serverPath?: string
   /** local 托管:专用 embedding 模型 gguf 路径——对话模型没有 pooling 头,
@@ -477,7 +479,8 @@ export const DEFAULT_CONFIG: AppConfig = {
 
 /** 经历记忆嵌入配置清洗:provider 只认 'local'(缺省即 endpoint,不落盘);endpoint
  *  两键与 localUrl 收非空短串,localUrl 还须是合法 http(s) URL 否则丢弃;托管字段
- *  (autoStart/serverPath/modelPath/extraArgs)收布尔与截尾短串 */
+ *  (managed/serverPath/modelPath/extraArgs)收合法枚举与截尾短串,
+ *  老布尔 autoStart:true 迁移为 managed:'boot' */
 function sanitizeColdMemory(v: unknown): ColdMemoryConfig {
   const o = (v ?? {}) as Record<string, unknown>
   let localUrl = ''
@@ -497,6 +500,15 @@ function sanitizeColdMemory(v: unknown): ColdMemoryConfig {
   const serverPath = path('serverPath', 400)
   const modelPath = path('modelPath', 400)
   const extraArgs = path('extraArgs', 300)
+  // managed 只认三个合法值;老配置布尔 autoStart:true 迁移为 'boot'(off 缺省不落盘)
+  const legacyBoot = o.autoStart === true
+  const managedRaw = o.managed
+  const managed =
+    managedRaw === 'boot' || managedRaw === 'lazy'
+      ? managedRaw
+      : legacyBoot && (managedRaw === undefined || managedRaw === 'off')
+        ? ('boot' as const)
+        : undefined
   return {
     ...(o.provider === 'local' ? { provider: 'local' as const } : {}),
     ...(typeof o.embedProfile === 'string' && o.embedProfile.trim()
@@ -506,7 +518,7 @@ function sanitizeColdMemory(v: unknown): ColdMemoryConfig {
       ? { embedModel: o.embedModel.trim().slice(0, 120) }
       : {}),
     ...(localUrl ? { localUrl } : {}),
-    ...(o.autoStart === true ? { autoStart: true } : {}),
+    ...(managed ? { managed } : {}),
     ...(serverPath ? { serverPath } : {}),
     ...(modelPath ? { modelPath } : {}),
     ...(extraArgs ? { extraArgs } : {}),

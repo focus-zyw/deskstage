@@ -70,27 +70,41 @@ test('托管控制:浏览器预览下状态返回 null、启停是安全 no-op',
 
 // ---- config 清洗:托管字段 ----
 
-test('清洗冷记忆托管字段:autoStart 只认 true,路径收截尾串,非法 provider 丢弃', () => {
+test('清洗冷记忆托管字段:managed 三态、老布尔 autoStart 迁移 boot、路径收截尾串', () => {
   const cfg = sanitizeConfig({
     coldMemory: {
       provider: 'local',
-      autoStart: true,
+      managed: 'lazy',
       serverPath: '  D:\\tools\\llama-server.exe  ',
       modelPath: 'D:\\models\\bge.gguf',
       extraArgs: ' --pooling mean ',
-      autoStartStr: 'yes',
     },
   }).coldMemory
   assert.equal(cfg.provider, 'local')
-  assert.equal(cfg.autoStart, true)
+  assert.equal(cfg.managed, 'lazy')
   assert.equal(cfg.serverPath, 'D:\\tools\\llama-server.exe')
   assert.equal(cfg.modelPath, 'D:\\models\\bge.gguf')
   assert.equal(cfg.extraArgs, '--pooling mean')
 
-  // autoStart 非 true 不落盘(缺省 false);空路径字段丢弃
-  const off = sanitizeConfig({
-    coldMemory: { provider: 'local', autoStart: false, serverPath: '   ' },
-  }).coldMemory
-  assert.equal('autoStart' in off, false)
-  assert.equal('serverPath' in off, false)
+  // 老布尔 autoStart:true 迁移为 boot;新值优先且 off 不落盘;非法值丢弃
+  assert.equal(
+    sanitizeConfig({ coldMemory: { provider: 'local', autoStart: true } }).coldMemory.managed,
+    'boot',
+  )
+  assert.equal(
+    sanitizeConfig({ coldMemory: { provider: 'local', managed: 'off', autoStart: true } }).coldMemory
+      .managed,
+    'boot',
+  )
+  const off = sanitizeConfig({ coldMemory: { provider: 'local', managed: 'off' } }).coldMemory
+  assert.equal('managed' in off, false)
+  assert.equal(
+    sanitizeConfig({ coldMemory: { provider: 'local', managed: 'always' } }).coldMemory.managed,
+    undefined,
+  )
+
+  // 空路径字段丢弃
+  const bare = sanitizeConfig({ coldMemory: { provider: 'local', managed: 'lazy', serverPath: '   ' } })
+    .coldMemory
+  assert.equal('serverPath' in bare, false)
 })

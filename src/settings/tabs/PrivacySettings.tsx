@@ -366,21 +366,28 @@ export function PrivacySettings() {
                 }}
               />
             </SetField>
-            <SetLine
-              title="托管启动 llama-server"
-              hint="应用自动拉起并看管本地服务(退出时一并关闭),启动参数固定带 --embeddings 把服务限制为只做嵌入;关 = 手动模式,自己在终端起服务、只填上方地址"
+            <SetField
+              label="托管模式"
+              htmlFor="cfg-cold-managed"
+              hint="托管 = 应用自动拉起并看管 llama-server(退出时一并关闭),启动参数固定带 --embeddings 把服务限制为只做嵌入;按需拉起在启动失败后会冷却约 1 分钟再自动重试"
             >
-              <SetSwitch
-                checked={form.coldMemory.autoStart === true}
-                label="托管启动 llama-server"
-                onChange={(v) => {
-                  const next = { ...form.coldMemory, autoStart: v }
+              <select
+                id="cfg-cold-managed"
+                value={form.coldMemory.managed ?? 'off'}
+                onChange={(e) => {
+                  const raw = e.target.value
+                  const managed = raw === 'boot' || raw === 'lazy' ? (raw as 'boot' | 'lazy') : undefined
+                  const next = { ...form.coldMemory, managed }
                   setForm({ ...form, coldMemory: next })
                   saveField({ coldMemory: next }, true)
                 }}
-              />
-            </SetLine>
-            {form.coldMemory.autoStart === true && (
+              >
+                <option value="off">不托管(手动起服务,只填上方地址)</option>
+                <option value="boot">随应用启动(常驻内存,响应零等待)</option>
+                <option value="lazy">按需拉起(无感知,推荐)</option>
+              </select>
+            </SetField>
+            {(form.coldMemory.managed ?? 'off') !== 'off' && (
               <>
                 <SetField label="llama-server 程序路径" htmlFor="cfg-cold-server-path">
                   <input
@@ -431,8 +438,9 @@ export function PrivacySettings() {
             )}
             <div className="set-note">
               模型请选专用 embedding 模型,不要用对话模型。体积参考:bge-small-zh-v1.5 量化约 25MB,冷记忆检索足够;
-              bge-m3 Q8 约 600MB,质量上限更高。托管关闭时自己起服务:
-              <code>llama-server -m 模型.gguf --embedding --port 8080</code>。
+              bge-m3 Q8 约 600MB,质量上限更高。按需拉起模式下,聊天用到而服务没跑时会自动后台拉起,
+              首次有几秒空窗(期间经历记忆自动停用,就绪自愈),全程无需手动操作。
+              托管关闭时自己起服务:<code>llama-server -m 模型.gguf --embedding --port 8080</code>。
               换嵌入模型后旧向量不可用,经历记忆会自动重开;服务没启动时经历记忆停用,聊天不受影响。
             </div>
           </>
