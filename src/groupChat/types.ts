@@ -153,4 +153,7 @@ export interface CommitMeta {
   expression?: ExpressionTrace
   /** 质量闸在最终文本上仍存在的问题(repetition/echo 等不可修复项照常提交) */
   gateIssues?: GateIssue[]
+  /** 情绪动作(plain 标签/schema action 字段归一后的词表词,平淡 = talk 省略):
+   *  呈现侧切立绘表情、moodState 情绪增量的唯一依据 */
+  action?: string
 }

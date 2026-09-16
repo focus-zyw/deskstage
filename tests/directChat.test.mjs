@@ -234,3 +234,48 @@ test('apiActor plain 模式必须关闭 JSON 模式(守卫)', async () => {
     'response_format json_object 会逼模型自造 JSON,plain 直答必须关闭',
   )
 })
+
+test('情绪标签:回复尾部 <mood:X> → 落盘干净文本 + presentMood 收到动作', async () => {
+  const calls = []
+  const moods = []
+  const adapter = {
+    prefersFullContext: () => true,
+    async react(req) {
+      calls.push(req)
+      // 模拟真实模型:直答正文 + 尾部情绪标签(与提示词 MOOD_TAG_RULE 约定一致)
+      return schema.plainSpeakReaction('哈哈这个好笑,你也很棒<mood:laugh>', req.batch)
+    },
+  }
+  const { session } = makeSession('A', { A: adapter }, {
+    opts: { presentMood: (who, action) => moods.push([who, action]) },
+  })
+  await session.send('讲个笑话呗')
+  await waitFor(() => calls.length >= 1)
+  await session.whenIdle()
+  await waitFor(() => moods.length >= 1)
+  const turns = await store.listChatTurns(20, 'direct:A')
+  assert.equal(turns.at(-1).who, 'A')
+  assert.equal(turns.at(-1).text, '哈哈这个好笑,你也很棒', '落盘正文不含标签残渣')
+  assert.deepEqual(moods, [['A', 'laugh']], '面板房零 TTS 零气泡,但情绪动作要到达舞台')
+})
+
+test('情绪标签缺失(平淡回复):不触发 presentMood,一切照旧', async () => {
+  const calls = []
+  const moods = []
+  const adapter = {
+    prefersFullContext: () => true,
+    async react(req) {
+      calls.push(req)
+      return schema.plainSpeakReaction('嗯,知道了', req.batch)
+    },
+  }
+  const { session } = makeSession('A', { A: adapter }, {
+    opts: { presentMood: (who, action) => moods.push([who, action]) },
+  })
+  await session.send('收到回一下')
+  await waitFor(() => calls.length >= 1)
+  await session.whenIdle()
+  await new Promise((r) => setTimeout(r, 60))
+  assert.deepEqual(moods, [], '无标签 = talk,面板模式桌面保持安静')
+})
+

@@ -22,8 +22,14 @@ export interface PresentationItem {
 }
 
 export interface RoomPresenterDeps {
-  /** 台词上屏 + 动画(气泡停留时长内部决定) */
-  presentTurn(item: { speaker: ActorId; text: string; holdMs: number; memoryRefs?: ChatMemoryRef[] }): void
+  /** 台词上屏 + 动画(气泡停留时长内部决定;action = 情绪动作词表词,呈现侧查表) */
+  presentTurn(item: {
+    speaker: ActorId
+    text: string
+    holdMs: number
+    memoryRefs?: ChatMemoryRef[]
+    action?: string
+  }): void
   /** 生命周期句柄;null = 被更高优先级压制/无声 */
   speakTracked(speaker: ActorId, text: string): { started: Promise<'audible' | 'silent'>; ended: Promise<void>; stop(): void } | null
   prefetch?(speaker: ActorId, text: string): void
@@ -95,6 +101,7 @@ export function createRoomPresenter(deps: RoomPresenterDeps): RoomPresenter {
           text: item.text,
           holdMs: holdMsOf(item.text),
           memoryRefs: takeBadge(item),
+          action: item.action,
         })
         if (handle && (await handle.started) === 'audible') {
           deps.onTurnSpeechStart?.()

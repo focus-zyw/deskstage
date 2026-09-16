@@ -44,13 +44,18 @@ export interface ChatHostDeps {
   queueInterjection(text: string, who: Speaker): void
   /** 呈现一句角色台词(上屏+动画;TTS 由 tts 通知,失败不影响本回调)。
    *  memoryRefs 是"原子的呈现事件"载荷:本轮实际注入的记忆引用,首句携带(徽标),
-   *  N=0 不带;演出/直播路径不传即不显示 */
+   *  N=0 不带;演出/直播路径不传即不显示。
+   *  action = 情绪动作词表词(moodTag 归一后),呈现侧查表切立绘表情 */
   presentTurn(line: {
     speaker: Speaker
     text: string
     holdMs: number
     memoryRefs?: ChatMemoryRef[]
+    action?: string
   }): void
+  /** 单聊面板房间的情绪反应:回复不上屏不朗读,只让舞台角色做个表情一拍
+   *  (面板模式"零气泡零 TTS"决策不变;action 缺省/talk = 不动作) */
+  presentMood?(who: Speaker, action?: string): void
   /** 用户这句话上屏;who 非空 = 空闲路径(顺带聚焦该角色),null = 演出插话路径 */
   presentUser(text: string, who: Speaker | null): void
   /** 收走用户气泡;文本不符(已被顶掉)时保持不动 */

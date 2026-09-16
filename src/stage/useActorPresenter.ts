@@ -10,6 +10,7 @@ import type { DialogLine, Speaker } from '../performer/player'
 import { listenersOf, reactionsOf } from '../performer/dialogSchema'
 import { moodOf } from '../storage/moodStore'
 import { tintedRelaxPose } from '../engine/moodState'
+import { stripMoodTag } from '../engine/moodTag'
 
 const NO_BUBBLE: Record<Speaker, string | null> = { A: null, B: null, C: null }
 const IDLE_POSE: Record<Speaker, string> = { A: 'idle', B: 'idle', C: 'idle' }
@@ -83,7 +84,9 @@ export function useActorPresenter() {
   }
 
   /** 插话/短句呈现;到期只回收这一句(气泡已被别的话顶掉时不再动动作与说话灯) */
-  function say(who: Speaker, text: string, opts: SayOptions = {}) {
+  function say(who: Speaker, rawText: string, opts: SayOptions = {}) {
+    // 显示层兜底:聊天情绪标签(<mood:x>)绝不上屏——落盘前已剥,这里防历史/回放漏网
+    const text = stripMoodTag(rawText)
     const { action: act, ms = 1600, loud = false, reacting: react = false, speaking: talk = false } = opts
     window.clearTimeout(timers.current[who])
     cancelRelax(who)
@@ -106,7 +109,9 @@ export function useActorPresenter() {
 
   /** 演出逐句上屏:气泡/表情/语气/说话态 + 各角色同步反应与惊讶脉冲。
    *  台词在笑 → 用大笑表情(LLM 词表有 laugh 时直接命中,否则启发式兜底) */
-  function showTalk(line: DialogLine) {
+  function showTalk(rawLine: DialogLine) {
+    // 同 say 的显示层兜底:协议残渣不跟台词上屏(其余字段原样透传)
+    const line: DialogLine = { ...rawLine, text: stripMoodTag(rawLine.text) }
     const laughing = /哈哈+|嘿嘿|嘻嘻|笑死|233/.test(line.text)
     const act = laughing ? 'laugh' : line.action || 'talk'
     cancelRelax(line.speaker)
@@ -167,6 +172,15 @@ export function useActorPresenter() {
     setAction((a) => ({ ...a, [who]: pose }))
   }
 
+  /** 做动作一拍后自动放松回 idle(单聊面板回复的情绪反应:不弹气泡不朗读)。
+   *  放松走既有 scheduleRelax(负向余波先落染色姿势),与台词句尾同一套回收语义 */
+  function pose(who: Speaker, act: string, ms = 2600) {
+    if (!act || act === 'idle' || act === 'talk') return
+    cancelRelax(who)
+    setAction((a) => ({ ...a, [who]: act }))
+    scheduleRelax(who, ms)
+  }
+
   /** 立即清场(停止/开播前):气泡与动作全复位 */
   function reset() {
     for (const w of ['A', 'B', 'C'] as const) {
@@ -184,7 +198,7 @@ export function useActorPresenter() {
 
   return {
     bubble, action, delivery, speaking, pulseFor, reacting, loudBubble, memBadge,
-    say, showTalk, hush, endLine, pulse, settle, setPose, reset,
+    say, showTalk, hush, endLine, pulse, settle, setPose, pose, reset,
   }
 }
 

@@ -42,7 +42,8 @@ import { createRoomPresenter, type RoomPresenter } from '../groupChat/presenter'
 import type { ActorId, ActorRuntimeState, Clock } from '../groupChat/types'
 import { personaText } from '../engine/persona'
 import { moodHintLine } from '../engine/moodState'
-import { getMoods } from '../storage/moodStore'
+import { moodDeltaOfAction } from '../engine/moodTag'
+import { applyMoodDeltas, getMoods } from '../storage/moodStore'
 import { contextAssembler } from '../context/assembler'
 import { contextLifecycle } from '../context/lifecycle'
 import { createLegacyChatSession, type LegacyChatSession } from './legacyChat'
@@ -241,15 +242,18 @@ export function createChatSession(
       presenter = createRoomPresenter({
         clock,
         // 单聊房间 = 面板模式:回复只在聊天面板内渲染,不弹舞台气泡、不朗读;
-        // 提交顺序/静止谓词机制不变(立即 ended 的句柄让 presenter 快速放行)
+        // 情绪动作仍要可见——presentMood 让角色做个表情一拍(无文字无声音,不抢戏)
         presentTurn: room
-          ? () => {}
+          ? (item) => {
+              if (item.action && item.action !== 'talk') host.presentMood?.(item.speaker, item.action)
+            }
           : (item) =>
               host.presentTurn({
                 speaker: item.speaker,
                 text: item.text,
                 holdMs: item.holdMs,
                 memoryRefs: item.memoryRefs,
+                action: item.action,
               }),
         speakTracked: room
           ? () => ({ started: Promise.resolve('silent' as const), ended: Promise.resolve(), stop: () => {} })
@@ -368,7 +372,16 @@ export function createChatSession(
           speaker: msg.author as ActorId,
           text: msg.text,
           chainRootId: msg.causalRootId,
+          action: meta?.action,
         })
+        // 情绪余波闭环:带情绪动作的回复按词表小额入账 moodState(无标签不漂移;
+        // 单笔钳 MAX_EVENT_DELTA,读时惰性衰减),待机染色与下轮心情提示自动接上
+        const moodDelta = moodDeltaOfAction(meta?.action)
+        if (moodDelta && (msg.author === 'A' || msg.author === 'B' || msg.author === 'C')) {
+          void applyMoodDeltas([
+            { who: msg.author, ...moodDelta, cause: '聊天中流露的情绪' },
+          ]).catch(() => {})
+        }
       },
       onEvent: (e) => {
         // 转向/停止恢复 → 网页会话作废(旧页面内容不污染新批次)

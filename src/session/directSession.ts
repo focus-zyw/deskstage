@@ -12,6 +12,9 @@ export interface DirectSessionOpts
   extends Pick<ChatSessionOpts, 'clock' | 'config' | 'adapters'> {
   /** 整轮零回复的兜底提示(面板内展示;缺省 no-op) */
   presentFallback?: (line: { speaker: ActorId; text: string }) => void
+  /** 回复情绪的舞台动作反应(面板模式零气泡零 TTS 不变,只让角色做个表情一拍;
+   *  缺省 no-op = 桌面保持安静)。宿主(App)经 ChatPanel 注入 */
+  presentMood?: (who: ActorId, action?: string) => void
 }
 
 export function createDirectSession(slot: ActorId, opts: DirectSessionOpts = {}): ChatSession {
@@ -25,6 +28,7 @@ export function createDirectSession(slot: ActorId, opts: DirectSessionOpts = {})
       presentUser: () => {}, // 用户消息由面板渲染(chatlog 订阅 + 本地乐观上屏)
       clearUser: () => {},
       presentFallback: (line) => opts.presentFallback?.(line),
+      presentMood: (who, action) => opts.presentMood?.(who, action),
       onUserActive: () => {},
     },
     {},

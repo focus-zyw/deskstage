@@ -75,7 +75,13 @@ export interface GroupChatDeps {
    *  meta.expression = 表达导演本轮留痕(落盘 trace 用;落盘时刻必须可用) */
   onCommit?(
     msg: RoomMessage | null,
-    meta: { actor: ActorId; result: CommitResult; expression?: ExpressionTrace; gateIssues?: GateIssue[] },
+    meta: {
+      actor: ActorId
+      result: CommitResult
+      expression?: ExpressionTrace
+      gateIssues?: GateIssue[]
+      action?: string
+    },
   ): void
   /** 用户消息入列通知(宿主负责落盘+短期窗口;工具/记忆在 openUserTurn 间隙执行)。
    *  primary 为 null = 停止词分支(消息照常入列留痕,但全员暂停) */
@@ -147,6 +153,7 @@ export function createGroupChatRuntime(deps: GroupChatDeps): GroupChatRuntime {
         result,
         expression: meta?.expression,
         gateIssues: meta?.gateIssues,
+        action: meta?.action,
       })
       router.trackDisabled()
       if (result.outcome === 'committed-speak') wakeAll()

@@ -34,9 +34,16 @@ interface Props {
   onPinChange: (pinned: boolean) => void
   onClose: () => void
   route?: ChatRoute | null
+  /** 单聊回复情绪的舞台动作反应(透传给 direct 房间;仅会话首建时生效,须传稳定引用) */
+  onMood?: (who: ActorId, action?: string) => void
 }
 
 type View = { kind: 'list' } | { kind: 'group' } | { kind: 'direct'; slot: ActorId }
+
+/** onMood → 单聊房间 opts:缺省不传(会话自持 no-op),有则透传(会话首建时生效) */
+function moodOpts(onMood: Props['onMood']): { presentMood: NonNullable<Props['onMood']> } | undefined {
+  return onMood ? { presentMood: onMood } : undefined
+}
 
 const SLOTS: ActorId[] = ['A', 'B', 'C']
 const FEED_TAIL = 50
@@ -50,7 +57,7 @@ function loadSeen(): Record<string, number> {
   }
 }
 
-export function ChatPanel({ innerRef, pos, pinned, onPinChange, onClose, route }: Props) {
+export function ChatPanel({ innerRef, pos, pinned, onPinChange, onClose, route, onMood }: Props) {
   const version = useChatLogVersion()
   const [view, setView] = useState<View>({ kind: 'list' })
   const [turns, setTurns] = useState<ChatLogEntry[]>([])
@@ -155,7 +162,8 @@ export function ChatPanel({ innerRef, pos, pinned, onPinChange, onClose, route }
       setBusy(false)
       return undefined
     }
-    const session = view.kind === 'group' ? getGroupSession() : getDirectSession(view.slot)
+    const session =
+      view.kind === 'group' ? getGroupSession() : getDirectSession(view.slot, moodOpts(onMood))
     const sync = () => setBusy(session.getSnapshot().busy)
     sync()
     return session.subscribe(sync)
@@ -166,6 +174,8 @@ export function ChatPanel({ innerRef, pos, pinned, onPinChange, onClose, route }
   useEffect(() => {
     if (!route) return
     setView({ kind: 'direct', slot: route.slot })
+    // 有意只依赖 nonce:重复点击同一角色也要重新触发跳转
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [route?.nonce])
 
   const summaryOf = (id: string): ConversationSummary | undefined => summaries.find((s) => s.sessionId === id)
@@ -180,7 +190,8 @@ export function ChatPanel({ innerRef, pos, pinned, onPinChange, onClose, route }
     if (!text || sending || view.kind === 'list') return
     setSending(true)
     setDraft('')
-    const session = view.kind === 'group' ? getGroupSession() : getDirectSession(view.slot)
+    const session =
+      view.kind === 'group' ? getGroupSession() : getDirectSession(view.slot, moodOpts(onMood))
     const res = await session.send(text).catch(() => 'busy' as const)
     if (res !== 'accepted') {
       setDraft((cur) => (cur.trim() ? cur : text)) // 已有新输入就不覆盖

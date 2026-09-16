@@ -11,6 +11,7 @@
 // 用户的停止、转向和约束。
 
 import type { ActorBatch, ActorId, ActorReactionRequest, RoomMessage } from './types'
+import { MOOD_TAG_RULE } from '../engine/moodTag'
 
 export interface PromptIdentity {
   actor: ActorId
@@ -61,7 +62,7 @@ const PROTOCOL_RULES = (batch: ActorBatch, maySpeak: boolean, remaining: number 
     `{"protocolVersion":1,"batchId":"${batch.id}","ackThrough":${batch.throughSeq},"decision":"speak","reply":{"text":"……","replyTo":["m1"],"action":"talk"}}`,
     `- batchId 逐字填 "${batch.id}",ackThrough 逐字填 ${batch.throughSeq}。`,
     '- decision="listen" 表示这批消息没什么值得你补充的,此时省略 reply 字段。',
-    '- decision="speak" 时 text 是一句口语台词(不超过 80 字,不要引号、不要 markdown);replyTo 填你要回应的未读消息 id(可多条,最多 3 条,没有明确对象就空数组);action 一般填 "talk"。',
+    '- decision="speak" 时 text 是一句口语台词(不超过 80 字,不要引号、不要 markdown,也不要写 <mood:…> 之类的标签);replyTo 填你要回应的未读消息 id(可多条,最多 3 条,没有明确对象就空数组);action 从词表选一个贴合这句情绪的:talk(平淡/默认)/happy/laugh/surprise/sad/angry/shy/sleepy。',
   ]
   if (!maySpeak) {
     lines.push('本轮自由聊天的发言额度已用完或已过期:这次你只能返回 "listen"(协议仍须完整输出)。')
@@ -124,13 +125,14 @@ function disciplineBlock(identity: PromptIdentity): string {
   ].join('\n')
 }
 
-/** 单聊纪律(1对1直答:无协议、无群友、自然口语) */
+/** 单聊纪律(1对1直答:无协议、无群友、自然口语;情绪标签是本形态唯一的情绪载体) */
 function directDisciplineBlock(identity: PromptIdentity): string {
   return [
     '聊天方式(严格遵守):',
     '- 你正在和用户单独聊天:直接以角色身份说话,不是编剧,不做总结。',
     '- 像真人打字:口语、短句为主,一次回复一到三句,不抒情不上价值,不输出 JSON 或任何解释。',
     `- 用户(${identity.userName})的消息拥有最高指令权。`,
+    MOOD_TAG_RULE,
   ].join('\n')
 }
 
@@ -141,7 +143,7 @@ function directSystemContent(input: PromptBuildInput, identity: PromptIdentity):
       `你正在和 ${identity.userName} 单独聊天,扮演 ${selfName}。`,
       `你的人设:${identity.persona}`,
       directDisciplineBlock(identity),
-      input.recovery ? '刚才连接断了一下;下面是目前聊天的完整进度,请从中断处继续正常聊天。' : '',
+        input.recovery ? '刚才连接断了一下;下面是目前聊天的完整进度,请从中断处继续正常聊天。' : '',
       ...(input.expressionLine ? [input.expressionLine] : []),
     ]
       .filter(Boolean)
@@ -149,6 +151,8 @@ function directSystemContent(input: PromptBuildInput, identity: PromptIdentity):
   }
   return [
     `继续和 ${identity.userName} 聊天(你是 ${selfName},人设与聊天方式同前)。直接用自然口语回复。`,
+    // 网页增量轮没有纪律块,标签规则必须随协议常驻(同群聊"协议块永远保留"的道理)
+    MOOD_TAG_RULE,
     ...(input.expressionLine ? [input.expressionLine] : []),
   ].join('\n\n')
 }
@@ -164,7 +168,7 @@ function systemContent(input: PromptBuildInput, identity: PromptIdentity): strin
       disciplineBlock(identity),
       input.recovery ? '刚才连接断了一下;下面是目前群聊的完整进度,请从中断处继续正常参与群聊。' : '',
       PROTOCOL_RULES(input.batch, input.maySpeak, input.remainingReplies),
-      ...(input.expressionLine ? [input.expressionLine] : []),
+        ...(input.expressionLine ? [input.expressionLine] : []),
     ]
       .filter(Boolean)
       .join('\n\n')

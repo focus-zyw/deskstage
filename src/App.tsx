@@ -33,6 +33,7 @@ import {
 const CaptureOverlay = lazy(() => import('./CaptureOverlay').then((m) => ({ default: m.CaptureOverlay })))
 import { SPRITE_SETS, preloadSprites } from './stage/spriteSets'
 import { ensureSpriteOverridesLoaded } from './storage/spriteOverrideStore'
+import { ensureSeeded } from './storage/charactersStore'
 import { ResidentActor } from './stage/resident/ResidentActor'
 import { preloadResident } from './stage/resident/residentManifest'
 import type { Speaker } from './performer/player'
@@ -49,6 +50,7 @@ import { beginUtilityTask, type UtilityTaskHandle } from './runtime/utilityTasks
 import { FirstRunWizard } from './wizard/FirstRunWizard'
 import { resetDismissals } from './storage/interactionStore'
 import { ensureMoodLoaded } from './storage/moodStore'
+import { emotionActionOf } from './engine/moodTag'
 import { noteActivity } from './runtime/proactiveScheduler'
 import { speak } from './engine/tts'
 import { topicDirector } from './topic/director'
@@ -476,7 +478,8 @@ function App() {
   // 角色呈现器:气泡/动作/说话态的唯一归属(演出回调、插话、聊天、直播统一走它)
   const {
     bubble, action, delivery, speaking, pulseFor, reacting, loudBubble,
-    showTalk, hush, endLine, pulse, settle, setPose, reset: resetStage, memBadge,
+    showTalk, hush, endLine, pulse, settle, setPose, pose: presenterPose,
+    reset: resetStage, memBadge,
     say: presenterSay,
   } = useActorPresenter()
 
@@ -864,6 +867,7 @@ function App() {
     void ensureMoodLoaded() // 情绪档预载:presenter 待机染色要同步读
     void loadLinePacks() // 台词包存档预载:takePackLine 同步取句前必须先载入
     void getConfig().then((c) => {
+      void ensureSeeded(c) // 角色库内置条目补种(甲/乙/丙入库,老用户自定义无损固化)
       applyChars(c.characters)
       setRuntimeCharHidden(c.charactersHidden)
       setRuntimeDnd(c.dnd) // 勿扰状态进运行时(工具栏按钮/TTS 同步)
@@ -1107,6 +1111,16 @@ function App() {
   useEffect(() => {
     presenterSayRef.current = presenterSay
   })
+  const presenterPoseRef = useRef(presenterPose)
+  useEffect(() => {
+    presenterPoseRef.current = presenterPose
+  })
+  /** 单聊面板回复的情绪动作反应:面板零气泡零 TTS 不变,只让角色做个表情一拍。
+   *  稳定引用(会话惰性首建时生效,重建不换) */
+  const directMood = useCallback((who: Speaker, action?: string) => {
+    const act = emotionActionOf(action)
+    if (act !== 'talk') presenterPoseRef.current(who, act)
+  }, [])
   const pulseOtherRef = useRef(pulseOther)
   useEffect(() => {
     pulseOtherRef.current = pulseOther
@@ -1197,14 +1211,19 @@ function App() {
           names: () => charNamesRef.current,
           isPerforming: () => phaseRef.current === 'performing',
           queueInterjection: (text, who) => directorRef.current.queueInterjection(text, who),
-          presentTurn: ({ speaker, text, holdMs, memoryRefs }) => {
+          presentTurn: ({ speaker, text, holdMs, memoryRefs, action }) => {
             presenterSayRef.current(speaker, text, {
-              action: 'talk',
+              action: emotionActionOf(action),
               ms: holdMs,
               speaking: true,
               memoryCount: memoryRefs?.length ?? 0,
             })
             pulseOtherRef.current(speaker)
+          },
+          presentMood: (who, act) => {
+            // 面板单聊:不上屏不朗读,只让角色做个表情一拍(talk/未知不动作,保持安静)
+            const moodAct = emotionActionOf(act)
+            if (moodAct !== 'talk') presenterPoseRef.current(who, moodAct)
           },
           presentUser: (_text, who) => {
             if (who) setTopActor(who)
@@ -2018,6 +2037,7 @@ function App() {
             onPinChange={setChatPinned}
             onClose={() => closeOverlay('chat')}
             route={chatRoute}
+            onMood={directMood}
           />
         </Suspense>
       )}

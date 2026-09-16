@@ -344,7 +344,14 @@ export function createActorWorker(deps: ActorWorkerDeps): ActorWorker {
           actor,
           batch,
           finalReaction,
-          plan ? { expression: plan.trace, gateIssues } : undefined,
+          finalReaction.decision === 'speak' && finalReaction.reply
+            ? {
+                ...(plan ? { expression: plan.trace, gateIssues } : {}),
+                action: finalReaction.reply.action,
+              }
+            : plan
+              ? { expression: plan.trace, gateIssues }
+              : undefined,
         )
         if (result.outcome === 'invalid') {
           failures += 1
