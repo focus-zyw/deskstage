@@ -4,9 +4,7 @@ import type { Relationship } from '../performer/modes/relationships'
 import { currentTimeSlot } from './timeAware'
 import { fullPersona, isCharacterEnabled, isPersonaCustomized, nameOf, pronounOf } from './persona'
 import type { UserProfile } from '../storage/configStore'
-import { getConfigSnapshot } from '../storage/configStore'
 import type { TopicPlan, TopicStage } from '../topic/types'
-import { getBookSync, renderQuirkBlock } from '../quirks'
 
 const ACTIONS = 'idle, talk, happy, laugh, shy, sleepy, wave, thinking, angry, sad, surprise, shake, jump'
 
@@ -506,14 +504,6 @@ export function buildMessages(
   const isCrosstalk = mode === 'crosstalk'
   // 身份层恒定;喜剧动态(互怼/逗哏捧哏/段子舞台)只在喜剧基调下拼接
   const persona = fullPersona({ comedyDynamics: isComedy })
-  // 招牌怪癖注入(实验):清单 + 五句使用纪律;关闭或无怪癖时为空串,不加空段
-  const quirkBlock = renderQuirkBlock(
-    getBookSync(),
-    getConfigSnapshot().quirkSystem === true,
-    nameOf,
-    (['A', 'B', 'C'] as const).filter((id) => isCharacterEnabled(id)),
-  )
-  const personaWithQuirks = quirkBlock ? `${persona}\n\n${quirkBlock}` : persona
 
   // 手法说教刻意做减法:结构/节拍由场景卡的 escalation 承担,避免固定套路疲劳
   const craft = isComedy
@@ -643,8 +633,8 @@ ${moodNote.trim()}` : ''
     {
       role: 'system',
       content: isComedy
-        ? `你是一位擅长传统相声和网络脱口秀的资深喜剧编剧,给桌面${cOn ? '三' : '两'}人情景剧写段子。${personaWithQuirks}${bondCtx}${moodCtx}${relCtx}${arcCtx}${cRule}${profile}${storyCtx}${timeCtx}${choiceRule}\n\n${craft}\n\n${protocol}\n\n【模式风格（本集最高创作优先级）】\n${modeDef.prompt}\n(模式风格与上述默认喜剧手法(互怼/包袱/secret反转/逗弄)冲突时,一律以模式风格为准:台词内容、角色相互姿态、收尾方式都按模式风格走;场景卡仍需输出,但 secret/callback 只在模式风格需要反转或回收时使用,模式不需要就不硬塞。模式给了专属话题角度时,话题从那些角度里取。)`
-        : `你给桌面${cOn ? '三' : '两'}人情景剧写台词,本集基调:${tone}——严格按模式风格创作,不要套用互怼喜剧的默认写法。${personaWithQuirks}${bondCtx}${moodCtx}${arcCtx}${cRule}${profile}${storyCtx}${timeCtx}${choiceRule}\n\n${craft}\n\n${protocol}\n\n【模式风格（本集最高创作优先级）】\n${modeDef.prompt}\n(模式风格是本集的主旋律:台词内容、角色相互姿态、收尾方式全部按模式风格与专属话题走。)`,
+        ? `你是一位擅长传统相声和网络脱口秀的资深喜剧编剧,给桌面${cOn ? '三' : '两'}人情景剧写段子。${persona}${bondCtx}${moodCtx}${relCtx}${arcCtx}${cRule}${profile}${storyCtx}${timeCtx}${choiceRule}\n\n${craft}\n\n${protocol}\n\n【模式风格（本集最高创作优先级）】\n${modeDef.prompt}\n(模式风格与上述默认喜剧手法(互怼/包袱/secret反转/逗弄)冲突时,一律以模式风格为准:台词内容、角色相互姿态、收尾方式都按模式风格走;场景卡仍需输出,但 secret/callback 只在模式风格需要反转或回收时使用,模式不需要就不硬塞。模式给了专属话题角度时,话题从那些角度里取。)`
+        : `你给桌面${cOn ? '三' : '两'}人情景剧写台词,本集基调:${tone}——严格按模式风格创作,不要套用互怼喜剧的默认写法。${persona}${bondCtx}${moodCtx}${arcCtx}${cRule}${profile}${storyCtx}${timeCtx}${choiceRule}\n\n${craft}\n\n${protocol}\n\n【模式风格（本集最高创作优先级）】\n${modeDef.prompt}\n(模式风格是本集的主旋律:台词内容、角色相互姿态、收尾方式全部按模式风格与专属话题走。)`,
     },
     {
       role: 'user',

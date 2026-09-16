@@ -277,9 +277,6 @@ export interface AppConfig {
   /** 表达导演(实验):生成前按角色规划"怎么说"(动作/立场/长度/旧梗回收);
    *  灰度默认关,关闭时生成路径与旧版完全一致 */
   expressionV2: boolean
-  /** 招牌怪癖(实验):为角色生成并保持怪癖(红5/蓝5),注入演出作为背景素材;
-   *  灰度默认关,关闭时不生成不注入,存量数据保留 */
-  quirkSystem: boolean
   /** 上下文生命周期(实验):Warm 滚动摘要/集摘要(Pi compaction)+ Mem0 经历记忆
    *  检索注入 + 群聊心情行;灰度默认关,关闭时聊天链路 prompt 与旧版完全一致 */
   contextLifecycle: boolean
@@ -483,7 +480,6 @@ export const DEFAULT_CONFIG: AppConfig = {
     C: { binding: { kind: 'disabled' }, autonomy: 'natural' },
   },
   expressionV2: false,
-  quirkSystem: false,
   contextLifecycle: false,
   coldMemory: {},
 }
@@ -1174,7 +1170,6 @@ const FIELD_SANITIZERS: { [K in keyof AppConfig]: (v: unknown, all: Record<strin
   modelProfileKeys: sanitizeModelProfileKeys,
   groupChatActors: sanitizeGroupChatActors,
   expressionV2: (v) => v === true,
-  quirkSystem: (v) => v === true,
   contextLifecycle: (v) => v === true,
   coldMemory: sanitizeColdMemory,
   bubbleStyle: sanitizeBubbleStyle,

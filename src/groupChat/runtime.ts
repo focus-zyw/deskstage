@@ -113,8 +113,6 @@ export interface GroupChatRuntime {
   reset(): void
   /** 启动引导:历史消息按时间序占位(context-only;各角色游标随后对齐尾部) */
   bootstrapHistory(entries: Array<{ author: RoomAuthor; text: string; ts: number }>): void
-  /** 系统公示:怪癖获得等状态变化以 control 消息进 journal(UI 渲染为"系统") */
-  announceControl(text: string): void
   getSnapshot(): GroupChatSnapshot
   subscribe(listener: () => void): () => void
   whenQuiescent(): Promise<void>
@@ -352,24 +350,6 @@ export function createGroupChatRuntime(deps: GroupChatDeps): GroupChatRuntime {
       emit()
     },
 
-    /** 系统公示(怪癖获得等状态变化):control 消息进 journal,投递语义同普通消息;
-     *  作者沿用 catch-up 摘要的 'user' + kind 'control' 惯例(UI 渲染为"系统") */
-    announceControl(text: string) {
-      const trimmed = text.trim()
-      if (!trimmed) return
-      const list = journal.list()
-      const last = list[list.length - 1]
-      journal.append({
-        author: 'user',
-        kind: 'control',
-        text: trimmed,
-        epoch: router.currentEpoch(),
-        causalRootId: last?.id ?? '',
-        depth: 0,
-        replyTo: [],
-      })
-      emit()
-    },
 
     getSnapshot(): GroupChatSnapshot {
       const actors = {} as Record<ActorId, ActorRuntimeState>

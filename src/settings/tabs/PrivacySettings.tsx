@@ -5,7 +5,6 @@ import { useEffect, useRef, useState } from 'react'
 import { WEBCHAT_SITES, webchatLogin, webchatProbe, webchatRestoreMain } from '../../engine/webchat'
 import type { AppConfig } from '../../storage/configStore'
 import { toolList } from '../../tools/registry'
-import { ensureColdStarts } from '../../quirks'
 import { SiteLoginRow } from '../SiteLoginRow'
 import { useSettings } from '../useSettingsSession'
 import { SettingsCard, SetField, SetLine, SetSwitch } from '../SettingsPrimitives'
@@ -213,25 +212,6 @@ export function PrivacySettings() {
         </SetLine>
         <div className="set-note">
           只影响群聊角色回复的"说法",不改变谁说话与发言额度;规划在本地完成,不增加模型调用。关闭后立即回到旧版行为。
-        </div>
-      </SettingsCard>
-      <SettingsCard card="招牌怪癖" flash={flashCard} title="招牌怪癖" desc="实验">
-        <SetLine
-          title="启用招牌怪癖"
-          hint="为每个角色生成并保持至多10条(红5/蓝5)招牌怪癖,注入演出作为背景素材;实验功能,默认关"
-        >
-          <SetSwitch
-            checked={form.quirkSystem}
-            label="启用招牌怪癖"
-            onChange={(v) => {
-              setForm({ ...form, quirkSystem: v })
-              saveField({ quirkSystem: v }, true)
-              if (v) void ensureColdStarts()
-            }}
-          />
-        </SetLine>
-        <div className="set-note">
-          怪癖在 设置 → 角色人设 页管理(锁定/清除/手动补一条);生成走 API 通道,失败静默。关闭后怪白数据保留,只是不再生成与注入。
         </div>
       </SettingsCard>
       <SettingsCard card="上下文生命周期" flash={flashCard} title="上下文生命周期" desc="实验">

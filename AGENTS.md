@@ -28,7 +28,7 @@
 
 - 注释、文档、提交信息、测试名**全部中文**。
 - 提交格式:`type(scope): 标题——详细说明`(feat/fix/docs/perf/refactor;scope 取模块域,
-  如 crosstalk/voice/quirks/test)。正文写清动机与权衡,一行说一件事。
+  如 crosstalk/voice/memory/test)。正文写清动机与权衡,一行说一件事。
 
 ## 行尾(CRLF)——Windows 仓库的惯用坑
 
@@ -46,7 +46,7 @@
 - `src/performer/modes` — 演出模式注册表(模式即纯数据);`src/topic` — 话题池
 - `src/groupChat` / `src/live` — 群聊 Actor 系统 / 直播弹幕(Provider 接口统一弹幕源)
 - `src/bubble` `src/stage` `src/expression` `src/interaction` — 气泡、立绘舞台、表情、互动层
-- `src/memory` `src/quirks` `src/world` — 长期记忆、招牌怪癖、世界模型
+- `src/memory` `src/world` — 长期记忆、世界模型
 - `src/tools` `src/features/commands` — 工具循环与命令面板;`src/settings` — 设置页
 - `src/storage` — 本地存储(JSON + localStorage,带迁移);`src/diag` — 链路诊断与会话回放
 - `src-tauri` — Rust 壳:窗口穿透、原生指针、WASAPI 捕获

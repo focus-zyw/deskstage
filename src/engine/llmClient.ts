@@ -3,7 +3,6 @@ import type { UserProfile } from '../storage/configStore'
 import { complete, completeStream, type GatewayDiag } from './llmGateway'
 import { createSentenceSplitter } from './sentenceSplitter'
 import { buildMessages, renderAudienceContext, renderViewerBrief, type UserContext } from './promptBuilder'
-import { notePerformanceEpisode } from '../quirks'
 import { mergeMessages, webchatAsk } from './webchat'
 import { diag, type LlmCallKind } from '../diag/store'
 import { scrubSecrets } from '../diag/redact'
@@ -198,8 +197,6 @@ export async function generateDialog(req: GenerateDialogRequest): Promise<Perfor
   const { mode, topicPlan, recentLines, signal, continueFromPrevious = false, deferContextAdoption, diagTurnId } = req
   const topic = topicPlan.card.title
   const cfg = await getConfig()
-  // 招牌怪癖周期记账 + 空位冷启动(fire-and-forget,绝不阻塞/拖慢演出链路)
-  void notePerformanceEpisode()
   const memory = await prepareTurnMemory({ query: topic, n: 8 })
   // 每集掷骰是否包含观众抉择点(概率用户可配,默认 30%;重试保持一致)。
   // 相声解绑/极简版不掷:抉择点与装置同属演出义务,极简相声不给模型加这份工
