@@ -270,13 +270,14 @@ test('renderStoryContext:非喜剧只带共同经历,不注入老梗与笑点素
   assert.match(comedy, /笑点素材/)
 })
 
-test('相声极简:丙分工不注入,协议仍允许少量参与', () => {
+test('相声极简:丙分工不注入,协议保留 goalC 与留白许可', () => {
   const prompt = buildMessages('crosstalk', tp('周报到底写给谁看'), [])
     .map((message) => message.content)
     .join('\n')
   assert.doesNotMatch(prompt, /本场只占 0~2 句/, '分工规则随极简退场')
   assert.doesNotMatch(prompt, /甲乙拿丙垫梗/, '垫梗编排随极简退场')
-  assert.match(prompt, /丙可少量参与/, '协议保留 C 少量参与的可能性')
+  assert.match(prompt, /goalC/, '互动版协议带 goalC 字段')
+  assert.match(prompt, /一段时间不说话/, '允许角色整段沉默(新模板语汇)')
 })
 
 test('使用者称呼纪律:注入用户名时明确禁止加"们"等后缀', () => {

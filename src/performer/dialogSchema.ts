@@ -95,6 +95,8 @@ export interface SceneCard {
   secret?: string
   escalation: string[]
   callback?: string
+  /** 相声互动版新增:这一段真正有趣的互动机制(一句话) */
+  engine?: string
 }
 
 const PAUSE_MAX_MS = 1500
@@ -242,9 +244,11 @@ export function sanitizeDialog(raw: unknown, minLines?: number): DialogLine[] {
   return lines
 }
 
-/** 清洗场景卡:基础结构(relationship/scene/escalation)缺失时整卡丢弃。
+/** 清洗场景卡:基础结构(relationship/scene/节拍)缺失时整卡丢弃。
  *  secret/callback 是可选语义字段——是否必有由模式校验层(validatePerformanceScript
- *  的 comedy 选项)把关,这里只看数据形状,避免非喜剧卡在清洗层无声消失 */
+ *  的 comedy 选项)把关,这里只看数据形状,避免非喜剧卡在清洗层无声消失。
+ *  相声互动版字段别名:beats=escalation、goalC=roleC,engine 为新增可选字段——
+ *  输入层接受两套名字,落盘 canonical 沿用旧名(历史/预取双向兼容) */
 export function sanitizeSceneCard(v: unknown): SceneCard | undefined {
   const o = (v ?? {}) as Record<string, unknown>
   const str = (x: unknown, cap: number): string =>
@@ -253,14 +257,24 @@ export function sanitizeSceneCard(v: unknown): SceneCard | undefined {
   const scene = str(o.scene, 80)
   const goalA = str(o.goalA, 60)
   const goalB = str(o.goalB, 60)
-  const roleC = str(o.roleC, 80)
+  const roleC = str(o.roleC, 80) || str(o.goalC, 80)
   const secret = str(o.secret, 80)
   const callback = str(o.callback, 80)
-  const escalation = Array.isArray(o.escalation)
-    ? o.escalation.map((x) => str(x, 40)).filter(Boolean).slice(0, 6)
-    : []
+  const engine = str(o.engine, 80)
+  const rawBeats = Array.isArray(o.escalation) ? o.escalation : Array.isArray(o.beats) ? o.beats : []
+  const escalation = rawBeats.map((x) => str(x, 40)).filter(Boolean).slice(0, 6)
   if (!relationship || !scene || escalation.length === 0) return undefined
-  return { relationship, scene, goalA, goalB, roleC: roleC || undefined, secret: secret || undefined, escalation, callback: callback || undefined }
+  return {
+    relationship,
+    scene,
+    goalA,
+    goalB,
+    roleC: roleC || undefined,
+    secret: secret || undefined,
+    escalation,
+    callback: callback || undefined,
+    engine: engine || undefined,
+  }
 }
 
 /** 清洗抉择点:prompt 与恰好两个带唯一 id 的选项 */

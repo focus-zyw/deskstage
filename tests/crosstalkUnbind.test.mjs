@@ -1,6 +1,5 @@
-// 相声解绑版验收(设计:docs/生活线系统设计方案.md 讨论 + 用户裁决"解绑版本不需要
-// secret 或 callback"):crosstalk 模式 craft/协议/模式风格后缀三处退场装置,
-// 话题降级为可弃用灵感;其他喜剧模式与校验层回归不动。
+// 相声互动版验收(用户裁决:解绑+极简+角色互动模板):装置字段彻底退场、自动选题零
+// 注入、仅点播题材以可弃用灵感行出现;beats/goalC/engine 场景卡别名映射;其他模式回归不动。
 import assert from 'node:assert/strict'
 import { before, test } from 'node:test'
 
@@ -43,44 +42,43 @@ const tp = (title, mode = 'crosstalk') => ({
 
 const systemOf = (mode, plan) => promptBuilder.buildMessages(mode, plan, [])[0].content
 
-test('相声解绑:craft 宣告装置退场与人设限权', () => {
+test('相声互动版:模板自含原则与自由宣告,装置字段彻底退场', () => {
   const sys = systemOf('crosstalk', tp('减肥这件事', 'crosstalk'))
-  assert.ok(sys.includes('不需要秘密反转，不需要回收铺垫，不需要任何预设装置'))
-  assert.ok(sys.includes('题材、人物、情境完全自由：人设只决定语气与相互姿态'))
-  assert.ok(sys.includes('secret/callback 两字段一律省略'))
+  assert.ok(sys.includes('## 核心目标'))
+  assert.ok(sys.includes('## 趣味生成原则'))
+  assert.ok(sys.includes('不要求必须有传统包袱或响底'))
+  assert.ok(sys.includes('题材、人物、情境完全自由'))
+  assert.ok(!sys.includes('"secret"'), '互动版协议无 secret 字段')
+  assert.ok(!sys.includes('callback'), '互动版协议无 callback 字段')
   assert.ok(!sys.includes('secret 是反转的底气'), '旧装置说教必须退场')
   assert.ok(!sys.includes('callback 是本集自己的梗'), '旧回收义务必须退场')
 })
 
-test('相声解绑:协议要求省略 secret/callback,不再命令反转与回收', () => {
+test('相声互动版:协议使用 beats/goalC/engine,按 beats 推进', () => {
   const sys = systemOf('crosstalk', tp('减肥这件事', 'crosstalk'))
-  assert.ok(sys.includes('这两个字段一律省略'))
-  assert.ok(!sys.includes('secret 在结尾反转揭晓'), '协议不得命令反转')
-  assert.ok(!sys.includes('callback 必须回收本集前面埋的线'), '协议不得命令回收')
-  assert.ok(!sys.includes('收底回收 callback 的句子标最后一拍'), 'beatId 收底指令随装置退场')
+  assert.ok(sys.includes('"beats":["节拍1","节拍2","节拍3"]'))
+  assert.ok(sys.includes('"goalC"'))
+  assert.ok(sys.includes('dialog 必须按照 card.beats 推进'))
+  assert.ok(sys.includes('## 最后自检'))
 })
 
 test('相声解绑:自动选题零注入,仅用户点播题材以灵感行出现', () => {
   // dynamic(导演自动选题)——话题零注入:连"可弃用的灵感行"都没有(锚定效应不在乎标注)
   const auto = promptBuilder.buildMessages('crosstalk', tp('减肥这件事', 'crosstalk'), [])
-  const autoSys = auto[0].content
   const autoUser = auto[1].content
   assert.ok(!autoUser.includes('话题'), '自动选题不进 user 消息(连灵感行都没有)')
   assert.ok(!autoUser.includes('减肥这件事'))
-  assert.ok(!autoSys.includes('用户点播了题材'), '非点播不带题材注记')
-  assert.ok(!autoSys.includes('话题只是可选灵感'), 'craft 的题材注记仅点播时出现')
+  assert.ok(!autoUser.includes('用户点播的题材'), '非点播不带题材注记')
   // manual(用户点播题材)——灵感行出现,但明示可弃用(点播是用户权威,不是导演束缚)
   const manual = promptBuilder.buildMessages('crosstalk', { ...tp('减肥这件事', 'crosstalk'), lane: 'manual' }, [])
-  const manualSys = manual[0].content
   const manualUser = manual[1].content
   assert.ok(manualUser.includes('用户点播的题材（可选灵感，可用、可用一半、也可完全弃用'))
   assert.ok(manualUser.includes('减肥这件事'))
-  assert.ok(manualSys.includes('用户点播了题材'), 'craft 带点播题材注记')
 })
 
 test('相声解绑:模式风格后缀换自由版,观众抉择点亦不注入(极简)', () => {
   const sys = promptBuilder.buildMessages('crosstalk', tp('减肥这件事', 'crosstalk'), [], undefined, undefined, undefined, undefined, true)[0].content
-  assert.ok(sys.includes('secret/callback 不使用'))
+  assert.ok(sys.includes('## 最后自检'), '互动版自检清单在场')
   assert.ok(!sys.includes('模式风格与上述默认喜剧手法(互怼/包袱/secret反转/逗弄)冲突时'))
   assert.ok(!sys.includes('观众互动'), '极简相声连抉择点也不注入(用户裁决)')
 })
@@ -135,4 +133,30 @@ test('校验降档:crosstalk 卡缺 secret/callback 不再 fatal,纯喜剧仍 fa
   const strict = dialogSchema.validatePerformanceScript(script, 4, { comedy: true })
   assert.ok(strict.fatal.some((f) => f.includes('secret')), '纯喜剧回归:缺 secret 仍 fatal')
   assert.ok(strict.fatal.some((f) => f.includes('callback')), '纯喜剧回归:缺 callback 仍 fatal')
+})
+
+test('schema 别名映射:beats→escalation、goalC→roleC、engine 保留,节拍覆盖校验通过', () => {
+  const raw = JSON.stringify({
+    card: {
+      relationship: '老友',
+      scene: '凌晨的电脑桌前',
+      engine: '一个普通问题被越来越认真地讨论',
+      goalA: '小哀此刻想做什么',
+      goalB: '柯南此刻想做什么',
+      goalC: '大肥鱼此刻想做什么',
+      beats: ['发现异常', '开始较真', '意外转折'],
+    },
+    dialog: [
+      { speaker: 'A', text: '第一条台词', action: 'talk', target: 'B', beatId: '发现异常' },
+      { speaker: 'B', text: '第二条台词', action: 'talk', target: 'A', beatId: '开始较真' },
+      { speaker: 'C', text: '第三条台词', action: 'talk', target: 'A', beatId: '意外转折' },
+      { speaker: 'A', text: '第四条台词', action: 'talk', target: 'B', beatId: '意外转折' },
+    ],
+  })
+  const script = dialogSchema.parseGeneratedDialog(raw, 4)
+  assert.deepEqual(script.card.escalation, ['发现异常', '开始较真', '意外转折'], 'beats 落到 canonical escalation')
+  assert.equal(script.card.roleC, '大肥鱼此刻想做什么', 'goalC 落到 canonical roleC')
+  assert.equal(script.card.engine, '一个普通问题被越来越认真地讨论', 'engine 随卡保留')
+  const v = dialogSchema.validatePerformanceScript(script, 4, { comedy: true, crosstalk: true })
+  assert.deepEqual(v.fatal, [], '新卡节拍覆盖校验通过')
 })

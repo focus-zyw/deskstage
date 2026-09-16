@@ -19,8 +19,10 @@ export const crosstalkMode: DialogMode<'crosstalk'> = {
   accent: '#f08c5a',
   gap: 200,
   script: CROSSTALK_SCRIPT,
+  // 互动版:本 prompt 不再进生成 prompt(模式指令由 promptBuilder 的互动模板自含),
+  // 仅作注册表描述与 modeHash 参与——文案变更使旧预取缓存自然失效
   prompt:
-    '当前是【相声】模式：甲是逗哏（负责铺陈和抖包袱），乙是捧哏（用"哦？""好家伙""嗐！"这类短句接话、拆台）。结构：开头垫话 1~2 句，中间正活层层展开，最后 1 句必须是收底的包袱。',
+    '当前是【角色互动】模式：三人围绕一个具体的小事件，自然发生一段值得看下去的互动；趣味优先但不强制搞笑，不使用 secret/callback 装置，题材、人物、情境完全自由。',
   // 相声结构化强,兴趣只作偶尔点缀,不构成话题约束
   interestTopicChance: 0.12,
   // 自然语言点播触发词("来一段相声/来一段段子")

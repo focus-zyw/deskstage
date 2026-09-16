@@ -86,12 +86,13 @@ test('buildMessages:protocol/cRule 用真名,模式指令的甲乙丙由映射�
   const xt = buildMessages('crosstalk', tp('周报到底写给谁看'), [])
     .map((m) => m.content)
     .join('\n')
-  assert.match(xt, /goalA":"小红想要什么/)
-  assert.match(xt, /roleC":"妞妞本集的行动职责/)
-  assert.match(xt, /小红和阿强承担主要语言冲突/)
-  // 相声模式 prompt 里的"甲是逗哏"属结构性称呼,由纪律块映射,不需要改写
-  assert.match(xt, /甲是逗哏/)
-  assert.match(xt, /"甲\/乙\/丙"就是 小红\/阿强\/妞妞/)
+  assert.match(xt, /goalA":"小红此刻想做什么/)
+  assert.match(xt, /goalC":"妞妞此刻想做什么/)
+  assert.match(xt, /speaker 只能取括号里的值/)
+  assert.match(xt, /"甲\/乙\/丙"就是小红\/阿强\/妞妞/)
+  // 互动版不套甲是逗哏的固定分工,由模板"角色互动原则"接管
+  assert.doesNotMatch(xt, /甲是逗哏/)
+  assert.doesNotMatch(xt, /承担主要语言冲突/)
   // 日常(非喜剧):承担主要对话,参与骨架用配置名,无默认逗弄示例
   const daily = buildMessages('daily', tp('周报到底写给谁看'), [])
     .map((m) => m.content)
@@ -101,19 +102,21 @@ test('buildMessages:protocol/cRule 用真名,模式指令的甲乙丙由映射�
   assert.doesNotMatch(daily, /把我咖啡变成冰的/)
 })
 
-test('模式风格最高优先级块:相声解绑后缀在场(题材自由,装置退场)', () => {
+test('相声互动版:专用模板自含协议与原则,人设文本不进', () => {
   setCharacterNames('甲', '乙', '丙')
   const xt = buildMessages('crosstalk', tp('周报到底写给谁看'), [])[0].content
-  assert.match(xt, /【模式风格（本集最高创作优先级）】/)
-  assert.match(xt, /secret\/callback 不使用/, '相声解绑:装置退场后缀')
+  assert.match(xt, /## 核心目标/, '互动版核心目标块在场')
+  assert.match(xt, /## 趣味生成原则/, '互动引擎机制在场')
+  assert.match(xt, /## 最后自检/, '内部自检清单在场')
   assert.match(xt, /题材、人物、情境完全自由/, '题材自由宣告')
+  assert.match(xt, /"beats":\[/, '场景卡协议使用 beats 字段')
+  assert.match(xt, /"goalC"/, '场景卡协议使用 goalC 字段')
+  assert.doesNotMatch(xt, /"secret"/, '互动版无 secret 字段')
+  assert.doesNotMatch(xt, /【模式风格（本集最高创作优先级）】/, '不再走模式拼装(模板自含)')
   // 极简:只保留姓名/性别/speaker 映射,人设文本不进
   assert.match(xt, /speaker 只能取括号里的值/, '极简名册行在场')
   assert.doesNotMatch(xt, /便利店店员/, '默认人设文本不进极简相声')
   assert.doesNotMatch(xt, /若模式风格指令与本节/, 'C 分工规则随极简退场')
-  // 模式指令包裹在优先级块内(以【模式风格 开头块紧跟其内容)
-  const idx = xt.indexOf('【模式风格（本集最高创作优先级）】')
-  assert.ok(xt.slice(idx, idx + 200).includes('相声'), '块内紧跟模式指令本体')
   // 非喜剧:让位条款换成"主旋律"措辞,同样压制默认喜剧件
   const daily = buildMessages('daily', tp('周报到底写给谁看'), [])[0].content
   assert.match(daily, /模式风格是本集的主旋律/)
@@ -194,10 +197,10 @@ test('内建回归锁:crosstalk 恒走喜剧分支,daily 固定走非喜剧闲�
   assert.equal(MODES.live.tone, undefined, 'live 不锁死,弹幕回复按其 tone 声明走')
 
   const xt = buildMessages('crosstalk', tp('周报到底写给谁看'), [])[0].content
-  assert.match(xt, /资深喜剧编剧/, '相声开场仍是喜剧编剧')
-  assert.match(xt, /这是相声/, '解绑版 craft 基调')
-  assert.match(xt, /不需要秘密反转/, '装置整体退场(用户裁决:解绑版无 secret/callback)')
-  assert.match(xt, /这两个字段一律省略/, '协议同步省略 secret/callback')
+  assert.match(xt, /角色互动、情景喜剧/, '互动版开场(不再是喜剧编剧单开)')
+  assert.match(xt, /## 核心目标/, '互动版目标块')
+  assert.doesNotMatch(xt, /"secret"/, '互动版协议无 secret 字段')
+  assert.doesNotMatch(xt, /callback/, '互动版协议无 callback 字段')
   assert.match(xt, /14~22 句/)
   assert.match(xt, /speaker 只能取括号里的值/, '极简名册:只保留姓名/性别/speaker 映射')
   assert.doesNotMatch(xt, /便利店店员/, '极简相声无人设文本')
