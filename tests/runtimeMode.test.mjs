@@ -1,24 +1,14 @@
 // 统一运行态测试:mode 单槽进出与恢复语义、overlays 栈、能力派生。
 // 关键不变量:框选/录音是"临时态",结束后必须恢复底下的演出态(演出在遮罩下继续播不能丢)。
 import assert from 'node:assert/strict'
-import { before, beforeEach, after, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, beforeEach, test } from 'node:test'
 
-let server
 let rm
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  rm = await server.ssrLoadModule('/src/runtime/runtimeMode.ts')
+  rm = await import('../src/runtime/runtimeMode.ts')
 })
 
-after(async () => {
-  await server?.close()
-})
 
 beforeEach(() => {
   rm.setMode({ type: 'idle' })

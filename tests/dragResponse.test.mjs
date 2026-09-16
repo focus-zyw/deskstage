@@ -3,24 +3,14 @@
 // 2) 文案不出现抱怨/记仇字眼(旧的"欠/清账/捣乱"系全部退役)
 // 3) 按关系档位的旧接口 reactBonded 已删除,防止回归
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let rules
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  rules = await server.ssrLoadModule('/src/engine/interactionRules.ts')
+  rules = await import('../src/engine/interactionRules.ts')
 })
 
-after(async () => {
-  await server?.close()
-})
 
 test('三种落地情形都有非空的轻松回应', () => {
   for (const kind of ['close', 'far', 'overlap']) {

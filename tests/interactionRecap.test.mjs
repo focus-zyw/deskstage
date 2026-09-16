@@ -2,9 +2,7 @@
 // peek 只预览不消费。此前计数只增不清,开场抱怨会报出吓人的终身累计数。
 import assert from 'node:assert/strict'
 import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
 
-let server
 let store
 
 before(async () => {
@@ -19,16 +17,10 @@ before(async () => {
       return values.size
     },
   }
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  store = await server.ssrLoadModule('/src/storage/interactionStore.ts')
+  store = await import('../src/storage/interactionStore.ts')
 })
 
 after(async () => {
-  await server?.close()
   delete globalThis.localStorage
 })
 

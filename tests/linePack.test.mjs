@@ -3,9 +3,7 @@
 // 台词包一天一换,旧包在被淘汰前先用掉,一份都没有才回本地预置池。
 import assert from 'node:assert/strict'
 import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
 
-let server
 let store
 let llm
 
@@ -30,17 +28,11 @@ before(async () => {
       return values.size
     },
   }
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  store = await server.ssrLoadModule('/src/storage/linePackStore.ts')
-  llm = await server.ssrLoadModule('/src/engine/llmClient.ts')
+  store = await import('../src/storage/linePackStore.ts')
+  llm = await import('../src/engine/llmClient.ts')
 })
 
 after(async () => {
-  await server?.close()
   delete globalThis.localStorage
 })
 

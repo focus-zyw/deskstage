@@ -1,24 +1,14 @@
 // 主按钮状态纯函数回归测试:RuntimeMode → 按钮 label/kind/disabled 的映射表全锁。
 // 合并播放/停止按钮后的不变量:生成中必须能停止(kind=stop),工具占用必须禁用。
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let performanceButton
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  ;({ performanceButton } = await server.ssrLoadModule('/src/ui/performButton.ts'))
+  ;({ performanceButton } = await import('../src/ui/performButton.ts'))
 })
 
-after(async () => {
-  await server?.close()
-})
 
 test('idle + 普通模式:开始一段(generate)', () => {
   assert.deepEqual(performanceButton('idle'), {

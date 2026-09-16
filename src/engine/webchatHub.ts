@@ -46,8 +46,16 @@ export async function askConversation(req: ConversationAsk): Promise<string> {
   }
 }
 
-/** 释放会话(关专属标签页)。fire-and-forget:generator finally 里调用,不阻塞 UI */
-export function releaseConversation(conversationKey: string): void {
-  if (!inTauri) return
-  void invoke('webchat_release_conversation', { conversationKey }).catch(() => {})
+/**
+ * 释放会话(关专属标签页)。永不 reject(失败静默,标签页由 Rust 侧 sweeper 兜底)。
+ * fire-and-forget 调用依旧合法;需要时序保证的调用方(换代后立刻发下一代 ask)
+ * 应 await 它——否则 Rust 侧旧槽的 claim 未解除,认领不到旧页就会新建,旧页
+ * 沦为永久孤儿标签页
+ */
+export function releaseConversation(conversationKey: string): Promise<void> {
+  if (!inTauri) return Promise.resolve()
+  return invoke('webchat_release_conversation', { conversationKey }).then(
+    () => undefined,
+    () => undefined,
+  )
 }

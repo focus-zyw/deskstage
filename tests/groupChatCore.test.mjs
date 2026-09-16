@@ -5,8 +5,7 @@
 // 重启游标对齐绝不重答(I5)/ disabled 游标跟尾 / presentationHold 阻塞静止 /
 // 调用限流统计所有 invocation / 快照 busy 语义。
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
 let createRoomJournal
 let createRoomRouter
@@ -15,23 +14,14 @@ let createFakeActorAdapter
 let autonomyPolicy
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  ;({ createRoomJournal } = await server.ssrLoadModule('/src/groupChat/roomJournal.ts'))
-  ;({ createRoomRouter } = await server.ssrLoadModule('/src/groupChat/roomRouter.ts'))
-  ;({ createGroupChatRuntime } = await server.ssrLoadModule('/src/groupChat/runtime.ts'))
-  ;({ createFakeActorAdapter } = await server.ssrLoadModule('/src/groupChat/adapters/fakeActor.ts'))
-  ;(autonomyPolicy = await server.ssrLoadModule('/src/groupChat/autonomyPolicy.ts'))
+  ;({ createRoomJournal } = await import('../src/groupChat/roomJournal.ts'))
+  ;({ createRoomRouter } = await import('../src/groupChat/roomRouter.ts'))
+  ;({ createGroupChatRuntime } = await import('../src/groupChat/runtime.ts'))
+  ;({ createFakeActorAdapter } = await import('../src/groupChat/adapters/fakeActor.ts'))
+  ;(autonomyPolicy = await import('../src/groupChat/autonomyPolicy.ts'))
 })
 
-after(async () => {
-  await server?.close()
-})
 
-let server
 
 // ---------- 测试基建 ----------
 

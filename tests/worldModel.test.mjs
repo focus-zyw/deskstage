@@ -3,30 +3,20 @@
 // 每个用例对应一条设计裁决:首帧不发事件、不可信标题入库前清洗、冷却跨帧去重、
 // 预算上限恒定、采样失败保持现状、单消费者异常不拖垮总线。
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let m
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
   m = {
-    types: await server.ssrLoadModule('/src/world/types.ts'),
-    normalizer: await server.ssrLoadModule('/src/world/normalizer.ts'),
-    render: await server.ssrLoadModule('/src/world/render.ts'),
-    bus: await server.ssrLoadModule('/src/world/bus.ts'),
-    engine: await server.ssrLoadModule('/src/world/engine.ts'),
+    types: await import('../src/world/types.ts'),
+    normalizer: await import('../src/world/normalizer.ts'),
+    render: await import('../src/world/render.ts'),
+    bus: await import('../src/world/bus.ts'),
+    engine: await import('../src/world/engine.ts'),
   }
 })
 
-after(async () => {
-  await server?.close()
-})
 
 const raw = (over = {}) => ({
   batteryPercent: null,

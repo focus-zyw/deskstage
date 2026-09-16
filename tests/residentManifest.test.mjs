@@ -2,10 +2,8 @@ import assert from 'node:assert/strict'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let clipsForAction
 let pickClip
 let isLoopingClip
@@ -18,20 +16,10 @@ let snackActionNow
 let RARE_CLIPS
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  ;({ clipsForAction, pickClip, isLoopingClip, residentSrc, nativeFacing, snackActionNow, RARE_CLIPS } = await server.ssrLoadModule(
-    '/src/stage/resident/residentManifest.ts',
-  ))
-  ;({ resolveResidentClip, shouldFlip, stableActionPicker } = await server.ssrLoadModule('/src/stage/resident/residentMachine.ts'))
+  ;({ clipsForAction, pickClip, isLoopingClip, residentSrc, nativeFacing, snackActionNow, RARE_CLIPS } = await import('../src/stage/resident/residentManifest.ts'))
+  ;({ resolveResidentClip, shouldFlip, stableActionPicker } = await import('../src/stage/resident/residentMachine.ts'))
 })
 
-after(async () => {
-  await server?.close()
-})
 
 test('词表动作映射到候选片段,未知动作回退 idle', () => {
   assert.deepEqual(clipsForAction('talk'), ['talk'])

@@ -150,17 +150,13 @@ export function createChatSession(
   }
 
   async function ensureConfig(): Promise<AppConfig> {
-    let cached: AppConfig | null | Promise<AppConfig> = configCache
-    if (!cached) {
-      const pending = loadConfig()
-      // 拒绝态不得滞留缓存:一次读取失败不该让之后所有发送永久失败
-      pending.catch(() => {
-        if (cached === pending) configCache = null
-      })
-      cached = await pending
-      configCache = cached
-    }
-    return cached
+    // 每次 send 重读(不再长缓存):configStore 的 cache 是 Promise 且在
+    // config-changed 时整体替换;这里若锁一份旧快照,resolveReal 的 key 比对
+    // 与 bindingRevision 指纹将永远看不到设置页改过的绑定,热切换形同虚设。
+    // 读取失败让本次 send 抛出(与原行为一致),configCache 保留上次好值供同步读
+    const cfg = await loadConfig()
+    configCache = cfg
+    return cfg
   }
 
   // ---------- 引擎分派 ----------
@@ -195,6 +191,9 @@ export function createChatSession(
       binding.kind === 'api' ? `api:${binding.profileId ?? 'main'}` : `web:${binding.site}`
     const cur = realAdapters.get(slot)
     if (cur && cur.key === key) return cur.adapter
+    // 换绑:立即释放旧适配器持有的网页会话(旧键标签页当场回收,
+    // 不必等 Rust 侧 30 分钟闲置清扫);在飞 ask 由 release 的 key_lock 排队收尾
+    void cur?.adapter.dispose?.()
     const adapter =
       binding.kind === 'api'
         ? createApiActorAdapter({ profileId: binding.profileId })

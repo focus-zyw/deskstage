@@ -11,7 +11,9 @@ test('模式菜单是轻量原生热区，打开时不能恢复全屏 WebView �
     appSource,
     /const interactivePanelsOpen\s*=\s*rt\.overlays\.some\(\(overlay\)\s*=>\s*overlay\s*!==\s*'mode-menu'\s*&&\s*overlay\s*!==\s*'c-menu'\)/,
   )
-  assert.match(appSource, /setPanelsOpen\(interactivePanelsOpen\)/)
+  // 设置窗(独立 WebView)打开期间也要让位:全局钩子按屏幕坐标吞事件,不认光标下
+  // 是哪个窗口,设置窗与角色热区重叠时会截胡对设置窗本身的点击/滚轮
+  assert.match(appSource, /setPanelsOpen\(interactivePanelsOpen \|\| settingsOpen\)/)
 
   const modeMenu = appSource.match(/id:\s*'mode-menu',[\s\S]*?\n\s*},/)?.[0] ?? ''
   assert.match(modeMenu, /nativePointerTarget:/, '菜单选项必须由原生钩子派发点击')

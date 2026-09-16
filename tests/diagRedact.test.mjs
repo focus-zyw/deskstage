@@ -2,24 +2,14 @@
 // 已登记密钥精确替换、Bearer/Cookie/URL 凭证/高熵兜底、实体掩码、截断记原长、
 // 会话盐指纹稳定、语言探测。任何档位(含"含原文导出")都必经 scrubSecrets。
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let redact
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  redact = await server.ssrLoadModule('/src/diag/redact.ts')
+  redact = await import('../src/diag/redact.ts')
 })
 
-after(async () => {
-  await server?.close()
-})
 
 test('scrubSecrets:已登记密钥精确替换优先于一切格式猜测', () => {
   redact.registerSecretValue('my-actual-key-98765')

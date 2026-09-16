@@ -70,6 +70,8 @@ pub const HUB_IDLE_SECS: u64 = 30 * 60;
 /// ResponseStarted(确认回复已开始生成)后的额外观察窗:慢响应/深度思考
 /// 不再被原总超时掐死
 const RESPONSE_STARTED_EXTRA_MS: u64 = 120_000;
+/// 成功回合后捕获线程 URL(location.href)的独立预算:总超时可能恰好耗尽
+const THREAD_CAPTURE_EXTRA_MS: u64 = 5_000;
 /// 同会话连续失败的指数退避基数与上限(1s→2s→4s→8s→16s,封顶 30s)
 const BACKOFF_BASE_MS: u64 = 1_000;
 const BACKOFF_CAP_MS: u64 = 30_000;
@@ -657,6 +659,15 @@ fn is_context_lost(err: &str) -> bool {
     .any(|k| l.contains(k))
 }
 
+/// 同一线程的 URL 判定:剥掉结尾斜杠后相等,或当前 URL 以记忆 URL 为前缀
+/// (站点给会话页追加 query/片段时不误判;Target.getTargets 的 URL 是页面当前
+/// 地址,导航后与捕获时的 location.href 逐字一致,前缀只为兜住边角)
+fn same_thread_url(current: &str, remembered: &str) -> bool {
+    let cur = current.trim_end_matches('/');
+    let want = remembered.trim_end_matches('/');
+    !want.is_empty() && (cur == want || cur.starts_with(want))
+}
+
 fn json_arg(s: &str) -> String {
     serde_json::to_string(s).unwrap_or_else(|_| "\"\"".into())
 }
@@ -737,6 +748,35 @@ impl RealCdpOps {
         if let Ok(mut paths) = self.browser_paths.lock() {
             paths.insert(port, path.to_string());
         }
+    }
+
+    /// 把目标所在窗口从最小化还原:窗口最小化时 Page.bringToFront 只切换活动
+    /// 标签页,页面 visibilityState 依旧 hidden——ChatGPT/豆包等站点在 hidden
+    /// 页直接暂停生成,表现为"必须手动切到标签页才有回复"。只动我们自管
+    /// profile 的 Edge 实例;非最小化状态不写,避免改动用户摆好的窗口布局
+    async fn restore_target_window(&self, port: u16, target_id: &str) -> Result<(), String> {
+        let mut browser = self.browser_cdp(port).await?;
+        let win = browser
+            .call(
+                "Browser.getWindowForTarget",
+                json!({ "targetId": target_id }),
+                5000,
+            )
+            .await?;
+        if win.pointer("/bounds/windowState").and_then(Value::as_str) != Some("minimized") {
+            return Ok(());
+        }
+        let Some(window_id) = win.get("windowId").and_then(Value::as_i64) else {
+            return Ok(());
+        };
+        browser
+            .call(
+                "Browser.setWindowBounds",
+                json!({ "windowId": window_id, "bounds": { "windowState": "normal" } }),
+                5000,
+            )
+            .await?;
+        Ok(())
     }
 
     async fn browser_cdp(&self, port: u16) -> Result<Cdp, String> {
@@ -838,7 +878,8 @@ impl CdpOps for RealCdpOps {
         let mut cdp =
             Cdp::new(connect_ws(format!("ws://127.0.0.1:{port}/devtools/page/{target_id}")).await?);
         cdp.call("Page.bringToFront", json!({}), 5000).await?;
-        Ok(())
+        drop(cdp);
+        self.restore_target_window(port, target_id).await
     }
 
     async fn open_page_session(&self, port: u16, target_id: &str) -> Result<PageSession, String> {
@@ -991,6 +1032,16 @@ pub struct HubState<O: CdpOps> {
     pulse: Mutex<activity::PulseCoordinator>,
     /// 站点健康总账(Tab/DedicatedPending/Dedicated + 用户覆盖;按站点分账)
     site_health: Mutex<activity::SiteHealthBook>,
+    /// 会话键 → 站点侧线程 URL(成功回合后的 location.href)。
+    /// **独立于 conversations 表**——Edge 重启/端口漂移会清空会话槽(epoch 失效),
+    /// 但站点侧线程仍在服务端;这张表让续聊能按 URL 开回同一会话,而不是认领
+    /// 任意同宿主页(入口残留页/登录页)开新线程。只在显式 release(换代)时清除,
+    /// 清扫(sweeper)保留:闲置页被关后,同键续聊仍可按 URL 恢复
+    thread_urls: tokio::sync::Mutex<HashMap<String, String>>,
+    /// 线程记忆落盘路径(None = 测试注入,纯内存)。App 重启清空进程内存,但
+    /// Edge 与站点侧线程都还在——不落盘的话,重启后的第一条续聊又会认领到
+    /// 入口残留页开新线程(豆包"续聊新建标签页"的顽固路径)
+    thread_store_path: tokio::sync::Mutex<Option<PathBuf>>,
 }
 
 /// 生成路由差异:target 解析与"丢失恢复"策略
@@ -1020,6 +1071,8 @@ impl<O: CdpOps> HubState<O> {
             activity_policy: activity::ActivityPolicy::default(),
             pulse: Mutex::new(activity::PulseCoordinator::new()),
             site_health: Mutex::new(activity::SiteHealthBook::default()),
+            thread_urls: tokio::sync::Mutex::new(HashMap::new()),
+            thread_store_path: tokio::sync::Mutex::new(None),
         }
     }
 
@@ -1175,8 +1228,25 @@ impl<O: CdpOps> HubState<O> {
         }
     }
 
+    /// 站点健康决定的落点:Tab 模式(或毒化保守回落)开普通标签页,否则独立窗口
+    fn placement_for(&self, site: &str) -> activity::TargetPlacement {
+        let mode = self
+            .site_health
+            .lock()
+            .map(|book| book.effective_mode(site))
+            .unwrap_or(activity::SiteMode::Tab);
+        if mode == activity::SiteMode::Tab {
+            activity::TargetPlacement::Tab
+        } else {
+            activity::TargetPlacement::DedicatedWindow
+        }
+    }
+
     /// Shared 路由的站点标签页:复用同宿主页,没有才建。
-    /// 站点已升级(Pending/Dedicated)时直接开独立窗口
+    /// 站点已升级(Pending/Dedicated)时直接开独立窗口。
+    /// 跳过已被 Conversation 路由认领的页(否则主演出会抢走群聊/剧场的会话页,
+    /// 两边互相串站点线程);选中的页登记占用到本次 ask 结束(见 webchat_ask 清账),
+    /// 反向挡住 Conversation 路由中途认领同一页
     async fn find_or_create_shared(
         &self,
         port: u16,
@@ -1186,23 +1256,26 @@ impl<O: CdpOps> HubState<O> {
     ) -> Result<String, AskFail> {
         let a = adapter(site).ok_or_else(|| AskFail::Failed(format!("未知站点: {site}")))?;
         let pages = self.op(self.ops.list_pages(port), cancel, deadline).await?;
-        if let Some((id, _)) = pages.iter().rev().find(|p| p.1.contains(a.host)) {
-            return Ok(id.clone());
-        }
-        let placement = {
-            let book = self.site_health.lock();
-            if book.is_ok_and(|b| b.effective_mode(site) != activity::SiteMode::Tab) {
-                activity::TargetPlacement::DedicatedWindow
-            } else {
-                activity::TargetPlacement::Tab
+        {
+            let mut claimed = self.claimed_targets.lock().await;
+            if let Some((id, _)) = pages
+                .iter()
+                .rev()
+                .find(|(id, url)| url.contains(a.host) && !claimed.contains(id))
+            {
+                claimed.insert(id.clone());
+                return Ok(id.clone());
             }
-        };
-        self.op(
-            self.ops.create_page(port, a.url, placement),
-            cancel,
-            deadline,
-        )
-        .await
+        }
+        let tid = self
+            .op(
+                self.ops.create_page(port, a.url, self.placement_for(site)),
+                cancel,
+                deadline,
+            )
+            .await?;
+        self.claimed_targets.lock().await.insert(tid.clone());
+        Ok(tid)
     }
 
     /// 优先认领用户已打开并登录的同站点页；没有可用页时才创建会话页。
@@ -1217,12 +1290,7 @@ impl<O: CdpOps> HubState<O> {
         deadline: Deadline,
     ) -> Result<(String, bool), AskFail> {
         let a = adapter(site).ok_or_else(|| AskFail::Failed(format!("未知站点: {site}")))?;
-        let mode = self
-            .site_health
-            .lock()
-            .map(|book| book.effective_mode(site))
-            .unwrap_or(activity::SiteMode::Tab); // 毒化保守回落标签页(毒化仅 panics 时发生)
-        if mode != activity::SiteMode::Tab {
+        if self.placement_for(site) != activity::TargetPlacement::Tab {
             let tid = self
                 .op(
                     self.ops
@@ -1285,11 +1353,17 @@ impl<O: CdpOps> HubState<O> {
 
     /// 解析会话标签页:首轮优先认领现有登录页；后续复用同一 target。
     /// reset/epoch 变化/站点变化/句柄丢失时释放旧 target，再认领或新建。
+    /// 线程身份恢复:记住过线程 URL(thread_urls,按会话键、活过 Edge 重启)时——
+    /// · 在飞句柄仍活着但页面 URL 已不是该线程(认领到了入口残留页)= 纠正回线程页;
+    /// · 句柄丢失(标签页被关/Edge 重启)= 先找现存的同 URL 页复用,没有才 create_page
+    ///   直达同一站点会话(上下文真正连续);认领/新建只作恢复失败的兜底。
+    /// reset/换站点 = 显式开新会话,本轮不作恢复。
     #[allow(clippy::too_many_arguments)]
     async fn resolve_conversation_target(
         &self,
         port: u16,
         epoch: u64,
+        key: &str,
         slot: &ConversationSlot,
         site: &str,
         reset: bool,
@@ -1301,27 +1375,93 @@ impl<O: CdpOps> HubState<O> {
         if st.released {
             return Err(AskFail::Failed("会话已释放".into()));
         }
+        let remembered = self.thread_urls.lock().await.get(key).cloned();
         let stale = reset || st.edge_epoch != epoch || st.site != site || st.target_id.is_none();
         let mut old = st.target_id.clone();
         if !stale {
             let tid = old.clone().unwrap_or_default();
-            if self.target_alive(port, &tid, cancel, deadline).await {
+            let pages = match self.op(self.ops.list_pages(port), cancel, deadline).await {
+                Ok(pages) => pages,
+                // 列表本身失败 = 调试通道抖动:乐观复用,真丢失由 generation
+                // 的 PageReady 宿主校验兜住(context_lost → recreate 携线程种子)
+                Err(_) => return Ok(tid),
+            };
+            let hit = pages.iter().find(|(id, _)| id == &tid);
+            let url_ok = match (hit, remembered.as_deref()) {
+                (Some((_, url)), Some(want)) => same_thread_url(url, want),
+                (Some(_), None) => true,
+                (None, _) => false,
+            };
+            if url_ok {
                 return Ok(tid);
             }
-            trace.mark("target_lost_reuse");
+            trace.mark(if hit.is_some() {
+                "target_url_mismatch"
+            } else {
+                "target_lost_reuse"
+            });
             self.claimed_targets.lock().await.remove(&tid);
             old = None;
         }
-        // 释放旧上下文；恢复靠 transcript prompt。
+        // 释放旧上下文；恢复靠 transcript prompt 或线程 URL。
         if let Some(tid) = old {
             self.claimed_targets.lock().await.remove(&tid);
             let _ = self
                 .op(self.ops.close_page(port, &tid), cancel, deadline)
                 .await;
         }
-        let (tid, target_owned) = self
-            .claim_or_create_conversation_target(port, site, cancel, deadline)
-            .await?;
+        // 线程身份:reset/换站点 = 显式开新会话,本轮不作恢复
+        let recover_url = if reset || st.site != site { None } else { remembered };
+        let (tid, target_owned, restored) = match recover_url {
+            Some(url) => {
+                // 先找现存同线程页(误判丢失/用户重开过):直接认领,不开重复页
+                let existing = self
+                    .op(self.ops.list_pages(port), cancel, deadline)
+                    .await
+                    .ok()
+                    .and_then(|pages| {
+                        pages
+                            .iter()
+                            .rev()
+                            .find(|(_, u)| same_thread_url(u, &url))
+                            .map(|(id, _)| id.clone())
+                    });
+                if let Some(id) = existing {
+                    self.claimed_targets.lock().await.insert(id.clone());
+                    trace.mark("thread_restored");
+                    (id, false, true)
+                } else {
+                    match self
+                        .op(
+                            self.ops
+                                .create_page(port, &url, self.placement_for(site)),
+                            cancel,
+                            deadline,
+                        )
+                        .await
+                    {
+                        Ok(tid) => {
+                            self.claimed_targets.lock().await.insert(tid.clone());
+                            trace.mark("thread_restored");
+                            (tid, true, true)
+                        }
+                        // 恢复失败(URL 已失效/站点拒绝)→ 回落认领/新建,上下文靠 prompt 兜底
+                        Err(_) => {
+                            let (tid, owned) = self
+                                .claim_or_create_conversation_target(port, site, cancel, deadline)
+                                .await?;
+                            (tid, owned, false)
+                        }
+                    }
+                }
+            }
+            None => {
+                let (tid, owned) = self
+                    .claim_or_create_conversation_target(port, site, cancel, deadline)
+                    .await?;
+                (tid, owned, false)
+            }
+        };
         trace.mark(if target_owned {
             "target_created"
         } else {
@@ -1331,7 +1471,10 @@ impl<O: CdpOps> HubState<O> {
         st.target_id = Some(tid.clone());
         st.target_owned = target_owned;
         st.edge_epoch = epoch;
-        st.turn_count = 0;
+        // 线程恢复 = 同一会话的延续,轮次不清零(否则 15 轮上下文卫生误判)
+        if !restored {
+            st.turn_count = 0;
+        }
         st.last_used_at = Instant::now();
         Ok(tid)
     }
@@ -1350,6 +1493,7 @@ impl<O: CdpOps> HubState<O> {
         target_id: &mut String,
         route: &Route,
         site: &str,
+        thread_seed: Option<&str>,
         prompt: &str,
         cancel: &CancellationHandle,
         deadline: Deadline,
@@ -1386,7 +1530,7 @@ impl<O: CdpOps> HubState<O> {
                     };
                     if context_lost && !self.target_alive(port, target_id, cancel, deadline).await {
                         *target_id = self
-                            .recreate_target(port, route, site, cancel, deadline)
+                            .recreate_target(port, route, site, thread_seed, cancel, deadline)
                             .await?;
                         trace.mark("target_recreated");
                     }
@@ -1408,7 +1552,7 @@ impl<O: CdpOps> HubState<O> {
                     return Err(AskFail::Failed(format!("认领到错误站点的标签页: {short}")));
                 }
                 *target_id = self
-                    .recreate_target(port, route, site, cancel, deadline)
+                    .recreate_target(port, route, site, thread_seed, cancel, deadline)
                     .await?;
                 trace.mark("target_recreated");
                 continue;
@@ -1603,7 +1747,7 @@ impl<O: CdpOps> HubState<O> {
                     if !alive {
                         if !sent {
                             *target_id = self
-                                .recreate_target(port, route, site, cancel, deadline)
+                                .recreate_target(port, route, site, thread_seed, cancel, deadline)
                                 .await?;
                             trace.mark("target_recreated");
                             continue;
@@ -1844,12 +1988,14 @@ impl<O: CdpOps> HubState<O> {
         }
     }
 
-    /// 发送前丢失的安全重建:Shared 按宿主重找/建,Conversation 开新页
+    /// 发送前丢失的安全重建:Shared 按宿主重找/建,Conversation 优先按线程 URL
+    /// 直达同一会话(不分会叉),失败回落开新页
     async fn recreate_target(
         &self,
         port: u16,
         route: &Route,
         site: &str,
+        thread_seed: Option<&str>,
         cancel: &CancellationHandle,
         deadline: Deadline,
     ) -> Result<String, AskFail> {
@@ -1860,6 +2006,20 @@ impl<O: CdpOps> HubState<O> {
                     .await
             }
             Route::Conversation => {
+                if let Some(url) = thread_seed {
+                    if let Ok(tid) = self
+                        .op(
+                            self.ops
+                                .create_page(port, url, self.placement_for(site)),
+                            cancel,
+                            deadline,
+                        )
+                        .await
+                    {
+                        self.claimed_targets.lock().await.insert(tid.clone());
+                        return Ok(tid);
+                    }
+                }
                 self.create_claimed_conversation_target(port, site, cancel, deadline)
                     .await
             }
@@ -1911,6 +2071,70 @@ impl<O: CdpOps> HubState<O> {
 
     /// 闲置会话清扫(sweeper 定时调用,崩溃兜底)。
     /// key_lock.try_lock 拿不到 = ask 在飞,跳过不关在用会话
+    /// 装配线程记忆落盘:载入上次的 会话键→线程URL 映射并记住写回路径。
+    /// 文件损坏/缺失静默跳过(记忆丢失只退化回认领行为,不影响生成)
+    pub async fn load_thread_store(&self, path: PathBuf) {
+        if let Ok(raw) = tokio::fs::read_to_string(&path).await {
+            if let Ok(map) = serde_json::from_str::<HashMap<String, String>>(&raw) {
+                let mut threads = self.thread_urls.lock().await;
+                for (k, v) in map {
+                    threads.entry(k).or_insert(v);
+                }
+            }
+        }
+        *self.thread_store_path.lock().await = Some(path);
+    }
+
+    /// 线程记忆写盘(tmp+rename 原子替换;失败静默——落盘是加速,不是事实源)
+    async fn persist_threads(&self) {
+        let Some(path) = self.thread_store_path.lock().await.clone() else {
+            return;
+        };
+        let snapshot = self.thread_urls.lock().await.clone();
+        let tmp = path.with_extension("json.tmp");
+        if tokio::fs::write(&tmp, serde_json::to_vec(&snapshot).unwrap_or_default())
+            .await
+            .is_ok()
+        {
+            let _ = tokio::fs::rename(&tmp, &path).await;
+        }
+    }
+
+    /// 释放会话(命令与测试共用):先出总表(后续 ask 拿到的是全新槽),再等在飞
+    /// ask 收场(key_lock 整段被 ask 持有),最后关标签页——绝不关在用 target。
+    /// 线程记忆在此清除(换代语义:显式 release = 该会话不再续);闲置清扫不清,
+    /// 闲置页被关后同键续聊仍能按 URL 恢复线程
+    pub async fn release_conversation(&self, profile: &Path, key: &str) {
+        let drop_thread = async {
+            if self.thread_urls.lock().await.remove(key).is_some() {
+                self.persist_threads().await;
+            }
+        };
+        let slot = self.conversations.lock().await.remove(key);
+        let Some(slot) = slot else {
+            drop_thread.await; // 不存在 = 已释放/已清扫:no-op,但记忆仍按换代语义清除
+            return;
+        };
+        let _serial = slot.key_lock.lock().await;
+        let mut st = slot.state.lock().await;
+        if st.released {
+            return;
+        }
+        if let Some(tid) = st.target_id.clone() {
+            self.claimed_targets.lock().await.remove(&tid);
+            if !st.target_owned {
+                st.released = true;
+                drop_thread.await;
+                return;
+            }
+            if let Some(port) = self.ops.probe_port(profile).await {
+                let _ = self.ops.close_page(port, &tid).await;
+            }
+        }
+        st.released = true;
+        drop_thread.await;
+    }
+
     pub async fn sweep_idle(&self) {
         let candidates: Vec<(String, Arc<ConversationSlot>)> = {
             let map = self.conversations.lock().await;
@@ -2004,6 +2228,7 @@ pub async fn webchat_ask(
         let mut target_id = hub
             .find_or_create_shared(port, &site, &cancel, deadline)
             .await?;
+        let original_target = target_id.clone();
         trace.mark("page_ready");
         let result = hub
             .generation(
@@ -2013,6 +2238,7 @@ pub async fn webchat_ask(
                     host: a.host.to_string(),
                 },
                 &site,
+                None,
                 &prompt,
                 &cancel,
                 deadline,
@@ -2020,6 +2246,12 @@ pub async fn webchat_ask(
             )
             .await;
         trace.finish(result.as_ref().err().map(|f| f.msg()));
+        // 清账:Shared 的在飞占用解除,页面本身留给下次 shared 复用
+        {
+            let mut claimed = hub.claimed_targets.lock().await;
+            claimed.remove(&original_target);
+            claimed.remove(&target_id);
+        }
         result.map(|outcome| outcome.text)
     };
     let result = run.await;
@@ -2130,6 +2362,7 @@ async fn run_conversation<O: CdpOps>(
         .resolve_conversation_target(
             lease.port,
             lease.epoch,
+            key,
             &slot,
             site,
             reset,
@@ -2139,6 +2372,8 @@ async fn run_conversation<O: CdpOps>(
         )
         .await?;
     trace.mark("page_ready");
+    // 复用路径上记住的线程 URL:发送前页面殉职时,中途重建按它直达同一会话
+    let thread_seed = hub.thread_urls.lock().await.get(key).cloned();
     let original_target = target_id.clone();
     let result = hub
         .generation(
@@ -2146,6 +2381,7 @@ async fn run_conversation<O: CdpOps>(
             &mut target_id,
             &Route::Conversation,
             site,
+            thread_seed.as_deref(),
             prompt,
             cancel,
             deadline,
@@ -2158,7 +2394,7 @@ async fn run_conversation<O: CdpOps>(
         if target_id != original_target {
             hub.claimed_targets.lock().await.remove(&original_target);
             hub.claimed_targets.lock().await.insert(target_id.clone());
-            st.target_id = Some(target_id);
+            st.target_id = Some(target_id.clone());
             st.target_owned = true;
         }
         if result.is_ok() {
@@ -2166,6 +2402,30 @@ async fn run_conversation<O: CdpOps>(
             st.consecutive_failures = 0;
         } else {
             st.consecutive_failures = st.consecutive_failures.saturating_add(1);
+        }
+    }
+    // 成功回合捕获站点侧线程身份:下一轮标签页丢失时按 URL 直达同一会话。
+    // 总超时可能恰好耗尽,给捕获单独立 5s 预算(失败静默跳过,prompt 兜底仍在)
+    if result.is_ok() {
+        let mut capture_deadline = deadline;
+        capture_deadline.extend(THREAD_CAPTURE_EXTRA_MS);
+        if let Ok(v) = hub
+            .op(
+                hub.ops
+                    .eval(lease.port, &target_id, "location.href", 5_000),
+                cancel,
+                capture_deadline,
+            )
+            .await
+        {
+            let href = v.as_str().unwrap_or("");
+            if href.starts_with("https://") && href.contains(a.host) {
+                hub.thread_urls
+                    .lock()
+                    .await
+                    .insert(key.to_string(), href.to_string());
+                hub.persist_threads().await;
+            }
         }
     }
     // 站点健康分账(按站点,不影响其他站点):成功喂 3-of-5 规则;
@@ -2187,34 +2447,15 @@ async fn run_conversation<O: CdpOps>(
     result.map(|outcome| outcome.text)
 }
 
-/// 释放会话:先出总表(后续 ask 拿到的是全新槽),再等在飞 ask 收场
-/// (key_lock 整段被 ask 持有),最后关标签页——绝不关在用 target
+/// 释放会话(换代/剧场收尾):Hub.release_conversation 的命令壳
 #[tauri::command]
 pub async fn webchat_release_conversation(
     app: AppHandle,
     hub: State<'_, Arc<WebchatHub>>,
     conversation_key: String,
 ) -> Result<(), String> {
-    let slot = hub.conversations.lock().await.remove(&conversation_key);
-    let Some(slot) = slot else {
-        return Ok(()); // 不存在 = 已释放,no-op
-    };
-    let _serial = slot.key_lock.lock().await;
-    let mut st = slot.state.lock().await;
-    if st.released {
-        return Ok(());
-    }
-    if let Some(tid) = st.target_id.clone() {
-        hub.claimed_targets.lock().await.remove(&tid);
-        if !st.target_owned {
-            st.released = true;
-            return Ok(());
-        }
-        if let Some(port) = hub.ops.probe_port(&profile_dir(&app)?).await {
-            let _ = hub.ops.close_page(port, &tid).await;
-        }
-    }
-    st.released = true;
+    let profile = profile_dir(&app)?;
+    hub.release_conversation(&profile, &conversation_key).await;
     Ok(())
 }
 
@@ -2673,8 +2914,8 @@ mod tests {
         require_active_for_send: bool,
         active_target: Option<String>,
         activation_calls: u32,
-        /// location.href 的应答覆写(None = 默认 deepseek 宿主;宿主校验测试用)
-        wrong_site_href: Option<String>,
+        /// location.href 的应答覆写(None = 默认 deepseek 宿主;宿主校验/线程恢复测试用)
+        href_override: Option<String>,
         /// 软唤醒/激活脉冲执行计数(活性派发断言用)
         wake_calls: u32,
         pulse_calls: u32,
@@ -2682,6 +2923,10 @@ mod tests {
         fail_soft_wake: bool,
         /// 独立窗口创建计数(placement=DedicatedWindow)
         dedicated_creations: u32,
+        /// 下次 create_page 注入失败(线程恢复回落路径测试用)
+        fail_next_create: bool,
+        /// 激活时同步还原最小化窗口的次数(激活语义回归用)
+        window_restore_calls: u32,
     }
 
     struct FakeOps {
@@ -2733,6 +2978,10 @@ mod tests {
         ) -> Result<String, String> {
             let mut s = self.state();
             s.ports_seen.push(port);
+            if s.fail_next_create {
+                s.fail_next_create = false;
+                return Err("create failed (injected)".into());
+            }
             s.next_id += 1;
             let id = format!("t{}", s.next_id);
             s.pages.push((id.clone(), url.to_string()));
@@ -2780,6 +3029,8 @@ mod tests {
             }
             s.active_target = Some(target_id.to_string());
             s.activation_calls += 1;
+            // 真实现在此同步还原最小化窗口(ChatGPT/豆包在 hidden 页暂停生成)
+            s.window_restore_calls += 1;
             Ok(())
         }
 
@@ -2804,7 +3055,7 @@ mod tests {
                 let mut s = self.state();
                 s.active_evals = s.active_evals.saturating_sub(1);
                 let href = s
-                    .wrong_site_href
+                    .href_override
                     .clone()
                     .unwrap_or_else(|| "https://chat.deepseek.com".into());
                 return Ok(json!(href));
@@ -3174,6 +3425,9 @@ mod tests {
 
         assert!(result.is_ok(), "发送前应激活目标标签页,实际: {result:?}");
         assert_eq!(hub.ops.state().activation_calls, 1);
+        // 激活必须同步还原最小化窗口:仅 bringToFront 时页面仍 hidden,
+        // ChatGPT/豆包在 hidden 页暂停生成(用户被迫手动切标签页)
+        assert_eq!(hub.ops.state().window_restore_calls, 1);
     }
 
     #[tokio::test]
@@ -3496,7 +3750,7 @@ mod tests {
     async fn page_ready_rejects_wrong_site_tab() {
         let ops = FakeOps::new();
         // 让 location.href 返回豆包宿主(deepseek 会话认领到别站 = 拒绝)
-        ops.state().wrong_site_href = Some("https://www.doubao.com/chat/".to_string());
+        ops.state().href_override = Some("https://www.doubao.com/chat/".to_string());
         let hub = hub_with(ops);
         let r = ask_conv(&hub, "wrong", "k1", 30_000).await.unwrap_err();
         assert!(r.contains("认领到错误站点的标签页"), "实际: {r}");
@@ -3535,6 +3789,367 @@ mod tests {
             cleared.as_millis() + 500 < with_backoff.as_millis(),
             "成功后退避应清零: {cleared:?} vs {with_backoff:?}"
         );
+    }
+
+    // ---------- Shared 不抢会话页 / 线程 URL 记录与恢复(治本) ----------
+
+    /// Shared 路由(主演出)不得抢走 Conversation 路由已认领的会话页:
+    /// 同站点只有登录页一个候选时,webchat_ask 应另开新页而不是抓走群聊/剧场的会话页
+    #[tokio::test]
+    async fn shared_route_skips_claimed_conversation_tabs() {
+        let hub = hub_with(FakeOps::new());
+        hub.open_login(&profile(), "https://chat.deepseek.com/")
+            .await
+            .unwrap();
+        let login_target = hub.ops.state().pages[0].0.clone();
+        ask_conv(&hub, "r1", "relay:e1:A", 10_000).await.unwrap();
+        assert_eq!(
+            hub.conversations
+                .lock()
+                .await
+                .get("relay:e1:A")
+                .unwrap()
+                .state
+                .lock()
+                .await
+                .target_id
+                .as_deref(),
+            Some(login_target.as_str()),
+            "前置:会话路由已认领登录页"
+        );
+
+        let cancel = RequestGuard::register(&hub.requests, "shared").handle();
+        let deadline = Deadline::after_ms(10_000);
+        let port = hub.edge.read().await.port;
+        let shared = match hub
+            .find_or_create_shared(port, "deepseek", &cancel, deadline)
+            .await
+        {
+            Ok(t) => t,
+            Err(e) => panic!("find_or_create_shared 失败: {}", e.msg()),
+        };
+        assert_ne!(shared, login_target, "Shared 不得复用已认领的会话页");
+        assert_eq!(hub.ops.state().pages.len(), 2, "应另开新页");
+        // Shared 的页在飞期间登记占用:Conversation 路由反向也认领不到它
+        assert!(hub.claimed_targets.lock().await.contains(&shared));
+    }
+
+    /// 治本:标签页丢失后,按上一成功回合记录的线程 URL 开页直达同一站点会话续聊;
+    /// 线程是同一会话的延续,turn_count 不清零
+    #[tokio::test]
+    async fn lost_tab_is_restored_from_recorded_thread_url() {
+        let ops = FakeOps::new();
+        let thread_url = "https://chat.deepseek.com/a/chat/s/thr-1";
+        ops.state().href_override = Some(thread_url.to_string());
+        let hub = hub_with(ops);
+        ask_conv(&hub, "r1", "k1", 10_000).await.unwrap();
+        assert_eq!(
+            hub.thread_urls.lock().await.get("k1").map(String::as_str),
+            Some(thread_url),
+            "成功回合应记录线程 URL"
+        );
+        let old_tid = hub.ops.state().pages[0].0.clone();
+        hub.ops.state().pages.retain(|(id, _)| id != &old_tid); // 用户手关标签页
+
+        let (_, stages) = ask_conv_trace(&hub, "r2", "k1", 10_000).await;
+        assert!(
+            stages.iter().any(|s| s == "thread_restored"),
+            "stages: {stages:?}"
+        );
+        let s = hub.ops.state();
+        assert_eq!(s.pages.len(), 1);
+        assert_eq!(
+            s.pages[0].1, thread_url,
+            "应按线程 URL 开页,而不是认领任意同宿主页"
+        );
+        drop(s);
+        let slot = hub.conversations.lock().await.get("k1").unwrap().clone();
+        assert_eq!(slot.state.lock().await.turn_count, 2, "线程恢复不清零轮次");
+    }
+
+    /// 线程记忆活过 Edge 重启:epoch+1 清空会话槽后,同键续聊按 URL 开回同一
+    /// 站点会话(豆包"续聊开新标签页"的主修复)——站点侧线程在服务端,不随进程死
+    #[tokio::test]
+    async fn thread_identity_survives_edge_restart() {
+        let ops = FakeOps::new();
+        let thread_url = "https://chat.deepseek.com/a/chat/s/thr-1";
+        ops.state().href_override = Some(thread_url.to_string());
+        let hub = hub_with(ops);
+        ask_conv(&hub, "r1", "k1", 10_000).await.unwrap();
+
+        // 模拟 webchat_login 冷启动/端口漂移的失效语义:重启 + epoch+1 + 清槽清认领
+        hub.cancel_all();
+        {
+            let mut w = hub.edge.write().await;
+            hub.ops
+                .kill_and_launch(&profile(), "https://chat.deepseek.com")
+                .await
+                .unwrap();
+            w.epoch += 1;
+            hub.conversations.lock().await.clear();
+            hub.claimed_targets.lock().await.clear();
+        }
+        assert!(hub.conversations.lock().await.is_empty());
+        assert_eq!(
+            hub.thread_urls.lock().await.get("k1").map(String::as_str),
+            Some(thread_url),
+            "重启不得清掉线程记忆"
+        );
+
+        let (_, stages) = ask_conv_trace(&hub, "r2", "k1", 10_000).await;
+        assert!(
+            stages.iter().any(|s| s == "thread_restored"),
+            "stages: {stages:?}"
+        );
+        let s = hub.ops.state();
+        let restored_id = s
+            .pages
+            .iter()
+            .find(|(_, u)| u == thread_url)
+            .map(|(id, _)| id.clone());
+        assert!(restored_id.is_some(), "重启后应按线程 URL 开回同一会话");
+        // 冷启动自带的入口页是合法残留;除它之外只应有恢复出的线程页
+        assert_eq!(s.pages.len(), 2, "不得残留更多标签页");
+        drop(s);
+        let slot = hub.conversations.lock().await.get("k1").unwrap().clone();
+        assert_eq!(
+            slot.state.lock().await.target_id.as_deref(),
+            restored_id.as_deref()
+        );
+    }
+
+    /// 恢复去重:线程页其实还开着(误判丢失/句柄陈旧)→ 认领现页,不开重复标签页
+    #[tokio::test]
+    async fn thread_restore_reuses_existing_page_with_same_url() {
+        let ops = FakeOps::new();
+        let thread_url = "https://chat.deepseek.com/a/chat/s/thr-1";
+        ops.state().href_override = Some(thread_url.to_string());
+        let hub = hub_with(ops);
+        ask_conv(&hub, "r1", "k1", 10_000).await.unwrap();
+
+        // 会话槽丢失(重启清表)但线程页还在列表里(用户新开/句柄陈旧)
+        hub.conversations.lock().await.clear();
+        hub.claimed_targets.lock().await.clear();
+        let existing_id = "existing-thread-page".to_string();
+        hub.ops
+            .state()
+            .pages
+            .push((existing_id.clone(), thread_url.to_string()));
+
+        let (_, stages) = ask_conv_trace(&hub, "r2", "k1", 10_000).await;
+        assert!(stages.iter().any(|s| s == "thread_restored"), "stages: {stages:?}");
+        assert_eq!(
+            hub.ops.state().pages.len(),
+            2,
+            "复用现存同 URL 页,不得另开重复标签页"
+        );
+        let slot = hub.conversations.lock().await.get("k1").unwrap().clone();
+        assert_eq!(
+            slot.state.lock().await.target_id.as_deref(),
+            Some(existing_id.as_str()),
+            "应认领现存线程页"
+        );
+    }
+
+    /// 在飞句柄活着但页面已不是记住的线程(认领到入口残留页)= 纠正回线程页,
+    /// 绝不在错误的页上继续增量续聊(新线程分叉)
+    #[tokio::test]
+    async fn alive_tab_on_wrong_url_is_corrected_back_to_thread() {
+        let ops = FakeOps::new();
+        let thread_url = "https://chat.deepseek.com/a/chat/s/thr-1";
+        let entry = adapter("deepseek").unwrap().url;
+        ops.state().href_override = Some(thread_url.to_string());
+        let hub = hub_with(ops);
+        ask_conv(&hub, "r1", "k1", 10_000).await.unwrap();
+
+        // 把存活页的列表 URL 改成入口页:模拟"认领到/漂移到残留入口页"
+        hub.ops.state().pages[0].1 = entry.to_string();
+
+        let (_, stages) = ask_conv_trace(&hub, "r2", "k1", 10_000).await;
+        assert!(
+            stages.iter().any(|s| s == "target_url_mismatch"),
+            "stages: {stages:?}"
+        );
+        assert!(stages.iter().any(|s| s == "thread_restored"), "stages: {stages:?}");
+        let s = hub.ops.state();
+        let restored_id = s
+            .pages
+            .iter()
+            .find(|(_, u)| u == thread_url)
+            .map(|(id, _)| id.clone());
+        assert!(restored_id.is_some(), "应开回线程页");
+        drop(s);
+        let slot = hub.conversations.lock().await.get("k1").unwrap().clone();
+        assert_eq!(
+            slot.state.lock().await.target_id.as_deref(),
+            restored_id.as_deref(),
+            "会话应绑定线程页而不是入口残留页"
+        );
+    }
+
+    /// 显式 release(换代)= 该会话不再续:线程记忆清除,同键后续(新槽)不复活旧线程;
+    /// 闲置清扫不在此列(关页但保留记忆,续聊仍可恢复)
+    #[tokio::test]
+    async fn release_drops_thread_memory_but_sweep_keeps_it() {
+        let ops = FakeOps::new();
+        let thread_url = "https://chat.deepseek.com/a/chat/s/thr-1";
+        ops.state().href_override = Some(thread_url.to_string());
+        let hub = hub_with(ops);
+        ask_conv(&hub, "r1", "k1", 10_000).await.unwrap();
+        assert!(hub.thread_urls.lock().await.contains_key("k1"));
+
+        hub.release_conversation(&profile(), "k1").await;
+        assert!(
+            !hub.thread_urls.lock().await.contains_key("k1"),
+            "release 必须清除线程记忆"
+        );
+        let owned_slot_page = hub.ops.state().pages.is_empty();
+        assert!(owned_slot_page, "release 关闭 owned 页");
+
+        // 清扫路径:记忆保留(同键续聊可按 URL 恢复)
+        ask_conv(&hub, "r2", "k2", 10_000).await.unwrap();
+        assert!(hub.thread_urls.lock().await.contains_key("k2"));
+        hub.ops.state().pages.clear(); // 模拟页被外部关掉(清扫关 owned 页后)
+        let slot = hub.conversations.lock().await.get("k2").unwrap().clone();
+        slot.state.lock().await.last_used_at =
+            Instant::now() - Duration::from_secs(HUB_IDLE_SECS + 60);
+        drop(slot);
+        hub.sweep_idle().await;
+        assert!(
+            hub.thread_urls.lock().await.contains_key("k2"),
+            "清扫不得清线程记忆:闲置页被关后同键续聊仍可恢复"
+        );
+    }
+
+    /// reset = 显式开新会话:记住的线程作废,重建页落站点入口而不是旧线程 URL
+    #[tokio::test]
+    async fn reset_discards_recorded_thread_url() {
+        let ops = FakeOps::new();
+        let thread_url = "https://chat.deepseek.com/a/chat/s/thr-1";
+        ops.state().href_override = Some(thread_url.to_string());
+        let hub = hub_with(ops);
+        ask_conv(&hub, "r1", "k1", 10_000).await.unwrap();
+        let entry = adapter("deepseek").unwrap().url;
+
+        let r = ask_conv_reset(&hub, "r2", "k1", 10_000, true).await;
+        assert!(r.is_ok());
+        let s = hub.ops.state();
+        assert_eq!(s.pages.len(), 1, "旧页应关闭,只留重建页");
+        assert_ne!(
+            s.pages[0].1, thread_url,
+            "reset 不得按旧线程 URL 恢复"
+        );
+        assert_eq!(s.pages[0].1, entry, "重建页落站点入口");
+        drop(s);
+        let slot = hub.conversations.lock().await.get("k1").unwrap().clone();
+        assert_eq!(slot.state.lock().await.turn_count, 1, "reset 清零轮次后重新累计");
+    }
+
+    /// 线程恢复的 create 失败(URL 失效/站点拒绝)→ 回落认领/新建,上下文靠 prompt 兜底
+    #[tokio::test]
+    async fn thread_restore_failure_falls_back_to_claim_or_create() {
+        let ops = FakeOps::new();
+        let thread_url = "https://chat.deepseek.com/a/chat/s/thr-1";
+        ops.state().href_override = Some(thread_url.to_string());
+        let hub = hub_with(ops);
+        ask_conv(&hub, "r1", "k1", 10_000).await.unwrap();
+        let old_tid = hub.ops.state().pages[0].0.clone();
+        hub.ops.state().pages.retain(|(id, _)| id != &old_tid);
+        hub.ops.state().fail_next_create = true;
+
+        let (r, stages) = ask_conv_trace(&hub, "r2", "k1", 10_000).await;
+        assert!(r.is_ok(), "回落路径应照常完成: {r:?}");
+        assert!(
+            !stages.iter().any(|s| s == "thread_restored"),
+            "stages: {stages:?}"
+        );
+        assert!(stages.iter().any(|s| s == "target_created"), "stages: {stages:?}");
+        let s = hub.ops.state();
+        assert_eq!(s.pages.len(), 1);
+        assert_eq!(s.pages[0].1, adapter("deepseek").unwrap().url);
+    }
+
+    /// 发送前页面殉职的中途重建:Conversation 路由优先按线程种子 URL 直达同一会话
+    /// (避免会话分叉),无种子/失败回落开站点入口新页
+    #[tokio::test]
+    async fn mid_generation_recreate_prefers_thread_seed_url() {
+        let hub = hub_with(FakeOps::new());
+        let cancel = RequestGuard::register(&hub.requests, "seed").handle();
+        let deadline = Deadline::after_ms(10_000);
+        let seed = "https://chat.deepseek.com/a/chat/s/thr-9";
+
+        let tid = match hub
+            .recreate_target(
+                9222,
+                &Route::Conversation,
+                "deepseek",
+                Some(seed),
+                &cancel,
+                deadline,
+            )
+            .await
+        {
+            Ok(t) => t,
+            Err(e) => panic!("recreate(有种子)失败: {}", e.msg()),
+        };
+        {
+            let s = hub.ops.state();
+            assert_eq!(s.pages.len(), 1);
+            assert_eq!(s.pages[0].1, seed, "应按线程种子 URL 开页");
+            assert!(s.pages.iter().any(|(id, _)| id == &tid));
+        }
+        assert!(hub.claimed_targets.lock().await.contains(&tid));
+
+        let tid2 = match hub
+            .recreate_target(9222, &Route::Conversation, "deepseek", None, &cancel, deadline)
+            .await
+        {
+            Ok(t) => t,
+            Err(e) => panic!("recreate(无种子)失败: {}", e.msg()),
+        };
+        {
+            let s = hub.ops.state();
+            assert_eq!(s.pages.len(), 2);
+            assert_ne!(s.pages[1].1, seed, "无种子回落站点入口");
+        }
+        assert!(hub.claimed_targets.lock().await.contains(&tid2));
+    }
+
+    /// 线程记忆落盘:App 重启(全新 Hub 实例、内存为空)后从盘上载入,同键续聊
+    /// 仍能按 URL 恢复线程;release 的清除同样落盘,重启后不复活
+    #[tokio::test]
+    async fn thread_store_persists_across_hub_restart() {
+        let store = std::env::temp_dir().join(format!(
+            "webchat-threads-test-{}-{}.json",
+            std::process::id(),
+            line!()
+        ));
+        let _ = std::fs::remove_file(&store);
+        let ops = FakeOps::new();
+        let thread_url = "https://chat.deepseek.com/a/chat/s/thr-1";
+        ops.state().href_override = Some(thread_url.to_string());
+        let hub = hub_with(ops);
+        hub.load_thread_store(store.clone()).await;
+        ask_conv(&hub, "r1", "k1", 10_000).await.unwrap();
+        assert!(store.exists(), "成功回合捕获后应落盘");
+
+        // "重启":全新 Hub(内存为空)从盘上载入
+        let hub2 = hub_with(FakeOps::new());
+        hub2.load_thread_store(store.clone()).await;
+        assert_eq!(
+            hub2.thread_urls.lock().await.get("k1").map(String::as_str),
+            Some(thread_url),
+            "重启后应从盘上恢复线程记忆"
+        );
+        // release(换代)的清除也要落盘:重启后不得复活旧线程
+        hub2.release_conversation(&profile(), "k1").await;
+        let hub3 = hub_with(FakeOps::new());
+        hub3.load_thread_store(store.clone()).await;
+        assert!(
+            !hub3.thread_urls.lock().await.contains_key("k1"),
+            "release 清除应同步落盘"
+        );
+        let _ = std::fs::remove_file(&store);
     }
 
     /// 真机 CDP 冒烟:拉起专用 Edge(临时 profile)→ 浏览器级 Target 域 → 页面 evaluate。

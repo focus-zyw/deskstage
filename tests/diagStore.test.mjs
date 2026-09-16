@@ -2,10 +2,8 @@
 // (默认档零正文)、环淘汰、派生结论(未说话原因/回退链/取消泄漏/错误分类)、
 // 导出筛选。隐私红线:detail_text 是唯一正文通道且必须先经 redact/scrub。
 import assert from 'node:assert/strict'
-import { after, before, beforeEach, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, beforeEach, test } from 'node:test'
 
-let server
 let store
 let types
 
@@ -17,18 +15,10 @@ before(async () => {
     removeItem: (k) => mem.delete(k),
     clear: () => mem.clear(),
   }
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  store = await server.ssrLoadModule('/src/diag/store.ts')
-  types = await server.ssrLoadModule('/src/diag/types.ts')
+  store = await import('../src/diag/store.ts')
+  types = await import('../src/diag/types.ts')
 })
 
-after(async () => {
-  await server?.close()
-})
 
 beforeEach(() => {
   store.resetDiagForTest()

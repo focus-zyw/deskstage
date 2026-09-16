@@ -1,28 +1,18 @@
 // 网页模型全模式支持回归:攒批弹幕回复容错解析、节奏分档、API Key 门放宽。
 // 沿用仓库测试原则:不碰网络与磁盘,webchatAsk 依赖注入。
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let generateLiveReplyBatch
 let sanitizeLiveReplyBatch
 let paceFor
 let startLiveSession
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  ;({ generateLiveReplyBatch, sanitizeLiveReplyBatch } = await server.ssrLoadModule('/src/engine/llmClient.ts'))
-  ;({ paceFor, startLiveSession } = await server.ssrLoadModule('/src/runtime/liveDanmaku.ts'))
+  ;({ generateLiveReplyBatch, sanitizeLiveReplyBatch } = await import('../src/engine/llmClient.ts'))
+  ;({ paceFor, startLiveSession } = await import('../src/runtime/liveDanmaku.ts'))
 })
 
-after(async () => {
-  await server?.close()
-})
 
 const BATCH = [
   { username: '观众甲', content: '今天吃什么' },
@@ -140,7 +130,7 @@ test('会话快照:webchat 档由开播时配置决定(startLiveSession 不抛�
     onReply: () => {},
     onStatus: () => {},
   }).catch(() => 'connect-failed-is-ok')
-  const m = await server.ssrLoadModule('/src/runtime/liveDanmaku.ts')
+  const m = await import('../src/runtime/liveDanmaku.ts')
   m.stopLiveSession()
   assert.ok('会话生命周期在无 Tauri 环境下安全')
 })

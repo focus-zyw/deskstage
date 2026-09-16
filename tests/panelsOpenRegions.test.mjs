@@ -1,3 +1,5 @@
+// 注:本文件依赖 vite 插件内联 mock @tauri-apps/* 等模块,保留 vite 自举;
+// scripts/run-tests.mjs 按含 "from 'vite'" 自动分流,勿改为直接 import(会丢 mock)。
 // 面板打开期间原生热区让位的回归测试:设置窗等 overlay 可见时,角色/按钮的
 // 原生热区必须整体退出——钩子数组清空(Rust 不再吞点击/滚轮)、hitTest 跳过
 // 原生热区(整窗恢复交互走真实 DOM)。否则"先注册者优先"会让角色热区压过设置窗:

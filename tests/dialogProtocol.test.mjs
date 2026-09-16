@@ -1,24 +1,14 @@
 // 三人对话协议回归:speaker/target 扩 C、reactions 清洗、listenersOf/reactionsOf 路由。
 // 兼容性重点:旧 listenerAction 历史数据按 target 转换,行为与双人时代一致。
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let schema
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  schema = await server.ssrLoadModule('/src/performer/dialogSchema.ts')
+  schema = await import('../src/performer/dialogSchema.ts')
 })
 
-after(async () => {
-  await server?.close()
-})
 
 const line = (raw) => schema.sanitizeDialogLine(raw)
 

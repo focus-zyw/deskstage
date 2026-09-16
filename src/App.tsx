@@ -387,9 +387,12 @@ function App() {
   // 全屏 WebView 恢复交互，否则展开小菜单也会让底层视频退出硬件合成。
   // C 右键菜单同理(轻交互按钮列表)。
   const interactivePanelsOpen = rt.overlays.some((overlay) => overlay !== 'mode-menu' && overlay !== 'c-menu')
+  // 设置窗虽是独立 WebView,但 Rust 全局钩子按屏幕坐标吞事件、不认光标下是哪个窗口,
+  // 设置窗与角色热区重叠时点击/滚轮会被截胡成拖拽/缩放(拆独立窗时丢了旧 overlay 时代的
+  // 让位保护)——设置打开期间原生热区同样让位,关闭(✕/点外收起/重播)后经此 effect 恢复。
   useEffect(() => {
-    setPanelsOpen(interactivePanelsOpen)
-  }, [interactivePanelsOpen])
+    setPanelsOpen(interactivePanelsOpen || settingsOpen)
+  }, [interactivePanelsOpen, settingsOpen])
   const [trInject, setTrInject] = useState<TranslationInject | null>(null)
   const trPanelRef = useRef<HTMLDivElement>(null)
   const trQuipAt = useRef(0)

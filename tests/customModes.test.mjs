@@ -1,10 +1,8 @@
 // 自定义模式(模式工坊)回归:校验清洗、存储合并、自然语言路由、AI 生成解析。
 // 沿用仓库测试原则:依赖注入、不碰网络与磁盘(localStorage 用内存桩)。
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let sanitizeCustomMode
 let sanitizeCustomModes
 let ensureCustomModesLoaded
@@ -18,20 +16,11 @@ let nlRoute
 let generateCustomMode
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
   ;({ sanitizeCustomMode, sanitizeCustomModes, ensureCustomModesLoaded, saveCustomMode, removeCustomMode, getCustomModesSnapshot } =
-    await server.ssrLoadModule('/src/storage/customModesStore.ts'))
-  ;({ MODES, allModes, modeOf } = await server.ssrLoadModule('/src/performer/modes/index.ts'))
-  ;({ nlRoute } = await server.ssrLoadModule('/src/features/commands/commands.ts'))
-  ;({ generateCustomMode } = await server.ssrLoadModule('/src/engine/modeGenerator.ts'))
-})
-
-after(async () => {
-  await server?.close()
+    await import('../src/storage/customModesStore.ts'))
+  ;({ MODES, allModes, modeOf } = await import('../src/performer/modes/index.ts'))
+  ;({ nlRoute } = await import('../src/features/commands/commands.ts'))
+  ;({ generateCustomMode } = await import('../src/engine/modeGenerator.ts'))
 })
 
 const validMode = {

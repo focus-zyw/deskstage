@@ -1,26 +1,16 @@
 // 聊天短期窗口与 TurnBatch 轻校验回归(P3)。
 // 窗口:最近 10 个 turn,超出淘汰最旧;校验:1~3 句、speaker 合法、被@角色首答。
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let turnWindow
 let llm
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  turnWindow = await server.ssrLoadModule('/src/dialogue/turnWindow.ts')
-  llm = await server.ssrLoadModule('/src/engine/llmClient.ts')
+  turnWindow = await import('../src/dialogue/turnWindow.ts')
+  llm = await import('../src/engine/llmClient.ts')
 })
 
-after(async () => {
-  await server?.close()
-})
 
 const line = (speaker, text) => ({ speaker, text, action: '' })
 

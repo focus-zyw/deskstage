@@ -3,8 +3,7 @@
 // 质量闸恰一次轻修复后提交 / 不可修复问题照常提交且 gateIssues 穿出 / trace 随提交
 // meta 送达宿主。假 Adapter + 手动时钟,零网络。
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
 let createRoomJournal
 let createRoomRouter
@@ -13,23 +12,14 @@ let createFakeActorAdapter
 let expression
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  ;({ createRoomJournal } = await server.ssrLoadModule('/src/groupChat/roomJournal.ts'))
-  ;({ createRoomRouter } = await server.ssrLoadModule('/src/groupChat/roomRouter.ts'))
-  ;({ createActorWorker } = await server.ssrLoadModule('/src/groupChat/actorWorker.ts'))
-  ;({ createFakeActorAdapter } = await server.ssrLoadModule('/src/groupChat/adapters/fakeActor.ts'))
-  ;(expression = await server.ssrLoadModule('/src/expression/index.ts'))
+  ;({ createRoomJournal } = await import('../src/groupChat/roomJournal.ts'))
+  ;({ createRoomRouter } = await import('../src/groupChat/roomRouter.ts'))
+  ;({ createActorWorker } = await import('../src/groupChat/actorWorker.ts'))
+  ;({ createFakeActorAdapter } = await import('../src/groupChat/adapters/fakeActor.ts'))
+  ;(expression = await import('../src/expression/index.ts'))
 })
 
-after(async () => {
-  await server?.close()
-})
 
-let server
 
 // ---------- 测试基建(与 groupChatCore 同款) ----------
 

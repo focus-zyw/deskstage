@@ -43,14 +43,27 @@ export function createWebchatActorAdapter(opts: WebchatActorAdapterOpts): ActorM
   let fresh = true // 尚未成功用过:首叫复用已有会话(见头部说明),全量上下文兜底
   let turnCount = 0
   let lastKey: string | null = null
+  /** 换代 release 的落定句柄:下一代 ask 必须等它,否则旧页 claim 未解除会新建孤儿页 */
+  let pendingRelease: Promise<void> | null = null
 
   const keyOf = () => `group:${opts.roomId()}:${opts.actor}:${opts.bindingRevision()}:${generation}`
+
+  const releaseForReplacement = (key: string | null): void => {
+    if (!key) return
+    pendingRelease = releaseConversation(key)
+  }
+
+  const settleRelease = async (): Promise<void> => {
+    const wait = pendingRelease
+    pendingRelease = null
+    if (wait) await wait
+  }
 
   return {
     prefersFullContext: () => fresh || invalidated || turnCount === 0,
 
     invalidate() {
-      if (lastKey) releaseConversation(lastKey)
+      releaseForReplacement(lastKey)
       generation += 1
       invalidated = true
       turnCount = 0
@@ -58,6 +71,7 @@ export function createWebchatActorAdapter(opts: WebchatActorAdapterOpts): ActorM
     },
 
     async react(req, signal) {
+      await settleRelease()
       const timeoutMs = opts.timeoutMs ?? 150_000
       const reset = invalidated || turnCount >= CONTEXT_RESET_TURNS
       const useKey = keyOf()
@@ -75,9 +89,10 @@ export function createWebchatActorAdapter(opts: WebchatActorAdapterOpts): ActorM
       } catch (e) {
         if (isAbort(e)) throw e
         // 两段式恢复:重建会话 + 全量进度重发,恰一次(再失败交给 Worker 退避)
-        if (lastKey) releaseConversation(lastKey)
+        releaseForReplacement(lastKey)
         generation += 1
         const recovery = req.rebuildPrompt?.({ fullContext: true, recovery: true })
+        await settleRelease()
         raw = await askConversation({
           conversationKey: keyOf(),
           site: opts.site,
@@ -95,7 +110,8 @@ export function createWebchatActorAdapter(opts: WebchatActorAdapterOpts): ActorM
     },
 
     async dispose() {
-      if (lastKey) releaseConversation(lastKey)
+      await settleRelease()
+      if (lastKey) await releaseConversation(lastKey)
       lastKey = null
     },
   }

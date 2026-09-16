@@ -1,3 +1,5 @@
+// 注:本文件依赖 vite 插件内联 mock @tauri-apps/* 等模块,保留 vite 自举;
+// scripts/run-tests.mjs 按含 "from 'vite'" 自动分流,勿改为直接 import(会丢 mock)。
 // 网页 Actor Adapter · 复用已有窗口行为矩阵:invoke 参数形状/reset 语义/release 时机。
 // 核心回归:前端刷新会重建 Adapter,但同键首叫不 reset——Rust Hub 的存活标签页
 // 被原样复用(角色接续同一站点会话),只有显式 invalidate/失败恢复才重建。
@@ -48,6 +50,7 @@ before(async () => {
     invoke: (cmd, args) => {
       invocations.push([cmd, args])
       if (cmd === 'webchat_ask_conversation') {
+        if (globalThis.__hubMock.onAsk) globalThis.__hubMock.onAsk()
         if (globalThis.__hubMock.failNext) {
           globalThis.__hubMock.failNext = false
           return Promise.reject(new Error('站点超时'))
@@ -55,6 +58,13 @@ before(async () => {
         return Promise.resolve(
           JSON.stringify({ protocolVersion: 1, batchId: 'A-1-2', ackThrough: 2, decision: 'listen' }),
         )
+      }
+      if (cmd === 'webchat_release_conversation') {
+        // 门控钩子:时序测试用它推迟 release 落定
+        if (globalThis.__hubMock.gateRelease) {
+          return globalThis.__hubMock.gateRelease().then(() => null)
+        }
+        return Promise.resolve(null)
       }
       return Promise.resolve(null)
     },
@@ -162,4 +172,36 @@ test('首叫失败:两段式恢复换新键全量重发恰一次', async () => {
   assert.notEqual(retry.conversationKey, first.conversationKey, '恢复换新键')
   assert.equal(retry.reset, true, '恢复重建标签页')
   assert.equal(retry.prompt, 'full', '恢复走 rebuildPrompt 全量形态')
+})
+
+test('换代后下一代 ask 等 release 落定才发出(防孤儿标签页竞态)', async () => {
+  const a = makeAdapter()
+  await a.react(makeReq(), SIGNAL)
+  const askCountBefore = asks().length
+
+  // 门住 release 落定:invalidate 触发 invoke 立即,但 promise 挂 30ms 才结算。
+  // 若下一代 ask 不等 release,它会在 release 落定前发出 → Rust 侧旧页 claim
+  // 未解除 → 认领不到 → 新建,旧页成永久孤儿(豆包"已有标签页还新建"的根因)
+  let releaseSettled = false
+  let askFiredAfterSettled = true
+  globalThis.__hubMock.gateRelease = () =>
+    new Promise((res) => {
+      setTimeout(() => {
+        releaseSettled = true
+        res(null)
+      }, 30)
+    })
+  globalThis.__hubMock.onAsk = () => {
+    askFiredAfterSettled = releaseSettled
+  }
+  try {
+    a.invalidate()
+    await a.react(makeReq(), SIGNAL)
+  } finally {
+    delete globalThis.__hubMock.gateRelease
+    delete globalThis.__hubMock.onAsk
+  }
+  assert.equal(releaseSettled, true, 'release 应已落定')
+  assert.equal(askFiredAfterSettled, true, '下一代 ask 必须 wait release 落定后才发出')
+  assert.equal(asks().length - askCountBefore, 1, '恰好一次换代 ask')
 })

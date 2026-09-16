@@ -230,6 +230,17 @@ pub fn run() {
                     }
                 });
             }
+            // 线程记忆落盘:载入上次「会话键→站点线程URL」映射。App 重启清空进程
+            // 内存,但 Edge 与站点侧线程都还在——不载入的话,重启后的第一条续聊会
+            // 认领到入口残留页开新线程(豆包"续聊新建标签页"的顽固路径)
+            {
+                use tauri::Manager;
+                let hub = app.state::<Arc<webchat::WebchatHub>>().inner().clone();
+                let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+                tauri::async_runtime::block_on(
+                    hub.load_thread_store(dir.join("webchat-threads.json")),
+                );
+            }
             Ok(())
         })
         .build(tauri::generate_context!())

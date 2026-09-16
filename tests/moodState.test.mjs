@@ -1,24 +1,14 @@
 // 情绪状态机回归:值域/衰减数学/增量钳位、量化边界、提示词渲染、集内瞬时情绪、姿势染色。
 // 衰减是惰性的(读时算,不跑定时器),这里把"隔天归中性"钉死。
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let ms
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  ms = await server.ssrLoadModule('/src/engine/moodState.ts')
+  ms = await import('../src/engine/moodState.ts')
 })
 
-after(async () => {
-  await server?.close()
-})
 
 /** 周三 14:00(白天,energy 基线 2.5) */
 const T0 = new Date(2026, 5, 3, 14, 0, 0).getTime()
