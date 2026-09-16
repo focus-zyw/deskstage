@@ -159,6 +159,10 @@ export interface AppConfig {
   apiKeys: Record<string, string>
   baseUrl: string
   model: string
+  /** 聊天联网搜索(实验):自由聊天对时效/事实类问题先检索再以角色口吻回答。
+   *  仅预设智谱/DeepSeek 主端点生效(host 判定);自定义档案/中转端点不支持,
+   *  工具不注入(静默关闭)。设计见 docs/联网搜索设计方案.md */
+  webSearch: boolean
   /** 使用者画像:手填的"角色认识你"信息,注入所有对话 prompt */
   userProfile: UserProfile
   /** 角色语音 */
@@ -369,6 +373,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   apiKeys: {},
   baseUrl: 'https://api.deepseek.com/v1',
   model: 'deepseek-chat',
+  webSearch: false,
   voice: {
     enabled: true,
     provider: 'siliconflow',
@@ -1139,6 +1144,7 @@ const FIELD_SANITIZERS: { [K in keyof AppConfig]: (v: unknown, all: Record<strin
   groupChatActors: sanitizeGroupChatActors,
   expressionV2: (v) => v === true,
   contextLifecycle: (v) => v === true,
+  webSearch: (v) => v === true,
   coldMemory: sanitizeColdMemory,
   bubbleStyle: sanitizeBubbleStyle,
   memoryDisplay: (v) => (v === 'subtle' || v === 'debug' ? v : 'off'),

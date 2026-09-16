@@ -43,6 +43,7 @@ import type { ActorId, ActorRuntimeState, Clock } from '../groupChat/types'
 import { personaText } from '../engine/persona'
 import { moodHintLine } from '../engine/moodState'
 import { moodDeltaOfAction } from '../engine/moodTag'
+import { WEB_SEARCH_LINE, webSearchOnOf } from '../engine/webSearch'
 import { applyMoodDeltas, getMoods } from '../storage/moodStore'
 import { contextAssembler } from '../context/assembler'
 import { contextLifecycle } from '../context/lifecycle'
@@ -136,6 +137,8 @@ export function createChatSession(
       experienceLine?: string
       /** 心情余波单行(上下文生命周期开启时;补齐群聊链路的 hot 心情注入) */
       moodLine?: string
+      /** 联网使用规则行(联网开关开 + 主模型档案;与网关工具注入同谓词门控) */
+      webLine?: string
       toolNote?: string
       memoryRefs?: ChatMemoryRef[]
       /** 只读预选的真实旧梗候选(表达导演回收旧梗的唯一来源) */
@@ -217,6 +220,11 @@ export function createChatSession(
     const adapter = createApiActorAdapter({
       profileId: binding.kind === 'api' ? binding.profileId : undefined,
       protocol: directMode ? 'plain' : 'schema',
+      // 联网搜索仅主模型档案生效(自定义档案/中转端点按 host 判定不可靠,v1 不开);
+      // getter 每次调用取最新配置,开关热生效,无需重建 adapter
+      ...(binding.kind === 'api' && !binding.profileId
+        ? { webSearch: () => webSearchOnOf(getConfigSnapshot()) }
+        : {}),
     })
     realAdapters.set(slot, { key, adapter })
     return adapter
@@ -313,6 +321,7 @@ export function createChatSession(
           warmLine: extra.warmLine,
           experienceLine: extra.experienceLine,
           moodLine: extra.moodLine,
+          webLine: extra.webLine,
           toolNotes: extra.toolNote ? { [rootId]: extra.toolNote } : undefined,
           gags: extra.gags,
           diagTurnId: chainTurn.get(rootId),
@@ -596,12 +605,20 @@ export function createChatSession(
       // 电脑感知暂停注入提示词(2026-09 裁决):感知改走通知(runtime/worldNotify);
       // worldLine 接缝(chainExtras→prepareExtras→actorPrompt)保留,回归时接 worldNote
       const { warmLine, experienceLine, moodLine } = await lifecycleLinesOf(text)
+      // 联网规则行:仅主模型档案生效(自定义档案不注入工具也不承诺能搜),
+      // 门控谓词与网关工具注入同源(engine/webSearch)
+      const primaryBinding = effectiveBinding(cfg, primary)
+      const webLine =
+        primaryBinding.kind === 'api' && !primaryBinding.profileId && webSearchOnOf(cfg)
+          ? WEB_SEARCH_LINE
+          : undefined
       chainExtras.set(chainId, {
         factsLine: memory.promptFacts.length ? memory.promptFacts.join(';') : undefined,
         briefLine: briefLineOf(cfg),
         warmLine,
         experienceLine,
         moodLine,
+        webLine,
         toolNote,
         memoryRefs: combinedRefs,
       })

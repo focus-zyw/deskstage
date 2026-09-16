@@ -44,6 +44,8 @@ export interface PromptBuildInput {
   worldLine?: string
   /** 心情余波单行(可选) */
   moodLine?: string
+  /** 联网使用规则行(可选;主模型档案 + 开关开 + 端点支持时注入) */
+  webLine?: string
   /** Warm 滚动摘要+历史集摘要(可选;注入序在"最近群聊"原文之前——Pi 序) */
   warmLine?: string
   /** 附在特定消息后的工具观察块(工具系统渲染好的不可信资料),键 = 消息 id */
@@ -143,7 +145,8 @@ function directSystemContent(input: PromptBuildInput, identity: PromptIdentity):
       `你正在和 ${identity.userName} 单独聊天,扮演 ${selfName}。`,
       `你的人设:${identity.persona}`,
       directDisciplineBlock(identity),
-        input.recovery ? '刚才连接断了一下;下面是目前聊天的完整进度,请从中断处继续正常聊天。' : '',
+      input.webLine ?? '',
+      input.recovery ? '刚才连接断了一下;下面是目前聊天的完整进度,请从中断处继续正常聊天。' : '',
       ...(input.expressionLine ? [input.expressionLine] : []),
     ]
       .filter(Boolean)
@@ -153,6 +156,7 @@ function directSystemContent(input: PromptBuildInput, identity: PromptIdentity):
     `继续和 ${identity.userName} 聊天(你是 ${selfName},人设与聊天方式同前)。直接用自然口语回复。`,
     // 网页增量轮没有纪律块,标签规则必须随协议常驻(同群聊"协议块永远保留"的道理)
     MOOD_TAG_RULE,
+    input.webLine ?? '',
     ...(input.expressionLine ? [input.expressionLine] : []),
   ].join('\n\n')
 }
@@ -168,7 +172,8 @@ function systemContent(input: PromptBuildInput, identity: PromptIdentity): strin
       disciplineBlock(identity),
       input.recovery ? '刚才连接断了一下;下面是目前群聊的完整进度,请从中断处继续正常参与群聊。' : '',
       PROTOCOL_RULES(input.batch, input.maySpeak, input.remainingReplies),
-        ...(input.expressionLine ? [input.expressionLine] : []),
+      input.webLine ?? '',
+      ...(input.expressionLine ? [input.expressionLine] : []),
     ]
       .filter(Boolean)
       .join('\n\n')
@@ -176,6 +181,7 @@ function systemContent(input: PromptBuildInput, identity: PromptIdentity): strin
   return [
     `继续群聊(你是 ${selfName},speaker "${input.actor}",人设与纪律同前)。`,
     PROTOCOL_RULES(input.batch, input.maySpeak, input.remainingReplies),
+    input.webLine ?? '',
     ...(input.expressionLine ? [input.expressionLine] : []),
   ].join('\n\n')
 }

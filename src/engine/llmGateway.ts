@@ -6,6 +6,13 @@
 import { getConfig, inTauri } from '../storage/configStore'
 import { diag, type LlmCallKind, type LlmErrorKind } from '../diag/store'
 import { openEndpointStream, requestEndpoint, type EndpointKind } from './endpointProxy'
+import {
+  buildResponsesBody,
+  extractResponsesText,
+  stripThinkBlocks,
+  webSearchTransportOf,
+  type WebSearchTransport,
+} from './webSearch'
 
 /** 诊断引用:不传 = 本次调用不进诊断环。
  *  群聊 Actor 维度(可选白名单标量):并发调用区分调用者 */
@@ -47,6 +54,9 @@ export interface CompletionOptions {
   maxTokens?: number
   /** true = 请求 response_format json_object;端点不支持时调用方自行降级重试 */
   jsonMode?: boolean
+  /** true = 聊天联网搜索:按端点 host 分流(智谱 chat tools / DeepSeek Responses),
+   *  不支持的端点工具不注入(行为同关闭)。仅聊天回复调用点开启 */
+  webSearch?: boolean
   timeoutMs?: number
   signal?: AbortSignal
   /** 诊断引用(可选):turnId + 调用点标签,传入才记诊断事件 */
@@ -161,18 +171,64 @@ export async function complete(options: CompletionOptions): Promise<string> {
       profile && profile !== 'main' ? cfg.modelProfiles?.[profile] : undefined
     const model = options.model?.trim() || profileEntry?.model || cfg.model
     const baseUrl = profileEntry?.baseUrl || cfg.baseUrl
-    const body = JSON.stringify({
-      model,
-      messages,
-      temperature,
-      max_tokens: maxTokens,
-      ...(jsonMode ? { response_format: { type: 'json_object' } } : {}),
-      // 火山方舟 doubao-seed 系默认深度思考,工具型调用用不上还拖慢数倍,显式关掉。
-      // 该参数仅 ark 认识,按 baseUrl+模型前缀收紧,避免污染其他厂商
-      ...(baseUrl.includes('volces.com') && model.startsWith('doubao-seed')
-        ? { thinking: { type: 'disabled' } }
-        : {}),
-    })
+    // 联网传输形态:host 判定单点(webSearch.ts);不支持的端点 = null,行为同关闭
+    const transport: WebSearchTransport | null = options.webSearch
+      ? webSearchTransportOf(baseUrl)
+      : null
+    // 联网档 max_tokens 抬底:检索结果挤占生成预算,防协议 JSON 被截(DeepSeek
+    // Responses 走固定 4096,见 buildResponsesBody)
+    const effMaxTokens =
+      transport === 'zhipu-tools' ? Math.max(maxTokens, 1024) : maxTokens
+    const chatBodyOf = (withTool: boolean) =>
+      JSON.stringify({
+        model,
+        messages,
+        temperature,
+        max_tokens: effMaxTokens,
+        ...(jsonMode ? { response_format: { type: 'json_object' } } : {}),
+        // 智谱服务端检索:tools 随 chat/completions 下发,模型自主决定何时搜
+        ...(withTool ? { tools: [{ type: 'web_search', web_search: { enable: true } }] } : {}),
+        // 火山方舟 doubao-seed 系默认深度思考,工具型调用用不上还拖慢数倍,显式关掉。
+        // 该参数仅 ark 认识,按 baseUrl+模型前缀收紧,避免污染其他厂商
+        ...(baseUrl.includes('volces.com') && model.startsWith('doubao-seed')
+          ? { thinking: { type: 'disabled' } }
+          : {}),
+      })
+    const body = chatBodyOf(transport === 'zhipu-tools')
+    // DeepSeek Responses 形态:instructions=system,input=其余消息;多模态在此不涉及,
+    // 数组 content 摊平为文本段(聊天链路不会出现,防御性处理)
+    const responsesBodyOf = (withTool: boolean) =>
+      buildResponsesBody(
+        model,
+        messages.map((m) => ({
+          role: m.role,
+          content:
+            typeof m.content === 'string'
+              ? m.content
+              : m.content.map((p) => (p.type === 'text' ? p.text : '')).join('\n'),
+        })),
+        { temperature, webSearch: withTool },
+      )
+    const sendChat = (jsonBody: string): Promise<{ status: number; text(): Promise<string> | string }> =>
+      inTauri
+        ? requestEndpoint(kind, '/chat/completions', {
+            body: jsonBody,
+            timeoutMs,
+            profile,
+            signal: ctrl.signal,
+          }).then((r) => ({ status: r.status, text: () => new TextDecoder().decode(r.body) }))
+        : fetch(`${baseUrl}/chat/completions`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: jsonBody,
+            signal: ctrl.signal,
+          }).then((res) => ({ status: res.status, text: () => res.text() }))
+    // 400/404 → 无工具重试一次:端点不认 web_search 参数(厂商漂移/中转)时,
+    // 开关打开绝不放大故障——退化为普通无联网调用
+    const isParamReject = (e: unknown): boolean => {
+      const s = (e as { status?: number }).status
+      return s === 400 || s === 404
+    }
     // llm_started 收归网关单点:所有直调 complete 的链路(actors apiActor、
     // llmClient 各调用)自动获得 prompt 结构/模型/端点,不再各自为政
     if (d) {
@@ -186,6 +242,7 @@ export async function complete(options: CompletionOptions): Promise<string> {
         contextLines: d.contextLines ?? 0,
         // 显示生效预算(调用方外层定时器,如 facts 6s),而非网关层 90s 底座
         timeoutMs: d.timeoutMs ?? timeoutMs,
+        ...(transport ? { web: true } : {}),
       })
       // 详情档:脱敏后的 prompt 编译结果(协议冲突/拼装出错/记忆污染类问题的证据)
       diag.detailText(d.turnId, { textKind: 'prompt', text: compiledPromptOf(messages) })
@@ -193,25 +250,53 @@ export async function complete(options: CompletionOptions): Promise<string> {
     // 计时从请求真正发出起算(getConfig 的缓存读不算网络延迟)
     t0 = Date.now()
     let out: string
-    if (!inTauri) {
-      // 浏览器预览:无 Tauri 运行时,走原生 fetch(靠对方 CORS 头;仅开发调试)
-      const res = await fetch(`${baseUrl}/chat/completions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body,
-        signal: ctrl.signal,
-      })
-      out = await readCompletion({ status: res.status, text: () => res.text() })
+    if (transport === 'deepseek-responses') {
+      const sendResponses = (withTool: boolean): Promise<{ status: number; text(): Promise<string> | string }> =>
+        inTauri
+          ? requestEndpoint(kind, '/responses', {
+              body: responsesBodyOf(withTool),
+              timeoutMs,
+              profile,
+              signal: ctrl.signal,
+            }).then((r) => ({ status: r.status, text: () => new TextDecoder().decode(r.body) }))
+          : fetch(`${baseUrl}/responses`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: responsesBodyOf(withTool),
+              signal: ctrl.signal,
+            }).then((res) => ({ status: res.status, text: () => res.text() }))
+      const readResponses = async (r: { status: number; text(): Promise<string> | string }): Promise<string> => {
+        const raw = await r.text()
+        if (r.status < 200 || r.status >= 300) {
+          const err = new Error(`API HTTP ${r.status}`) as Error & { status?: number; serverMsg?: string }
+          err.status = r.status
+          err.serverMsg = raw.slice(0, 300)
+          throw err
+        }
+        let data: unknown
+        try {
+          data = JSON.parse(raw)
+        } catch {
+          throw new Error('响应不是合法 JSON')
+        }
+        const content = stripThinkBlocks(extractResponsesText(data))
+        if (!content) throw new Error('空响应')
+        return content
+      }
+      try {
+        out = await readResponses(await sendResponses(true))
+      } catch (e) {
+        if (isParamReject(e)) out = await readResponses(await sendResponses(false))
+        else throw e
+      }
     } else {
-      // 桌面端:配置端点代理——origin/鉴权由 Rust 解析,自定义 http/https 端点
-      // (LM Studio、局域网网关等)不再依赖静态 scope 与 CORS
-      const { status, body: respBytes } = await requestEndpoint(kind, '/chat/completions', {
-        body,
-        timeoutMs,
-        profile,
-        signal: ctrl.signal,
-      })
-      out = await readCompletion({ status, text: () => new TextDecoder().decode(respBytes) })
+      try {
+        out = await readCompletion(await sendChat(body))
+      } catch (e) {
+        if (transport === 'zhipu-tools' && isParamReject(e)) {
+          out = await readCompletion(await sendChat(chatBodyOf(false)))
+        } else throw e
+      }
     }
     if (d) {
       diag.llmFinished(d.turnId, {

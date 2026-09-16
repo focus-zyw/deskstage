@@ -13,12 +13,19 @@ export interface ApiActorAdapterOpts {
   timeoutMs?: number
   /** 'schema'(默认,群聊)= 决策协议 JSON;'plain'(单聊)= 原始文本直答 */
   protocol?: 'schema' | 'plain'
+  /** 聊天联网搜索(每次调用取最新;宿主按"主模型档案 + 配置开关 + 端点支持"
+   *  门控后注入,缺省不传 = 永不联网)。开启时超时自动抬底 75s(检索加秒级延迟) */
+  webSearch?: () => boolean
 }
+
+/** 联网档超时抬底:检索加数秒到十几秒,40s 默认预算会被吃穿 */
+const WEB_TIMEOUT_MS = 75_000
 
 export function createApiActorAdapter(opts: ApiActorAdapterOpts = {}): ActorModelAdapter {
   return {
     prefersFullContext: () => true,
     async react(req, signal) {
+      const web = opts.webSearch?.() === true
       const raw = await complete({
         messages: req.messages,
         profile: opts.profileId,
@@ -26,7 +33,8 @@ export function createApiActorAdapter(opts: ApiActorAdapterOpts = {}): ActorMode
         // {"type":"json_object",...} 之类的自造 JSON,而不是自然语言回复
         jsonMode: opts.protocol !== 'plain',
         temperature: 1.0,
-        timeoutMs: opts.timeoutMs ?? 40_000,
+        webSearch: web,
+        timeoutMs: web ? Math.max(opts.timeoutMs ?? 0, WEB_TIMEOUT_MS) : (opts.timeoutMs ?? 40_000),
         signal,
         diag: req.diag?.turnId
           ? {

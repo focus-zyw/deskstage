@@ -270,6 +270,8 @@ export const diag = {
       contextLines: number
       timeoutMs?: number
       estTokens?: number
+      /** 本次调用注入了联网检索(web_search 工具)——回答"联网到底生效没有" */
+      web?: boolean
       actor?: string
       batchId?: string
       attempt?: number

@@ -179,6 +179,22 @@ export function ModelSettings() {
             </select>
           )}
         </SetField>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, marginTop: 10 }}>
+          <input
+            type="checkbox"
+            checked={form.webSearch === true}
+            onChange={(e) => {
+              setForm({ ...form, webSearch: e.target.checked })
+              saveField({ webSearch: e.target.checked })
+            }}
+          />
+          聊天联网搜索(实验):角色可先检索时效/事实类问题,再以角色口吻回答
+        </label>
+        <div className="set-note" style={{ marginTop: 6 }}>
+          仅预设智谱 / DeepSeek 主端点生效(DeepSeek 走 Responses API,智谱走 chat 工具);
+          自定义端点与自定义模型档案不支持,自动关闭。只作用于自由聊天,演出/翻译等调用不联网;
+          联网回复更慢且更耗 token,属正常现象。
+        </div>
       </SettingsCard>
       <SettingsCard
         card="提取文字"
