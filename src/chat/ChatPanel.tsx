@@ -65,6 +65,7 @@ export function ChatPanel({ innerRef, pos, pinned, onPinChange, onClose, route }
   const [hint, setHint] = useState('')
   const [seen, setSeen] = useState<Record<string, number>>(() => loadSeen())
   const feedRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLTextAreaElement>(null)
   const viewRef = useRef<View>(view)
   viewRef.current = view
 
@@ -121,6 +122,14 @@ export function ChatPanel({ innerRef, pos, pinned, onPinChange, onClose, route }
     const el = feedRef.current
     if (el) el.scrollTop = el.scrollHeight
   }, [turns])
+
+  // 输入框自长:默认单行(与发送按钮平齐),内容放不下才长高,封顶后内部滚动
+  useEffect(() => {
+    const el = inputRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${Math.min(120, el.scrollHeight)}px`
+  }, [draft])
 
   // 当前会话 busy 订阅(回应中提示;群聊 busy 不阻断继续输入)
   useEffect(() => {
@@ -257,8 +266,9 @@ export function ChatPanel({ innerRef, pos, pinned, onPinChange, onClose, route }
           </div>
           <div className="chatp-input-row">
             <textarea
+              ref={inputRef}
               className="chatp-input"
-              rows={2}
+              rows={1}
               placeholder={`和${view.kind === 'group' ? `「${groupName}」` : nameOf(view.slot)}说点什么…(Enter 发送)`}
               value={draft}
               onChange={(e) => setDraft(e.target.value)}

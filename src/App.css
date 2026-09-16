@@ -4612,6 +4612,8 @@ body:has(.gal-page) {
 .chatp-input {
   flex: 1;
   min-width: 0;
+  height: 38px; /* 单行:与发送按钮平齐;内容放不下才自长,封顶 120px */
+  max-height: 120px;
   padding: 8px 10px;
   border: 1px solid rgba(255, 255, 255, 0.18);
   border-radius: var(--radius-input);
@@ -4622,6 +4624,7 @@ body:has(.gal-page) {
   line-height: 1.5;
   outline: none;
   resize: none;
+  overflow-y: auto;
 }
 .chatp-input:focus {
   border-color: rgba(124, 108, 240, 0.9);
