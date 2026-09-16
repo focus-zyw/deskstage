@@ -1,6 +1,13 @@
 // 演出历史:回放(经 bridge 交回应用)、收藏、删除、赞/踩补评。列表挂载时拉取
 import { useEffect, useState } from 'react'
-import { listEpisodes, deleteEpisodes, toggleFavorite, type Episode } from '../../storage/historyStore'
+import {
+  listEpisodes,
+  deleteEpisodes,
+  clearUnfavoritedEpisodes,
+  historyStats,
+  toggleFavorite,
+  type Episode,
+} from '../../storage/historyStore'
 import { topicDirector } from '../../topic/director'
 import { rateEpisode, removeRatings, getRatings, type Rating, type FeedbackTable } from '../../storage/feedbackStore'
 import { modeOf } from '../../performer/modes'
@@ -12,6 +19,7 @@ export function HistorySettings() {
   const { bridge, flashCard } = useSettings()
   const [episodes, setEpisodes] = useState<Episode[]>([])
   const [ratings, setRatings] = useState<FeedbackTable>({})
+  const [stats, setStats] = useState({ total: 0, unfavorited: 0 })
   const [clearHistArmed, setClearHistArmed] = useState(false)
 
   // 挂载拉取:内联 .then + 卸载守卫,避免组件函数在 effect 里自引用触发级联渲染
@@ -19,6 +27,9 @@ export function HistorySettings() {
     let alive = true
     void listEpisodes().then((eps) => {
       if (alive) setEpisodes(eps)
+    })
+    void historyStats().then((st) => {
+      if (alive) setStats(st)
     })
     void getRatings().then((r) => {
       if (alive) setRatings(r)
@@ -55,24 +66,25 @@ export function HistorySettings() {
     setRatings(await getRatings())
   }
 
+  /** 清空全部未收藏(跨所有日文件一次到底;不是只清列表当前显示的分页) */
   async function onClearUnfavorited() {
-    const doomed = episodes.filter((e) => !e.fav)
-    await deleteEpisodes(new Set(doomed.map((e) => e.ts)))
-    await removeRatings(doomed.map((e) => e.eid))
+    const { eids } = await clearUnfavoritedEpisodes()
+    await removeRatings(eids)
     setEpisodes(await listEpisodes())
     setRatings(await getRatings())
+    setStats(await historyStats())
   }
 
   return (
     <SettingsCard
       card="演出历史"
       flash={flashCard}
-      title={`演出历史(${episodes.length})`}
+      title={`演出历史(共 ${stats.total} 集)`}
       desc="点击一行即可回放;收藏不会被清理且重放权重更高,收藏的对话可在「收藏」页管理"
       action={
         <button
           className={`hist-clear${clearHistArmed ? ' danger' : ''}`}
-          disabled={episodes.every((e) => e.fav) || episodes.length === 0}
+          disabled={stats.unfavorited === 0}
           onClick={() => {
             if (!clearHistArmed) {
               setClearHistArmed(true)
@@ -83,7 +95,7 @@ export function HistorySettings() {
             void onClearUnfavorited()
           }}
         >
-          {clearHistArmed ? '确认清空?' : '清空未收藏'}
+          {clearHistArmed ? '确认清空全部未收藏?' : '清空未收藏'}
         </button>
       }
     >

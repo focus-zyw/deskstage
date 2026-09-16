@@ -349,6 +349,53 @@ export async function findEpisodeByEid(eid: string): Promise<Episode | null> {
   }
 }
 
+/** 历史规模统计:total = 全部分集(含收藏库中已不在历史里的幽灵集);
+ *  unfavorited = 其中未收藏、可被「清空未收藏」清掉的集数 */
+export async function historyStats(): Promise<{ total: number; unfavorited: number }> {
+  const favTs = new Set((await readFavorites()).map((f) => f.ts))
+  const dir = await getHistoryDir()
+  const entries: HistoryEntry[] = []
+  for (const name of await listHistoryFiles(dir)) {
+    entries.push(...parseEntries(await readTextFile(await join(dir, name))))
+  }
+  const eps = aggregateEpisodes(entries)
+  const histTs = new Set(eps.map((e) => e.ts))
+  const phantoms = (await readFavorites()).filter((f) => !histTs.has(f.ts))
+  return {
+    total: eps.length + phantoms.length,
+    unfavorited: eps.filter((e) => !favTs.has(e.ts)).length,
+  }
+}
+
+/**
+ * 清空全部未收藏集(跨所有日文件,一次到底;不是分页清)。
+ * 收藏集(含收藏库中已不在历史里的幽灵集)一律保留。
+ * 返回删除的集数与被删集的 eid 列表(调用方据此清理评分)。
+ */
+export async function clearUnfavoritedEpisodes(): Promise<{ removed: number; eids: string[] }> {
+  const favTs = new Set((await readFavorites()).map((f) => f.ts))
+  let removed = 0
+  const eids: string[] = []
+  await withFileLock('history', async () => {
+    const dir = await getHistoryDir()
+    for (const name of await listHistoryFiles(dir)) {
+      const file = await join(dir, name)
+      const entries = parseEntries(await readTextFile(file))
+      const doomed = entries.filter((e) => !favTs.has(e.ts))
+      if (doomed.length === 0) continue
+      removed += aggregateEpisodes(doomed).length
+      for (const e of doomed) if (e.eid && !eids.includes(e.eid)) eids.push(e.eid)
+      const kept = entries.filter((e) => favTs.has(e.ts))
+      if (kept.length === 0) {
+        await remove(file)
+      } else {
+        await writeTextFile(file, kept.map(entryToLine).join('\n') + '\n')
+      }
+    }
+  })
+  return { removed, eids }
+}
+
 /**
  * 删除指定 ts 的历史集（重写受影响日文件，删空则移除整个文件）。
  * 收藏库不受影响——UI 层负责不让删除收藏集。
