@@ -25,9 +25,9 @@ import {
 import { dialogue, newEpisodeId } from '../dialogue/director'
 import { planInterjectionTakeover, keepChoiceOpts } from '../dialogue/interjection'
 import { pushTurn, chatWindow } from '../dialogue/turnWindow'
-import { castHash, castSnapshotOf, nameOf, soloShortPersona } from '../engine/persona'
-import { recentMoodHint } from '../engine/moodState'
+import { castHash, castSnapshotOf, nameOf } from '../engine/persona'
 import { diag } from '../diag/store'
+import { recentMoodHint } from '../engine/moodState'
 import { noteEpisodeAbandoned } from '../storage/moodStore'
 import type { CurateReport } from '../engine/storyCurator'
 import { listEpisodes, loadRecentHistory, type Episode, type TopicRef } from '../storage/historyStore'
@@ -40,15 +40,6 @@ import { getStory } from '../storage/storyStore'
 import { bumpMode } from '../storage/memoryStore'
 import { logDismiss, type DismissableKind } from '../storage/interactionStore'
 import { getConfig } from '../storage/configStore'
-import { createRelayDirector } from '../relay/relayDirector'
-import { AI_THEATER_TURN_POLICY } from '../relay/relayPolicy'
-import { askConversation, releaseConversation } from '../engine/webchatHub'
-import type {
-  PreparedRelaySource,
-  RelayEndReason,
-  RelayRequest,
-  RelayScene,
-} from '../relay/types'
 import { prefetchNext } from '../engine/dialogPrefetch'
 import { isFullscreenApp } from '../world'
 import { topicDirector } from '../topic/director'
@@ -75,10 +66,6 @@ import { speakTracked, stopSpeaking, prefetchVoice } from '../engine/tts'
 import type { ActorPresenter } from '../stage/useActorPresenter'
 
 const sleepMs = (ms: number): Promise<void> => new Promise((resolve) => window.setTimeout(resolve, ms))
-
-/** relay 自然结束判定:仅这两种收法算自然完播(蒸馏角色世界);
- *  timeout/repetitive/failed 只落历史;cancelled 走 onStopped 前缀提交 */
-const NATURAL_REASONS: ReadonlySet<RelayEndReason> = new Set(['model-ended', 'max-turns'])
 
 /** 保底收底留白:未走二遍节奏标注的集,最后一句自动补 1s 停顿,给响底包袱留笑的时间 */
 function withFinalePause(lines: DialogLine[]): DialogLine[] {
@@ -131,8 +118,7 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
   // 已开播待提交的集:单次落盘——完播提交完整真实路径(playedAccum,含插话反应),
   // 中止提交已播前缀。choice/after 留存以便"插话接回"后继续未消费的抉择点
   // pendingEpisode.source 区分提交语义:script 集=自然完播即 natural;
-  // relay 集=naturalness 只由 NATURAL_REASONS 判定(onSourceEnd 写入 relayNatural)
-  const pendingEpisode = useRef<{ eid: string; card?: SceneCard; before: DialogLine[]; after: Record<string, DialogLine[]>; choice?: ChoicePoint; playedAccum: DialogLine[]; mode: Mode; topic: string; topicRef?: TopicRef; plan?: TopicPlan; chosen?: string; source: 'script' | 'relay'; relayNatural?: boolean } | null>(null)
+  const pendingEpisode = useRef<{ eid: string; card?: SceneCard; before: DialogLine[]; after: Record<string, DialogLine[]>; choice?: ChoicePoint; playedAccum: DialogLine[]; mode: Mode; topic: string; topicRef?: TopicRef; plan?: TopicPlan; chosen?: string; source: 'script' } | null>(null)
   // 演出中的用户插话队列:onLineEnd 安全缝处消费(反应回合后接回原剧本)
   const interjectionQueue = useRef<{ text: string; target?: Speaker }[]>([])
   const handoff = useRef(false) // 接回换场中:onStopped 跳过中止提交
@@ -221,7 +207,7 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
           lastLines.current = fullPath // 续播衔接上下文升级为完整路径(选边集原先是前半段)
           deps.onEpisodeEnd?.({ eid: p.eid, mode: p.mode, topic: p.topic, plan: p.plan })
           void dialogue
-            .commitEpisode({ eid: p.eid, mode: p.mode, topic: p.topic, card: p.card, played: fullPath, natural: p.source === 'relay' ? p.relayNatural === true : true, topicRef: p.topicRef })
+            .commitEpisode({ eid: p.eid, mode: p.mode, topic: p.topic, card: p.card, played: fullPath, natural: true, topicRef: p.topicRef })
             .then((report) => {
               if (report) deps.onEpisodeCommitted?.(report)
             })
@@ -571,160 +557,6 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
     }
   }
 
-  /** AI 剧场(relay 生成策略):双网页会话即兴,RelayDirector 轮转,playStream 播放。
-   *  流程:plan(话题)→ prepareRelay(首句产出=流水线已预发对方请求)→ adopt
-   *  (提交点;stale=静默弃演)→ record(started)→ playStream(rest, initial:first)。
-   *  naturalness 双条件:源自然结束(NATURAL_REASONS)∧ 播放器自然播完(onDone) */
-  async function playRelay(m: Mode, arg?: string | PlayRequest) {
-    const cfg = await getConfig()
-    if (cfg.aiTheater.enabled !== true) {
-      deps.presenter.say('A', 'AI剧场还在内测,到 设置 → 工具与隐私 里开启吧~', { action: 'surprise', ms: 3200 })
-      return
-    }
-    const req0: PlayRequest = typeof arg === 'string' ? { topic: arg } : (arg ?? {})
-    bumpMode(m)
-    generateAbort.current?.abort()
-    player.current!.stop()
-    stopSpeaking()
-    deps.presenter.reset()
-    const diagId = `perf-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-    perfDiag.current = { id: diagId, startedAt: Date.now() }
-    diag.beginTurn({ id: diagId, source: 'performance', text: req0.topic ?? '' })
-    setRuntimeMode({ type: 'generating' })
-    deps.presenter.setPose('A', 'thinking')
-    deps.presenter.setPose('B', 'thinking')
-    const ctrl = new AbortController()
-    generateAbort.current = ctrl
-    const eid = newEpisodeId()
-
-    // 话题:手动话题 > 话题规划。MVP 不采纳话题计划(不进口味账,零副作用),
-    // 只取场景素材;失败回兜底场景
-    let plan: TopicPlan | null = null
-    if (!req0.topic?.trim()) {
-      try {
-        plan = await topicDirector.plan({ mode: m })
-      } catch {
-        plan = null
-      }
-    }
-    const scene: RelayScene = {
-      topic: req0.topic?.trim() || plan?.card.title || '突然的即兴闲聊',
-      hook: plan?.card.hook || req0.topic?.trim() || '一次不期而遇的斗嘴',
-      focus: plan?.episodeFocus || '把话题聊出戏剧性',
-      stage: plan ? String(plan.stage) : '开场',
-      allowedBranches: plan?.allowedBranches ?? [],
-      avoid: plan?.avoid ?? [],
-      relationship: '熟悉的长期搭档,互相拆台但关键时刻护着对方',
-      goalA: '按你的性格把话题往前推,偶尔逞强',
-      goalB: '接住话头并反将一军',
-    }
-    const actors: RelayRequest['actors'] = [
-      {
-        speaker: 'A',
-        site: cfg.aiTheater.actorA,
-        conversationKey: `relay:${eid}:A`,
-        name: nameOf('A'),
-        persona: soloShortPersona('A'),
-      },
-      {
-        speaker: 'B',
-        site: cfg.aiTheater.actorB,
-        conversationKey: `relay:${eid}:B`,
-        name: nameOf('B'),
-        persona: soloShortPersona('B'),
-      },
-    ]
-    const relayReq: RelayRequest = {
-      eid,
-      scene,
-      actors,
-      minTurns: AI_THEATER_TURN_POLICY.minTurns,
-      maxTurns: AI_THEATER_TURN_POLICY.maxTurns,
-      timeBudgetMs: 6 * 60_000,
-      perTurnTimeoutMs: 120_000,
-      signal: ctrl.signal,
-    }
-    const director = createRelayDirector({
-      ask: (r) =>
-        askConversation({
-          conversationKey: r.actor.conversationKey,
-          site: r.actor.site,
-          prompt: r.prompt,
-          timeoutMs: r.timeoutMs,
-          reset: r.reset,
-          signal: r.signal,
-        }),
-      release: (key) => releaseConversation(key),
-    })
-
-    let prepared: PreparedRelaySource
-    try {
-      prepared = await director.prepareRelay(relayReq)
-    } catch (e) {
-      // 首句前失败:计划未采纳 → release;气泡说明原因,回退该模式内置剧本
-      if (plan) topicDirector.release(plan.planId)
-      if (ctrl.signal.aborted) return
-      const reason = await describeLlmError(e)
-      if (ctrl.signal.aborted) return
-      console.warn('[ai-theater] 首句失败,回退内置剧本', e)
-      deps.presenter.say('A', `网页会话没就绪(${reason.slice(0, 40)}),先来段内置的~`, { ms: 2400 })
-      window.setTimeout(() => {
-        if (ctrl.signal.aborted) return
-        deps.presenter.reset()
-        beginPerforming()
-        playingLines.current = modeOf(m).script
-        player.current!.play(modeOf(m).script, { gap: modeOf(m).gap })
-      }, 2000)
-      return
-    }
-
-    // 第一条合法台词 = 采纳提交点:stale(并发已接管话题)→ 静默弃演,
-    // 不播任何台词、不按 failed 收场
-    if (plan) {
-      const adoptRes = await topicDirector.adopt(plan)
-      if (adoptRes.status === 'stale') {
-        ctrl.abort()
-        void prepared.rest.return(undefined as never)
-        topicDirector.release(plan.planId)
-        setRuntimeMode({ type: 'idle' })
-        return
-      }
-      if (plan.lane !== 'story') void topicDirector.record({ type: 'started', eid, plan })
-    }
-
-    pendingEpisode.current = {
-      eid,
-      before: [],
-      after: {},
-      playedAccum: [],
-      source: 'relay',
-      relayNatural: false,
-      mode: m,
-      topic: scene.topic,
-    }
-    nowPlaying.current = { topic: scene.topic, lines: [prepared.first], total: relayReq.maxTurns, index: -1, source: 'gen' }
-    beginPerforming()
-    playingLines.current = [prepared.first]
-    player.current!.playStream(prepared.rest, {
-      gap: modeOf(m).gap,
-      initial: prepared.first,
-      onSourceEnd: (result) => {
-        if (pendingEpisode.current?.source === 'relay') {
-          pendingEpisode.current.relayNatural = NATURAL_REASONS.has(result.reason)
-        }
-        nowPlaying.current = {
-          topic: scene.topic,
-          lines: result.lines,
-          total: result.lines.length,
-          index: result.lines.length - 1,
-          source: 'gen',
-        }
-        playingLines.current = result.lines
-        lastLines.current = result.lines
-      },
-    })
-  }
-
   /** 单次点播:先采纳兼容预生成缓存(秒开,CAS 成功才消费),未命中则
    *  规划(plan 零副作用)→ 生成 → 采纳(adopt CAS)→ 开播 → 后台预生成下一轮。
    *  arg = 一次性话题字符串(命令面板"来一段关于X的相声")或完整点播请求 */
@@ -732,11 +564,6 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
     // 主播模式不走剧本链路:开播 = 连弹幕源 + 事件驱动单句回复
     if (m === 'live') {
       deps.onLive()
-      return
-    }
-    // AI 剧场走 relay 链路(纯网页会话,不需要 API Key 守卫)
-    if (modeOf(m).generation?.kind === 'relay') {
-      await playRelay(m, arg)
       return
     }
     // API Key 与网页模型至少配一个:都没有才不进生成流程,气泡引导去设置

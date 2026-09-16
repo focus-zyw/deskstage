@@ -3,7 +3,6 @@
 // 模式菜单/历史徽标/重放节奏/LLM 指令全部自动感知，其余代码零改动。
 // 用户自定义模式(模式工坊)运行时经 allModes()/modeOf() 动态并入,同享以上全部链路。
 import { useMemo } from 'react'
-import { aiTheaterMode } from './aiTheater'
 import { crosstalkMode } from './crosstalk'
 import { dailyMode } from './daily'
 import { liveMode } from './live'
@@ -13,12 +12,6 @@ import type { DialogLine } from '../player'
 // 弹幕回复 prompt 需要读 live 的 tone 声明(直播基调不锁死,改 live.ts 即切换)
 export { liveMode }
 
-/** 生成策略:缺省 single-shot(单模型完整剧本,全部既有模式);
- *  relay = 多网页会话逐轮即兴(AI 剧场),play() 据此分派给 RelayDirector。
- *  自定义模式(模式工坊)不带 generation,恒走 single-shot */
-export type GenerationStrategy =
-  | { kind: 'single-shot' }
-  | { kind: 'relay'; preset: 'dual-ai' | 'triple-ai' }
 
 export interface DialogMode<ID extends string = string> {
   /** 注册键，落盘到历史的 mode 字段 */
@@ -34,7 +27,6 @@ export interface DialogMode<ID extends string = string> {
   /** 该模式的编剧指令，拼进 system prompt */
   prompt: string
   /** 可选：生成策略(relay 模式忽略 prompt 走多会话轮转) */
-  generation?: GenerationStrategy
   /** 可选：专属话题池，缺省用全局池（topicSeeds） */
   topics?: string[]
   /** 可选：随机话题时改用"使用者兴趣"作主题的概率(0~1,缺省 0)。
@@ -53,7 +45,6 @@ export const MODES = {
   daily: dailyMode,
   crosstalk: crosstalkMode,
   live: liveMode,
-  'ai-theater': aiTheaterMode,
 } satisfies Record<string, DialogMode>
 
 /** 内置模式的注册键(编译期可枚举) */

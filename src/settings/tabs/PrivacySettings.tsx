@@ -5,7 +5,6 @@ import { useEffect, useRef, useState, type ChangeEvent } from 'react'
 import { WEBCHAT_SITES, webchatLogin, webchatProbe, webchatRestoreMain } from '../../engine/webchat'
 import { COLD_LOCAL_URL_DEFAULT, type AppConfig } from '../../storage/configStore'
 import { toolList } from '../../tools/registry'
-import { SiteLoginRow } from '../SiteLoginRow'
 import { useSettings } from '../useSettingsSession'
 import { SettingsCard, SetField, SetLine, SetSwitch } from '../SettingsPrimitives'
 import {
@@ -15,7 +14,6 @@ import {
   type EmbedServerState,
 } from '../../engine/localEmbedding'
 
-// 站点登录行已抽为共享组件 SiteLoginRow(AI 剧场与群聊角色绑定共用)
 
 export function PrivacySettings() {
   const { form, setForm, saveField, flashCard } = useSettings()
@@ -218,63 +216,6 @@ export function PrivacySettings() {
             <div className="set-note">
               生成用系统 Edge 的独立窗口(独立 profile,不影响日常浏览):登录一次长期有效;生成时会出现
               Edge 标签页,可最小化,完成后自动关闭。
-            </div>
-          </>
-        )}
-      </SettingsCard>
-      <SettingsCard card="AI剧场" flash={flashCard} title="AI剧场" desc="实验">
-        <SetLine title="启用 AI 剧场模式" hint="多个网页 AI 各演一个角色,逐轮即兴接话;实验功能,默认关">
-          <SetSwitch
-            checked={form.aiTheater.enabled}
-            label="启用 AI 剧场模式"
-            onChange={(v) => {
-              const next = { ...form.aiTheater, enabled: v }
-              setForm({ ...form, aiTheater: next })
-              saveField({ aiTheater: next }, true)
-            }}
-          />
-        </SetLine>
-        {form.aiTheater.enabled && (
-          <>
-            <SetField label="甲的站点" htmlFor="cfg-theater-a">
-              <select
-                id="cfg-theater-a"
-                value={form.aiTheater.actorA}
-                onChange={(e) => {
-                  const next = { ...form.aiTheater, actorA: e.target.value as AppConfig['aiTheater']['actorA'] }
-                  setForm({ ...form, aiTheater: next })
-                  saveField({ aiTheater: next }, true)
-                }}
-              >
-                {WEBCHAT_SITES.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.label}
-                  </option>
-                ))}
-              </select>
-            </SetField>
-            <SiteLoginRow label="甲登录" site={form.aiTheater.actorA} />
-            <SetField label="乙的站点" htmlFor="cfg-theater-b">
-              <select
-                id="cfg-theater-b"
-                value={form.aiTheater.actorB}
-                onChange={(e) => {
-                  const next = { ...form.aiTheater, actorB: e.target.value as AppConfig['aiTheater']['actorB'] }
-                  setForm({ ...form, aiTheater: next })
-                  saveField({ aiTheater: next }, true)
-                }}
-              >
-                {WEBCHAT_SITES.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.label}
-                  </option>
-                ))}
-              </select>
-            </SetField>
-            <SiteLoginRow label="乙登录" site={form.aiTheater.actorB} />
-            <div className="set-note">
-              两个角色各绑一个网页会话,甲乙可同站(会话独立),建议选不同模型对比效果;演出时后台会开两个
-              Edge 标签页,可最小化。两个站点都需要先登录一次。
             </div>
           </>
         )}

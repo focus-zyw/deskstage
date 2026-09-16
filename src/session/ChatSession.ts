@@ -407,10 +407,24 @@ export function createChatSession(
   }
 
   /** 后台事实提取(用户消息触发一次;所有入口共享摄取器的同一套可靠性规则:
-   *  pending 账本 → 提取 → 证据校验 → 原子入库,失败记 failed 不影响聊天) */
+   *  pending 账本 → 提取 → 证据校验 → 原子入库,失败记 failed 不影响聊天)。
+   *  诊断:摄取报告本就带 id 级决策,在这里落到会话(新管线不丢「为什么记错」的证据) */
   function backgroundFacts(text: string, turnId: string | null): void {
+    const t0 = Date.now()
     void (engine.memoryIngestor ?? memoryIngestor)
       .ingestUserTurn({ turnId, text })
+      .then((report) => {
+        if (!turnId) return
+        diag.memoryWrite(turnId, {
+          candidates: report.candidateCount,
+          changed: report.appliedFactIds.length,
+          addedIds: report.appliedFactIds,
+          supersededIds: report.supersededFactIds,
+          rejected: report.rejected,
+          ms: Date.now() - t0,
+          ...(report.status === 'failed' ? { error: report.reason } : {}),
+        })
+      })
       .catch(() => {
         // 后台提取失败不影响聊天(摄取器内部已把账本记为 failed)
       })
@@ -467,13 +481,15 @@ export function createChatSession(
       currentChannel = opts2.voice ? 'voice' : 'chat'
       currentAbort = new AbortController()
       const turnId = newTurnId()
+      // 诊断总耗时的起点(turnId 创建即受理;停止词/取消/兜底各出口统一减它)
+      const turnStartedAt = Date.now()
       currentTurnId = turnId
       // 语音来源随 turn 标记进 room:含该消息的批次 channel=voice,回复强制走 API
       const turn = await runtimeOf().openUserTurn(text, { voice: opts2.voice === true })
       if (turn.kind === 'stop') {
         // 停止词:消息已留痕并全员暂停;恢复由下一条用户消息开启
         diag.beginTurn({ id: turnId, source: opts2.voice ? 'voice' : 'chat', text, target: 'A', groupAsk: false, voice: !!opts2.voice, ts: Date.now() })
-        diag.turnFinished(turnId, { outcome: 'cancelled', totalMs: 0, replyChars: 0, replySentences: 0 })
+        diag.turnFinished(turnId, { outcome: 'cancelled', totalMs: Date.now() - turnStartedAt, replyChars: 0, replySentences: 0 })
         diag.finish(turnId)
         currentTurnId = null
         clock.setTimeout(() => host.clearUser(text), 400)
@@ -505,11 +521,12 @@ export function createChatSession(
       let clarifyText: string | null = null
       let cancelled = false
       try {
+        const memoryT0 = Date.now()
         memory =
           (await (engine.prepareMemory ?? prepareTurnMemory)({ query: text, n: 3 }).catch(() => emptyTurnMemory())) ??
           emptyTurnMemory()
         diag.memorySelection(turnId, {
-          ms: 0,
+          ms: Date.now() - memoryT0,
           selected: memory.selected.map((s) => ({ id: s.id, score: s.score, source: s.source })),
           candidates: memory.candidates.map((c) => ({ id: c.id, score: c.score, outcome: c.outcome })),
         })
@@ -531,14 +548,14 @@ export function createChatSession(
         // extras 失败不阻塞受理:按无附加上下文继续 wake
       }
       if (cancelled) {
-        diag.turnFinished(turnId, { outcome: 'cancelled', totalMs: Date.now(), replyChars: 0, replySentences: 0 })
+        diag.turnFinished(turnId, { outcome: 'cancelled', totalMs: Date.now() - turnStartedAt, replyChars: 0, replySentences: 0 })
         diag.finish(turnId)
         currentTurnId = null
         return 'accepted'
       }
       if (clarifyText) {
         turn.awaitUser(primary, clarifyText)
-        diag.turnFinished(turnId, { outcome: 'spoke', totalMs: Date.now(), replyChars: clarifyText.length, replySentences: 1 })
+        diag.turnFinished(turnId, { outcome: 'spoke', totalMs: Date.now() - turnStartedAt, replyChars: clarifyText.length, replySentences: 1 })
         diag.finish(turnId)
         currentTurnId = null
         clock.setTimeout(() => host.clearUser(text), 400)
@@ -576,10 +593,10 @@ export function createChatSession(
         .then(() => {
           if (mode !== 'actors') return
           if (repliedChains.has(chainId)) {
-            diag.turnFinished(turnId, { outcome: 'spoke', totalMs: Date.now(), replyChars: 0, replySentences: 0 })
+            diag.turnFinished(turnId, { outcome: 'spoke', totalMs: Date.now() - turnStartedAt, replyChars: 0, replySentences: 0 })
           } else {
             host.presentFallback({ speaker: primary, text: '（这会儿信号不好,没接上…再说一遍?)' })
-            diag.turnFinished(turnId, { outcome: 'failed', totalMs: Date.now(), replyChars: 0, replySentences: 0 })
+            diag.turnFinished(turnId, { outcome: 'failed', totalMs: Date.now() - turnStartedAt, replyChars: 0, replySentences: 0 })
           }
           diag.finish(turnId)
           if (currentTurnId === turnId) currentTurnId = null

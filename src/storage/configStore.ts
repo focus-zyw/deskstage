@@ -244,9 +244,6 @@ export interface AppConfig {
   /** 角色工具系统:按工具开关与 external 工具的"记住允许"。
    *  键 = 工具注册表 id(src/tools/registry.ts);开关缺省键 = 各工具 defaultEnabled */
   tools: ToolPrefsConfig
-  /** AI 剧场(多网页会话即兴):实验开关默认关;甲乙各绑一个网页模型站点
-   *  (同站合法——同站点两个会话本就独立,设置页仅提示建议不同模型) */
-  aiTheater: AiTheaterConfig
   /** 群聊模型档案(角色可绑独立 API 端点);键须匹配 PROFILE_ID_RE,'main' 保留 */
   modelProfiles: Record<string, ModelProfile>
   /** 档案 Key(明文不落盘:SECRET_FIELDS 改道 'llm:profileKeys',键须同白名单) */
@@ -293,14 +290,6 @@ export interface ColdMemoryConfig {
 
 /** local 嵌入默认服务地址:llama-server 的默认端口与 OpenAI 兼容前缀 */
 export const COLD_LOCAL_URL_DEFAULT = 'http://127.0.0.1:8080/v1'
-
-/** AI 剧场配置 */
-export interface AiTheaterConfig {
-  /** 实验开关:默认关 */
-  enabled: boolean
-  actorA: WebchatSiteId
-  actorB: WebchatSiteId
-}
 
 /** 群聊模型档案:每角色可绑定的独立 OpenAI 兼容端点(地址/模型是普通配置;
  *  Key 经 modelProfileKeys 由 SECRET_FIELDS 改道进凭据库 'llm:profileKeys' 一条 map) */
@@ -463,7 +452,6 @@ export const DEFAULT_CONFIG: AppConfig = {
   memoryDisplay: 'off',
   wizardDone: false,
   tools: { switches: {}, autoApproved: {} },
-  aiTheater: { enabled: false, actorA: 'deepseek', actorB: 'doubao' },
   modelProfiles: {},
   modelProfileKeys: {},
   groupChatActors: {
@@ -596,18 +584,6 @@ export function sanitizeWebchatSiteModes(v: unknown): Partial<Record<WebchatSite
     }
   }
   return out
-}
-
-function sanitizeAiTheater(v: unknown): AiTheaterConfig {
-  const d = DEFAULT_CONFIG.aiTheater
-  const o = (v ?? {}) as Record<string, unknown>
-  const site = (x: unknown, dft: WebchatSiteId): WebchatSiteId =>
-    isWebchatSite(x) ? x : dft
-  return {
-    enabled: o.enabled === true,
-    actorA: site(o.actorA, d.actorA),
-    actorB: site(o.actorB, d.actorB),
-  }
 }
 
 /** 档案 id 是否可用:匹配 PROFILE_ID_RE 且不占保留字 'main'(= 全局主模型) */
@@ -1158,7 +1134,6 @@ const FIELD_SANITIZERS: { [K in keyof AppConfig]: (v: unknown, all: Record<strin
   launchOnBoot: (v) => v === true,
   wizardDone: (v) => v === true,
   tools: sanitizeToolPrefs,
-  aiTheater: sanitizeAiTheater,
   modelProfiles: sanitizeModelProfiles,
   modelProfileKeys: sanitizeModelProfileKeys,
   groupChatActors: sanitizeGroupChatActors,
