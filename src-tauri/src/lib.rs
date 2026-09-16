@@ -17,7 +17,6 @@ mod mic_capture;
 mod ocr;
 mod pointer_hook;
 mod secrets;
-mod video_save;
 mod webchat;
 
 // 光标轮询线程：以约 80Hz 读取全局光标位置，位置变化时推送给前端。
@@ -191,8 +190,6 @@ pub fn run() {
             local_asr::local_asr_status,
             local_asr::local_asr_download,
             local_asr::asr_transcribe_local,
-            video_save::video_save_from_url,
-            video_save::reveal_in_explorer,
             bili_http::bili_http_request,
             secrets::secret_get,
             secrets::secret_set,

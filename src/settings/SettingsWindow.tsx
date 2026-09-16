@@ -22,7 +22,6 @@ const ModelSettings = lazy(() => import('./tabs/ModelSettings').then((m) => ({ d
 const PersonaSettings = lazy(() => import('./tabs/PersonaSettings').then((m) => ({ default: m.PersonaSettings })))
 const CustomModesSettings = lazy(() => import('./tabs/CustomModesSettings').then((m) => ({ default: m.CustomModesSettings })))
 const BubbleSettings = lazy(() => import('./tabs/BubbleSettings').then((m) => ({ default: m.BubbleSettings })))
-const VideoSettings = lazy(() => import('./tabs/VideoSettings').then((m) => ({ default: m.VideoSettings })))
 const VoiceSettings = lazy(() => import('./tabs/VoiceSettings').then((m) => ({ default: m.VoiceSettings })))
 const LiveSettings = lazy(() => import('./tabs/LiveSettings').then((m) => ({ default: m.LiveSettings })))
 const HotkeysSettings = lazy(() => import('./tabs/HotkeysSettings').then((m) => ({ default: m.HotkeysSettings })))
@@ -55,7 +54,6 @@ const TAB_CONTENT: Record<SettingsTab, React.LazyExoticComponent<() => React.JSX
   modes: CustomModesSettings,
   topics: lazy(() => import('./tabs/TopicSettings').then((m) => ({ default: m.TopicSettings }))),
   bubble: BubbleSettings,
-  video: VideoSettings,
   voice: VoiceSettings,
   live: LiveSettings,
   hotkeys: HotkeysSettings,

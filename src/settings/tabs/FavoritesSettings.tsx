@@ -1,7 +1,6 @@
 // 收藏的对话:数据管理组独立分页(与历史平级)。数据是 favorites.json 的整集拷贝,
 // 历史原件独立存在——★取消收藏只移除收藏拷贝(原件回到普通流水),✕彻底删除才
 // 连历史原件一起清。点击行回放,经 bridge 交回应用(同历史页)。
-// 🎬 把整集导入视频工坊作转译素材(会话载荷 videoSource + gotoTab 跳页)。
 import { useEffect, useState } from 'react'
 import { listFavorites, deleteEpisodes, toggleFavorite, type Episode } from '../../storage/historyStore'
 import { modeOf } from '../../performer/modes'
@@ -10,7 +9,7 @@ import { SettingsCard } from '../SettingsPrimitives'
 import { fmtTime } from '../format'
 
 export function FavoritesSettings() {
-  const { bridge, flashCard, gotoTab, setVideoSource } = useSettings()
+  const { bridge, flashCard } = useSettings()
   const [favs, setFavs] = useState<Episode[]>([])
 
   useEffect(() => {
@@ -64,20 +63,6 @@ export function FavoritesSettings() {
                   {ep.topic ? ` · ${ep.topic}` : ''}
                 </div>
               </div>
-              <button
-                className="hist-vid"
-                title="导入视频工坊:用这段对话生成 AI 视频"
-                onClick={(e) => {
-                  e.stopPropagation()
-                  setVideoSource(ep)
-                  gotoTab('video')
-                }}
-              >
-                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <rect x="2" y="5" width="14" height="14" rx="2" />
-                  <path d="M22 8l-6 4 6 4V8z" />
-                </svg>
-              </button>
               <button
                 className="hist-fav on"
                 title="取消收藏(保留在历史里)"

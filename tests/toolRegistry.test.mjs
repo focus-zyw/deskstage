@@ -18,13 +18,12 @@ after(async () => {
 
 const ctx = { isLive: true, phase: 'idle' }
 
-test('注册表形状:十三个工具,id 即键,manifest 齐备', () => {
+test('注册表形状:十二个工具,id 即键,manifest 齐备', () => {
   const ids = Object.keys(mod.TOOLS)
   assert.deepEqual(
     [...ids].sort(),
     [
       'capture_screen',
-      'generate_video',
       'list_desktop_files',
       'media_control',
       'open_target',
@@ -53,9 +52,7 @@ test('注册表形状:十三个工具,id 即键,manifest 齐备', () => {
   assert.equal(mod.TOOLS.recognize_text.manifest.risk, 'read')
   assert.equal(mod.TOOLS.search_memory.manifest.risk, 'read')
   assert.equal(mod.TOOLS.send_live_message.manifest.risk, 'external')
-  assert.equal(mod.TOOLS.generate_video.manifest.risk, 'external')
   assert.equal(mod.TOOLS.send_live_message.manifest.defaultEnabled, false)
-  assert.equal(mod.TOOLS.generate_video.manifest.defaultEnabled, false)
 })
 
 test('打分:明确命令高分直达,弱关联挡在候选外,非直播发弹幕 0 分', () => {
@@ -69,17 +66,13 @@ test('打分:明确命令高分直达,弱关联挡在候选外,非直播发弹�
   const dm = mod.TOOLS.send_live_message.manifest
   assert.equal(dm.match('发个弹幕:大家好', { ...ctx, isLive: false }), 0) // 非直播不候选
   assert.ok(dm.match('发个弹幕:大家好', { ...ctx, isLive: true }) >= 0.9)
-  const vid = mod.TOOLS.generate_video.manifest
-  assert.ok(vid.match('生成一段视频', ctx) >= 0.9)
 })
 
-test('validate:发弹幕 30 字上限截断;视频 prompt 必填;识字来源枚举', () => {
+test('validate:发弹幕 30 字上限截断;识字来源枚举', () => {
   const dm = mod.TOOLS.send_live_message
   const long = dm.validate({ text: 'x'.repeat(50) })
   assert.equal(long.ok, true)
   assert.equal(long.value.text.length, 30) // 截断而非拒绝(明确意图)
-  const vid = mod.TOOLS.generate_video
-  assert.equal(vid.validate({}).ok, false) // 缺 prompt
   const rec = mod.TOOLS.recognize_text
   assert.equal(rec.validate({ source: 'camera' }).ok, false) // 枚举外拒绝
   assert.equal(rec.validate({ source: 'clipboard' }).value.source, 'clipboard')

@@ -4,7 +4,6 @@
 // 模型输出才被允许触碰真实世界。
 import type { CharacterTool } from './types'
 import { captureScreenTool } from './adapters/captureScreen'
-import { generateVideoTool } from './adapters/generateVideo'
 import { listDesktopFilesTool } from './adapters/listDesktopFiles'
 import { mediaControlTool } from './adapters/mediaControl'
 import { openTargetTool } from './adapters/openTarget'
@@ -22,7 +21,6 @@ export const TOOLS = {
   recognize_text: recognizeTextTool,
   search_memory: searchMemoryTool,
   send_live_message: sendLiveMessageTool,
-  generate_video: generateVideoTool,
   read_clipboard: readClipboardTool,
   list_desktop_files: listDesktopFilesTool,
   open_target: openTargetTool,

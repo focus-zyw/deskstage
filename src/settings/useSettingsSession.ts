@@ -82,8 +82,6 @@ export interface SettingsSessionApi {
   /** 切到指定分页(跨页动作用,如收藏页"导入视频工坊");清空搜索词。本体在 SettingsWindow */
   gotoTab(tab: SettingsTab): void
   /** 视频工坊的素材来源:null = 用最近一集;由收藏页"导入视频工坊"设置,窗口关闭即复位 */
-  videoSource: Episode | null
-  setVideoSource(ep: Episode | null): void
 }
 
 export const SettingsContext = createContext<SettingsSessionApi | null>(null)
@@ -113,7 +111,6 @@ export function useSettingsSession(): SettingsSessionState {
   // 二维码轮次号:丢弃旧轮迟到的渲染结果,防止新一轮被旧图覆盖
   const qrRoundRef = useRef(0)
   // 视频工坊的素材来源:收藏页"导入视频工坊"带过来的整集(跨 tab 载荷,窗口关闭即销毁)
-  const [videoSource, setVideoSource] = useState<Episode | null>(null)
 
   // 即存管线:字段变更 → saveField(队列合并) → commitSettings(落盘+副作用)
   const saveQueue = useMemo(
@@ -252,7 +249,5 @@ export function useSettingsSession(): SettingsSessionState {
     qrLogin,
     beginQrLogin,
     cancelQrLogin,
-    videoSource,
-    setVideoSource,
   }
 }

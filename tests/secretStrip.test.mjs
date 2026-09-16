@@ -11,7 +11,7 @@ before(async () => {
 })
 
 
-test('stripSecrets 移除七个密钥字段,非密钥字段保留', () => {
+test('stripSecrets 移除六个密钥字段,非密钥字段保留', () => {
   const cfg = {
     apiKey: 'sk-main',
     apiKeys: { deepseek: 'sk-a' },
@@ -21,7 +21,6 @@ test('stripSecrets 移除七个密钥字段,非密钥字段保留', () => {
       provider: 'siliconflow',
       minimax: { apiKey: 'sk-mm', groupId: 'g' },
     },
-    videoGen: { apiKeys: { ark: 'sk-v' }, provider: 'ark' },
     ocr: { apiKey: 'sk-ocr', model: 'glm-4.6v-flash' },
     live: { cookie: 'SESSDATA=xx', roomId: '1' },
   }
@@ -33,8 +32,6 @@ test('stripSecrets 移除七个密钥字段,非密钥字段保留', () => {
   assert.equal(out.voice.provider, 'siliconflow')
   assert.equal(out.voice.minimax.apiKey, undefined)
   assert.equal(out.voice.minimax.groupId, 'g')
-  assert.equal(out.videoGen.apiKeys, undefined)
-  assert.equal(out.videoGen.provider, 'ark')
   assert.equal(out.ocr.apiKey, undefined)
   assert.equal(out.ocr.model, 'glm-4.6v-flash')
   assert.equal(out.live.cookie, undefined)

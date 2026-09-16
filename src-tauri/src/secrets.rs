@@ -17,13 +17,12 @@ use tauri::Manager;
 const SERVICE: &str = "dev.virtualcharacter.app";
 
 /// 封闭的 SecretId 白名单(凭据库"账户名"),前端传别的 id 一律拒绝
-const SECRET_IDS: [&str; 9] = [
+const SECRET_IDS: [&str; 8] = [
     "llm:apiKey",
     "llm:apiKeys",
     "tts:voice",
     "tts:minimax",
     "asr:siliconflow",
-    "video:apiKeys",
     "ocr:apiKey",
     "live:cookie",
     "llm:profileKeys",
@@ -46,7 +45,6 @@ pub const SECRET_PATHS: &[(&[&str], &str, bool)] = &[
     (&["voice", "apiKey"], "tts:voice", false),
     (&["voice", "minimax", "apiKey"], "tts:minimax", false),
     (&["voice", "asr", "apiKey"], "asr:siliconflow", false),
-    (&["videoGen", "apiKeys"], "video:apiKeys", true),
     (&["ocr", "apiKey"], "ocr:apiKey", false),
     (&["live", "cookie"], "live:cookie", false),
     (&["modelProfileKeys"], "llm:profileKeys", true),
@@ -253,7 +251,6 @@ mod tests {
             "apiKeys": {"deepseek": "sk-a"},
             "voice": {"apiKey": "sk-tts", "minimax": {"apiKey": "sk-mm", "groupId": "g"},
                       "asr": {"apiKey": "sk-asr"}},
-            "videoGen": {"apiKeys": {"ark": "sk-v"}},
             "ocr": {"apiKey": "sk-ocr"},
             "live": {"cookie": "SESSDATA=xx"}
         });
@@ -267,8 +264,7 @@ mod tests {
                 "tts:voice",
                 "tts:minimax",
                 "asr:siliconflow",
-                "video:apiKeys",
-                "ocr:apiKey",
+                            "ocr:apiKey",
                 "live:cookie"
             ]
         );
@@ -295,7 +291,6 @@ mod tests {
             "voice": {"apiKey": "sk", "provider": "siliconflow",
                       "minimax": {"apiKey": "sk", "groupId": "g"},
                       "asr": {"apiKey": "sk", "model": "FunAudioLLM/SenseVoiceSmall"}},
-            "videoGen": {"apiKeys": {"ark": "sk"}, "provider": "ark"},
             "ocr": {"apiKey": "sk", "model": "glm-4.6v-flash"},
             "live": {"cookie": "SESSDATA=xx", "roomId": "1"}
         });
@@ -309,8 +304,6 @@ mod tests {
         assert!(obj["voice"]["minimax"].get("apiKey").is_none());
         assert_eq!(obj["voice"]["asr"]["model"], "FunAudioLLM/SenseVoiceSmall");
         assert!(obj["voice"]["asr"].get("apiKey").is_none());
-        assert!(obj["videoGen"].get("apiKeys").is_none());
-        assert_eq!(obj["videoGen"]["provider"], "ark");
         assert!(obj["ocr"].get("apiKey").is_none());
         assert_eq!(obj["ocr"]["model"], "glm-4.6v-flash");
         assert!(obj["live"].get("cookie").is_none());
