@@ -250,12 +250,17 @@ export function buildMessages(
   const personaWithQuirks = quirkBlock ? `${persona}\n\n${quirkBlock}` : persona
 
   // 手法说教刻意做减法:结构/节拍由场景卡的 escalation 承担,避免固定套路疲劳
+  // 相声话题:自动选题完全不进 prompt——锚定效应不在乎"可弃用"标注(怪癖示例同教训);
+  // 仅用户点播题材(lane manual)时以灵感行出现:点播是用户权威,自动选题是导演束缚
+  const crosstalkTopicNote =
+    topicPlan.lane === 'manual'
+      ? '\n- 用户点播了题材：它仍是可选灵感而非义务——可以用、可以用一半、也可以完全无视'
+      : ''
   const crosstalkCraft = `创作要求（这是相声，好笑比什么都重要）：
 - 台词全部口语化，像真说话；不写无信息的比喻和抒情，不上价值不总结；少用"其实/说实话/不得不说"这类万金油开头
 - 题材、人物、情境完全自由：人设只决定语气与相互姿态——角色可以扮演段子里任何人物，也可以谁都不演
 - 不需要秘密反转，不需要回收铺垫，不需要任何预设装置：写你最有把握写响的东西，底翻得越意外越好
-- 场景卡照常输出（播放器靠它排节拍），escalation 按段子真实节拍填；secret/callback 两字段一律省略
-- 话题只是可选灵感：可以用、可以用一半、也可以完全无视`
+- 场景卡照常输出（播放器靠它排节拍），escalation 按段子真实节拍填；secret/callback 两字段一律省略${crosstalkTopicNote}`
   const craft = isCrosstalk
     ? crosstalkCraft
     : isComedy
@@ -365,14 +370,16 @@ ${moodNote.trim()}` : ''
     : ''
 
   const topicText = isCrosstalk
-    ? `话题灵感（可用、可用一半、也可完全弃用，以你最有把握写响的题材为准）：${topicPlan.card.title}${topicPlan.episodeFocus ? `——${topicPlan.episodeFocus}` : ''}`
+    ? topicPlan.lane === 'manual'
+      ? `用户点播的题材（可选灵感，可用、可用一半、也可完全弃用，以你最有把握写响的题材为准）：${topicPlan.card.title}${topicPlan.episodeFocus ? `——${topicPlan.episodeFocus}` : ''}`
+      : ''
     : renderTopicPlan(topicPlan)
 
   return [
     {
       role: 'system',
       content: isComedy
-        ? `你是一位擅长传统相声和网络脱口秀的资深喜剧编剧,给桌面${cOn ? '三' : '两'}人情景剧写段子。${personaWithQuirks}${bondCtx}${moodCtx}${relCtx}${arcCtx}${cRule}${profile}${storyCtx}${timeCtx}${choiceRule}\n\n${craft}\n\n${protocol}\n\n【模式风格（本集最高创作优先级）】\n${modeDef.prompt}\n${isCrosstalk ? '(模式风格(逗哏铺包袱、捧哏拆台,垫话→正活→底)是本集主旋律;题材、人物、情境完全自由,人设只管语气与相互姿态;secret/callback 不使用;话题只是可选灵感——可以用、可以用一半、也可以完全无视,以你最有把握写响的题材为准。)' : '(模式风格与上述默认喜剧手法(互怼/包袱/secret反转/逗弄)冲突时,一律以模式风格为准:台词内容、角色相互姿态、收尾方式都按模式风格走;场景卡仍需输出,但 secret/callback 只在模式风格需要反转或回收时使用,模式不需要就不硬塞。模式给了专属话题角度时,话题从那些角度里取。)'}`
+        ? `你是一位擅长传统相声和网络脱口秀的资深喜剧编剧,给桌面${cOn ? '三' : '两'}人情景剧写段子。${personaWithQuirks}${bondCtx}${moodCtx}${relCtx}${arcCtx}${cRule}${profile}${storyCtx}${timeCtx}${choiceRule}\n\n${craft}\n\n${protocol}\n\n【模式风格（本集最高创作优先级）】\n${modeDef.prompt}\n${isCrosstalk ? '(模式风格(逗哏铺包袱、捧哏拆台,垫话→正活→底)是本集主旋律;题材、人物、情境完全自由,人设只管语气与相互姿态;secret/callback 不使用。)' : '(模式风格与上述默认喜剧手法(互怼/包袱/secret反转/逗弄)冲突时,一律以模式风格为准:台词内容、角色相互姿态、收尾方式都按模式风格走;场景卡仍需输出,但 secret/callback 只在模式风格需要反转或回收时使用,模式不需要就不硬塞。模式给了专属话题角度时,话题从那些角度里取。)'}`
         : `你给桌面${cOn ? '三' : '两'}人情景剧写台词,本集基调:${tone}——严格按模式风格创作,不要套用互怼喜剧的默认写法。${personaWithQuirks}${bondCtx}${moodCtx}${arcCtx}${cRule}${profile}${storyCtx}${timeCtx}${choiceRule}\n\n${craft}\n\n${protocol}\n\n【模式风格（本集最高创作优先级）】\n${modeDef.prompt}\n(模式风格是本集的主旋律:台词内容、角色相互姿态、收尾方式全部按模式风格与专属话题走。)`,
     },
     {

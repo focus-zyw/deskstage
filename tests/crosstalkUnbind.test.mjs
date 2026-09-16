@@ -70,14 +70,22 @@ test('相声解绑:协议要求省略 secret/callback,不再命令反转与回�
   assert.ok(!sys.includes('收底回收 callback 的句子标最后一拍'), 'beatId 收底指令随装置退场')
 })
 
-test('相声解绑:话题降级为可弃用灵感,strict 策略不再全文绑定', () => {
-  const msgs = promptBuilder.buildMessages('crosstalk', tp('减肥这件事', 'crosstalk'), [])
-  const user = msgs[1].content
-  assert.ok(user.includes('话题灵感（可用、可用一半、也可完全弃用'))
-  assert.ok(user.includes('减肥这件事'), '点播题材仍可见(软灵感)')
-  assert.ok(user.includes('切口:减肥这件事'))
-  assert.ok(!user.includes('约束强度'), 'renderTopicPlan 的 strict 绑定全文不进相声')
-  assert.ok(!user.includes('必须全程围绕中心话题展开'), '严格围绕义务退场')
+test('相声解绑:自动选题零注入,仅用户点播题材以灵感行出现', () => {
+  // dynamic(导演自动选题)——话题零注入:连"可弃用的灵感行"都没有(锚定效应不在乎标注)
+  const auto = promptBuilder.buildMessages('crosstalk', tp('减肥这件事', 'crosstalk'), [])
+  const autoSys = auto[0].content
+  const autoUser = auto[1].content
+  assert.ok(!autoUser.includes('话题'), '自动选题不进 user 消息(连灵感行都没有)')
+  assert.ok(!autoUser.includes('减肥这件事'))
+  assert.ok(!autoSys.includes('用户点播了题材'), '非点播不带题材注记')
+  assert.ok(!autoSys.includes('话题只是可选灵感'), 'craft 的题材注记仅点播时出现')
+  // manual(用户点播题材)——灵感行出现,但明示可弃用(点播是用户权威,不是导演束缚)
+  const manual = promptBuilder.buildMessages('crosstalk', { ...tp('减肥这件事', 'crosstalk'), lane: 'manual' }, [])
+  const manualSys = manual[0].content
+  const manualUser = manual[1].content
+  assert.ok(manualUser.includes('用户点播的题材（可选灵感，可用、可用一半、也可完全弃用'))
+  assert.ok(manualUser.includes('减肥这件事'))
+  assert.ok(manualSys.includes('用户点播了题材'), 'craft 带点播题材注记')
 })
 
 test('相声解绑:模式风格后缀换自由版,观众抉择点保留(身份层不动)', () => {
