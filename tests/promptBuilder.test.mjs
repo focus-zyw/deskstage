@@ -1,8 +1,6 @@
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let buildMessages
 let cRuleFor
 let renderAudienceContext
@@ -13,25 +11,17 @@ let selectStoryItems
 let storyContext
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
   ;({
     buildMessages,
     cRuleFor,
     renderAudienceContext,
     renderViewerBrief,
     renderStoryContext,
-  } = await server.ssrLoadModule('/src/engine/promptBuilder.ts'))
-  persona = await server.ssrLoadModule('/src/engine/persona.ts')
-  ;({ selectStoryItems, storyContext } = await server.ssrLoadModule('/src/storage/storyStore.ts'))
+  } = await import('../src/engine/promptBuilder.ts'))
+  persona = await import('../src/engine/persona.ts')
+  ;({ selectStoryItems, storyContext } = await import('../src/storage/storyStore.ts'))
 })
 
-after(async () => {
-  await server?.close()
-})
 
 const story = (gags, threads = []) => ({
   version: 1,
@@ -403,7 +393,7 @@ test('自定义人设接管:行为四维按角色裁剪,中性伙伴线与口头
 })
 
 test('bondNoteFor:负面关系按基调分档,非喜剧不含互怼措辞', async () => {
-  const { bondNoteFor } = await server.ssrLoadModule('/src/engine/llmClient.ts')
+  const { bondNoteFor } = await import('../src/engine/llmClient.ts')
   const bond = { trust: -2, rivalry: 4 }
   assert.match(bondNoteFor(bond, true), /看不顺眼|较劲/)
   const casual = bondNoteFor(bond, false)

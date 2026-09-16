@@ -10,10 +10,10 @@
     "prototype:chatlog": "vite --open /chatlog-prototype.html",
     "build": "tsc -b && vite build",
     "lint": "oxlint --deny-warnings",
-    "test": "node --test tests/*.test.mjs",
-    "test:bubble": "node --test tests/bubbleEngine.test.mjs tests/bubbleThemes.test.mjs",
-    "test:fast": "node --test tests/bubbleEngine.test.mjs tests/bubbleThemes.test.mjs tests/configMigration.test.mjs tests/configPartial.test.mjs tests/dialogProtocol.test.mjs tests/scriptValidation.test.mjs tests/turnBatch.test.mjs tests/toolSystem.test.mjs tests/runtimeMode.test.mjs tests/hotkeys.test.mjs tests/mention.test.mjs tests/sentenceSplitter.test.mjs tests/worldModel.test.mjs tests/desktopTools.test.mjs",
-    "test:shard": "node --test",
+    "test": "node scripts/run-tests.mjs",
+    "test:bubble": "node --import ./tests/_tsxSetup.mjs --test tests/bubbleEngine.test.mjs tests/bubbleThemes.test.mjs",
+    "test:fast": "node --import ./tests/_tsxSetup.mjs --test tests/bubbleEngine.test.mjs tests/bubbleThemes.test.mjs tests/configMigration.test.mjs tests/configPartial.test.mjs tests/dialogProtocol.test.mjs tests/scriptValidation.test.mjs tests/turnBatch.test.mjs tests/toolSystem.test.mjs tests/runtimeMode.test.mjs tests/hotkeys.test.mjs tests/mention.test.mjs tests/sentenceSplitter.test.mjs tests/worldModel.test.mjs tests/desktopTools.test.mjs",
+    "test:shard": "node --import ./tests/_tsxSetup.mjs --test",
     "preview": "vite preview",
     "tauri": "tauri"
   },
@@ -40,6 +40,7 @@
     "jsqr": "^1.4.0",
     "oxlint": "^1.79.0",
     "pngjs": "^7.0.0",
+    "tsx": "^4.23.13",
     "typescript": "~6.0.2",
     "vite": "^8.2.2"
   }

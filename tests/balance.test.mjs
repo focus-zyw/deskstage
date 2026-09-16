@@ -1,10 +1,8 @@
 // 余额查询与当日消费记账的行为测试:供应商识别、响应解析、差值记账(日期翻转/
 // 充值重置)、60s 节流。全部纯函数驱动,不发真实网络请求。
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let mod
 
 before(async () => {
@@ -15,13 +13,9 @@ before(async () => {
     removeItem: (k) => mem.delete(k),
     clear: () => mem.clear(),
   }
-  server = await createServer({ server: { middlewareMode: true }, appType: 'custom', logLevel: 'silent' })
-  mod = await server.ssrLoadModule('/src/engine/balance.ts')
+  mod = await import('../src/engine/balance.ts')
 })
 
-after(async () => {
-  await server?.close()
-})
 
 test('balanceVendorOf:按 baseUrl 识别,自定义端点返回 null', () => {
   assert.equal(mod.balanceVendorOf('https://api.deepseek.com/v1'), 'deepseek')

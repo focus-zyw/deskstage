@@ -1,24 +1,14 @@
 // 配置平滑迁移回归:老配置没有 characters.C / persona.c / names.c 时自动补默认值,
 // A/B 原值一字不动;非法值钳位回落。读清洗经 sanitizeCharacters(导出供测试)。
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let configStore
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  configStore = await server.ssrLoadModule('/src/storage/configStore.ts')
+  configStore = await import('../src/storage/configStore.ts')
 })
 
-after(async () => {
-  await server?.close()
-})
 
 test('老配置缺少 C 时补默认值,A/B 原值不动', () => {
   const legacy = {

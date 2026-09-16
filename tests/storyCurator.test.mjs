@@ -4,9 +4,7 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
 
-let server
 let migration
 let store
 let curator
@@ -24,18 +22,12 @@ before(async () => {
       return values.size
     },
   }
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  migration = await server.ssrLoadModule('/src/storage/storyMigration.ts')
-  store = await server.ssrLoadModule('/src/storage/storyStore.ts')
-  curator = await server.ssrLoadModule('/src/engine/storyCurator.ts')
+  migration = await import('../src/storage/storyMigration.ts')
+  store = await import('../src/storage/storyStore.ts')
+  curator = await import('../src/engine/storyCurator.ts')
 })
 
 after(async () => {
-  await server?.close()
   delete globalThis.localStorage
 })
 

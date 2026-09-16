@@ -2,24 +2,14 @@
 // 落盘数据修复/输出解析/生成 prompt 组装/演出注入渲染/开关关回归。
 // 纯函数为主,假依赖注入,零 IO 零模型。
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let mod
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  mod = await server.ssrLoadModule('/src/quirks/index.ts')
+  mod = await import('../src/quirks/index.ts')
 })
 
-after(async () => {
-  await server?.close()
-})
 
 const entry = (id, valence, extra = {}) => ({
   id,

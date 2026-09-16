@@ -3,24 +3,14 @@
 // 的时长单一事实源在 spriteMotion.SWITCH_MS,测试直接加载常量做合成可见度模拟。
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let SWITCH_MS
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  ;({ SWITCH_MS } = await server.ssrLoadModule('/src/stage/spriteMotion.ts'))
+  ;({ SWITCH_MS } = await import('../src/stage/spriteMotion.ts'))
 })
 
-after(async () => {
-  await server?.close()
-})
 
 test('crossfade/dip 同步互补淡化:任一时刻合成可见度不低于 0.65', () => {
   for (const mode of ['crossfade', 'dip']) {

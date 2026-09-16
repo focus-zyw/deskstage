@@ -1,29 +1,19 @@
 // 语音后处理回归:裁剪/响度/峰值指标 + 14 句合成语料的处理前后对照。
 // 语料为确定性伪随机合成 wav(可复现);真实人声回归可在 app 内对比缓存重放。
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let postProcessWav
 let parseWavFront
 let pcmToWav
 let POST
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  ;({ postProcessWav } = await server.ssrLoadModule('/src/engine/tts/speechPostProcessor.ts'))
-  ;({ POST } = await server.ssrLoadModule('/src/engine/tts/speechPostProcessor.ts'))
-  ;({ parseWavFront, pcmToWav } = await server.ssrLoadModule('/src/engine/tts/wav.ts'))
+  ;({ postProcessWav } = await import('../src/engine/tts/speechPostProcessor.ts'))
+  ;({ POST } = await import('../src/engine/tts/speechPostProcessor.ts'))
+  ;({ parseWavFront, pcmToWav } = await import('../src/engine/tts/wav.ts'))
 })
 
-after(async () => {
-  await server?.close()
-})
 
 const SR = 44100
 

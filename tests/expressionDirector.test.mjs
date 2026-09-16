@@ -3,25 +3,15 @@
 // 偏好乘数公式 / 质量闸逐类检测与恰一次轻修复 / expressionV2 配置清洗。
 // 假 IO + 定数 rng,零磁盘零模型。
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
 let mod
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  mod = await server.ssrLoadModule('/src/expression/index.ts')
+  mod = await import('../src/expression/index.ts')
 })
 
-after(async () => {
-  await server?.close()
-})
 
-let server
 
 const inputOf = (over = {}) => ({
   actor: 'B',
@@ -213,7 +203,7 @@ test('质量闸:健康文本直接放行', () => {
 // ---------- expressionV2 配置(灰度默认关) ----------
 
 test('expressionV2 配置:默认关、真值才开、非法值回退关', async () => {
-  const cfgMod = await server.ssrLoadModule('/src/storage/configStore.ts')
+  const cfgMod = await import('../src/storage/configStore.ts')
   assert.equal(cfgMod.DEFAULT_CONFIG.expressionV2, false)
   assert.equal(cfgMod.sanitizeConfig({}).expressionV2, false)
   assert.equal(cfgMod.sanitizeConfig({ expressionV2: true }).expressionV2, true)

@@ -2,30 +2,20 @@
 // 全部零 Tauri 零网络;每个用例对应一条设计裁决(清洗不猜、零候选不调模型、
 // 模型不能自我降权、解析从严、注入防御)。
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let m
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
   m = {
-    schema: await server.ssrLoadModule('/src/tools/schema.ts'),
-    gate: await server.ssrLoadModule('/src/tools/candidateGate.ts'),
-    policy: await server.ssrLoadModule('/src/tools/policy.ts'),
-    parse: await server.ssrLoadModule('/src/tools/planner/decisionParse.ts'),
-    obs: await server.ssrLoadModule('/src/tools/observation.ts'),
+    schema: await import('../src/tools/schema.ts'),
+    gate: await import('../src/tools/candidateGate.ts'),
+    policy: await import('../src/tools/policy.ts'),
+    parse: await import('../src/tools/planner/decisionParse.ts'),
+    obs: await import('../src/tools/observation.ts'),
   }
 })
 
-after(async () => {
-  await server?.close()
-})
 
 const manifestOf = (over = {}) => ({
   id: 'capture_screen',

@@ -2,25 +2,15 @@
 // 覆盖:LLM 失败→单句回落 / 取消后迟到响应不呈现 / 落盘成功但事实提取失败 /
 // TTS 失败不影响文本 / 连续快发 busy 语义 / 演出中改走插话 / @解析与轮换 / groupAsk。
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let mod
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
   // 旧单飞引擎已迁至 legacyChat(Actor 化后保一个版本的回退路径);本矩阵继续验收它
-  mod = await server.ssrLoadModule('/src/session/legacyChat.ts')
+  mod = await import('../src/session/legacyChat.ts')
 })
 
-after(async () => {
-  await server?.close()
-})
 
 /** 轮询等待异步流程推进到某断言点(受理后 turnBatch 在数个 await 之后才发起) */
 async function waitFor(fn, timeoutMs = 2000) {

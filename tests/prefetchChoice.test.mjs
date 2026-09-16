@@ -4,9 +4,7 @@
 // 规划器版本/过期/意图/manual 归属/recent 指纹/剧情拍号 十条兼容检查。
 import assert from 'node:assert/strict'
 import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
 
-let server
 let store
 
 before(async () => {
@@ -17,12 +15,10 @@ before(async () => {
     removeItem: (k) => values.delete(k),
     clear: () => values.clear(),
   }
-  server = await createServer({ server: { middlewareMode: true }, appType: 'custom', logLevel: 'silent' })
-  store = await server.ssrLoadModule('/src/storage/prefetchStore.ts')
+  store = await import('../src/storage/prefetchStore.ts')
 })
 
 after(async () => {
-  await server?.close()
   delete globalThis.localStorage
 })
 

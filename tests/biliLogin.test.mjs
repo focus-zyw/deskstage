@@ -1,24 +1,14 @@
 // 扫码登录的 crossDomain 链接解析测试:重点保护 SESSDATA 里的特殊字符
 // (%2C 转义符、'+' 不得被当空格)与缺字段/坏链接的容错。
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let mod
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  ;({ mod } = { mod: await server.ssrLoadModule('/src/live/biliLogin.ts') })
+  ;({ mod } = { mod: await import('../src/live/biliLogin.ts') })
 })
 
-after(async () => {
-  await server?.close()
-})
 
 test('解析完整 crossDomain 链接:cookie 拼接 + uid', () => {
   const url =

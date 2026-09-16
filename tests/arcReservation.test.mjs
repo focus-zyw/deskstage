@@ -1,22 +1,12 @@
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let reserveArcBeat
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  ;({ reserveArcBeat } = await server.ssrLoadModule('/src/engine/arcReservation.ts'))
+  ;({ reserveArcBeat } = await import('../src/engine/arcReservation.ts'))
 })
 
-after(async () => {
-  await server?.close()
-})
 
 const arcs = [
   {

@@ -5,20 +5,14 @@
 // · external 需确认,拒绝产出"未允许"观察;autoApproved 免确认;
 // · 超时置 abort 并落账;runTool 走同一条策略管线。
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let createToolCoordinator
 
 before(async () => {
-  server = await createServer({ server: { middlewareMode: true }, appType: 'custom', logLevel: 'silent' })
-  ;({ createToolCoordinator } = await server.ssrLoadModule('/src/tools/coordinator.ts'))
+  ;({ createToolCoordinator } = await import('../src/tools/coordinator.ts'))
 })
 
-after(async () => {
-  await server?.close()
-})
 
 function mkTool(id, over = {}) {
   return {

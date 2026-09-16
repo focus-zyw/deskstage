@@ -1,9 +1,7 @@
 // 角色语音关闭时不进入 TTS 生命周期：不请求供应商，也不让诊断面板误报 TTS 分段。
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let store
 let tts
 
@@ -16,16 +14,10 @@ before(async () => {
     removeItem: (key) => values.delete(key),
     clear: () => values.clear(),
   }
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  store = await server.ssrLoadModule('/src/diag/store.ts')
-  tts = await server.ssrLoadModule('/src/engine/tts/index.ts')
+  store = await import('../src/diag/store.ts')
+  tts = await import('../src/engine/tts/index.ts')
 })
 
-after(async () => server?.close())
 
 test('voice.enabled=false 时诊断不记录 TTS 请求或分段', async () => {
   store.resetDiagForTest()

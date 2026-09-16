@@ -1,26 +1,16 @@
 // 气泡主题引擎回归:目录完整性、V2 清洗、V1 迁移、resolve 兜底、配色诊断/修复、
 // mutate 改稿动作、根兼容变量同步。全部穿 src/bubble 公共接口,不碰内部颜色工具。
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let bubble
 let generateBubbleCandidates
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  bubble = await server.ssrLoadModule('/src/bubble/index.ts')
-  ;({ generateBubbleCandidates } = await server.ssrLoadModule('/src/bubble/generate.ts'))
+  bubble = await import('../src/bubble/index.ts')
+  ;({ generateBubbleCandidates } = await import('../src/bubble/generate.ts'))
 })
 
-after(async () => {
-  await server?.close()
-})
 
 const HEX_RE = /^#[0-9a-f]{6}$/
 

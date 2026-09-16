@@ -1,28 +1,18 @@
 // 桌面工具验收(阶段2):读剪贴板/看桌面两个适配器的门槛路由、参数校验、摘要纯函数,
 // 以及注册表接线。执行路径 invoke 打桩不可用,单测覆盖纯函数件——执行体是薄封装。
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let m
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
   m = {
-    registry: await server.ssrLoadModule('/src/tools/registry.ts'),
-    readClipboard: await server.ssrLoadModule('/src/tools/adapters/readClipboard.ts'),
-    listDesktop: await server.ssrLoadModule('/src/tools/adapters/listDesktopFiles.ts'),
+    registry: await import('../src/tools/registry.ts'),
+    readClipboard: await import('../src/tools/adapters/readClipboard.ts'),
+    listDesktop: await import('../src/tools/adapters/listDesktopFiles.ts'),
   }
 })
 
-after(async () => {
-  await server?.close()
-})
 
 test('阶段2工具已注册:默认开关方向正确(read 剪贴板默认关,看桌面默认开)', () => {
   const { TOOLS } = m.registry

@@ -1,10 +1,8 @@
 // 称呼与性别纪律回归:改名/设性别后,各 prompt 通道必须用真名、带映射与代词纪律。
-// 沿用仓库测试原则:不碰网络与磁盘(vite ssrLoadModule 直载 TS 源码)。
+// 沿用仓库测试原则:不碰网络与磁盘(直接 import 加载 TS 源码)。
 import assert from 'node:assert/strict'
 import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
 
-let server
 let setCharacterNames
 let setCharacterGenders
 let namingDiscipline
@@ -16,16 +14,11 @@ let getConfig
 let DEFAULT_CONFIG
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
   ;({ setCharacterNames, setCharacterGenders, namingDiscipline, fullPersona, defaultPersonaText } =
-    await server.ssrLoadModule('/src/engine/persona.ts'))
-  ;({ buildMessages } = await server.ssrLoadModule('/src/engine/promptBuilder.ts'))
-  ;({ validateStoryText } = await server.ssrLoadModule('/src/storage/storyStore.ts'))
-  ;({ getConfig, DEFAULT_CONFIG } = await server.ssrLoadModule('/src/storage/configStore.ts'))
+    await import('../src/engine/persona.ts'))
+  ;({ buildMessages } = await import('../src/engine/promptBuilder.ts'))
+  ;({ validateStoryText } = await import('../src/storage/storyStore.ts'))
+  ;({ getConfig, DEFAULT_CONFIG } = await import('../src/storage/configStore.ts'))
 })
 
 // 最小合法 TopicPlan(新话题契约:buildMessages 只认话题计划,不再收 topic/topicFixed)
@@ -61,7 +54,6 @@ after(async () => {
   // 还原默认名系,避免模块级状态影响同文件后续断言的可读性
   setCharacterNames('甲', '乙', '丙')
   setCharacterGenders('女', '男', '女')
-  await server?.close()
 })
 
 test('改名+设性别后:fullPersona 人设条目用真名,纪律块含映射与代词', () => {
@@ -132,7 +124,7 @@ test('模式风格最高优先级块:相声解绑后缀在场(题材自由,装�
 
 /** 种入一个非喜剧自定义模式(与用户机上夸夸同构) */
 async function seedNonComedyMode() {
-  const { ensureCustomModesLoaded } = await server.ssrLoadModule('/src/storage/customModesStore.ts')
+  const { ensureCustomModesLoaded } = await import('../src/storage/customModesStore.ts')
   const values = new Map()
   globalThis.localStorage = {
     getItem: (key) => values.get(key) ?? null,
@@ -196,7 +188,7 @@ test('非喜剧分支:prompt 裁掉默认喜剧件,tone 注入为基调语境', 
 
 test('内建回归锁:crosstalk 恒走喜剧分支,daily 固定走非喜剧闲聊分支', async () => {
   setCharacterNames('甲', '乙', '丙')
-  const { MODES } = await server.ssrLoadModule('/src/performer/modes/index.ts')
+  const { MODES } = await import('../src/performer/modes/index.ts')
   assert.equal(MODES.crosstalk.tone, 'comedy')
   assert.equal(MODES.daily.tone, '日常闲聊', '日常是非喜剧闲聊,不再套用互怼喜剧骨架')
   assert.equal(MODES.live.tone, undefined, 'live 不锁死,弹幕回复按其 tone 声明走')
@@ -226,7 +218,7 @@ test('内建回归锁:crosstalk 恒走喜剧分支,daily 固定走非喜剧闲�
 })
 
 test('sanitizeCustomMode:tone 透传(非 comedy 保留,comedy/空归 undefined)', async () => {
-  const { sanitizeCustomMode } = await server.ssrLoadModule('/src/storage/customModesStore.ts')
+  const { sanitizeCustomMode } = await import('../src/storage/customModesStore.ts')
   const base = {
     id: 'custom_x',
     label: '夸夸',
@@ -244,7 +236,7 @@ test('sanitizeCustomMode:tone 透传(非 comedy 保留,comedy/空归 undefined)'
 
 test('弹幕回复基调:live 非喜剧时措辞按 tone 走(直接断言 liveMode 声明与 prompt 生成素材)', async () => {
   // live 未锁死:改 live.ts 的 tone 声明即切换直播风格
-  const { liveMode } = await server.ssrLoadModule('/src/performer/modes/index.ts')
+  const { liveMode } = await import('../src/performer/modes/index.ts')
   assert.equal(liveMode.tone, undefined)
   const liveIsComedy = !liveMode.tone?.trim() || liveMode.tone.trim() === 'comedy'
   assert.ok(liveIsComedy, '当前 live 未声明非 comedy,弹幕回复走现有捧场接梗文案')

@@ -1,3 +1,5 @@
+// 注:本文件依赖 vite 插件内联 mock @tauri-apps/* 等模块,保留 vite 自举;
+// scripts/run-tests.mjs 按含 "from 'vite'" 自动分流,勿改为直接 import(会丢 mock)。
 import assert from 'node:assert/strict'
 import { after, before, test } from 'node:test'
 import { createServer } from 'vite'

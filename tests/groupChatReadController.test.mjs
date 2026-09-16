@@ -2,24 +2,14 @@
 // 滚动的像素级断言在页面层以效果类型代替——scroll-bottom/scroll-message/preserve)。
 // 假游标仓:内存 Map + 落盘计数;零 IO 零 DOM。
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let mod
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  mod = await server.ssrLoadModule('/src/groupChat/readController.ts')
+  mod = await import('../src/groupChat/readController.ts')
 })
 
-after(async () => {
-  await server?.close()
-})
 
 const NAME_OF = { A: '柯南', B: '大肥鱼', C: '小哀' }
 

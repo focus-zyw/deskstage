@@ -1,27 +1,17 @@
 // 表达导演纯逻辑验收矩阵(方案 §三/§四):语音机制/权重抽取/全部冷却规则/
 // 任务优先/旧梗选择/指令渲染。假依赖注入,零 IO 零模型。
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
 let mod
 let persona
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  mod = await server.ssrLoadModule('/src/expression/index.ts')
-  persona = await server.ssrLoadModule('/src/engine/persona.ts')
+  mod = await import('../src/expression/index.ts')
+  persona = await import('../src/engine/persona.ts')
 })
 
-after(async () => {
-  await server?.close()
-})
 
-let server
 
 // ---------- VoiceMechanics(方案 §四) ----------
 

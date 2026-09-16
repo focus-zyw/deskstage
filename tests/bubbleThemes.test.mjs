@@ -2,9 +2,7 @@
 // bubbleStyle 选择器放宽。沿用仓库测试原则:不碰网络与磁盘(localStorage 用内存桩)。
 import assert from 'node:assert/strict'
 import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
 
-let server
 let saveBubbleTheme
 let removeBubbleTheme
 let getBubbleThemesV2Snapshot
@@ -20,19 +18,13 @@ before(async () => {
     removeItem: (k) => values.delete(k),
     clear: () => values.clear(),
   }
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
   ;({ saveBubbleTheme, removeBubbleTheme, getBubbleThemesV2Snapshot } =
-    await server.ssrLoadModule('/src/storage/bubbleThemesStore.ts'))
-  ;({ getConfig, DEFAULT_CONFIG } = await server.ssrLoadModule('/src/storage/configStore.ts'))
-  ;({ BUILT_IN_BUBBLE_THEMES } = await server.ssrLoadModule('/src/bubble/index.ts'))
+    await import('../src/storage/bubbleThemesStore.ts'))
+  ;({ getConfig, DEFAULT_CONFIG } = await import('../src/storage/configStore.ts'))
+  ;({ BUILT_IN_BUBBLE_THEMES } = await import('../src/bubble/index.ts'))
 })
 
 after(async () => {
-  await server?.close()
   delete globalThis.localStorage
 })
 
@@ -101,7 +93,7 @@ test('存储:内置主题禁止存成自定义(绕过检查的 V2 输入同样�
 
 test('bubbleStyle 选择器:custom_ id 放行,默认柔彩', async () => {
   assert.equal(DEFAULT_CONFIG.bubbleStyle, 'comic')
-  const { saveConfig } = await server.ssrLoadModule('/src/storage/configStore.ts')
+  const { saveConfig } = await import('../src/storage/configStore.ts')
   const saved = await saveConfig({ bubbleStyle: 'custom_neon' })
   assert.equal(saved.bubbleStyle, 'custom_neon')
   assert.equal((await getConfig()).bubbleStyle, 'custom_neon')

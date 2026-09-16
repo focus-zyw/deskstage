@@ -1,23 +1,13 @@
 // 台词呈现计划的回归测试:气泡在任何首声结果下都必须展示(P1 修复的回归防线)。
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let planLinePresentation
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  ;({ planLinePresentation } = await server.ssrLoadModule('/src/performer/player.ts'))
+  ;({ planLinePresentation } = await import('../src/performer/player.ts'))
 })
 
-after(async () => {
-  await server?.close()
-})
 
 test('语音关闭(silent):气泡仍按纯文本估时展示,不误取消 TTS', () => {
   const plan = planLinePresentation('silent', 2800)

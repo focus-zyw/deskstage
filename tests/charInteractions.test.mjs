@@ -5,24 +5,14 @@
 // rand 消耗顺序(poke 非 C 非生气):①普通池取句 ②laugh 掷骰(<0.3) ③即兴触发(<0.3);
 // C 走 ①② 后跳过即兴,直接进起哄掷骰(<0.3)。测试按此排布序列。
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let mod
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  mod = await server.ssrLoadModule('/src/interaction/charInteractions.ts')
+  mod = await import('../src/interaction/charInteractions.ts')
 })
 
-after(async () => {
-  await server?.close()
-})
 
 function makeWorld(over = {}) {
   const calls = { present: [], focus: [], logs: [], interrupts: [], poked: [], active: 0 }

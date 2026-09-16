@@ -2,24 +2,14 @@
 // done 值经 onSourceEnd 先于 onDone 交还、最后一句不清气泡、
 // stop() 同步 onStopped 前缀 + 异步 iterator.return()、首句前抛错走 onSourceError。
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let mod
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  mod = await server.ssrLoadModule('/src/performer/player.ts')
+  mod = await import('../src/performer/player.ts')
 })
 
-after(async () => {
-  await server?.close()
-})
 
 const line = (speaker, text) => ({ speaker, text, action: '' })
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))

@@ -2,9 +2,7 @@
 // 痛点:对话里的和解/背叛/较劲原本不影响关系数值,数值变化没有来由(doc §7)。
 import assert from 'node:assert/strict'
 import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
 
-let server
 let story
 let curator
 
@@ -20,17 +18,11 @@ before(async () => {
       return values.size
     },
   }
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  story = await server.ssrLoadModule('/src/storage/storyStore.ts')
-  curator = await server.ssrLoadModule('/src/engine/storyCurator.ts')
+  story = await import('../src/storage/storyStore.ts')
+  curator = await import('../src/engine/storyCurator.ts')
 })
 
 after(async () => {
-  await server?.close()
   delete globalThis.localStorage
 })
 

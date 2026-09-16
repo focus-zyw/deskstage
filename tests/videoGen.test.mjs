@@ -1,14 +1,12 @@
 // 视频工坊回归:三家适配器的请求构造与状态映射(mock 全局 fetch,不碰网络)、
 // promptComposer 的剧本轻适配转译(注入 mock complete)、错误分类、
 // videoStore 任务清洗与 configStore.videoGen 清洗。
-// 沿用仓库测试原则:vite ssrLoadModule 加载 TS 源,不碰磁盘(localStorage 天然未启用)。
+// 沿用仓库测试原则:直接 import 加载 TS 源,不碰磁盘(localStorage 天然未启用)。
 import assert from 'node:assert/strict'
-import { after, afterEach, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { afterEach, before, test } from 'node:test'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 
-let server
 let ark
 let minimax
 let zhipu
@@ -21,26 +19,18 @@ let favoritesTab
 let session
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  ark = await server.ssrLoadModule('/src/engine/videoGen/ark.ts')
-  minimax = await server.ssrLoadModule('/src/engine/videoGen/minimax.ts')
-  zhipu = await server.ssrLoadModule('/src/engine/videoGen/zhipu.ts')
-  index = await server.ssrLoadModule('/src/engine/videoGen/index.ts')
-  composer = await server.ssrLoadModule('/src/engine/videoGen/promptComposer.ts')
-  store = await server.ssrLoadModule('/src/storage/videoStore.ts')
-  configStore = await server.ssrLoadModule('/src/storage/configStore.ts')
-  videoTab = await server.ssrLoadModule('/src/settings/tabs/VideoSettings.tsx')
-  favoritesTab = await server.ssrLoadModule('/src/settings/tabs/FavoritesSettings.tsx')
-  session = await server.ssrLoadModule('/src/settings/useSettingsSession.ts')
+  ark = await import('../src/engine/videoGen/ark.ts')
+  minimax = await import('../src/engine/videoGen/minimax.ts')
+  zhipu = await import('../src/engine/videoGen/zhipu.ts')
+  index = await import('../src/engine/videoGen/index.ts')
+  composer = await import('../src/engine/videoGen/promptComposer.ts')
+  store = await import('../src/storage/videoStore.ts')
+  configStore = await import('../src/storage/configStore.ts')
+  videoTab = await import('../src/settings/tabs/VideoSettings.tsx')
+  favoritesTab = await import('../src/settings/tabs/FavoritesSettings.tsx')
+  session = await import('../src/settings/useSettingsSession.ts')
 })
 
-after(async () => {
-  await server?.close()
-})
 
 // ---------- fetch 桩:引擎在非 Tauri 环境走原生 fetch,替换全局即可拦截 ----------
 

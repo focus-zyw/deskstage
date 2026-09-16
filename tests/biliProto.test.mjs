@@ -1,25 +1,15 @@
-// B站弹幕二进制协议解析器测试:vite ssrLoadModule 直载 TS 源码(与 spriteVariants.test.mjs 同模式)。
+// B站弹幕二进制协议解析器测试:直接 import 加载 TS 源码(与 spriteVariants.test.mjs 同模式)。
 // zlib 用例:真实 deflate 压缩两个粘连包再解,覆盖"版本2正文→递归解包"主路径。
 import assert from 'node:assert/strict'
 import { deflateSync } from 'node:zlib'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let proto
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  ;({ proto } = { proto: await server.ssrLoadModule('/src/live/providers/biliProto.ts') })
+  ;({ proto } = { proto: await import('../src/live/providers/biliProto.ts') })
 })
 
-after(async () => {
-  await server?.close()
-})
 
 /** 手工拼一个包(独立于被测的 encodePacket,互为校验) */
 function buildPacket(ver, op, body) {

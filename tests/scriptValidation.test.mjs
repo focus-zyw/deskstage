@@ -1,24 +1,14 @@
 // 剧本结构校验回归:清洗保证每行合法,校验器保证整集可播放——
 // 死抉择(分支缺失/过短)必须 fatal 拒播走重生成;节奏瑕疵(连说/超长句/C 收底)只警告不拦截。
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let schema
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  schema = await server.ssrLoadModule('/src/performer/dialogSchema.ts')
+  schema = await import('../src/performer/dialogSchema.ts')
 })
 
-after(async () => {
-  await server?.close()
-})
 
 const line = (speaker, text) => ({ speaker, text, action: '' })
 const LINE_A = () => line('A', '甲的一句台词')

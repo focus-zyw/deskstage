@@ -1,22 +1,12 @@
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let IdleDirector
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  ;({ IdleDirector } = await server.ssrLoadModule('/src/stage/idleDirector.ts'))
+  ;({ IdleDirector } = await import('../src/stage/idleDirector.ts'))
 })
 
-after(async () => {
-  await server?.close()
-})
 
 function fakeClock(randomValues = []) {
   let now = 0

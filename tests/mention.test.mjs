@@ -1,23 +1,13 @@
 // 聊天 @ 补全纯函数回归:语境判定/候选过滤/插入替换(见 src/ui/mention.ts 头注释)。
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let mention
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  mention = await server.ssrLoadModule('/src/ui/mention.ts')
+  mention = await import('../src/ui/mention.ts')
 })
 
-after(async () => {
-  await server?.close()
-})
 
 test('语境判定:@紧邻光标即开启,空格/删@即关闭', () => {
   assert.deepEqual(mention.mentionContext('你好@'), { query: '' })

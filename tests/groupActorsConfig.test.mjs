@@ -4,26 +4,16 @@
 // binding 三形态收敛(web 站点白名单、api profileId 非法回落主模型、未知 kind → disabled)/
 // engine 回退开关 / stripSecrets 剥离 modelProfileKeys / profileId 非法字符不进任何路径(评审③)。
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let configStore
 let secretsModule
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  configStore = await server.ssrLoadModule('/src/storage/configStore.ts')
-  secretsModule = await server.ssrLoadModule('/src/storage/secrets.ts')
+  configStore = await import('../src/storage/configStore.ts')
+  secretsModule = await import('../src/storage/secrets.ts')
 })
 
-after(async () => {
-  await server?.close()
-})
 
 test('旧配置缺字段:迁移默认 A=主模型+natural、B=主模型+quiet、C=disabled(控费用)', () => {
   const cfg = configStore.sanitizeConfig({})

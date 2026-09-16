@@ -1,24 +1,14 @@
 // DialogueDirector 编排回归:准备→采纳→提交的生命周期收拢。
 // 依赖全注入,不碰网络与磁盘:参数透传、eid 分配、自然/中止提交分路、采纳空跳过。
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let mod
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  mod = await server.ssrLoadModule('/src/dialogue/director.ts')
+  mod = await import('../src/dialogue/director.ts')
 })
 
-after(async () => {
-  await server?.close()
-})
 
 const line = (speaker, text) => ({ speaker, text, action: '' })
 const script = () => ({ before: [line('A', '1'), line('B', '2')], after: {} })

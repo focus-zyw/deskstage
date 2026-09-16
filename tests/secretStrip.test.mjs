@@ -2,24 +2,14 @@
 // sanitize 层仍读历史明文——迁移失败/浏览器预览的兜底读取路径,读取后由凭据库覆盖。
 // stripSecrets 导出自 configStore(与 sanitizeCharacters 同惯例),在此做 SSR 直测。
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let configStore
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  configStore = await server.ssrLoadModule('/src/storage/configStore.ts')
+  configStore = await import('../src/storage/configStore.ts')
 })
 
-after(async () => {
-  await server?.close()
-})
 
 test('stripSecrets 移除七个密钥字段,非密钥字段保留', () => {
   const cfg = {

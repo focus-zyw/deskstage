@@ -2,27 +2,17 @@
 // 覆盖(评审必补项):呈现/TTS 顺序按 roomSeq 一致 / 打断停 Worker+当前 TTS+待播(I8)/
 // whenIdle 等 TTS 排空 / clarify 零模型调用且补充后只答一次 / legacy 引擎分派。
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let mod
 let createFakeActorAdapter
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  mod = await server.ssrLoadModule('/src/session/ChatSession.ts')
-  const fake = await server.ssrLoadModule('/src/groupChat/adapters/fakeActor.ts')
+  mod = await import('../src/session/ChatSession.ts')
+  const fake = await import('../src/groupChat/adapters/fakeActor.ts')
   createFakeActorAdapter = fake.createFakeActorAdapter
 })
 
-after(async () => {
-  await server?.close()
-})
 
 function deferred() {
   let resolve

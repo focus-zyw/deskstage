@@ -2,26 +2,16 @@
 // ①parseGeneratedDialog 解析出的 card 必须随 PerformanceScript 保留(曾被类型丢弃);
 // ②card 作为集级元数据盖在历史首行,聚合时还原到集上;旧格式无 card 条目天然兼容。
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let history
 let schema
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  history = await server.ssrLoadModule('/src/storage/historyStore.ts')
-  schema = await server.ssrLoadModule('/src/performer/dialogSchema.ts')
+  history = await import('../src/storage/historyStore.ts')
+  schema = await import('../src/performer/dialogSchema.ts')
 })
 
-after(async () => {
-  await server?.close()
-})
 
 const line = (speaker, text) => ({ speaker, text, action: '' })
 

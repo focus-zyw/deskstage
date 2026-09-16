@@ -2,24 +2,14 @@
 // danmaku 走过滤+入队。假 session 直接驱动导出的路由函数,不起真连接。
 // 附:noteActivity 记账在 gift 分支先行(一行代码,行为由 giftReactions 测试覆盖开关逻辑)。
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let ld
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  ld = await server.ssrLoadModule('/src/runtime/liveDanmaku.ts')
+  ld = await import('../src/runtime/liveDanmaku.ts')
 })
 
-after(async () => {
-  await server?.close()
-})
 
 /** 假 session:只需路由函数触达的字段;reactions 用假件记录旁路调用 */
 function fakeSession() {

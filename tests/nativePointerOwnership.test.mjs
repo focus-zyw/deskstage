@@ -1,3 +1,5 @@
+// 注:本文件依赖 vite 插件内联 mock @tauri-apps/* 等模块,保留 vite 自举;
+// scripts/run-tests.mjs 按含 "from 'vite'" 自动分流,勿改为直接 import(会丢 mock)。
 // 原生指针归属校正回归:角色矩形与浮层菜单矩形重叠时,Rust 钩子按"先注册者优先"
 // 会把点击判给角色——合成目标必须按 DOM(elementFromPoint)归属校正,
 // 否则点右键菜单项会误触"角色戳"、角色间重叠区互相截胡。

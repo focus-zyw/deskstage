@@ -1,24 +1,14 @@
 // OCR 连败熔断回归:AI 免费档经常失效(429/超时),连败 2 次即进入 10 分钟冷却,
 // 期间不再反复白等超时——直接本地识别;冷却结束放行探测,成功即复位。
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let ocr
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  ocr = await server.ssrLoadModule('/src/translation/ocr.ts')
+  ocr = await import('../src/translation/ocr.ts')
 })
 
-after(async () => {
-  await server?.close()
-})
 
 const T0 = 1_700_000_000_000
 

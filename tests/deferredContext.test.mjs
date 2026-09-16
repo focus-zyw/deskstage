@@ -2,9 +2,7 @@
 // 痛点:预取的集没播也会烧掉注入冷却、消费掉互动 recap(doc §4.2 预生成零副作用)。
 import assert from 'node:assert/strict'
 import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
 
-let server
 let story
 let interactions
 
@@ -20,17 +18,11 @@ before(async () => {
       return values.size
     },
   }
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  story = await server.ssrLoadModule('/src/storage/storyStore.ts')
-  interactions = await server.ssrLoadModule('/src/storage/interactionStore.ts')
+  story = await import('../src/storage/storyStore.ts')
+  interactions = await import('../src/storage/interactionStore.ts')
 })
 
 after(async () => {
-  await server?.close()
   delete globalThis.localStorage
 })
 

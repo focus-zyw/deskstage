@@ -1,27 +1,17 @@
 // 支持作者抽奖回归:金额换算边界、权重落档统计(带宽校验)、硬保底时序、
 // 连抽与账本/图鉴一致性、账本清洗(坏数据回默认、陌生 id 丢弃)、文案渲染。
-// gacha.ts/pool.ts 运行时零依赖,node --test 经 vite ssrLoadModule 直载。
+// gacha.ts/pool.ts 运行时零依赖,node --test 直接 import 加载。
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let g
 let p
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  g = await server.ssrLoadModule('/src/features/support/gacha.ts')
-  p = await server.ssrLoadModule('/src/features/support/pool.ts')
+  g = await import('../src/features/support/gacha.ts')
+  p = await import('../src/features/support/pool.ts')
 })
 
-after(async () => {
-  await server?.close()
-})
 
 /** mulberry32 种子随机:统计用例可复现 */
 function seeded(seed) {

@@ -2,24 +2,14 @@
 // stop() 必须上报"真实开播过的台词前缀"且不触发 onDone;
 // 自然播完只触发 onDone;空闲时防御性 stop 是空操作。
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let mod
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  mod = await server.ssrLoadModule('/src/performer/player.ts')
+  mod = await import('../src/performer/player.ts')
 })
 
-after(async () => {
-  await server?.close()
-})
 
 const line = (speaker, text) => ({ speaker, text, action: '' })
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))

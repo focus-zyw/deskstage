@@ -3,9 +3,7 @@
 // LLM 经注入的 fake complete 驱动,不碰网络。
 import assert from 'node:assert/strict'
 import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
 
-let server
 let discovery
 let store
 let promptMod
@@ -18,14 +16,12 @@ before(async () => {
     removeItem: (k) => values.delete(k),
     clear: () => values.clear(),
   }
-  server = await createServer({ server: { middlewareMode: true }, appType: 'custom', logLevel: 'silent' })
-  discovery = await server.ssrLoadModule('/src/topic/discovery.ts')
-  store = await server.ssrLoadModule('/src/topic/store.ts')
-  promptMod = await server.ssrLoadModule('/src/topic/prompt.ts')
+  discovery = await import('../src/topic/discovery.ts')
+  store = await import('../src/topic/store.ts')
+  promptMod = await import('../src/topic/prompt.ts')
 })
 
 after(async () => {
-  await server?.close()
   delete globalThis.localStorage
 })
 

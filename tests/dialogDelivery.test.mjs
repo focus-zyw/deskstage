@@ -1,27 +1,15 @@
 // 朗读归一化与情绪收敛的回归测试。
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let normalizeForSpeech
 let diversifyDeliveries
 let deliverySpeed
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  ;({ normalizeForSpeech, diversifyDeliveries, deliverySpeed } = await server.ssrLoadModule(
-    '/src/performer/dialogSchema.ts',
-  ))
+  ;({ normalizeForSpeech, diversifyDeliveries, deliverySpeed } = await import('../src/performer/dialogSchema.ts'))
 })
 
-after(async () => {
-  await server?.close()
-})
 
 test('朗读归一化:AI/省略号/长破折号/百分号统一读法', () => {
   assert.equal(normalizeForSpeech('AI助手'), 'A I 助手')

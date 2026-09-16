@@ -3,24 +3,16 @@
 // decideFactUpdate 裁决矩阵 / queryMemory 流水线归因(含冲突门控) /
 // v1/v2→v3 迁移(不伪造证据) / evict 顺序。全部确定性时间,零 IO。
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let policy
 let store
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  policy = await server.ssrLoadModule('/src/storage/memoryPolicy.ts')
-  store = await server.ssrLoadModule('/src/storage/memoryStore.ts')
+  policy = await import('../src/storage/memoryPolicy.ts')
+  store = await import('../src/storage/memoryStore.ts')
 })
 
-after(async () => server?.close())
 
 const DAY = 86_400_000
 const NOW = 1_800_000_000_000

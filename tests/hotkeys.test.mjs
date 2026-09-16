@@ -3,24 +3,14 @@
 // 2) 同组合键先到先得(清单顺序 = 让位顺序,后者视为未设置)
 // 3) 与截屏快捷键撞车的让位截屏(截屏已有独立的注册链路,同一键不能双方都抢)
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let resolveHotkeyBindings
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  ;({ resolveHotkeyBindings } = await server.ssrLoadModule('/src/hotkeys.ts'))
+  ;({ resolveHotkeyBindings } = await import('../src/hotkeys.ts'))
 })
 
-after(async () => {
-  await server?.close()
-})
 
 const HK = (partial) => ({
   generate: '',

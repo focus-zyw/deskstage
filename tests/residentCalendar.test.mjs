@@ -1,28 +1,18 @@
 // 日历情境与待机池组合回归:节日判定/季节带/pickAmbientClip 优先级四象限。
 // pickAmbientClip 的 rand 可注入——节日全替换、2% 彩蛋、时间∪情绪、默认回落逐一对拍。
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let calendar
 let machine
 
 const mood = (valence, energy) => ({ valence, energy, updatedAt: 0 })
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  calendar = await server.ssrLoadModule('/src/stage/resident/residentCalendar.ts')
-  machine = await server.ssrLoadModule('/src/stage/resident/residentMachine.ts')
+  calendar = await import('../src/stage/resident/residentCalendar.ts')
+  machine = await import('../src/stage/resident/residentMachine.ts')
 })
 
-after(async () => {
-  await server?.close()
-})
 
 test('公历节日判定:圣诞窗口覆盖多天,万圣单日', () => {
   assert.equal(calendar.festivalOf(12, 24, 2026), 'christmas')

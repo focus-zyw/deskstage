@@ -1,24 +1,14 @@
 // 礼物反应旁路测试:档位映射(阈值边界)、开关、感谢语节流、A/B 轮流、revision 门。
-// giftReactions 只 import 类型(运行时零依赖),node --test 经 vite ssrLoadModule 直载。
+// giftReactions 只 import 类型(运行时零依赖),node --test 直接 import 加载。
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let gr
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  gr = await server.ssrLoadModule('/src/runtime/giftReactions.ts')
+  gr = await import('../src/runtime/giftReactions.ts')
 })
 
-after(async () => {
-  await server?.close()
-})
 
 /** 构造一个归一化 GiftEvent(与 src/live/types.ts 的 GiftEvent 同形) */
 function giftEvent(over = {}) {

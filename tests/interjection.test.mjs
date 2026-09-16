@@ -1,24 +1,14 @@
 // 演出中插话(P4)规划器回归:反应回合插在已播之后、剩余剧本之前;
 // 未选边时保留原抉择点,已选边不再携带;下标语义 = 已开播当前句(算已播)。
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let interjection
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  interjection = await server.ssrLoadModule('/src/dialogue/interjection.ts')
+  interjection = await import('../src/dialogue/interjection.ts')
 })
 
-after(async () => {
-  await server?.close()
-})
 
 const line = (speaker, text) => ({ speaker, text, action: '' })
 

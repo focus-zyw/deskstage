@@ -2,8 +2,7 @@
 // 1) generate 的 data.url 必须原样交给 onQr(此前把信封当数据用,画出去的是字符串 "undefined")
 // 2) 外层 code=0 而内层 data.code=86101(未扫码)时,必须继续轮询,不能误进成功分支
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
 // biliLogin 用 window.setTimeout 做轮询间隔,Node 下补 shim
 globalThis.window = globalThis
@@ -24,17 +23,11 @@ const POLL_PENDING_ENVELOPE = {
   data: { url: '', qrcode_key: 'abc123def456', code: 86101, message: '未扫码', timestamp: 0 },
 }
 
-let server
 let mod
 let fetchCalls = []
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  ;({ mod } = { mod: await server.ssrLoadModule('/src/live/biliLogin.ts') })
+  ;({ mod } = { mod: await import('../src/live/biliLogin.ts') })
   // stub fetch:generate → 信封 gen;poll/其余(finger/spi 等)→ 恒未扫码信封
   globalThis.fetch = async (url) => {
     fetchCalls.push(String(url))
@@ -50,9 +43,6 @@ before(async () => {
   }
 })
 
-after(async () => {
-  await server?.close()
-})
 
 test('generate 的 data.url 原样交给 onQr(信封正确解包)', async () => {
   const seen = []

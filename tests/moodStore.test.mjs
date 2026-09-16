@@ -3,9 +3,7 @@
 // 注意:store 有内存缓存(首读后不再回磁盘),所以衰减用例必须先于一切加载发生。
 import assert from 'node:assert/strict'
 import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
 
-let server
 let store
 
 const HOUR = 3_600_000
@@ -22,16 +20,10 @@ before(async () => {
       return values.size
     },
   }
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  store = await server.ssrLoadModule('/src/storage/moodStore.ts')
+  store = await import('../src/storage/moodStore.ts')
 })
 
 after(async () => {
-  await server?.close()
   delete globalThis.localStorage
 })
 

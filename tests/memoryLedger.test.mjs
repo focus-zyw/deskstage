@@ -3,10 +3,8 @@
 // 禁止规则入库闸 / pending→failed 账本 / V2→V3 迁移幂等 / 话题口味不受迁移影响。
 // 浏览器降级路径:伪造 localStorage,零 IO 零网络。
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let store
 let policy
 
@@ -18,16 +16,10 @@ before(async () => {
     setItem: (k, v) => void backing.set(k, String(v)),
     removeItem: (k) => void backing.delete(k),
   }
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  store = await server.ssrLoadModule('/src/storage/memoryStore.ts')
-  policy = await server.ssrLoadModule('/src/storage/memoryPolicy.ts')
+  store = await import('../src/storage/memoryStore.ts')
+  policy = await import('../src/storage/memoryPolicy.ts')
 })
 
-after(async () => server?.close())
 
 const DAY = 86_400_000
 const NOW = Date.now()

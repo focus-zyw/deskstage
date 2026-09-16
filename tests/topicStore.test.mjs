@@ -1,10 +1,8 @@
 // 话题状态存储(topic-state)行为测试:清洗钳制、指纹稳定性、CAS 变更循环(浏览器
 // adapter)、读模型快照订阅。回归目标:动态话题系统数据地基的形状契约。
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let store
 let planner
 
@@ -17,19 +15,10 @@ before(async () => {
     removeItem: (k) => mem.delete(k),
     clear: () => mem.clear(),
   }
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  planner = await server.ssrLoadModule('/src/topic/planner.ts')
-  store = await server.ssrLoadModule('/src/topic/store.ts')
+  planner = await import('../src/topic/planner.ts')
+  store = await import('../src/topic/store.ts')
 })
 
-after(async () => {
-  // 不关 server 会留句柄,node 进程不退出,runner 永远等不到结束
-  await server?.close()
-})
 
 test('normalizeTitle 归一全半角/标点/大小写,指纹跨调用稳定', () => {
   assert.equal(planner.normalizeTitle('ＡＩ，帮你回消息！'), 'ai帮你回消息')

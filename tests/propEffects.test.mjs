@@ -1,26 +1,16 @@
 // 道具效果 store 测试:时序不变量逐条钉死(不变量清单见 src/runtime/propEffects.ts 头注释)。
 // 真实 setTimeout 驱动,时长用小毫秒数;beforeEach clearProps 顺带重置冷却账。
 import assert from 'node:assert/strict'
-import { after, before, beforeEach, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, beforeEach, test } from 'node:test'
 
-let server
 let pe
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  pe = await server.ssrLoadModule('/src/runtime/propEffects.ts')
+  pe = await import('../src/runtime/propEffects.ts')
 })
 
-after(async () => {
-  await server?.close()
-})
 
 beforeEach(() => {
   pe.clearProps()

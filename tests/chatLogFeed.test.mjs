@@ -3,24 +3,14 @@
 // ②buildFeed 把演出集与聊天消息合并成统一时间线——升序穿插、同 ts 时聊天消息在前;
 // ③空输入空输出。
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let store
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  store = await server.ssrLoadModule('/src/storage/chatLogStore.ts')
+  store = await import('../src/storage/chatLogStore.ts')
 })
 
-after(async () => {
-  await server?.close()
-})
 
 const ep = (ts, text) => ({
   ts,

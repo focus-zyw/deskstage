@@ -2,22 +2,14 @@
 // 帧 = 30ms 恒定,时间全用帧数度量。覆盖:底噪自适应 / 起止迟滞 / pre-roll 回填 /
 // 瞬态不触发 / 30s 强制截断 / PTT 闸门 / barge-in 默认关 / 高阈值触发 / 风暴闩锁与恢复。
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let mod
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  mod = await server.ssrLoadModule('/src/engine/vad.ts')
+  mod = await import('../src/engine/vad.ts')
 })
 
-after(async () => server?.close())
 
 const FRAME = 480
 

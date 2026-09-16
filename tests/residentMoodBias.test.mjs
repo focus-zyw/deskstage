@@ -1,27 +1,17 @@
 // C 常驻行为的情绪偏置回归:闹情绪不哼歌、蔫了发呆且节奏放缓、精神足加专注小动作、平静走默认池。
 // 偏置函数是纯函数,直接喂 Mood;池成员必须是合法片段 id(类型层保证,这里测行为语义)。
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let machine
 
 const T0 = new Date(2026, 5, 3, 14, 0, 0).getTime()
 const mood = (valence, energy) => ({ valence, energy, updatedAt: T0 })
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  machine = await server.ssrLoadModule('/src/stage/resident/residentMachine.ts')
+  machine = await import('../src/stage/resident/residentMachine.ts')
 })
 
-after(async () => {
-  await server?.close()
-})
 
 test('闹情绪:待机不哼歌改敲桌面,点击回应收起热情招手', () => {
   const angry = mood(-2, 3)

@@ -1,24 +1,14 @@
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
+import { before, test } from 'node:test'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { createServer } from 'vite'
 
-let server
 let ChoicePanel
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  ;({ ChoicePanel } = await server.ssrLoadModule('/src/ui/ChoicePanel.tsx'))
+  ;({ ChoicePanel } = await import('../src/ui/ChoicePanel.tsx'))
 })
 
-after(async () => {
-  await server?.close()
-})
 
 test('choice 面板显示问题和两个可选按钮', () => {
   const choice = {

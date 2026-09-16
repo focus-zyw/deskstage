@@ -3,9 +3,7 @@
 // 非喜剧卡要能活着走完 生成→落盘/收藏聚合→预取缓存 全链路,不得无声消失。
 import assert from 'node:assert/strict'
 import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
 
-let server
 let schema
 let history
 let prefetch
@@ -74,18 +72,12 @@ before(async () => {
       return values.size
     },
   }
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  schema = await server.ssrLoadModule('/src/performer/dialogSchema.ts')
-  history = await server.ssrLoadModule('/src/storage/historyStore.ts')
-  prefetch = await server.ssrLoadModule('/src/storage/prefetchStore.ts')
+  schema = await import('../src/performer/dialogSchema.ts')
+  history = await import('../src/storage/historyStore.ts')
+  prefetch = await import('../src/storage/prefetchStore.ts')
 })
 
 after(async () => {
-  await server?.close()
   delete globalThis.localStorage
 })
 

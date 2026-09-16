@@ -1,21 +1,13 @@
 // 诊断包导出必须落在 Tauri 授权的 appData/data 内，Windows 路径不能因缺少分隔符越界。
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let writeDiagExportFile
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  ;({ writeDiagExportFile } = await server.ssrLoadModule('/src/diag/exportFile.ts'))
+  ;({ writeDiagExportFile } = await import('../src/diag/exportFile.ts'))
 })
 
-after(async () => server?.close())
 
 test('Windows appDataDir 无尾分隔符时仍导出到授权的 data 子目录', async () => {
   const calls = { mkdir: [], write: [] }

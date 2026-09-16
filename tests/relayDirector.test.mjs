@@ -3,26 +3,16 @@
 // 指令 / intent:end 的 minTurns 门槛 / 整场时间预算 / 连续重复收场 /
 // 两段式失败恢复与本地收尾 / 用户取消无新请求 / speaker 忽略 / 会话释放。
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let createRelayDirector
 let aiTheaterTurnPolicy
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  ;({ createRelayDirector } = await server.ssrLoadModule('/src/relay/relayDirector.ts'))
-  ;({ AI_THEATER_TURN_POLICY: aiTheaterTurnPolicy } = await server.ssrLoadModule('/src/relay/relayPolicy.ts'))
+  ;({ createRelayDirector } = await import('../src/relay/relayDirector.ts'))
+  ;({ AI_THEATER_TURN_POLICY: aiTheaterTurnPolicy } = await import('../src/relay/relayPolicy.ts'))
 })
 
-after(async () => {
-  await server?.close()
-})
 
 /** 台词步骤:字符串 = 原样回传;{fail:true} = 抛错(计入该演员失败) */
 function makeDeps(script, over = {}) {

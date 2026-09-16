@@ -1,29 +1,19 @@
 import assert from 'node:assert/strict'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let SpriteVariantPicker
 let firstDelayedVariantGroup
 let immediateSpriteVariants
 let SPRITE_SETS
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
   ;({ SpriteVariantPicker, firstDelayedVariantGroup, immediateSpriteVariants } =
-    await server.ssrLoadModule('/src/stage/spriteVariants.ts'))
-  ;({ SPRITE_SETS } = await server.ssrLoadModule('/src/stage/spriteSets.ts'))
+    await import('../src/stage/spriteVariants.ts'))
+  ;({ SPRITE_SETS } = await import('../src/stage/spriteSets.ts'))
 })
 
-after(async () => {
-  await server?.close()
-})
 
 test('没有变体时保持基础动作图片', () => {
   const picker = new SpriteVariantPicker()

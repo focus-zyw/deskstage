@@ -3,22 +3,14 @@
 // 中按下 = cancel+回听) / barge-in 事件打断 / stop 全清 / 麦克风断流→重试恢复 /
 // 迟到 whenIdle 不覆盖打断后的 phase。
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let mod
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  mod = await server.ssrLoadModule('/src/session/voiceSession.ts')
+  mod = await import('../src/session/voiceSession.ts')
 })
 
-after(async () => server?.close())
 
 const tick = () => new Promise((r) => setImmediate(r))
 

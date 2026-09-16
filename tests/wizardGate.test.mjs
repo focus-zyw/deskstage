@@ -2,24 +2,14 @@
 // 弹出条件(App 侧,此处固定其输入契约):!wizardDone && 无聊天记录 && 未填称呼;
 // 老用户升级(wizardDone 缺省 false)但有任一痕迹 → 不弹。
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let configStore
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  configStore = await server.ssrLoadModule('/src/storage/configStore.ts')
+  configStore = await import('../src/storage/configStore.ts')
 })
 
-after(async () => {
-  await server?.close()
-})
 
 test('wizardDone:老配置缺省 false(视为未完成,是否弹由零痕迹判定决定)', () => {
   assert.equal(configStore.sanitizeConfig({}).wizardDone, false)

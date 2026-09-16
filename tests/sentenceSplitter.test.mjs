@@ -1,22 +1,14 @@
 // SentenceSplitter 行为矩阵:句末标点 / 增量跨 delta / 软断(>24 字遇逗号) /
 // 60 字硬顶 / 换行断句 / flush 尾句 / 英文小数不受影响。
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let mod
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  mod = await server.ssrLoadModule('/src/engine/sentenceSplitter.ts')
+  mod = await import('../src/engine/sentenceSplitter.ts')
 })
 
-after(async () => server?.close())
 
 test('句末标点即断,多句一次吐出并 trim', () => {
   const s = mod.createSentenceSplitter()

@@ -1,10 +1,8 @@
 // TopicDirector 行为矩阵(V2 §16):两阶段生命周期、通道决策、雷区、去重、会话、
 // 故事 lease、反馈幂等。全部经公共 interface 驱动,存储走浏览器 adapter。
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let mod // { director, store, planner, catalog }
 
 // 确定性 RNG(朴素 LCG):每个用例给种子,杜绝随机翻车
@@ -61,17 +59,13 @@ before(async () => {
     removeItem: (k) => mem.delete(k),
     clear: () => mem.clear(),
   }
-  server = await createServer({ server: { middlewareMode: true }, appType: 'custom', logLevel: 'silent' })
-  const store = await server.ssrLoadModule('/src/topic/store.ts')
-  const planner = await server.ssrLoadModule('/src/topic/planner.ts')
-  const catalog = await server.ssrLoadModule('/src/topic/catalog.ts')
-  const director = await server.ssrLoadModule('/src/topic/director.ts')
+  const store = await import('../src/topic/store.ts')
+  const planner = await import('../src/topic/planner.ts')
+  const catalog = await import('../src/topic/catalog.ts')
+  const director = await import('../src/topic/director.ts')
   mod = { store, planner, catalog, director }
 })
 
-after(async () => {
-  await server?.close()
-})
 
 test('plan() 零持久副作用:普通与预生成规划都不写状态(无幽灵话题的根)', async () => {
   await resetState()

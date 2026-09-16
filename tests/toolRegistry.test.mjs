@@ -4,51 +4,16 @@
 // · validate 清洗:超长截断、缺参拒绝(安全事实源的两道闸之一)。
 import assert from 'node:assert/strict'
 import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
 
-let server
 let mod
 
 before(async () => {
   globalThis.__toolRegistryMock = { invoke: async () => null }
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-    ssr: { noExternal: ['@tauri-apps/api'] },
-    plugins: [
-      {
-        name: 'tool-registry-mocks',
-        enforce: 'pre',
-        resolveId(id) {
-          if (id.startsWith('@tauri-apps/')) return `\0mock:${id}`
-        },
-        load(id) {
-          if (!id.startsWith('\0mock:@tauri-apps/')) return undefined
-          return `
-            export const invoke = (...a) => globalThis.__toolRegistryMock.invoke(...a)
-            export class Channel { onmessage = () => {} }
-            export const getCurrentWindow = () => ({ hide: async () => {}, show: async () => {} })
-            export const readTextFile = async () => ''
-            export const writeTextFile = async () => {}
-            export const exists = async () => false
-            export const mkdir = async () => {}
-            export const appDataDir = async () => '/tmp'
-            export const join = async (...p) => p.join('/')
-            export const emitTo = async () => {}
-            export const listen = async () => () => {}
-            export const fetch = async () => { throw new Error('no network in tests') }
-          `
-        },
-      },
-    ],
-  })
-  mod = await server.ssrLoadModule('/src/tools/registry.ts')
+  mod = await import('../src/tools/registry.ts')
 })
 
 after(async () => {
   delete globalThis.__toolRegistryMock
-  await server?.close()
 })
 
 const ctx = { isLive: true, phase: 'idle' }

@@ -2,9 +2,7 @@
 // end 漏发会让 C 的"围观工作姿势"永远不还原(见 utilityTasks.ts 头注释)。
 import assert from 'node:assert/strict'
 import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
 
-let server
 let mod
 
 before(async () => {
@@ -13,16 +11,10 @@ before(async () => {
     setTimeout: (fn, ms) => setTimeout(fn, Math.min(ms ?? 0, 5)),
     clearTimeout: (t) => clearTimeout(t),
   }
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  mod = await server.ssrLoadModule('/src/runtime/utilityTasks.ts')
+  mod = await import('../src/runtime/utilityTasks.ts')
 })
 
 after(async () => {
-  await server?.close()
   delete globalThis.window
 })
 

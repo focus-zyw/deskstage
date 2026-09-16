@@ -3,10 +3,8 @@
 // 另加 player 层运行时断言(onChoice 触发/中止路径)。
 // 全部确定性:不碰网络/磁盘,LLM 原始输出用真实形状的固定用例。
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let parseGeneratedDialog
 let validatePerformanceScript
 let PerformancePlayer
@@ -15,20 +13,12 @@ let getConfig
 let DEFAULT_CONFIG
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  ;({ parseGeneratedDialog, validatePerformanceScript } = await server.ssrLoadModule('/src/performer/dialogSchema.ts'))
-  ;({ PerformancePlayer } = await server.ssrLoadModule('/src/performer/player.ts'))
-  ;({ evaluateChoiceAsk } = await server.ssrLoadModule('/src/dialogue/choiceGate.ts'))
-  ;({ getConfig, DEFAULT_CONFIG } = await server.ssrLoadModule('/src/storage/configStore.ts'))
+  ;({ parseGeneratedDialog, validatePerformanceScript } = await import('../src/performer/dialogSchema.ts'))
+  ;({ PerformancePlayer } = await import('../src/performer/player.ts'))
+  ;({ evaluateChoiceAsk } = await import('../src/dialogue/choiceGate.ts'))
+  ;({ getConfig, DEFAULT_CONFIG } = await import('../src/storage/configStore.ts'))
 })
 
-after(async () => {
-  await server?.close()
-})
 
 const line = (speaker, text, extra = {}) => ({ speaker, text, action: 'talk', ...extra })
 const CHOICE = { prompt: '谁先道歉?', options: [{ id: 'a', label: '甲先' }, { id: 'b', label: '乙先' }] }

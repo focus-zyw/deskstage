@@ -1,23 +1,13 @@
 // C 的漫游路径纯函数回归:步幅范围、边界反弹、速度换算。
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let motion
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  motion = await server.ssrLoadModule('/src/stage/resident/residentMotion.ts')
+  motion = await import('../src/stage/resident/residentMotion.ts')
 })
 
-after(async () => {
-  await server?.close()
-})
 
 test('漫游目标始终在界内,步幅 3~7 个百分点', () => {
   for (let i = 0; i < 200; i++) {

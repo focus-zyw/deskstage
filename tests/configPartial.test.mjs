@@ -2,24 +2,14 @@
 // 与全量 sanitizeConfig(读路径)共用同一张 FIELD_SANITIZERS 表,规则必然一致。
 // 统一状态中心后,saveConfig 在 invoke('config_set') 前过这道闸,Rust 不复制 schema。
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let configStore
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  configStore = await server.ssrLoadModule('/src/storage/configStore.ts')
+  configStore = await import('../src/storage/configStore.ts')
 })
 
-after(async () => {
-  await server?.close()
-})
 
 test('sanitizePartial 只清洗出现的键,未触及字段不出现在结果里', () => {
   const out = configStore.sanitizePartial({ dnd: true })

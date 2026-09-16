@@ -1,24 +1,14 @@
 // Relay 台词解析验收:模型输出不可信——speaker 忽略、动作白名单、截断、
 // 容错取首个 JSON、结构不对一律 null(不猜)。
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let m
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  m = await server.ssrLoadModule('/src/relay/relaySchema.ts')
+  m = await import('../src/relay/relaySchema.ts')
 })
 
-after(async () => {
-  await server?.close()
-})
 
 test('正常解析:text/action/intent,容错围栏与前后说明', () => {
   const ok = m.parseRelayTurn('{"text":"蛋糕上写着你的名字","action":"surprise","intent":"continue"}')

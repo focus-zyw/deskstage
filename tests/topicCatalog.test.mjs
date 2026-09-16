@@ -2,10 +2,8 @@
 // config.topicOverride 幂等迁移四步序、topicPrefs 清洗。回归目标:动态话题系统
 // 的数据地基不漂移,旧"锁定直到清除"用户升级后语义无损。
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let catalog
 let planner
 let store
@@ -20,21 +18,13 @@ before(async () => {
     removeItem: (k) => mem.delete(k),
     clear: () => mem.clear(),
   }
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  planner = await server.ssrLoadModule('/src/topic/planner.ts')
-  catalog = await server.ssrLoadModule('/src/topic/catalog.ts')
-  store = await server.ssrLoadModule('/src/topic/store.ts')
-  migration = await server.ssrLoadModule('/src/topic/migration.ts')
-  configStore = await server.ssrLoadModule('/src/storage/configStore.ts')
+  planner = await import('../src/topic/planner.ts')
+  catalog = await import('../src/topic/catalog.ts')
+  store = await import('../src/topic/store.ts')
+  migration = await import('../src/topic/migration.ts')
+  configStore = await import('../src/storage/configStore.ts')
 })
 
-after(async () => {
-  await server?.close()
-})
 
 test('精选池:核心 93 条、指纹唯一、分类分布、全匿名骨架', () => {
   const cards = catalog.CURATED_CARDS
@@ -233,7 +223,7 @@ test('换皮审计:titleSimilarity>0.6 的卡对必须在显式允许列表', ()
 })
 
 test('personaSource 迁移三规则 + usesDefaultPersona 只读结构化来源', async () => {
-  const personaMod = await server.ssrLoadModule('/src/engine/persona.ts')
+  const personaMod = await import('../src/engine/persona.ts')
   // 规则一:空文本 → default;规则三:其他非空 → custom
   const dirty = configStore.sanitizeConfig({ persona: { a: '', b: '自定义侦探人设', c: '' } })
   assert.deepEqual(dirty.personaSource, { a: 'default', b: 'custom', c: 'default' })
@@ -250,7 +240,7 @@ test('personaSource 迁移三规则 + usesDefaultPersona 只读结构化来源',
 })
 
 test('castHash:同配置同哈希(跨重启稳定),人设/名字/性别任一变化即变', async () => {
-  const personaMod = await server.ssrLoadModule('/src/engine/persona.ts')
+  const personaMod = await import('../src/engine/persona.ts')
   personaMod.setPersonaOverride('', '', '')
   personaMod.setCharacterNames('甲', '乙', '丙')
   personaMod.setCharacterGenders('女', '男', '女')

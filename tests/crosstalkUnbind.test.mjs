@@ -2,26 +2,16 @@
 // secret 或 callback"):crosstalk 模式 craft/协议/模式风格后缀三处退场装置,
 // 话题降级为可弃用灵感;其他喜剧模式与校验层回归不动。
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let promptBuilder
 let dialogSchema
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  promptBuilder = await server.ssrLoadModule('/src/engine/promptBuilder.ts')
-  dialogSchema = await server.ssrLoadModule('/src/performer/dialogSchema.ts')
+  promptBuilder = await import('../src/engine/promptBuilder.ts')
+  dialogSchema = await import('../src/performer/dialogSchema.ts')
 })
 
-after(async () => {
-  await server?.close()
-})
 
 const tp = (title, mode = 'crosstalk') => ({
   planId: `tp-${title}`,

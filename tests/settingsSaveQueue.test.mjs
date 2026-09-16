@@ -1,26 +1,16 @@
 // 设置即存队列测试:合并/冲刷/丢弃语义逐条钉死(见 src/settings/saveQueue.ts 头注释)。
 // 真实 setTimeout 驱动,防抖窗口用小毫秒数。
 import assert from 'node:assert/strict'
-import { before, after, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let mod
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 before(async () => {
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  mod = await server.ssrLoadModule('/src/settings/saveQueue.ts')
+  mod = await import('../src/settings/saveQueue.ts')
 })
 
-after(async () => {
-  await server?.close()
-})
 
 test('防抖窗口内的多次文本输入合并为一次落盘,后写覆盖先写', async () => {
   const commits = []

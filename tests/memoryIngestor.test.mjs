@@ -2,10 +2,8 @@
 // 跨轮独立重申加分 / 非法 slot 降级不参与槽位替代 / 提取失败账本记 failed 不影响聊天 /
 // 禁止规则第二道闸。注入假 extract,零网络;存储走浏览器降级路径(伪造 localStorage)。
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createServer } from 'vite'
+import { before, test } from 'node:test'
 
-let server
 let ingestorMod
 let store
 let policy
@@ -17,17 +15,11 @@ before(async () => {
     setItem: (k, v) => void backing.set(k, String(v)),
     removeItem: (k) => void backing.delete(k),
   }
-  server = await createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-  })
-  ingestorMod = await server.ssrLoadModule('/src/memory/ingestor.ts')
-  store = await server.ssrLoadModule('/src/storage/memoryStore.ts')
-  policy = await server.ssrLoadModule('/src/storage/memoryPolicy.ts')
+  ingestorMod = await import('../src/memory/ingestor.ts')
+  store = await import('../src/storage/memoryStore.ts')
+  policy = await import('../src/storage/memoryPolicy.ts')
 })
 
-after(async () => server?.close())
 
 const NOW = 1_800_000_000_000
 

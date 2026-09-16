@@ -1,3 +1,5 @@
+// 注:本文件依赖 vite 插件内联 mock @tauri-apps/* 等模块,保留 vite 自举;
+// scripts/run-tests.mjs 按含 "from 'vite'" 自动分流,勿改为直接 import(会丢 mock)。
 // 网页会话 Hub 前端薄封装验收:invoke 参数形状、取消语义(abort → webchat_cancel
 // →「已取消」还原 AbortError)、「发送后页面丢失」typed error 原样透传、release。
 import assert from 'node:assert/strict'
