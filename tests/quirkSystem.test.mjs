@@ -151,6 +151,14 @@ test('解析:超长 trigger/behavior 截断到 80 字', () => {
   assert.equal(r.trigger.length, 80)
 })
 
+test('宁缺毋滥出口:{"skip":true} 识别为 skip,带 trigger 的不算 skip', () => {
+  assert.equal(mod.isSkipResponse('{"skip":true}'), true)
+  assert.equal(mod.isSkipResponse('模型说:{"skip":true}'), true)
+  assert.equal(mod.isSkipResponse('{"skip":true,"trigger":"夹带"}'), false, '夹带怪癖字段的不算空手')
+  assert.equal(mod.isSkipResponse('{"trigger":"t","behavior":"b","valence":"red"}'), false)
+  assert.equal(mod.isSkipResponse('不是 JSON'), false)
+})
+
 // ---------- 生成 prompt 组装(§4.3 纯函数) ----------
 
 test('prompt 组装:槽位全进,空摘要给占位,反套路承重条款在', () => {
@@ -167,6 +175,13 @@ test('prompt 组装:槽位全进,空摘要给占位,反套路承重条款在', (
   assert.ok(p.includes('(暂无)'), '近期互动/因果存档空槽占位')
   assert.ok(p.includes('放到别的五个角色身上也成立'), '§11 可迁移性测试(承重条款)')
   assert.ok(p.includes('伪具体'), '§13 直接关联约束')
+  assert.ok(p.includes('不是小剧场'), '§14 反多拍表演')
+  assert.ok(p.includes('不指向不知情的第三方'), '§15 反捉弄他人(神经质修正)')
+  assert.ok(p.includes('不是角色世界设定的证据'), '§16 防旧怪癖架空人设')
+  assert.ok(p.includes('怪癖强度纪律'), '强度纪律整块在场')
+  assert.ok(p.includes('辨识度大胆'), '大胆=辨识度,非严重程度(纪律第6条)')
+  assert.ok(p.includes('只有这个角色会这样'), '好怪癖判据(纪律第7条)')
+  assert.ok(p.includes('以本纪律为准'), '强度纪律对前文大胆条款的优先级声明')
   assert.ok(p.includes('禁止沿用其中的物品、场景或句式'), 'few-shot 防克隆声明')
   assert.ok(p.includes('"causeType":"memory|interaction|inferred"'))
   assert.ok(p.includes('最小因果'), 'cause 定义:最小因果,不是背景故事')

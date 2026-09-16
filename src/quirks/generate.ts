@@ -88,6 +88,18 @@ export function parseQuirkJson(raw: string): ParsedQuirk | null {
   return { trigger, behavior, valence, type, cause, causeType }
 }
 
+/** 模型行使"宁缺毋滥"出口:{"skip":true} 且没给怪癖字段 → 正常空手,不算失败不进冷却 */
+export function isSkipResponse(raw: string): boolean {
+  const json = extractJsonObject(raw)
+  if (!json) return false
+  try {
+    const obj = JSON.parse(json) as Record<string, unknown>
+    return obj.skip === true && typeof obj.trigger !== 'string'
+  } catch {
+    return false
+  }
+}
+
 // ---------- 生成 ----------
 
 function causeArchiveOf(slot: ActorSlot): string {
@@ -131,6 +143,7 @@ export async function generateForSlot(
       jsonMode: true,
       timeoutMs: GEN_TIMEOUT_MS,
     })
+    if (isSkipResponse(raw)) return 'skip' // 宁缺毋滥出口:正常空手,不进失败冷却
     const parsed = parseQuirkJson(raw)
     if (!parsed) {
       lastFailAt = Date.now()

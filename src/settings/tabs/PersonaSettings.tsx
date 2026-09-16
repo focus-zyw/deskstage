@@ -7,8 +7,9 @@ import { getMoods, resetMoods } from '../../storage/moodStore'
 import type { Speaker } from '../../performer/dialogSchema'
 import { useConfigSnapshot } from '../../storage/configStore'
 import { useSettings } from '../useSettingsSession'
-import { SettingsCard, SetField, SetLine } from '../SettingsPrimitives'
+import { SettingsCard, SetField, SetLine, SetSwitch } from '../SettingsPrimitives'
 import {
+  ensureColdStarts,
   generateForSlot,
   getShape,
   mutateShape,
@@ -28,9 +29,11 @@ const CAUSE_TYPE_LABELS: Record<QuirkEntry['causeType'], string> = {
 }
 
 /** 招牌怪癖管理卡:红/蓝各 5 条配额、每色锁定 ≤3、清除与手动补一条。
- *  仅 隐私与工具 页的实验开关开启时渲染(实验未开就不占设置页空间) */
+ *  常驻显示(可发现性):未启用时卡内直接给启用开关,不必去 工具与隐私 页找 */
 function QuirkCard() {
   const names = useConfigSnapshot().names
+  const { form, setForm, saveField } = useSettings()
+  const enabled = form.quirkSystem === true
   const [book, setBook] = useState<QuirkBook | null>(null)
   const [busy, setBusy] = useState('')
 
@@ -38,6 +41,12 @@ function QuirkCard() {
     void getShape().then((s) => setBook(s.quirks))
     return onQuirkAcquired(() => void getShape().then((s) => setBook(s.quirks)))
   }, [])
+
+  function setEnabled(v: boolean) {
+    setForm({ ...form, quirkSystem: v })
+    saveField({ quirkSystem: v }, true)
+    if (v) void ensureColdStarts()
+  }
 
   const slotName = (who: ActorSlot): string => names[who.toLowerCase() as 'a' | 'b' | 'c']
 
@@ -63,42 +72,76 @@ function QuirkCard() {
   }
 
   return (
-    <SettingsCard card="招牌怪癖" title="招牌怪癖" desc='模型生成 · 用户锁定/清除;红5/蓝5,每色可锁3'>
-      {(['A', 'B', 'C'] as const).map((who) => {
-        const list = book?.[who] ?? []
-        const count = { red: list.filter((q) => q.valence === 'red').length, blue: list.filter((q) => q.valence === 'blue').length }
-        return (
-          <SetLine key={who} title={`${slotName(who)}(${count.red}红/${count.blue}蓝)`} hint={undefined}>
-            <div className="set-note" style={{ textAlign: 'left', maxWidth: 480 }}>
-              {list.length === 0 && <div>暂无怪癖</div>}
-              {list.map((q) => (
-                <div key={q.id} style={{ marginBottom: 6 }}>
-                  <span style={{ color: q.valence === 'red' ? '#e05252' : '#5b8def' }}>●</span>{' '}
-                  <span style={{ textDecoration: q.locked ? 'underline dotted' : 'none' }}>
-                    {q.trigger} → {q.behavior}
-                  </span>{' '}
-                  <span>({q.type}·{CAUSE_TYPE_LABELS[q.causeType]}{q.locked ? '·已锁定' : ''})</span>
-                  <button className="panel-btn" onClick={() => void toggleLock(who, q)}>
-                    {q.locked ? '解锁' : '锁定'}
-                  </button>
-                  <button className="panel-btn" onClick={() => void remove(who, q.id)}>
-                    清除
-                  </button>
+    <SettingsCard
+      card="招牌怪癖"
+      title="招牌怪癖"
+      desc={enabled ? '模型生成 · 用户锁定/清除;红5/蓝5,每色可锁3' : '实验功能,默认关'}
+    >
+      <SetLine
+        title="启用招牌怪癖"
+        hint="为每个角色生成并保持至多 10 条(红5/蓝5)招牌怪癖,注入演出作为背景素材;生成走 API 通道,失败静默"
+      >
+        <SetSwitch checked={enabled} label="启用招牌怪癖" onChange={setEnabled} />
+      </SetLine>
+      {enabled && (
+        <div style={{ display: 'grid', gap: 14 }}>
+          {(['A', 'B', 'C'] as const).map((who) => {
+            const list = book?.[who] ?? []
+            const count = {
+              red: list.filter((q) => q.valence === 'red').length,
+              blue: list.filter((q) => q.valence === 'blue').length,
+            }
+            return (
+              <div key={who} style={{ borderTop: '1px solid var(--sw-border-soft)', paddingTop: 10 }}>
+                <div className="set-line">
+                  <div className="set-copy">
+                    <span className="set-label">
+                      {slotName(who)}({count.red}红/{count.blue}蓝)
+                    </span>
+                    {list.length === 0 && <span className="set-hint">暂无怪癖</span>}
+                  </div>
+                  <div className="set-control">
+                    <button className="panel-btn" disabled={busy.startsWith('正在')} onClick={() => void addOne(who)}>
+                      补一条怪癖
+                    </button>
+                  </div>
                 </div>
-              ))}
-              <button className="panel-btn" disabled={busy.startsWith('正在')} onClick={() => void addOne(who)}>
-                补一条怪癖
-              </button>
-            </div>
-          </SetLine>
-        )
-      })}
-      <div className="set-actions">
-        <span className="set-note">
-          怪癖是背景素材,偶尔自然出现,不是每集任务;红=怪/执拗(冲突向),蓝=温柔/仪式(陪伴向);新怪癖获得时会在群聊里公示一条。
-        </span>
-      </div>
-      {busy && <div className="set-note">{busy}</div>}
+                <div style={{ display: 'grid', gap: 6, marginTop: 4 }}>
+                  {list.map((q) => (
+                    <div
+                      key={q.id}
+                      className="set-note"
+                      title={q.cause ? `因果:${q.cause}` : undefined}
+                      style={{ display: 'flex', alignItems: 'baseline', gap: 6, flexWrap: 'wrap' }}
+                    >
+                      <span style={{ color: q.valence === 'red' ? '#e05252' : '#5b8def', flex: 'none' }}>●</span>
+                      <span style={{ color: 'var(--sw-text-2)' }}>
+                        {q.trigger} → {q.behavior}
+                      </span>
+                      <span>
+                        {q.type}·{CAUSE_TYPE_LABELS[q.causeType]}
+                        {q.locked ? '·已锁定' : ''}
+                      </span>
+                      <button className="panel-btn" style={{ flex: 'none' }} onClick={() => void toggleLock(who, q)}>
+                        {q.locked ? '解锁' : '锁定'}
+                      </button>
+                      <button className="panel-btn" style={{ flex: 'none' }} onClick={() => void remove(who, q.id)}>
+                        清除
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )
+          })}
+          <div className="set-actions">
+            <span className="set-note">
+              怪癖是背景素材,偶尔自然出现,不是每集任务;红=怪/执拗(冲突向),蓝=温柔/仪式(陪伴向);新怪癖获得时会在群聊里公示一条;悬停可看因果。
+            </span>
+          </div>
+          {busy && <div className="set-note">{busy}</div>}
+        </div>
+      )}
     </SettingsCard>
   )
 }
@@ -285,7 +328,7 @@ export function PersonaSettings() {
           </button>
         </div>
       </SettingsCard>
-      {form.quirkSystem && <QuirkCard />}
+      <QuirkCard />
       <MoodCard />
     </>
   )

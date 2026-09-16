@@ -22,6 +22,7 @@ export {
 export { buildQuirkPrompt, type QuirkPromptInput } from './prompt'
 export {
   parseQuirkJson,
+  isSkipResponse,
   generateForSlot,
   ensureColdStarts,
   notePerformanceEpisode,

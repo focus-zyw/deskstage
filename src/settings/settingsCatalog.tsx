@@ -318,6 +318,7 @@ export const SETTINGS_SEARCH_INDEX: { tab: SettingsTab; card: string; label: str
   { tab: 'persona', card: '角色人设', label: '角色B的人设', keywords: '人设 性格 职业 背景' },
   { tab: 'persona', card: '角色人设', label: '角色C的人设', keywords: '人设 性格 小管家 字面 执行' },
   { tab: 'persona', card: '角色人设', label: '还原默认人设', keywords: '重置 出厂 内置' },
+  { tab: 'persona', card: '招牌怪癖', label: '招牌怪癖(锁定/清除/补一条)', keywords: '怪癖 招牌 锁定 清除 生成 人设 红癖 蓝癖' },
   // 模式工坊
   { tab: 'modes', card: 'AI 创建模式', label: 'AI 创建模式', keywords: '自定义 新模式 玩法 点播 生成 模式工坊' },
   { tab: 'topics', card: '默认点播方式', label: '默认持续时间/联想距离/严格围绕', keywords: '演出话题 本次 默认 持续 时间 联想 距离 严格 围绕 点播' },
@@ -365,6 +366,7 @@ export const SETTINGS_SEARCH_INDEX: { tab: SettingsTab; card: string; label: str
   { tab: 'privacy', card: '网页版生成', label: '主演出改用网页模型生成', keywords: '实验 网页 deepseek 豆包 chatgpt gemini 千问 通义' },
   { tab: 'privacy', card: '网页版生成', label: '网页模型站点', keywords: 'deepseek 豆包 chatgpt gemini 千问 通义 站点' },
   { tab: 'privacy', card: '网页版生成', label: '网页窗口登录', keywords: 'edge 登录 窗口' },
+  { tab: 'privacy', card: '招牌怪癖', label: '启用招牌怪癖', keywords: '怪癖 招牌 实验 人设 角色 生成' },
   { tab: 'privacy', card: '隐私与数据', label: '隐私与数据说明', keywords: '本机 上传 隐私 安全' },
   // 记忆
   { tab: 'memory', card: '使用者画像', label: '你的称呼', keywords: '画像 称呼 名字' },
