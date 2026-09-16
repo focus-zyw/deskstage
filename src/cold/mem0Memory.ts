@@ -2,11 +2,14 @@
 // 管线(LLM 抽取 → 与旧记忆比对裁决 ADD/UPDATE/DELETE/NOOP → 向量检索);本模块
 // 把它的三个外部依赖全部换成项目自有通道:
 //   LLM        → llmGateway.complete(主对话档案;Key 在 Rust 凭据库,走端点代理)
-//   embeddings → 端点代理 /embeddings(独立可配置档案;浏览器预览走原生 fetch)
+//   embeddings → 按来源分发:云端端点代理 /embeddings(独立可配置档案)或本地
+//                llama-server(localEmbeddingService,手动启动;见
+//                docs/经历记忆本地嵌入设计方案.md);浏览器预览走原生 fetch
 //   向量库     → data/mem0-vectors.json(vectorFileStore,替代 better-sqlite3)
 // mem0ai 的工厂是封闭 switch,注入靠初始化时对静态 create 打补丁(marker 路由);
 // better-sqlite3 是模块顶层静态导入,webview 无法执行——vite alias 指向桩
 // (src/shims/better-sqlite3.ts),配合 disableHistory + 自定义向量库它永不执行。
+// 换嵌入来源/模型 = 换向量空间:向量库带嵌入器指纹(vectorFileStore),不匹配即重开。
 //
 // fail-open 纪律:embedder 未配置 / 模块加载失败 / 初始化探测失败 / 任何调用失败
 // → 整体停用(检索返回空、写入记 false),Warm 摘要照常工作,绝不影响聊天。
@@ -17,6 +20,7 @@ import { complete } from '../engine/llmGateway'
 import { requestEndpoint } from '../engine/endpointProxy'
 import { withFileLock } from '../storage/writeLock'
 import { createFileVectorStore, sanitizeVectorsFile, type VectorStoreIO, type VectorsFile } from './vectorFileStore'
+import { localEmbedding } from '../engine/localEmbedding'
 
 /** 单用户应用:全部经历记忆挂同一 scope */
 export const MEM0_USER_ID = 'audience'
@@ -45,10 +49,14 @@ interface Mem0ModuleLike {
 }
 
 export interface ColdMemorySettings {
-  /** embeddings 走哪个模型档案(Rust 按 modelProfiles 解析地址与 Key) */
+  /** 嵌入来源:'endpoint' 云端档案(缺省);'local' 本地 llama-server(手动启动) */
+  provider?: 'endpoint' | 'local'
+  /** endpoint 模式:embeddings 走哪个模型档案(Rust 按 modelProfiles 解析地址与 Key) */
   embedProfile?: string
-  /** embeddings 模型名(如 text-embedding-3-small / embedding-3) */
+  /** endpoint 必填(如 text-embedding-3-small);local 选填(llama-server 单模型) */
   embedModel?: string
+  /** local 模式:llama-server 服务地址;空则用缺省(http://127.0.0.1:8080/v1) */
+  localUrl?: string
 }
 
 export interface Mem0Memory {
@@ -124,6 +132,33 @@ async function endpointEmbedBatch(texts: string[], settings: ColdMemorySettings)
     .map((d) => d.embedding ?? [])
 }
 
+/** 嵌入来源路由:'local' 走本地 llama-server,其余(含缺省)走云端档案 */
+export function embedderFor(settings: ColdMemorySettings): 'endpoint' | 'local' {
+  return settings.provider === 'local' ? 'local' : 'endpoint'
+}
+
+/** 启用门槛:local 模式选了即启用(localUrl 空时有缺省地址);endpoint(缺省)需
+ *  档案 + 模型名齐全才启用,缺任一整体停用 */
+export function coldMemoryEnabled(settings: ColdMemorySettings | null | undefined): settings is ColdMemorySettings {
+  if (!settings) return false
+  if (embedderFor(settings) === 'local') return true
+  return Boolean(settings.embedProfile && settings.embedModel)
+}
+
+/** 嵌入器指纹:换来源/模型 = 换向量空间,向量库凭它识别并重开(vectorFileStore 守卫)。
+ *  local 模式 llama-server 忽略 model 名,指纹只能按填写的名字——同地址悄悄换 gguf
+ *  检测不到,设置页提示换模型后自行清空经历记忆 */
+export function embedderFingerprintOf(settings: ColdMemorySettings): string {
+  if (embedderFor(settings) === 'local') return `local:${settings.embedModel ?? ''}`
+  return `endpoint:${settings.embedProfile ?? ''}/${settings.embedModel ?? ''}`
+}
+
+/** 生产嵌入分发:按 settings.provider 路由到本地服务或云端档案通道 */
+async function productionEmbedBatch(texts: string[], settings: ColdMemorySettings): Promise<number[][]> {
+  if (embedderFor(settings) === 'local') return await localEmbedding.embedBatch(texts, settings)
+  return await endpointEmbedBatch(texts, settings)
+}
+
 const VECTOR_FILE = 'mem0-vectors.json'
 const VECTOR_LS_KEY = 'vc-mem0-vectors'
 
@@ -172,8 +207,7 @@ function productionSettings(): () => Promise<ColdMemorySettings | null> {
   return async () => {
     const cfg = await getConfig()
     const cold = (cfg as { coldMemory?: ColdMemorySettings }).coldMemory
-    if (!cold?.embedProfile || !cold?.embedModel) return null
-    return cold
+    return coldMemoryEnabled(cold) ? cold : null
   }
 }
 
@@ -182,7 +216,7 @@ function productionSettings(): () => Promise<ColdMemorySettings | null> {
 export function createMem0Memory(deps: Mem0MemoryDeps = {}): Mem0Memory {
   const loadModule = deps.loadModule ?? (async () => (await import('mem0ai/oss')) as unknown as Mem0ModuleLike)
   const completeLLM = deps.completeLLM ?? gatewayLLMComplete
-  const embedBatch = deps.embedBatch ?? endpointEmbedBatch
+  const embedBatch = deps.embedBatch ?? productionEmbedBatch
   const vectorIO = deps.vectorIO ?? productionVectorIO
   const settingsOf = deps.settings ?? productionSettings()
 
@@ -194,7 +228,8 @@ export function createMem0Memory(deps: Mem0MemoryDeps = {}): Mem0Memory {
       const settings = await settingsOf()
       if (!settings) return null
       const mod = await loadModule()
-      const store = createFileVectorStore(vectorIO, COLLECTION)
+      // 嵌入器指纹:来源/模型变化时向量库自动重开(换空间旧向量不可比)
+      const store = createFileVectorStore(vectorIO, COLLECTION, embedderFingerprintOf(settings))
       patchFactory(mod.LLMFactory, 'vcGatewayLlm', {
         generateResponse: async (messages: Array<{ role: string; content: string }>, responseFormat?: { type: string }) =>
           await completeLLM({ messages, jsonMode: responseFormat?.type === 'json_object' }),

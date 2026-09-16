@@ -5,6 +5,9 @@
 // (记忆量级 ≤ 千条,毫秒级),filters 只支持 user_id/agent_id/run_id 等值匹配
 // (mem0 自身只按这三键过滤)。持久化 IO 可注入:测试用内存 Map,生产走
 // withFileLock + localStorage 降级(与 moodStore 同一套约定)。
+// 嵌入器指纹:换嵌入模型 = 换向量空间,旧向量与新 query 余弦不可比(混用的结果是
+// 检索永远低于阈值、冷记忆悄悄失效),故 createFileVectorStore 可传入指纹,init 时
+// 不匹配即重开空库。
 
 export interface VectorRecord {
   id: string
@@ -14,7 +17,7 @@ export interface VectorRecord {
 
 export interface VectorsFile {
   version: 1
-  collections: Record<string, { userId?: string; items: VectorRecord[] }>
+  collections: Record<string, { userId?: string; embedder?: string; items: VectorRecord[] }>
 }
 
 export interface VectorStoreIO {
@@ -86,18 +89,31 @@ export function sanitizeVectorsFile(raw: unknown): VectorsFile {
       : []
     out.collections[name] = {
       ...(typeof c.userId === 'string' ? { userId: c.userId } : {}),
+      ...(typeof c.embedder === 'string' && c.embedder ? { embedder: c.embedder } : {}),
       items,
     }
   }
   return out
 }
 
-export function createFileVectorStore(io: VectorStoreIO, collectionName: string): FileVectorStore {
+export function createFileVectorStore(io: VectorStoreIO, collectionName: string, embedder?: string): FileVectorStore {
   let file: VectorsFile | null = null
 
   const ensure = async (): Promise<VectorsFile> => {
     if (!file) file = (await io.read()) ?? emptyFile()
-    if (!file.collections[collectionName]) file.collections[collectionName] = { items: [] }
+    let c = file.collections[collectionName]
+    if (!c) c = file.collections[collectionName] = { items: [] }
+    // 指纹守卫:不一致 = 嵌入模型换过了,旧向量全部不可比,重开空库;
+    // 老档无指纹(升级存量)则补盖当前指纹,不激进重置,下次落盘带上
+    if (embedder) {
+      if (c.embedder && c.embedder !== embedder) {
+        console.warn(`向量库嵌入器指纹变化(${c.embedder} → ${embedder}),${collectionName} 重开空库`)
+        c = file.collections[collectionName] = { embedder, items: [] }
+        await io.write(file)
+      } else if (!c.embedder) {
+        c.embedder = embedder
+      }
+    }
     return file
   }
   const col = (f: VectorsFile) => f.collections[collectionName]
@@ -150,7 +166,9 @@ export function createFileVectorStore(io: VectorStoreIO, collectionName: string)
     },
     async deleteCol() {
       const f = await ensure()
-      f.collections[collectionName] = { items: [] }
+      // 清集合不清指纹:空集合仍属于当前嵌入器
+      const embedderOf = col(f).embedder
+      f.collections[collectionName] = { ...(embedderOf ? { embedder: embedderOf } : {}), items: [] }
       await io.write(f)
     },
     async list(filters, topK) {

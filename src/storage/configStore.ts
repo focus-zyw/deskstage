@@ -259,16 +259,26 @@ export interface AppConfig {
   /** 上下文生命周期(实验):Warm 滚动摘要/集摘要(Pi compaction)+ Mem0 经历记忆
    *  检索注入 + 群聊心情行;灰度默认关,关闭时聊天链路 prompt 与旧版完全一致 */
   contextLifecycle: boolean
-  /** 经历记忆(Mem0)的嵌入配置:embedProfile 指向 modelProfiles 的档案(Rust 解析
-   *  地址与 Key),embedModel 是嵌入模型名;两者齐全才启用,缺任一整体停用(fail-open) */
+  /** 经历记忆(Mem0)的嵌入配置:provider 选来源——'endpoint'(缺省)走 modelProfiles
+   *  档案(两者齐全才启用),'local' 走本机 llama-server(手动启动,localUrl 即门槛,
+   *  有缺省值即启用);任一来源配置不完整或调用失败整体停用(fail-open) */
   coldMemory: ColdMemoryConfig
 }
 
 /** 经历记忆(Mem0)嵌入配置 */
 export interface ColdMemoryConfig {
+  /** 嵌入来源:'endpoint' 云端档案(缺省,缺省值不落盘);'local' 本地 llama.cpp */
+  provider?: 'endpoint' | 'local'
+  /** endpoint 模式:embeddings 走哪个模型档案(Rust 按 modelProfiles 解析地址与 Key) */
   embedProfile?: string
+  /** endpoint 模式必填(如 text-embedding-3-small);local 模式选填(llama-server 单模型) */
   embedModel?: string
+  /** local 模式:llama-server 服务地址(含 /v1);空则用 COLD_LOCAL_URL_DEFAULT */
+  localUrl?: string
 }
+
+/** local 嵌入默认服务地址:llama-server 的默认端口与 OpenAI 兼容前缀 */
+export const COLD_LOCAL_URL_DEFAULT = 'http://127.0.0.1:8080/v1'
 
 /** AI 剧场配置 */
 export interface AiTheaterConfig {
@@ -453,16 +463,29 @@ export const DEFAULT_CONFIG: AppConfig = {
   coldMemory: {},
 }
 
-/** 经历记忆嵌入配置清洗:两键都收非空短串,其余丢弃(缺任一键 = 整体停用) */
+/** 经历记忆嵌入配置清洗:provider 只认 'local'(缺省即 endpoint,不落盘);endpoint
+ *  两键与 localUrl 收非空短串,localUrl 还须是合法 http(s) URL 否则丢弃 */
 function sanitizeColdMemory(v: unknown): ColdMemoryConfig {
   const o = (v ?? {}) as Record<string, unknown>
+  let localUrl = ''
+  if (typeof o.localUrl === 'string') {
+    const trimmed = o.localUrl.trim().slice(0, 200)
+    try {
+      const u = new URL(trimmed)
+      if ((u.protocol === 'http:' || u.protocol === 'https:') && u.hostname) localUrl = trimmed
+    } catch {
+      /* 非法 URL 丢弃 */
+    }
+  }
   return {
+    ...(o.provider === 'local' ? { provider: 'local' as const } : {}),
     ...(typeof o.embedProfile === 'string' && o.embedProfile.trim()
       ? { embedProfile: o.embedProfile.trim().slice(0, 64) }
       : {}),
     ...(typeof o.embedModel === 'string' && o.embedModel.trim()
       ? { embedModel: o.embedModel.trim().slice(0, 120) }
       : {}),
+    ...(localUrl ? { localUrl } : {}),
   }
 }
 

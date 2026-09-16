@@ -342,6 +342,7 @@ export const SETTINGS_SEARCH_INDEX: { tab: SettingsTab; card: string; label: str
   { tab: 'privacy', card: '网页版生成', label: '主演出改用网页模型生成', keywords: '实验 网页 deepseek 豆包 chatgpt gemini 千问 通义' },
   { tab: 'privacy', card: '网页版生成', label: '网页模型站点', keywords: 'deepseek 豆包 chatgpt gemini 千问 通义 站点' },
   { tab: 'privacy', card: '网页版生成', label: '网页窗口登录', keywords: 'edge 登录 窗口' },
+  { tab: 'privacy', card: '上下文生命周期', label: '经历记忆嵌入来源', keywords: '经历记忆 嵌入 embedding 本地 llama.cpp llama-server gguf 向量 记忆' },
   { tab: 'privacy', card: '隐私与数据', label: '隐私与数据说明', keywords: '本机 上传 隐私 安全' },
   // 记忆
   { tab: 'memory', card: '使用者画像', label: '你的称呼', keywords: '画像 称呼 名字' },

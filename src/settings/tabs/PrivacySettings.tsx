@@ -3,7 +3,7 @@
 // 网页版生成的窗口/状态轮询是本页私有的临时会话,挂载期间存活、切走即止。
 import { useEffect, useRef, useState } from 'react'
 import { WEBCHAT_SITES, webchatLogin, webchatProbe, webchatRestoreMain } from '../../engine/webchat'
-import type { AppConfig } from '../../storage/configStore'
+import { COLD_LOCAL_URL_DEFAULT, type AppConfig } from '../../storage/configStore'
 import { toolList } from '../../tools/registry'
 import { SiteLoginRow } from '../SiteLoginRow'
 import { useSettings } from '../useSettingsSession'
@@ -228,49 +228,118 @@ export function PrivacySettings() {
             }}
           />
         </SetLine>
-        <SetField label="经历记忆嵌入档案" htmlFor="cfg-cold-profile">
+        <SetField label="嵌入来源" htmlFor="cfg-cold-provider">
           <select
-            id="cfg-cold-profile"
-            value={form.coldMemory.embedProfile ?? ''}
+            id="cfg-cold-provider"
+            value={form.coldMemory.provider === 'local' ? 'local' : 'endpoint'}
             onChange={(e) => {
-              const next = { ...form.coldMemory, embedProfile: e.target.value || undefined }
+              const next = { ...form.coldMemory, provider: e.target.value === 'local' ? ('local' as const) : undefined }
               setForm({ ...form, coldMemory: next })
               saveField({ coldMemory: next }, true)
             }}
           >
-            <option value="">(不启用经历记忆)</option>
-            {Object.entries(form.modelProfiles ?? {}).map(([id, p]) => (
-              <option key={id} value={id}>
-                {p.label || id}
-              </option>
-            ))}
+            <option value="endpoint">云端端点(模型档案)</option>
+            <option value="local">本地 llama.cpp(llama-server)</option>
           </select>
         </SetField>
-        <SetField label="嵌入模型名" htmlFor="cfg-cold-model">
-          <input
-            id="cfg-cold-model"
-            type="text"
-            placeholder="如 text-embedding-3-small"
-            value={form.coldMemory.embedModel ?? ''}
-            onChange={(e) => {
-              const next = { ...form.coldMemory, embedModel: e.target.value }
-              setForm({ ...form, coldMemory: next })
-              saveField({ coldMemory: next }, true)
-            }}
-            onBlur={() => {
-              const model = form.coldMemory.embedModel?.trim() || undefined
-              if (model !== form.coldMemory.embedModel) {
-                const next = { ...form.coldMemory, embedModel: model }
-                setForm({ ...form, coldMemory: next })
-                saveField({ coldMemory: next }, true)
-              }
-            }}
-          />
-        </SetField>
-        <div className="set-note">
-          经历记忆(Mem0)需要所选档案的端点支持 /embeddings 接口;配置不完整或调用失败时经历记忆自动停用,
-          滚动摘要照常工作。所有记忆都在记忆库页可见可删,聊天原文永远只在聊天记录里。
-        </div>
+        {form.coldMemory.provider === 'local' ? (
+          <>
+            <SetField label="本地服务地址" htmlFor="cfg-cold-local-url">
+              <input
+                id="cfg-cold-local-url"
+                type="text"
+                placeholder={COLD_LOCAL_URL_DEFAULT}
+                value={form.coldMemory.localUrl ?? ''}
+                onChange={(e) => {
+                  const next = { ...form.coldMemory, localUrl: e.target.value }
+                  setForm({ ...form, coldMemory: next })
+                  saveField({ coldMemory: next }, false)
+                }}
+                onBlur={() => {
+                  const url = form.coldMemory.localUrl?.trim() || undefined
+                  if (url !== form.coldMemory.localUrl) {
+                    const next = { ...form.coldMemory, localUrl: url }
+                    setForm({ ...form, coldMemory: next })
+                    saveField({ coldMemory: next }, true)
+                  }
+                }}
+              />
+            </SetField>
+            <SetField label="嵌入模型名(选填)" htmlFor="cfg-cold-model">
+              <input
+                id="cfg-cold-model"
+                type="text"
+                placeholder="llama-server 单模型可不填"
+                value={form.coldMemory.embedModel ?? ''}
+                onChange={(e) => {
+                  const next = { ...form.coldMemory, embedModel: e.target.value }
+                  setForm({ ...form, coldMemory: next })
+                  saveField({ coldMemory: next }, false)
+                }}
+                onBlur={() => {
+                  const model = form.coldMemory.embedModel?.trim() || undefined
+                  if (model !== form.coldMemory.embedModel) {
+                    const next = { ...form.coldMemory, embedModel: model }
+                    setForm({ ...form, coldMemory: next })
+                    saveField({ coldMemory: next }, true)
+                  }
+                }}
+              />
+            </SetField>
+            <div className="set-note">
+              先在本机启动 llama-server 加载 embedding 模型,例如:
+              <code>llama-server -m 模型.gguf --embedding --port 8080</code>。
+              模型体积参考:bge-small-zh-v1.5 量化约 25MB,冷记忆检索足够;bge-m3 Q8 约 600MB,质量上限更高。
+              换嵌入模型后旧向量不可用,经历记忆会自动重开;服务没启动时经历记忆停用,聊天不受影响。
+            </div>
+          </>
+        ) : (
+          <>
+            <SetField label="经历记忆嵌入档案" htmlFor="cfg-cold-profile">
+              <select
+                id="cfg-cold-profile"
+                value={form.coldMemory.embedProfile ?? ''}
+                onChange={(e) => {
+                  const next = { ...form.coldMemory, embedProfile: e.target.value || undefined }
+                  setForm({ ...form, coldMemory: next })
+                  saveField({ coldMemory: next }, true)
+                }}
+              >
+                <option value="">(不启用经历记忆)</option>
+                {Object.entries(form.modelProfiles ?? {}).map(([id, p]) => (
+                  <option key={id} value={id}>
+                    {p.label || id}
+                  </option>
+                ))}
+              </select>
+            </SetField>
+            <SetField label="嵌入模型名" htmlFor="cfg-cold-model">
+              <input
+                id="cfg-cold-model"
+                type="text"
+                placeholder="如 text-embedding-3-small"
+                value={form.coldMemory.embedModel ?? ''}
+                onChange={(e) => {
+                  const next = { ...form.coldMemory, embedModel: e.target.value }
+                  setForm({ ...form, coldMemory: next })
+                  saveField({ coldMemory: next }, false)
+                }}
+                onBlur={() => {
+                  const model = form.coldMemory.embedModel?.trim() || undefined
+                  if (model !== form.coldMemory.embedModel) {
+                    const next = { ...form.coldMemory, embedModel: model }
+                    setForm({ ...form, coldMemory: next })
+                    saveField({ coldMemory: next }, true)
+                  }
+                }}
+              />
+            </SetField>
+            <div className="set-note">
+              经历记忆(Mem0)需要所选档案的端点支持 /embeddings 接口;配置不完整或调用失败时经历记忆自动停用,
+              滚动摘要照常工作。所有记忆都在记忆库页可见可删,聊天原文永远只在聊天记录里。
+            </div>
+          </>
+        )}
       </SettingsCard>
       <SettingsCard card="角色工具" flash={flashCard} title="角色工具" desc="角色按对话自主使用">
         {toolList().map((t) => {

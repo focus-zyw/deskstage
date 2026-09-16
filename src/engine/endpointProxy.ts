@@ -1,12 +1,12 @@
-// 配置端点代理 · 前端桥:可配置 origin 的外部请求(llm / ocr / gptsovits)统一经
-// Rust 发出。前端只给 kind + 相对路径;origin 与鉴权头由 Rust 从 config.json /
-// 凭据库解析,禁止重定向、限方法/体大小/超时——硬化清单见
+// 配置端点代理 · 前端桥:可配置 origin 的外部请求(llm / ocr / gptsovits /
+// coldLocal)统一经 Rust 发出。前端只给 kind + 相对路径;origin 与鉴权头由
+// Rust 从 config.json / 凭据库解析,禁止重定向、限方法/体大小/超时——硬化清单见
 // src-tauri/src/endpoint_proxy.rs 顶部注释。响应体经 Channel 流式回传,前端
-// 重组为 ReadableStream(TTS 增量播放)或整包收集(LLM/OCR 的 JSON)。
+// 重组为 ReadableStream(TTS 增量播放)或整包收集(LLM/OCR/本地嵌入的 JSON)。
 // 固定 https 厂商(videoGen/商用 TTS/直播 HTTP)不走这里,仍受静态 scope 管辖。
 import { Channel, invoke } from '@tauri-apps/api/core'
 
-export type EndpointKind = 'llm' | 'ocr' | 'gptsovits'
+export type EndpointKind = 'llm' | 'ocr' | 'gptsovits' | 'coldLocal'
 
 export interface EndpointOptions {
   /** 请求体(JSON 字符串);三类端点固定 POST */

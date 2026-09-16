@@ -1,10 +1,12 @@
 // Mem0 封装层回归(假模块零依赖,不 import mem0ai):
 // 工厂补丁路由 / 未配置整体停用 / 模块加载失败 fail-open / 初始化探测失败停用 /
-// 写入的 role 映射与空文本过滤 / 检索的分数过滤与 limit / 配置变更后 dispose 重启。
+// 写入的 role 映射与空文本过滤 / 检索的分数过滤与 limit / 配置变更后 dispose 重启 /
+// 嵌入来源(云端/本地)路由与启用门槛、嵌入器指纹(纯函数)。
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-const { createMem0Memory, MEM0_USER_ID, SEARCH_MIN_SCORE } = await import('../src/cold/mem0Memory.ts')
+const { createMem0Memory, MEM0_USER_ID, SEARCH_MIN_SCORE, embedderFor, coldMemoryEnabled, embedderFingerprintOf } =
+  await import('../src/cold/mem0Memory.ts')
 
 /** 假 mem0ai 模块:工厂能被补丁命中,Memory 记录调用并可编排失败。
  *  真实 Memory 的公开方法会先 _ensureInitialized(探测嵌入);假件照此模拟——
@@ -198,4 +200,33 @@ test('检索:分数过滤 + 空文本剔除 + limit 透传', async () => {
 test('检索失败:返回 [] 不抛', async () => {
   const { store } = create({ searchError: true })
   assert.deepEqual(await store.searchExperiences('x'), [])
+})
+
+// ---- 嵌入来源(云端/本地)路由、启用门槛、嵌入器指纹(纯函数) ----
+
+test('嵌入来源路由:provider=local 命中本地,其余(含缺省)走云端', () => {
+  assert.equal(embedderFor({ provider: 'local' }), 'local')
+  assert.equal(embedderFor({ provider: 'endpoint', embedProfile: 'p', embedModel: 'm' }), 'endpoint')
+  assert.equal(embedderFor({}), 'endpoint')
+  assert.equal(embedderFor({ embedProfile: 'p', embedModel: 'm' }), 'endpoint')
+})
+
+test('启用门槛:local 选了即启用(localUrl 空时有缺省地址);endpoint 需档案+模型名齐全', () => {
+  assert.equal(coldMemoryEnabled({ provider: 'local' }), true)
+  assert.equal(coldMemoryEnabled({ provider: 'local', localUrl: 'http://127.0.0.1:9990/v1' }), true)
+  assert.equal(coldMemoryEnabled({}), false)
+  assert.equal(coldMemoryEnabled({ embedProfile: 'p' }), false)
+  assert.equal(coldMemoryEnabled({ embedModel: 'm' }), false)
+  assert.equal(coldMemoryEnabled({ embedProfile: 'p', embedModel: 'm' }), true)
+  assert.equal(coldMemoryEnabled(null), false)
+})
+
+test('嵌入器指纹:local 与云端格式不同,来源/模型变化即换指纹', () => {
+  assert.equal(embedderFingerprintOf({ provider: 'local', embedModel: 'bge' }), 'local:bge')
+  assert.equal(embedderFingerprintOf({ provider: 'local' }), 'local:')
+  assert.equal(embedderFingerprintOf({ embedProfile: 'p', embedModel: 'm' }), 'endpoint:p/m')
+  assert.notEqual(
+    embedderFingerprintOf({ provider: 'local', embedModel: 'bge' }),
+    embedderFingerprintOf({ embedProfile: 'p', embedModel: 'bge' }),
+  )
 })

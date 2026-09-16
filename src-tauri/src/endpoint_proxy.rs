@@ -1,13 +1,13 @@
-// 配置端点代理:可配置 origin 的外部请求(llm / ocr / gptsovits)统一经此发出。
+// 配置端点代理:可配置 origin 的外部请求(llm / ocr / gptsovits / coldLocal)统一经此发出。
 //
-// 为什么不放前端自由 fetch:capability scope 是静态的,而这三类端点的地址由
-// 用户配置(自定义 OpenAI 兼容网关、局域网 GPT-SoVITS),静态白名单要么放行
+// 为什么不放前端自由 fetch:capability scope 是静态的,而这四类端点的地址由
+// 用户配置(自定义 OpenAI 兼容网关、局域网 GPT-SoVITS、本机 llama-server),静态白名单要么放行
 // http://*(等于向前端开放任意内网请求),要么把合法配置挡死。把请求移进
 // Rust后,前端只给 kind + 相对路径——origin 由 Rust 从 config.json 解析,
 // 鉴权头由 Rust 从凭据库注入,前端从头到尾接触不到完整 URL 与密钥。
 //
 // 硬化清单(评审 PR C 规格):
-//   · 仅 POST(三类端点的唯一合法方法),前端不可指定 method 与 header
+//   · 仅 POST(四类端点的唯一合法方法),前端不可指定 method 与 header
 //   · 目标 = 配置里的 base + 相对路径;resolve_target 重解析最终 URL 并复核
 //     scheme/host/port 未被路径改变,拒绝 userinfo 与控制字符
 //   · 禁止重定向(Policy::none):3xx 直接返回状态码,不做 SSRF 跳板
@@ -30,6 +30,9 @@ use tauri::{AppHandle, Manager, State};
 const MAX_REQ_BODY: usize = 2 * 1024 * 1024;
 const MAX_RESP_BODY: usize = 32 * 1024 * 1024;
 const CANCELLED: &str = "已取消";
+/// 冷记忆本地嵌入缺省地址:llama-server 默认端口 + OpenAI 兼容前缀
+/// (与前端 configStore 的 COLD_LOCAL_URL_DEFAULT 保持一致)
+const COLD_LOCAL_URL_DEFAULT: &str = "http://127.0.0.1:8080/v1";
 
 /// 进行中请求的取消通道:request_id → oneshot;cancel 命令触发发送
 #[derive(Default)]
@@ -92,6 +95,8 @@ fn kind_spec(kind: &str) -> Result<(&'static str, bool), String> {
         "llm" => Ok(("/baseUrl", true)),
         "ocr" => Ok(("/ocr/baseUrl", true)),
         "gptsovits" => Ok(("/voice/gptsovits/url", false)),
+        // 冷记忆本地嵌入:llama-server 手动起在用户自己机器上,免鉴权
+        "coldLocal" => Ok(("/coldMemory/localUrl", false)),
         other => Err(format!("未知端点类型: {other}")),
     }
 }
@@ -162,6 +167,10 @@ fn configured_base(app: &AppHandle, kind: &str, profile: Option<&str>) -> Result
         .unwrap_or("")
         .trim();
     if s.is_empty() {
+        // 冷记忆本地嵌入有缺省地址(llama-server 默认端口):选了 local 没填地址也能用
+        if kind == "coldLocal" {
+            return Ok(COLD_LOCAL_URL_DEFAULT.to_string());
+        }
         Err("未配置端点地址(请在设置里填写后重试)".into())
     } else {
         Ok(s.to_string())
@@ -405,10 +414,13 @@ mod tests {
     }
 
     #[test]
-    fn kind_spec_allows_only_three_kinds() {
+    fn kind_spec_allows_only_four_kinds() {
         assert!(kind_spec("llm").is_ok());
         assert!(kind_spec("ocr").is_ok());
         assert!(kind_spec("gptsovits").is_ok());
+        // 冷记忆本地嵌入:免鉴权(本机 llama-server)
+        assert!(kind_spec("coldLocal").is_ok());
+        assert!(!kind_spec("coldLocal").unwrap().1);
         assert!(kind_spec("anything").is_err());
     }
 
