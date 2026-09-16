@@ -187,9 +187,11 @@ export function setPersonaOverride(
   c = '',
   source?: { a?: PersonaSourceSlot; b?: PersonaSourceSlot; c?: PersonaSourceSlot },
 ): void {
-  overrides.A = a.trim().slice(0, 600)
-  overrides.B = b.trim().slice(0, 600)
-  overrides.C = c.trim().slice(0, 600)
+  // 上限与 configStore.sanitizePersona、设置页 textarea maxLength 一致(8000):
+  // 酒馆角色卡分区烘焙后的人设体量(核心 4800 + 风格 2000 + 常驻 lore 1200)
+  overrides.A = a.trim().slice(0, 8000)
+  overrides.B = b.trim().slice(0, 8000)
+  overrides.C = c.trim().slice(0, 8000)
   const adopt = (id: ActorSlot, declared?: PersonaSourceSlot): PersonaSourceSlot =>
     declared ?? (overrides[id] ? 'custom' : 'default')
   sources.A = adopt('A', source?.a)

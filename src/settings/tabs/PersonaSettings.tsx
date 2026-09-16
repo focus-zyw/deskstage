@@ -1,4 +1,4 @@
-// 角色人设:角色名字(名牌与台词称呼)、性别(代词事实源)与人设全文编辑
+// 角色人设:角色名字(名牌与台词称呼)、性别(代词事实源)、酒馆角色卡导入与人设全文编辑
 import { useEffect, useState } from 'react'
 import { defaultPersonaText } from '../../engine/persona'
 import type { AppConfig } from '../../storage/configStore'
@@ -6,6 +6,7 @@ import { quantizeMood, type MoodTable } from '../../engine/moodState'
 import { getMoods, resetMoods } from '../../storage/moodStore'
 import type { Speaker } from '../../performer/dialogSchema'
 import { useConfigSnapshot } from '../../storage/configStore'
+import { importCharacterCard } from '../../cardImport'
 import { useSettings } from '../useSettingsSession'
 import { SettingsCard, SetField, SetLine, SetSwitch } from '../SettingsPrimitives'
 import {
@@ -190,6 +191,99 @@ function MoodCard() {
   )
 }
 
+/** 酒馆角色卡导入卡:选 PNG/JSON → 解析预览 → 选槽位 → 分区烘焙写入人设。
+ *  映射:描述/性格/场景 → 核心人设;mes_example 前 3 组 + first_mes → 表达风格参考;
+ *  世界书仅常驻条目 → 长期背景设定;其余(非 constant lore/开场白备选/原始 JSON)留档不进 prompt。
+ *  C 槽不支持导入:小管家有写死的人格与固定台词,导入卡会互相打架 */
+function ImportCardCard() {
+  const { form, setForm, saveField, flashCard } = useSettings()
+  const names = useConfigSnapshot().names
+  const [busy, setBusy] = useState(false)
+  const [note, setNote] = useState('')
+  const [error, setError] = useState('')
+  const [pending, setPending] = useState<{ slot: 'a' | 'b'; personaText: string; name: string; fullName: string; warnings: string[] } | null>(null)
+
+  async function onPickFile(file: File | null) {
+    setError('')
+    setNote('')
+    setPending(null)
+    if (!file) return
+    setBusy(true)
+    try {
+      const isJson = /\.json$/i.test(file.name)
+      const input = isJson
+        ? { jsonText: await file.text() }
+        : { bytes: new Uint8Array(await file.arrayBuffer()) }
+      const preview = await importCharacterCard(input, 'a', form.userProfile?.userName ?? '')
+      if (!preview.ok) {
+        setError(preview.error ?? '解析失败')
+        return
+      }
+      setPending({ slot: 'a', personaText: preview.personaText!, name: preview.name!, fullName: preview.fullName!, warnings: preview.warnings ?? [] })
+    } catch (e) {
+      setError(`读取文件失败:${String((e as Error)?.message ?? e).slice(0, 100)}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  function confirmImport() {
+    if (!pending) return
+    const persona = { ...form.persona, [pending.slot]: pending.personaText }
+    const personaSource: AppConfig['personaSource'] = { ...form.personaSource, [pending.slot]: 'custom' }
+    const names2 = { ...form.names, [pending.slot]: pending.name }
+    setForm({ ...form, persona, personaSource, names: names2 })
+    saveField({ persona, personaSource, names: names2 }, true)
+    setNote(`已导入「${pending.fullName}」到角色${pending.slot.toUpperCase()}:人设分区烘焙完成,性别请在上方自行设置`)
+    setPending(null)
+  }
+
+  return (
+    <SettingsCard card="导入角色卡" flash={flashCard} title="导入角色卡" desc="支持酒馆 SillyTavern 角色卡(PNG/JSON,V1/V2/V3)">
+      <SetField label="角色卡文件" htmlFor="cfg-card-file">
+        <input
+          id="cfg-card-file"
+          type="file"
+          accept=".png,.json"
+          disabled={busy}
+          onChange={(e) => {
+            void onPickFile(e.target.files?.[0] ?? null)
+            e.target.value = ''
+          }}
+        />
+      </SetField>
+      {pending && (
+        <>
+          <SetLine title={`解析成功:${pending.fullName}`} hint={`烘焙后人设 ${pending.personaText.length} 字`}>
+            <span className="set-note">{pending.warnings.length ? pending.warnings.join(';') : '无截断,全部字段装入'}</span>
+          </SetLine>
+          <SetField label="导入到哪个角色" htmlFor="cfg-card-slot">
+            <select
+              id="cfg-card-slot"
+              value={pending.slot}
+              onChange={(e) => setPending({ ...pending, slot: e.target.value as 'a' | 'b' })}
+            >
+              <option value="a">角色A({names.a})</option>
+              <option value="b">角色B({names.b})</option>
+            </select>
+          </SetField>
+          <div className="set-actions">
+            <button className="panel-btn" onClick={confirmImport}>
+              确认导入
+            </button>
+          </div>
+          <div className="set-note">
+            描述/性格/场景→核心人设;对话示例(前 3 组)与开场白→表达风格参考;世界书仅常驻条目→长期背景设定;
+            其余数据(关键词条目/开场白备选/原始卡)已留档备用,不进入对话。导入后请到「AI 模型」页确认该角色的模型绑定。
+          </div>
+        </>
+      )}
+      {error && <div className="set-note">{error}</div>}
+      {note && <div className="set-note">{note}</div>}
+    </SettingsCard>
+  )
+}
+
 export function PersonaSettings() {
   const { form, setForm, saveField, flashCard } = useSettings()
 
@@ -272,6 +366,7 @@ export function PersonaSettings() {
         {genderRow('c', `角色C(${names.c})的性别`)}
         <div className="set-note">生成时会以这里的性别注入称呼纪律,人设文本里的性别描述不覆盖此项。</div>
       </SettingsCard>
+      <ImportCardCard />
       <SettingsCard
         card="角色人设"
         flash={flashCard}
@@ -286,7 +381,7 @@ export function PersonaSettings() {
           <textarea
             id="cfg-persona-a"
             rows={4}
-            maxLength={2000}
+            maxLength={8000}
             value={form.persona.a || defaultPersonaText('A')}
             onChange={(e) => savePersona('a', e.target.value)}
           />
@@ -295,7 +390,7 @@ export function PersonaSettings() {
           <textarea
             id="cfg-persona-b"
             rows={4}
-            maxLength={2000}
+            maxLength={8000}
             value={form.persona.b || defaultPersonaText('B')}
             onChange={(e) => savePersona('b', e.target.value)}
           />
@@ -308,7 +403,7 @@ export function PersonaSettings() {
           <textarea
             id="cfg-persona-c"
             rows={4}
-            maxLength={2000}
+            maxLength={8000}
             value={form.persona.c || defaultPersonaText('C')}
             onChange={(e) => savePersona('c', e.target.value)}
           />

@@ -1018,10 +1018,10 @@ function sanitizeContextSense(v: unknown): AppConfig['contextSense'] {
   return { windowTitle: c.windowTitle === true, desktopDigest: c.desktopDigest === true }
 }
 
-/** 清洗人设:与设置页 textarea 的 maxLength 一致(2000),写超长在这里被截断 */
+/** 清洗人设:与设置页 textarea 的 maxLength 一致(8000,容纳酒馆角色卡分区烘焙体量),写超长在这里被截断 */
 function sanitizePersona(v: unknown): { a: string; b: string; c: string } {
   const pr = (v ?? {}) as Record<string, unknown>
-  const cap = (x: unknown): string => (typeof x === 'string' ? x.trim().slice(0, 2000) : '')
+  const cap = (x: unknown): string => (typeof x === 'string' ? x.trim().slice(0, 8000) : '')
   return { a: cap(pr.a), b: cap(pr.b), c: cap(pr.c) }
 }
 
