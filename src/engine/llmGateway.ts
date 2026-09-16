@@ -14,6 +14,8 @@ export interface GatewayDiag {
   call: LlmCallKind
   actor?: string
   batchId?: string
+  /** 短期会话窗口行数(llmClient 持有,gateway 层发 llm_started 时透传) */
+  contextLines?: number
   attempt?: number
   queueDepth?: number
 }
@@ -47,6 +49,29 @@ export interface CompletionOptions {
   signal?: AbortSignal
   /** 诊断引用(可选):turnId + 调用点标签,传入才记诊断事件 */
   diag?: GatewayDiag
+}
+
+/** 端点 host(诊断展示用,只留 host 不留路径与参数) */
+function hostOf(baseUrl: string): string | undefined {
+  try {
+    return new URL(baseUrl).host
+  } catch {
+    return undefined
+  }
+}
+
+/** prompt 结构一次算全(诊断 llm_started 用;多媒体 content 按文本段计长) */
+function promptShapeOf(messages: GatewayMessage[]): {
+  promptChars: number
+  systemChars: number
+  userChars: number
+} {
+  const textLen = (c: GatewayContent): number =>
+    typeof c === 'string' ? c.length : c.reduce((n, p) => n + (p.type === 'text' ? p.text.length : 0), 0)
+  const lens = messages.map((m) => textLen(m.content))
+  const promptChars = lens.reduce((a, b) => a + b, 0)
+  const systemChars = messages.reduce((a, m, i) => (m.role === 'system' ? a + lens[i] : a), 0)
+  return { promptChars, systemChars, userChars: promptChars - systemChars }
 }
 
 /** 错误分类:超时/HTTP 状态/网络层/解析/空响应/取消,供诊断与面板归纳 */
@@ -133,6 +158,20 @@ export async function complete(options: CompletionOptions): Promise<string> {
         ? { thinking: { type: 'disabled' } }
         : {}),
     })
+    // llm_started 收归网关单点:所有直调 complete 的链路(actors apiActor、
+    // llmClient 各调用)自动获得 prompt 结构/模型/端点,不再各自为政
+    if (d) {
+      const shape = promptShapeOf(messages)
+      diag.llmStarted(d.turnId, {
+        call: d.call,
+        transport: 'api',
+        model,
+        endpointHost: hostOf(baseUrl),
+        ...shape,
+        contextLines: d.contextLines ?? 0,
+        timeoutMs,
+      })
+    }
     // 计时从请求真正发出起算(getConfig 的缓存读不算网络延迟)
     t0 = Date.now()
     let out: string

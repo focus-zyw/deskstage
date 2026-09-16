@@ -89,37 +89,28 @@ function serverMessage(e: unknown): string {
   }
 }
 
-/** 端点 host(诊断展示用,只留 host 不留路径与参数) */
-function hostOf(baseUrl: string): string | undefined {
-  try {
-    return new URL(baseUrl).host
-  } catch {
-    return undefined
-  }
-}
-
-/** llm_started 埋点(prompt 结构一次记全;turnId 缺省 = 本调用不进诊断) */
+/** 网页通道的 llm_started 埋点;turnId 缺省 = 本调用不进诊断。
+ *  api 通道不经过这里:llm_started 已收归 llmGateway 单点(complete 内统一
+ *  发射,含 model/endpointHost/prompt 结构),此处仅补 gateway 覆盖不到的网页通道 */
 function noteLlmStart(
   turnId: string | undefined,
   call: LlmCallKind,
   transport: 'api' | 'webchat',
-  cfg: { model: string; baseUrl: string },
+  _cfg: { model: string; baseUrl: string },
   messages: { role: string; content: string }[],
-  opts: { contextLines?: number; timeoutMs?: number } = {},
+  opts: { timeoutMs?: number } = {},
 ): void {
-  if (!turnId) return
+  if (!turnId || transport !== 'webchat') return
   const chars = messages.map((m) => String(m.content).length)
   const promptChars = chars.reduce((a, b) => a + b, 0)
   const systemChars = messages.reduce((a, m, i) => (m.role === 'system' ? a + chars[i] : a), 0)
   diag.llmStarted(turnId, {
     call,
-    transport,
-    model: transport === 'api' ? cfg.model : undefined,
-    endpointHost: transport === 'api' ? hostOf(cfg.baseUrl) : undefined,
+    transport: 'webchat',
+    contextLines: 0,
     promptChars,
     systemChars,
     userChars: promptChars - systemChars,
-    contextLines: opts.contextLines ?? 0,
     timeoutMs: opts.timeoutMs,
   })
 }
@@ -706,9 +697,9 @@ ${rescueDiscipline()}`,
   const timer = setTimeout(() => ctrl.abort(new DOMException('超时', 'TimeoutError')), 12_000)
   const onAbort = () => ctrl.abort()
   input.signal?.addEventListener('abort', onAbort, { once: true })
-  noteLlmStart(input.diagTurnId, 'turnBatch', 'api', cfg, messages, { contextLines: input.window.length, timeoutMs: 12_000 })
+  noteLlmStart(input.diagTurnId, 'turnBatch', 'api', cfg, messages, { timeoutMs: 12_000 })
   try {
-    const raw = await chatRaw(messages, ctrl.signal, true, input.diagTurnId ? { turnId: input.diagTurnId, call: 'turnBatch' } : undefined)
+    const raw = await chatRaw(messages, ctrl.signal, true, input.diagTurnId ? { turnId: input.diagTurnId, call: 'turnBatch', contextLines: input.window.length } : undefined)
     return validateTurnBatch(parseDialog(raw, 1).before, input.target, { maxLines: input.groupAsk ? 3 : 2 }) ?? []
   } finally {
     clearTimeout(timer)
@@ -760,9 +751,9 @@ ${rescueDiscipline()}`,
   ]
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(new DOMException('超时', 'TimeoutError')), 12_000)
-  noteLlmStart(input.diagTurnId, 'interject', 'api', cfg, messages, { contextLines: input.window.length, timeoutMs: 12_000 })
+  noteLlmStart(input.diagTurnId, 'interject', 'api', cfg, messages, { timeoutMs: 12_000 })
   try {
-    const raw = await chatRaw(messages, ctrl.signal, true, input.diagTurnId ? { turnId: input.diagTurnId, call: 'interject' } : undefined)
+    const raw = await chatRaw(messages, ctrl.signal, true, input.diagTurnId ? { turnId: input.diagTurnId, call: 'interject', contextLines: input.window.length } : undefined)
     return validateTurnBatch(parseDialog(raw, 1).before, input.target, { maxLines: 3 }) ?? []
   } finally {
     clearTimeout(timer)

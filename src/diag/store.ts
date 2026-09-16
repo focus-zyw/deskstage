@@ -153,11 +153,12 @@ const EMPTY_SUMMARY: DiagSummary = {
 }
 
 /** 开一次交互会话(默认档,输入结构在 turnStarted 里记)。返回会话 id */
-export function beginDiag(input: { id: string; source: DiagSource; ts?: number }): string {
+export function beginDiag(input: { id: string; source: DiagSource; ts?: number; room?: string }): string {
   const session: DiagSession = {
     id: input.id,
     ts: input.ts ?? Date.now(),
     source: input.source,
+    room: input.room,
     ended: false,
     hasDetail: detail.armed,
     events: [],
@@ -231,8 +232,9 @@ export const diag = {
     groupAsk?: boolean
     voice?: boolean
     ts?: number
+    room?: string
   }): string {
-    beginDiag({ id: input.id, source: input.source, ts: input.ts })
+    beginDiag({ id: input.id, source: input.source, ts: input.ts, room: input.room })
     emit(input.id, {
       kind: 'turn_started',
       ts: input.ts ?? Date.now(),
@@ -319,7 +321,7 @@ export const diag = {
     })
   },
 
-  fallback(id: string, p: { call: LlmCallKind; from: 'webchat' | 'stream' | 'turnBatch' | 'ocr'; reason: string }): void {
+  fallback(id: string, p: { call: LlmCallKind; from: 'webchat' | 'stream' | 'turnBatch' | 'ocr' | 'actor'; reason: string }): void {
     emit(id, { kind: 'fallback', ts: Date.now(), level: 'basic', ...p })
   },
 

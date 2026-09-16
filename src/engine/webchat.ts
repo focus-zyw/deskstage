@@ -29,7 +29,7 @@ let askSeq = 0
 /** 一轮网页生成:整段 prompt 进,网页模型原始回复出。
  *  完成判定(见过生成中 → 不忙 → 稳定 2.5 秒)在 Rust 侧,见 webchat.rs run_ask。
  *  diagRef(可选):传入后本请求进诊断环——耗时、错误与 CDP 阶段轨迹
- *  (webchat_last_trace:拉起/发送/首忙/首文/稳定),回答"网络 or CDP or 模型" */
+ *  (webchat_take_trace:拉起/发送/首忙/首文/稳定),回答"网络 or CDP or 模型" */
 export async function webchatAsk(
   prompt: string,
   signal?: AbortSignal,

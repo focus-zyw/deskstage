@@ -23,6 +23,7 @@ import {
   chainMaySpeak,
 } from './autonomyPolicy'
 import { buildReactionMessages, buildReactionPrompt, type PromptBuildInput, type PromptIdentity } from './actorPrompt'
+import { diag } from '../diag/store'
 import { REACTION_TEXT_MAX } from './actorSchema'
 import { runQualityGate, type ExpressionDirector, type ExpressionPlan, type GateIssue } from '../expression'
 import type { ActorModelAdapter } from './adapters/types'
@@ -299,6 +300,15 @@ export function createActorWorker(deps: ActorWorkerDeps): ActorWorker {
             return
           }
           failures += 1
+          // 诊断:模型调用失败的退避/停用(回答「角色为什么没反应」)
+          const tid = request.diag?.turnId
+          if (tid) {
+            diag.fallback(tid, {
+              call: 'groupActor',
+              from: 'actor',
+              reason: `${actor} 模型调用失败(连续第 ${failures} 次)→ ${failures >= ACTOR_MAX_CONSECUTIVE_FAILURES ? '停用等新消息' : '退避重试'}:${String((e as Error)?.message ?? e).slice(0, 100)}`,
+            })
+          }
           if (failures >= ACTOR_MAX_CONSECUTIVE_FAILURES) {
             setStatus('paused')
             return
@@ -338,6 +348,14 @@ export function createActorWorker(deps: ActorWorkerDeps): ActorWorker {
         )
         if (result.outcome === 'invalid') {
           failures += 1
+          const tid2 = request.diag?.turnId
+          if (tid2) {
+            diag.fallback(tid2, {
+              call: 'groupActor',
+              from: 'actor',
+              reason: `${actor} 回复提交校验不过(连续第 ${failures} 次)→ ${failures >= ACTOR_MAX_CONSECUTIVE_FAILURES ? '停用等新消息' : '退避重试'}`,
+            })
+          }
           if (failures >= ACTOR_MAX_CONSECUTIVE_FAILURES) {
             setStatus('paused')
             return

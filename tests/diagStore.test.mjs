@@ -40,6 +40,18 @@ test('beginTurn 记录输入结构(零正文):长度/语言/指纹/target,文本
   assert.ok(!JSON.stringify(store.getDiagSnapshot()).includes('今天天气怎么样'))
 })
 
+test('beginTurn 透传 room(群聊/单聊区分),fallback 支持 actor 来源', () => {
+  const g = store.diag.beginTurn({ id: 'g1', source: 'chat', text: 'x', room: 'group:main' })
+  const d = store.diag.beginTurn({ id: 'd1', source: 'chat', text: 'x', room: 'direct:A' })
+  const snap = store.getDiagSnapshot()
+  assert.equal(snap.sessions.find((x) => x.id === g).room, 'group:main')
+  assert.equal(snap.sessions.find((x) => x.id === d).room, 'direct:A')
+  // actors 引擎的失败退避/停用走 from:'actor'
+  store.diag.fallback('g1', { call: 'groupActor', from: 'actor', reason: '模型调用失败 → 停用' })
+  const evs = store.getDiagSnapshot().sessions.find((x) => x.id === g).events
+  assert.equal(evs.find((e) => e.kind === 'fallback').from, 'actor')
+})
+
 test('未知会话 id 的事件被静默丢弃,零抛错', () => {
   assert.doesNotThrow(() => {
     store.diag.llmStarted('no-such-turn', {

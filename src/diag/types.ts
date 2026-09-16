@@ -122,10 +122,10 @@ export type DiagEvent =
       ts: number
       level: 'basic'
       call: LlmCallKind
-      from: 'webchat' | 'stream' | 'turnBatch' | 'ocr'
+      from: 'webchat' | 'stream' | 'turnBatch' | 'ocr' | 'actor'
       reason: string
     }
-  /** CDP 阶段轨迹(Rust webchat_last_trace):拉起/发送/首忙/首文/稳定各阶段耗时 */
+  /** CDP 阶段轨迹(Rust webchat_take_trace):拉起/发送/首忙/首文/稳定各阶段耗时 */
   | {
       kind: 'webchat_stages'
       ts: number
@@ -233,6 +233,8 @@ export interface DiagSession {
   ts: number
   source: DiagSource
   ended: boolean
+  /** 会话房间:group:main(群聊)/ direct:<slot>(单聊);缺省 = 旧数据 */
+  room?: string
   /** 详情档捕获的会话(面板标注,保留策略更紧) */
   hasDetail: boolean
   events: DiagEvent[]

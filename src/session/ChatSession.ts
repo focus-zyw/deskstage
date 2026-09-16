@@ -34,7 +34,7 @@ import {
 } from '../storage/configStore'
 import { expressionDirector, type ExpressionTrace } from '../expression'
 import { speakTracked, prefetchVoice } from '../engine/tts'
-import { diag } from '../diag/store'
+import { diag, type DiagRef } from '../diag/store'
 import { createApiActorAdapter } from '../groupChat/adapters/apiActor'
 import type { ActorModelAdapter } from '../groupChat/adapters/types'
 import { createGroupChatRuntime, type GroupChatRuntime } from '../groupChat/runtime'
@@ -142,6 +142,18 @@ export function createChatSession(
       gags?: Array<{ id: string; text: string }>
     }
   >()
+  /** 当前回合的 TTS 诊断引用(presenter 逐句播报递增 seg;回合切换自动重置) */
+  let ttsDiag: { turnId: string; seg: number } | null = null
+  /** 每回合回复量统计(onCommit 逐条累加;静止收尾随 turnFinished 上报后清除) */
+  const replyStats = new Map<string, { chars: number; sentences: number }>()
+  /** TTS 诊断引用:同一回合内 seg 递增,跨回合重置;无在飞回合不发 */
+  function ttsDiagRefOf(): DiagRef | undefined {
+    if (!currentTurnId) return undefined
+    if (!ttsDiag || ttsDiag.turnId !== currentTurnId) ttsDiag = { turnId: currentTurnId, seg: 0 }
+    const ref: DiagRef = { turnId: ttsDiag.turnId, segIndex: ttsDiag.seg }
+    ttsDiag.seg += 1
+    return ref
+  }
   let mode: 'actors' | 'legacy' | null = null
   let configCache: AppConfig | null = null
   let currentAbort: AbortController | null = null
@@ -243,7 +255,8 @@ export function createChatSession(
         speakTracked: room
           ? () => ({ started: Promise.resolve('silent' as const), ended: Promise.resolve(), stop: () => {} })
           : (who, text) =>
-              (engine.tts?.speakTracked ?? ((w, t) => speakTracked(w, t, undefined, currentChannel)))(who, text),
+              (engine.tts?.speakTracked ??
+                ((w, t, d) => speakTracked(w, t, undefined, currentChannel, d)))(who, text, ttsDiagRefOf()),
         prefetch: room ? () => {} : (who, text) => engine.tts?.prefetch?.(who, text) ?? prefetchVoice(who, text),
         onTurnSpeechStart: () => host.onTurnSpeechStart?.(),
         holdRuntime: () => runtimeOf().presentationHold(),
@@ -327,6 +340,13 @@ export function createChatSession(
         // 角色回复:落盘 + 短期窗口 + 呈现队列(消费者按 roomSeq 逐项 present→TTS)
         chainReplied.add(msg.causalRootId)
         const rootTurnId = chainTurn.get(msg.causalRootId)
+        // 回复量统计:诊断回合的 replyChars/replySentences(静止收尾统一上报)
+        if (rootTurnId) {
+          const stat = replyStats.get(rootTurnId) ?? { chars: 0, sentences: 0 }
+          stat.chars += msg.text.length
+          stat.sentences += 1
+          replyStats.set(rootTurnId, stat)
+        }
         pushTurn({ who: msg.author, text: msg.text })
         void appendChatTurns([
           {
@@ -478,7 +498,7 @@ export function createChatSession(
       const turn = await runtimeOf().openUserTurn(text, { voice: opts2.voice === true })
       if (turn.kind === 'stop') {
         // 停止词:消息已留痕并全员暂停;恢复由下一条用户消息开启
-        diag.beginTurn({ id: turnId, source: opts2.voice ? 'voice' : 'chat', text, target: 'A', groupAsk: false, voice: !!opts2.voice, ts: Date.now() })
+        diag.beginTurn({ id: turnId, source: opts2.voice ? 'voice' : 'chat', text, target: 'A', groupAsk: false, voice: !!opts2.voice, ts: Date.now(), room: roomSessionId })
         diag.turnFinished(turnId, { outcome: 'cancelled', totalMs: Date.now() - turnStartedAt, replyChars: 0, replySentences: 0 })
         diag.finish(turnId)
         currentTurnId = null
@@ -495,6 +515,7 @@ export function createChatSession(
         groupAsk: GROUP_ASK_RE.test(text),
         voice: !!opts2.voice,
         ts: Date.now(),
+        room: roomSessionId,
       })
       diag.detailText(turnId, { textKind: 'input', text })
       if (opts2.diagAsr) diag.asrResult(turnId, opts2.diagAsr)
@@ -522,7 +543,14 @@ export function createChatSession(
         })
         presenterOf().setBadge(chainId, memory.refs)
         if (engine.tools) {
+          const toolsT0 = Date.now()
           const prep = await engine.tools({ userText: text }, currentAbort.signal)
+          diag.toolsPrepare(turnId, {
+            ms: Date.now() - toolsT0,
+            clarified: !!prep.clarify,
+            hasNote: !!prep.note,
+            memoryRefs: prep.memoryRefs?.length ?? 0,
+          })
           if (currentAbort.signal.aborted) {
             cancelled = true
           } else if (prep.clarify) {
@@ -582,11 +610,23 @@ export function createChatSession(
         .catch(() => undefined)
         .then(() => {
           if (mode !== 'actors') return
+          const stats = replyStats.get(turnId) ?? { chars: 0, sentences: 0 }
+          replyStats.delete(turnId)
           if (repliedChains.has(chainId)) {
-            diag.turnFinished(turnId, { outcome: 'spoke', totalMs: Date.now() - turnStartedAt, replyChars: 0, replySentences: 0 })
+            diag.turnFinished(turnId, {
+              outcome: 'spoke',
+              totalMs: Date.now() - turnStartedAt,
+              replyChars: stats.chars,
+              replySentences: stats.sentences,
+            })
           } else {
             host.presentFallback({ speaker: primary, text: '（这会儿信号不好,没接上…再说一遍?)' })
-            diag.turnFinished(turnId, { outcome: 'failed', totalMs: Date.now() - turnStartedAt, replyChars: 0, replySentences: 0 })
+            diag.turnFinished(turnId, {
+              outcome: 'failed',
+              totalMs: Date.now() - turnStartedAt,
+              replyChars: stats.chars,
+              replySentences: stats.sentences,
+            })
           }
           diag.finish(turnId)
           if (currentTurnId === turnId) currentTurnId = null
@@ -602,7 +642,15 @@ export function createChatSession(
       }
       if (mode !== 'actors') return
       currentAbort?.abort()
-      if (currentTurnId) diag.cancelRequested(currentTurnId, { generation: 0, hadHandle: false, hadAbort: true })
+      if (currentTurnId) {
+        replyStats.delete(currentTurnId)
+        // actors 引擎无代次概念(generation 恒 0);hadHandle = 呈现管线有句柄在播
+        diag.cancelRequested(currentTurnId, {
+          generation: 0,
+          hadHandle: presenterOf().playing(),
+          hadAbort: !!currentAbort,
+        })
+      }
       runtimeOf().cancel()
       presenterOf().cancel()
       currentTurnId = null

@@ -334,7 +334,10 @@ export function DiagSettings() {
                   onClick={() => setExpanded(open ? null : s.id)}
                 >
                   <span style={{ fontFamily: 'monospace', fontSize: 12, opacity: 0.7, flexShrink: 0 }}>{fmtTime(s.ts)}</span>
-                  <span style={{ fontSize: 12, flexShrink: 0 }}>{SOURCE_LABEL[s.source] ?? s.source}</span>
+                  <span style={{ fontSize: 12, flexShrink: 0 }}>
+                    {SOURCE_LABEL[s.source] ?? s.source}
+                    {s.room?.startsWith('direct:') && `(单聊·${s.room.slice(7)})`}
+                  </span>
                   <span style={{ fontSize: 12, color: oc?.tone, flexShrink: 0 }}>{oc?.text ?? s.summary.outcome}</span>
                   <span style={{ fontSize: 12, opacity: 0.65, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {s.summary.errorKind ? s.summary.errorText ?? s.summary.errorKind : `${s.events.length} 个事件`}
