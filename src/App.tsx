@@ -386,7 +386,17 @@ function App() {
   // 模式菜单没有输入框，仍由原生钩子派发点击；只有真正的输入面板才让
   // 全屏 WebView 恢复交互，否则展开小菜单也会让底层视频退出硬件合成。
   // C 右键菜单同理(轻交互按钮列表)。
-  const interactivePanelsOpen = rt.overlays.some((overlay) => overlay !== 'mode-menu' && overlay !== 'c-menu')
+  // 固定(📌)的翻译面板不强制整窗交互:固定 = 挂着边看边用,整窗拦截会让桌面
+  // 无法操作;面板自身走 tr-panel 热区(可输入可拖动),其余屏幕保持穿透
+  const interactivePanelsOpen = rt.overlays.some(
+    (overlay) =>
+      overlay !== 'mode-menu' &&
+      overlay !== 'c-menu' &&
+      !(overlay === 'translation' && translationPinnedRef.current),
+  )
+  // 只剩固定的翻译面板时,连「点外部收起」的全屏兜底区也撤掉(固定语义:外部点击
+  // 归外部应用;面板只能 ✕ 关)。其他面板在场时兜底区保留,点了收它们、留下翻译
+  const pinnedTranslationOnly = overlaysOpen && translationPinnedRef.current && rt.overlays.length === 1
   // 设置窗虽是独立 WebView,但 Rust 全局钩子按屏幕坐标吞事件、不认光标下是哪个窗口,
   // 设置窗与角色热区重叠时点击/滚轮会被截胡成拖拽/缩放(拆独立窗时丢了旧 overlay 时代的
   // 让位保护)——设置打开期间原生热区同样让位,关闭(✕/点外收起/重播)后经此 effect 恢复。
@@ -985,6 +995,9 @@ function App() {
             memoAlertsCountRef.current > 0
               ? (memoAlertsRef.current?.getBoundingClientRect() ?? new DOMRect(0, 0, 0, 0))
               : new DOMRect(0, 0, 0, 0),
+          // 真实归属由 DOM 决定:卡片与角色热区矩形重叠时,点击经 elementFromPoint
+          // 落回卡片内元素,不再被先注册的角色热区截走(「知道了」点不到的根因)
+          nativePointerTarget: () => memoAlertsRef.current,
         },
         {
           // 工具任务卡:同备忘卡,不注册则错误卡的"知道了"点不到(卡永远关不掉)
@@ -994,10 +1007,12 @@ function App() {
             utilCardsCountRef.current > 0
               ? (utilCardsRef.current?.getBoundingClientRect() ?? new DOMRect(0, 0, 0, 0))
               : new DOMRect(0, 0, 0, 0),
+          // 同 memo-alert:卡片矩形与角色热区重叠时,点击按 DOM 归属派发回卡片
+          nativePointerTarget: () => utilCardsRef.current,
         },
         {
           id: 'outside',
-          active: overlaysOpen,
+          active: overlaysOpen && !pinnedTranslationOnly,
           getRect: () => new DOMRect(0, 0, window.innerWidth, window.innerHeight),
           // 模式菜单/C菜单单独打开时，兜底区也走原生事件；点击空白处只负责收起菜单，
           // 不把整个透明 WebView 切成可点击窗口。
@@ -1007,7 +1022,7 @@ function App() {
         },
       ],
       // settingsOpen 不进依赖:设置已是独立 WebView,主窗命中区不随它变化
-      [topicOpen, chatOpen, translationOpen, toolsOpen, choice, overlaysOpen, modeMenuOpen, cMenuOpen],
+      [topicOpen, chatOpen, translationOpen, toolsOpen, choice, overlaysOpen, modeMenuOpen, cMenuOpen, pinnedTranslationOnly],
     ),
   )
 

@@ -9,8 +9,12 @@ test('模式菜单是轻量原生热区，打开时不能恢复全屏 WebView �
   // 打开它们只注册原生热区,绝不把整窗切成可点击(否则底层视频退出硬件合成)
   assert.match(
     appSource,
-    /const interactivePanelsOpen\s*=\s*rt\.overlays\.some\(\(overlay\)\s*=>\s*overlay\s*!==\s*'mode-menu'\s*&&\s*overlay\s*!==\s*'c-menu'\)/,
+    /const interactivePanelsOpen\s*=\s*rt\.overlays\.some\([\s\S]*?overlay\s*!==\s*'mode-menu'[\s\S]*?overlay\s*!==\s*'c-menu'[\s\S]*?\)/,
   )
+  // 固定(📌)的翻译面板同样不强制整窗交互(固定 = 挂着边看边用,桌面必须可操作)
+  assert.match(appSource, /!\(overlay === 'translation' && translationPinnedRef\.current\)/)
+  // 只剩固定翻译面板时,全屏「点外部收起」兜底区必须撤掉(否则整窗拦截桌面)
+  assert.match(appSource, /active: overlaysOpen && !pinnedTranslationOnly/)
   // 设置窗(独立 WebView)打开期间也要让位:全局钩子按屏幕坐标吞事件,不认光标下
   // 是哪个窗口,设置窗与角色热区重叠时会截胡对设置窗本身的点击/滚轮
   assert.match(appSource, /setPanelsOpen\(interactivePanelsOpen \|\| settingsOpen\)/)
