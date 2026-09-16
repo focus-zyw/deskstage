@@ -23,9 +23,8 @@ before(async () => {
 })
 
 
-const story = (gags, threads = []) => ({
-  version: 1,
-  gags,
+const story = (threads = []) => ({
+  version: 2,
   threads,
   arcs: [],
   bond: { trust: 1, rivalry: 0, updatedAt: 0 },
@@ -86,14 +85,12 @@ test('周报主题的最终提示词不会注入无关的满减记忆', () => {
       {
         id: 'shopping',
         text: '凑奶茶满减退17单叫精准凑单',
-        hits: 10,
         lastSeen: 300,
         lastInjectedAt: 0,
       },
       {
         id: 'weekly-report',
         text: '甲把周报写成了连续剧预告',
-        hits: 0,
         lastSeen: 100,
         lastInjectedAt: 0,
       },
@@ -101,42 +98,35 @@ test('周报主题的最终提示词不会注入无关的满减记忆', () => {
     '周报到底写给谁看',
     2,
   )
-  // 选题相关性:与"周报"相关的记忆入选(gags/threads 哪个桶都算),满减类无关记忆被排除
-  const selectedText = [...selection.gags, ...selection.threads].map((item) => item.text).join('\n')
+  // 选题相关性:与"周报"相关的事件线入选,满减类无关记忆被排除
+  const selectedText = selection.threads.map((item) => item.text).join('\n')
   assert.match(selectedText, /周报写成了连续剧预告/)
   assert.doesNotMatch(selectedText, /满减|凑单/)
-  // 注入层:daily(非喜剧)渲染共同经历线程,不渲染 gags——无关记忆不进最终提示词;
-  // gags 的喜剧渲染能力由 renderStoryContext 直测(相声极简已不消费它)
+  // 注入层:最终提示词只渲染共同经历事件线——无关记忆不进最终提示词
   const prompt = finalPrompt({
-    storyContext: {
-      gags: selection.gags.map((item) => item.text),
-      threads: selection.threads.map((item) => item.text),
-    },
+    storyContext: { threads: selection.threads.map((item) => item.text) },
   })
 
   assert.doesNotMatch(prompt, /满减|凑单/)
-  if (selection.gags.length > 0) {
-    assert.match(
-      renderStoryContext({ gags: selection.gags.map((item) => item.text), threads: [] }, { comedy: true }),
-      /周报写成了连续剧预告/,
-    )
-  }
+  // renderStoryContext 在任何基调下都渲染共同经历事件线
+  assert.match(
+    renderStoryContext({ threads: selection.threads.map((item) => item.text) }),
+    /周报写成了连续剧预告/,
+  )
 })
 
-test('冷却时间优先于 hits，近期高频老梗不会继续霸榜', () => {
+test('冷却时间决定轮换顺序,最近注入过的不再霸榜', () => {
   const selection = selectStoryItems(
     story([
       {
         id: 'hot-recent',
         text: '周报写成八百回连续剧',
-        hits: 99,
         lastSeen: 300,
         lastInjectedAt: 300,
       },
       {
         id: 'cool',
         text: '周报最后一页其实是请假条',
-        hits: 0,
         lastSeen: 100,
         lastInjectedAt: 100,
       },
@@ -145,10 +135,33 @@ test('冷却时间优先于 hits，近期高频老梗不会继续霸榜', () => 
     1,
   )
 
-  assert.equal(selection.gags[0]?.id, 'cool')
+  assert.equal(selection.threads[0]?.id, 'cool')
 })
 
-test('每次注入后记录冷却时间并轮换到下一个相关老梗', async () => {
+test('注入冷却平手时按最近看过优先', () => {
+  const selection = selectStoryItems(
+    story([
+      {
+        id: 'older',
+        text: '周报写成八百回连续剧',
+        lastSeen: 100,
+        lastInjectedAt: 0,
+      },
+      {
+        id: 'newer',
+        text: '周报最后一页其实是请假条',
+        lastSeen: 300,
+        lastInjectedAt: 0,
+      },
+    ]),
+    '周报到底写给谁看',
+    1,
+  )
+
+  assert.equal(selection.threads[0]?.id, 'newer')
+})
+
+test('每次注入后记录冷却时间并轮换到下一个相关事件线', async () => {
   const values = new Map()
   globalThis.localStorage = {
     getItem: (key) => values.get(key) ?? null,
@@ -167,14 +180,12 @@ test('每次注入后记录冷却时间并轮换到下一个相关老梗', async
         {
           id: 'first',
           text: '周报写成了一部长篇小说',
-          hits: 0,
           lastSeen: 200,
           lastInjectedAt: 0,
         },
         {
           id: 'second',
           text: '周报最后一页藏着请假条',
-          hits: 0,
           lastSeen: 100,
           lastInjectedAt: 0,
         },
@@ -185,8 +196,8 @@ test('每次注入后记录冷却时间并轮换到下一个相关老梗', async
   const first = await storyContext('周报到底写给谁看', 1)
   const second = await storyContext('周报到底写给谁看', 1)
 
-  assert.deepEqual(first.gags, ['周报写成了一部长篇小说'])
-  assert.deepEqual(second.gags, ['周报最后一页藏着请假条'])
+  assert.deepEqual(first.threads, ['周报写成了一部长篇小说'])
+  assert.deepEqual(second.threads, ['周报最后一页藏着请假条'])
   delete globalThis.localStorage
 })
 
@@ -258,16 +269,12 @@ test('日常模式非喜剧化:无喜剧件,句数 8~16,喜剧动态不注入', 
   assert.match(sys, /本集的场景和情绪/, 'timeCtx 不再写"段子的场景"')
 })
 
-test('renderStoryContext:非喜剧只带共同经历,不注入老梗与笑点素材', () => {
-  const s = { gags: ['老梗A'], threads: ['没还的扳手'] }
-  const casual = renderStoryContext(s, { comedy: false })
-  assert.match(casual, /共同经历\/未了结事件/)
-  assert.match(casual, /没还的扳手/)
-  assert.doesNotMatch(casual, /老梗A/)
-  assert.doesNotMatch(casual, /笑点素材/)
-  const comedy = renderStoryContext(s, { comedy: true })
-  assert.match(comedy, /老梗A/)
-  assert.match(comedy, /笑点素材/)
+test('renderStoryContext:只渲染共同经历事件线,无事件线时为空串', () => {
+  const rendered = renderStoryContext({ threads: ['没还的扳手'] })
+  assert.match(rendered, /共同经历\/未了结事件/)
+  assert.match(rendered, /没还的扳手/)
+  assert.equal(renderStoryContext({ threads: [] }), '')
+  assert.equal(renderStoryContext(), '')
 })
 
 test('相声极简:丙分工不注入,协议保留 goalC 与留白许可', () => {

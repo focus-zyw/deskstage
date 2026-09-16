@@ -26,7 +26,6 @@ import {
   type AppConfig,
   type GroupModelBinding,
 } from '../storage/configStore'
-import { peekStory, selectStoryItems } from '../storage/storyStore'
 import { expressionDirector, type ExpressionTrace } from '../expression'
 import { speakTracked, prefetchVoice } from '../engine/tts'
 import { diag } from '../diag/store'
@@ -362,18 +361,6 @@ export function createChatSession(
     return parts.length ? parts.join(';') : undefined
   }
 
-  /** 旧梗候选:story.json 只读预选(selectStoryItems 同源),不写注入冷却、不烧主演出额度 */
-  function gagCandidatesOf(topic: string): Array<{ id: string; text: string }> | undefined {
-    try {
-      const story = peekStory()
-      if (!story || story.gags.length === 0) return undefined
-      const picked = selectStoryItems(story, topic, 1).gags
-      return picked.length > 0 ? picked.map((g) => ({ id: g.id, text: g.text })) : undefined
-    } catch {
-      return undefined
-    }
-  }
-
   /** 表达 trace 落盘:仅枚举与 id、无正文;调试档(memoryDisplay==='debug')才落,
    *  与 legacyChat 的 includeTrace 同款隐私闸 */
   function expressionTraceOf(meta: { expression?: ExpressionTrace } | undefined): unknown {
@@ -543,7 +530,6 @@ export function createChatSession(
         moodLine,
         toolNote,
         memoryRefs: combinedRefs,
-        gags: gagCandidatesOf(text),
       })
       if (chainExtras.size > 8) {
         const oldest = chainExtras.keys().next().value

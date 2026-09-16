@@ -25,12 +25,7 @@ import {
 } from '../storage/storyStore'
 
 export interface CurateReport {
-  addedGags: string[]
   addedThreads: string[]
-  /** sameAs 合并:库存老梗被更新成的规范表述 */
-  canonicalized: { id: string; text: string }[]
-  /** 本集实际回收了的老梗(模型指认的 + 字面相似度判定的) */
-  reusedGagIds: string[]
   resolvedThreadIds: string[]
   rejected: { text: string; reason: string }[]
   arcAdvanced: string | null
@@ -72,10 +67,7 @@ export async function curateEpisode(
   deps: CuratorDeps = {},
 ): Promise<CurateReport> {
   const report: CurateReport = {
-    addedGags: [],
     addedThreads: [],
-    canonicalized: [],
-    reusedGagIds: [],
     resolvedThreadIds: [],
     rejected: [],
     arcAdvanced: null,
@@ -89,13 +81,9 @@ export async function curateEpisode(
   const d = await distill(lines, inv)
 
   report.resolvedThreadIds = d.resolvedThreadIds
-  report.reusedGagIds = [...d.reusedGagIds]
 
   const patch: StoryPatch = {
-    gags: [],
     threads: [],
-    canonicalizedGags: [],
-    reusedGagIds: d.reusedGagIds,
     resolvedThreadIds: d.resolvedThreadIds,
     arcAdvance: d.arcAdvance,
     newArc: d.newArc,
@@ -110,7 +98,7 @@ export async function curateEpisode(
   // 集内去重:同一批候选里换说法的只收第一条
   const seen: string[] = []
 
-  const runCandidates = (kind: 'gag' | 'thread', candidates: StoryCandidate[]) => {
+  const runCandidates = (candidates: StoryCandidate[]) => {
     for (const c of candidates) {
       if (!hasEvidence(c)) {
         report.rejected.push({ text: c.text, reason: '无台词证据' })
@@ -124,7 +112,7 @@ export async function curateEpisode(
       if ((c.assertion === 'boast' || c.assertion === 'excuse') && !MODAL_MARKER.test(text)) {
         text = withModality(text)
       }
-      const invalid = validateStoryText(kind, text)
+      const invalid = validateStoryText('thread', text)
       if (invalid) {
         report.rejected.push({ text, reason: invalid })
         continue
@@ -133,38 +121,16 @@ export async function curateEpisode(
         report.rejected.push({ text, reason: '与集内候选重复' })
         continue
       }
-      if (kind === 'gag' && c.sameAsId) {
-        // 模型指认的同义梗:把库存老梗的措辞规范化,并计一次使用
-        patch.canonicalizedGags.push({ id: c.sameAsId, text })
-        report.canonicalized.push({ id: c.sameAsId, text })
-      } else {
-        const pool = kind === 'gag' ? inv.gags : inv.threads
-        const twin = pool.find((x) => storyTextSimilarity(x.text, text) >= SIMILAR_MERGE_THRESHOLD)
-        if (kind === 'gag') {
-          // 模型没认出来但字面高度相似的老梗:按回收记账(hits 在 mergeStory 里 +1)
-          if (twin) report.reusedGagIds.push(twin.id)
-          patch.gags.push({ text })
-          report.addedGags.push(text)
-        } else {
-          patch.threads.push({ text })
-          if (!twin) report.addedThreads.push(text)
-        }
-      }
+      const twin = inv.threads.find((x) => storyTextSimilarity(x.text, text) >= SIMILAR_MERGE_THRESHOLD)
+      patch.threads.push({ text })
+      if (!twin) report.addedThreads.push(text)
       seen.push(text)
     }
   }
-  runCandidates('gag', d.newGags)
-  runCandidates('thread', d.newThreads)
+  runCandidates(d.newThreads)
 
   const touched =
-    patch.gags.length +
-      patch.threads.length +
-      patch.canonicalizedGags.length +
-      patch.reusedGagIds.length +
-      patch.resolvedThreadIds.length >
-      0 ||
-    !!patch.arcAdvance ||
-    !!patch.newArc
+    patch.threads.length + patch.resolvedThreadIds.length > 0 || !!patch.arcAdvance || !!patch.newArc
   if (touched) {
     await mergeStory(patch)
   }

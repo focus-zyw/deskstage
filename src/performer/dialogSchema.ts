@@ -67,7 +67,6 @@ export interface ChoicePoint {
 /** 预生成暂缓的上下文采纳:prompt 已消费这些素材,但注入冷却/recap 消费等持久副作用
  *  等真正开播时由播放侧调 adoptDeferredContext 一次性提交(预生成零副作用) */
 export interface ContextAdoption {
-  gagIds: string[]
   threadIds: string[]
   hasRecap: boolean
 }

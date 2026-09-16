@@ -31,22 +31,21 @@ test('previewStoryContext 不写注入冷却,commitStoryInjection 才写', async
     'vc-story',
     JSON.stringify({
       version: 2,
-      gags: [{ id: 'g-noodle', text: '甲的泡面必须配冰可乐', lastSeen: 1, hits: 0, lastInjectedAt: 0 }],
-      threads: [],
+      threads: [{ id: 't-noodle', text: '甲的泡面必须配冰可乐', lastSeen: 1, lastInjectedAt: 0 }],
       arcs: [],
       bond: { trust: 1, rivalry: 0, updatedAt: 0 },
     }),
   )
   const preview = await story.previewStoryContext('泡面', 2)
-  assert.equal(preview.gags.length, 1)
-  assert.equal(preview.gagIds[0], 'g-noodle')
+  assert.equal(preview.threads.length, 1)
+  assert.equal(preview.threadIds[0], 't-noodle')
   // 预览不落冷却
-  let gag = (await story.getStory()).gags[0]
-  assert.equal(gag.lastInjectedAt, 0)
+  let thread = (await story.getStory()).threads[0]
+  assert.equal(thread.lastInjectedAt, 0)
   // 采纳才落
-  await story.commitStoryInjection(preview.gagIds, preview.threadIds)
-  gag = (await story.getStory()).gags[0]
-  assert.ok(gag.lastInjectedAt > 0)
+  await story.commitStoryInjection(preview.threadIds)
+  thread = (await story.getStory()).threads[0]
+  assert.ok(thread.lastInjectedAt > 0)
 })
 
 test('peekRecap 与 takeRecap 文案一致,但只有 take 清零计数', async () => {

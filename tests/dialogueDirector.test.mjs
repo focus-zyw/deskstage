@@ -115,8 +115,8 @@ test('adoptDeferred:无 adoption 空操作,有则透传', async () => {
   })
   d.adoptDeferred({ before: [], after: {} })
   assert.equal(calls.length, 0)
-  const adoption = { gagIds: ['g1'], threadIds: [], hasRecap: true }
+  const adoption = { threadIds: ['t1'], hasRecap: true }
   d.adoptDeferred({ before: [], after: {}, adoption })
   assert.equal(calls.length, 1)
-  assert.equal(calls[0].gagIds[0], 'g1')
+  assert.equal(calls[0].threadIds[0], 't1')
 })

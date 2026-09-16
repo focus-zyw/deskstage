@@ -46,10 +46,9 @@ function sanitizeAdoption(v: unknown): ContextAdoption | undefined {
   const o = v as Record<string, unknown>
   const ids = (x: unknown): string[] =>
     Array.isArray(x) ? x.filter((s): s is string => typeof s === 'string').slice(0, 4) : []
-  const gagIds = ids(o.gagIds)
   const threadIds = ids(o.threadIds)
-  if (gagIds.length === 0 && threadIds.length === 0 && o.hasRecap !== true) return undefined
-  return { gagIds, threadIds, hasRecap: o.hasRecap === true }
+  if (threadIds.length === 0 && o.hasRecap !== true) return undefined
+  return { threadIds, hasRecap: o.hasRecap === true }
 }
 
 function sanitizeEntries(v: unknown): PrefetchEntry[] {

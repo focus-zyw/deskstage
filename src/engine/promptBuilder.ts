@@ -20,8 +20,8 @@ export interface UserContext {
   taste?: string
   /** 记忆事实内容列表(pinned 优先) */
   facts?: string[]
-  /** 角色世界:两人之间的老梗与未了结事件(与观众隐私无关,适合制造 callbacks) */
-  story?: { gags: string[]; threads: string[] }
+  /** 角色世界:未了结事件线(适合时自然提起) */
+  story?: { threads: string[] }
 }
 
 /** 观众字段底层组装:full=主演出画像块,brief=短通道一行简报。
@@ -85,24 +85,10 @@ export function renderViewerBrief(p: UserProfile | undefined, facts: string[]): 
   return lines.length ? `关于观众:${lines.join(';')}。` : ''
 }
 
-/** 角色世界:两人之间的老梗/未了结事件。喜剧里这是笑点 callback 的唯一合法来源;
- *  非喜剧只保留共同经历/未了结事件(适合时自然提起),不注入"老梗回收/笑点素材"的喜剧件 */
-export function renderStoryContext(story?: UserContext['story'], opts: { comedy?: boolean } = {}): string {
-  const comedy = opts.comedy !== false
-  const parts: string[] = []
-  if (comedy && story?.gags.length) {
-    parts.push(`与本段话题相关的老梗:${story.gags.join(';')}。最多自然回收 1 个;接不上就不用,不得为了 callback 扭曲本段话题。`)
-  }
-  if (story?.threads.length) {
-    parts.push(
-      comedy
-        ? `与本段话题相关的未了结事件(适合时再了结):${story.threads.join(';')}。`
-        : `与本段话题相关的共同经历/未了结事件(适合时自然提起):${story.threads.join(';')}。`,
-    )
-  }
-  if (!parts.length) return ''
-  if (comedy) parts.push('笑点素材只能来自本集场景卡和角色世界;观众的私人信息不是包袱。')
-  return `\n\n角色世界（三人共同的经历）：${parts.join(' ')}`
+/** 角色世界:未了结事件线。喜剧/非喜剧同构注入(适合时自然提起,不作强制回收义务) */
+export function renderStoryContext(story?: UserContext['story']): string {
+  if (!story?.threads.length) return ''
+  return `\n\n角色世界（三人共同的经历）：与本段话题相关的共同经历/未了结事件(适合时自然提起):${story.threads.join(';')}。`
 }
 
 /** C 的角色分工规则(纯函数,导出供测试):按 基调/是否相声/C 是否自定义 三分。
@@ -527,7 +513,7 @@ export function buildMessages(
     ? `\n\n使用者画像：我们的观众朋友有以下兴趣爱好：${userInterests.trim()}。聊天中可以自然地偶尔聊到这些（不要刻意每句都提）。`
     : ''
   const profile = userCtx ? renderAudienceContext(userCtx) : legacy
-  const storyCtx = userCtx ? renderStoryContext(userCtx.story, { comedy: isComedy }) : ''
+  const storyCtx = userCtx ? renderStoryContext(userCtx.story) : ''
 
   const slot = currentTimeSlot()
   const timeCtx = `\n\n现实时间：现在是${slot.label}，${slot.scene}。本集的场景和情绪可以贴合这个时间段。`

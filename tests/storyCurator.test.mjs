@@ -1,5 +1,5 @@
-// 角色世界策展回归:迁移幂等、证据/断言门禁、两级去重、剧情生命周期、全量库存视野。
-// 背景:老梗曾出现同场景重复入库、反问被写成事实、临时甩锅成为世界设定、
+// 角色世界策展回归:迁移幂等、证据/断言门禁、相似去重、剧情生命周期、全量库存视野。
+// 背景:事件线曾出现同场景重复入库、反问被写成事实、临时甩锅成为世界设定、
 // 同一件事同时挂在事件线和剧情线上,这里逐一钉死。
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -35,10 +35,7 @@ const fixture = () => JSON.parse(readFileSync(new URL('./fixtures/story.v1.json'
 
 /** 空补丁(只填关心的字段) */
 const patch = (over = {}) => ({
-  gags: [],
   threads: [],
-  canonicalizedGags: [],
-  reusedGagIds: [],
   resolvedThreadIds: [],
   arcAdvance: null,
   newArc: null,
@@ -47,18 +44,18 @@ const patch = (over = {}) => ({
 
 /** 空蒸馏结果 */
 const distilled = (over = {}) => ({
-  newGags: [],
   newThreads: [],
   resolvedThreadIds: [],
-  reusedGagIds: [],
   arcAdvance: null,
   newArc: null,
+  relationshipEvent: null,
+  mood: [],
   ...over,
 })
 
-const gagTexts = () => store.getStory().then((s) => s.gags.map((g) => g.text))
-const gagBy = (part) =>
-  store.getStory().then((s) => s.gags.find((g) => g.text.includes(part)))
+const threadTexts = () => store.getStory().then((s) => s.threads.map((t) => t.text))
+const threadBy = (part) =>
+  store.getStory().then((s) => s.threads.find((t) => t.text.includes(part)))
 
 test('迁移:11 条已检老梗收敛为 6 条规范表述,检查范围外的新梗不动', async () => {
   const fx = fixture()
@@ -115,22 +112,22 @@ test('纯函数:规范化统一"甲家"系主体,相似度识别换说法,校验
     store.storyTextSimilarity('甲认定家族群才是真算法', '甲认定家族群才是真正算法') >= 0.7,
   )
   assert.ok(store.storyTextSimilarity('AI写请假条店长秒批', '赛博身体不适需接入床铺碎片整理') < 0.7)
-  assert.ok(store.validateStoryText('gag', '太短了'))
-  assert.equal(store.validateStoryText('gag', '观众是打地鼠的锤子，戳人二十六下'), '缺少角色主体(甲/乙/丙或其配置名)')
-  assert.equal(store.validateStoryText('gag', '乙点无糖，甲喝全糖也要让乙背锅'), null)
-  // 丙为主语的呆萌名场面同样可以入库(团宠定位:她的梗要有长期记忆载体)
-  assert.equal(store.validateStoryText('gag', '丙把甲的泡面种进花盆等它长出办公椅'), null)
+  assert.ok(store.validateStoryText('thread', '太短了'))
+  assert.equal(store.validateStoryText('thread', '观众是打地鼠的锤子，戳人二十六下'), '缺少角色主体(甲/乙/丙或其配置名)')
+  assert.equal(store.validateStoryText('thread', '乙点无糖，甲喝全糖也要让乙背锅'), null)
+  // 有主语的事件线才可入库(乙的怪癖/丙的呆萌名场面同样有长期记忆载体)
+  assert.equal(store.validateStoryText('thread', '丙把甲的泡面种进花盆等它长出办公椅'), null)
   assert.ok(store.validateStoryText('arcTitle', '这个剧情线标题实在是太长了不合规'))
 })
 
-test('确定性去重:与库存高度相似的老梗只计 hits,不再新增', async () => {
-  await store.mergeStory(patch({ gags: [{ text: '甲认定家族群才是真算法' }] }))
-  const before = (await store.getStory()).gags.length
-  await store.mergeStory(patch({ gags: [{ text: '甲认定家族群才是真正算法' }] }))
+test('确定性去重:与库存高度相似的事件线只刷新时间,不再新增', async () => {
+  await store.mergeStory(patch({ threads: [{ text: '甲认定家族群才是真算法' }] }))
+  const before = (await store.getStory()).threads.length
+  await store.mergeStory(patch({ threads: [{ text: '甲认定家族群才是真正算法' }] }))
   const story = await store.getStory()
-  assert.equal(story.gags.length, before) // 不新增
-  const gag = story.gags.find((g) => g.text.includes('家族群才是'))
-  assert.equal(gag.hits, 1) // 并入已有条目并计数
+  assert.equal(story.threads.length, before) // 不新增
+  const thread = story.threads.find((t) => t.text.includes('家族群才是'))
+  assert.equal(thread.text, '甲认定家族群才是真算法') // 保留最初入库的表述,只并入不改写
 })
 
 test('策展:反问候选被拒,不写成世界事实', async () => {
@@ -138,18 +135,17 @@ test('策展:反问候选被拒,不写成世界事实', async () => {
   const report = await curator.curateEpisode(lines, {
     distill: async () =>
       distilled({
-        newGags: [
+        newThreads: [
           {
             text: '甲的奶茶连茶底都是AI画的',
             evidence: ['连茶底都是AI画的吧'],
             assertion: 'question',
-            sameAsId: null,
           },
         ],
       }),
   })
   assert.ok(report.rejected.some((r) => r.reason.includes('反问')))
-  assert.ok(!(await gagTexts()).some((t) => t.includes('茶底')))
+  assert.ok(!(await threadTexts()).some((t) => t.includes('茶底')))
 })
 
 test('策展:没有台词证据的候选被拒', async () => {
@@ -157,18 +153,17 @@ test('策展:没有台词证据的候选被拒', async () => {
   const report = await curator.curateEpisode(lines, {
     distill: async () =>
       distilled({
-        newGags: [
+        newThreads: [
           {
             text: '甲家里的沙发有一个月没弹起来过',
             evidence: ['沙发有一个月没弹起来过'], // 台词里没有这句,模型编的证据
             assertion: 'established',
-            sameAsId: null,
           },
         ],
       }),
   })
   assert.ok(report.rejected.some((r) => r.reason.includes('证据')))
-  assert.ok(!(await gagTexts()).some((t) => t.includes('沙发')))
+  assert.ok(!(await threadTexts()).some((t) => t.includes('沙发')))
 })
 
 test('策展:临时甩锅保留模态,补"自称"后入库而非成为事实', async () => {
@@ -176,43 +171,18 @@ test('策展:临时甩锅保留模态,补"自称"后入库而非成为事实', a
   const report = await curator.curateEpisode(lines, {
     distill: async () =>
       distilled({
-        newGags: [
+        newThreads: [
           {
             text: '房东借走了甲的手机发emo语音',
             evidence: ['房东借走了甲的手机发emo语音'],
             assertion: 'excuse',
-            sameAsId: null,
           },
         ],
       }),
   })
-  assert.ok(report.addedGags.length > 0)
-  const gag = await gagBy('房东借走了甲的手机')
-  assert.equal(gag.text, '甲自称房东借走了甲的手机发emo语音')
-})
-
-test('策展:sameAs 指认把库存老梗规范化,不产生第二条', async () => {
-  const target = await gagBy('家族群才是')
-  const lines = [{ speaker: 'A', text: '家族群才是最懂我的算法,过年专推灵魂拷问', action: '' }]
-  const report = await curator.curateEpisode(lines, {
-    distill: async () =>
-      distilled({
-        newGags: [
-          {
-            text: '甲认定家族群才是最懂他的真算法',
-            evidence: ['家族群才是最懂我的算法'],
-            assertion: 'established',
-            sameAsId: target.id,
-          },
-        ],
-      }),
-  })
-  assert.equal(report.canonicalized.length, 1)
-  const story = await store.getStory()
-  assert.ok(!story.gags.some((g) => g.text === '甲认定家族群才是最懂他的真算法' && g.id !== target.id))
-  const gag = story.gags.find((g) => g.id === target.id)
-  assert.equal(gag.text, '甲认定家族群才是最懂他的真算法') // 措辞已规范化
-  assert.ok(gag.hits >= 2) // 此前模糊合并 +1,本次 sameAs 规范化再 +1
+  assert.ok(report.addedThreads.length > 0)
+  const thread = await threadBy('房东借走了甲的手机')
+  assert.equal(thread.text, '甲自称房东借走了甲的手机发emo语音')
 })
 
 test('生命周期:newArc 吸收事件线结案;拍满完结后无下一拍、收尾入 ending', async () => {
@@ -246,10 +216,10 @@ test('生命周期:newArc 吸收事件线结案;拍满完结后无下一拍、�
   assert.equal(done.ending, H[1]) // 刚演完的拍成为结局,最后一拍给出的钩子不再采用
 })
 
-test('记账:回收老梗只加 hits 不新增;策展必须拿到全量库存', async () => {
+test('记账:策展必须拿到全量库存,去重视野完整', async () => {
   await store.mergeStory(
     patch({
-      gags: [
+      threads: [
         { text: '甲把遥控器焊在了自己手里' },
         { text: '乙的猫只认甲当铲屎官' },
         { text: '甲的泡面必须配冰可乐才够赛博' },
@@ -258,15 +228,8 @@ test('记账:回收老梗只加 hits 不新增;策展必须拿到全量库存', 
   )
   const story = await store.getStory()
   const inv = await store.storyInventory()
-  assert.equal(inv.gags.length, story.gags.length) // 全量,不再截 top3
+  assert.equal(inv.threads.length, story.threads.length) // 全量,不再截 top3
   assert.equal(inv.doneArcs.length, story.arcs.filter((a) => a.status === 'done').length)
-
-  const target = story.gags.find((g) => g.text.includes('泡面'))
-  const hitsBefore = target.hits
-  await store.mergeStory(patch({ reusedGagIds: [target.id] }))
-  const after = await store.getStory()
-  assert.equal(after.gags.length, story.gags.length)
-  assert.equal(after.gags.find((g) => g.id === target.id).hits, hitsBefore + 1)
 
   // 策展链路把全量库存交给蒸馏模型(去重视野完整)
   const captured = []
@@ -276,24 +239,24 @@ test('记账:回收老梗只加 hits 不新增;策展必须拿到全量库存', 
       return distilled()
     },
   })
-  assert.equal(captured[0].gags.length, after.gags.length)
-  assert.equal(captured[0].doneArcs.length, after.arcs.filter((a) => a.status === 'done').length)
+  assert.equal(captured[0].threads.length, story.threads.length)
+  assert.equal(captured[0].doneArcs.length, story.arcs.filter((a) => a.status === 'done').length)
 })
 
-test('回放收敛:同一批梗换说法反复出现,库存不膨胀', async () => {
+test('回放收敛:同一批事件线换说法反复出现,库存不膨胀', async () => {
+  await store.mergeStory(patch({ threads: [{ text: '甲自称房东借走了甲的手机发emo语音' }] }))
   const before = await store.getStory()
-  const target = before.gags.find((g) => g.text.includes('房东借走了甲的手机'))
+  const target = before.threads.find((t) => t.text.includes('房东借走了甲的手机'))
   const lines = [{ speaker: 'A', text: '我手机被房东借走发emo语音了,真事,图文并茂', action: '' }]
-  // 第 1 集:sameAs 指认的规范表述
+  // 第 1 集:与库存完全一致的表述
   await curator.curateEpisode(lines, {
     distill: async () =>
       distilled({
-        newGags: [
+        newThreads: [
           {
-            text: '甲自称手机被房东借走发emo语音',
+            text: '甲自称房东借走了甲的手机发emo语音',
             evidence: ['手机被房东借走发emo语音'],
             assertion: 'excuse',
-            sameAsId: target.id,
           },
         ],
       }),
@@ -302,21 +265,19 @@ test('回放收敛:同一批梗换说法反复出现,库存不膨胀', async () 
   await curator.curateEpisode(lines, {
     distill: async () =>
       distilled({
-        newGags: [
+        newThreads: [
           {
-            text: '甲自称手机被房东借走发了emo语音',
+            text: '甲自称房东借走了甲的手机发了emo语音',
             evidence: ['手机被房东借走发emo语音'],
             assertion: 'excuse',
-            sameAsId: null,
           },
         ],
       }),
   })
   const after = await store.getStory()
-  assert.equal(after.gags.length, before.gags.length) // 换说法不产生新条目
-  const gag = after.gags.find((g) => g.id === target.id)
-  assert.equal(gag.text, '甲自称手机被房东借走发emo语音')
-  assert.ok(gag.hits >= target.hits + 2) // 两次都计入使用
+  assert.equal(after.threads.length, before.threads.length) // 换说法不产生新条目
+  const thread = after.threads.find((t) => t.id === target.id)
+  assert.equal(thread.text, '甲自称房东借走了甲的手机发emo语音') // 措辞保持最初入库的表述
 })
 
 test('策展:情绪余波须过台词证据关才入库,丙同样记账', async () => {

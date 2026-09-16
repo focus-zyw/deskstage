@@ -64,7 +64,7 @@ src/
               识别优先+本地兜底)、TranslationPanel
   ui/         ControlBar(工具栏,自带热区注册)、CommandPanel(命令面板)、UtilityCard(任务浮层卡)
   storage/    持久化:configStore / historyStore(jsonl 分集+收藏) / memoryStore(事实+口味统计) /
-              storyStore(角色世界:老梗/事件线/连续剧情/关系) / interactionStore(互动账本+降频记账) /
+              storyStore(角色世界:事件线/连续剧情/关系) / interactionStore(互动账本+降频记账) /
               memoStore(备忘) / prefetchStore(预生成缓冲);全部写操作走 writeLock 读改写锁,失败静默
   stage/      表现层:CharacterSprite(立绘交叉淡入+CSS 动画)、Bubble、icons、spriteSets(素材注册表)
   input/      pointerManager:穿透窗口的核心——Rust 轮询全局光标,命中已注册热区才恢复交互

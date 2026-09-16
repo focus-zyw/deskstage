@@ -1,8 +1,7 @@
 // 角色共同记忆(角色世界):appData/data/story.json。
-// gags[]:两人之间的固定笑点/歪理(如"冰箱是甲的健身器材"),后续剧集可自然回收;
-// threads[]:尚未了结的事件线(如"乙还欠甲一杯奶茶"),适合在包袱里了结。
-// 与 memoryStore(观众事实)刻意分离:笑点回调只用角色共同经历,观众隐私只作亲切感语境。
-// 全部写操作走 withFileLock;浏览器预览降级 localStorage。失败静默不影响演出。
+// threads[]:尚未了结的事件线(如"乙还欠甲一杯奶茶"),适合在包袱里了结;
+// arcs[]:连续剧情线。与 memoryStore(观众事实)刻意分离:这里只存角色共同经历,
+// 观众隐私只作亲切感语境。全部写操作走 withFileLock;浏览器预览降级 localStorage。
 
 import { readTextFile, writeTextFile, exists, mkdir } from '@tauri-apps/plugin-fs'
 import { appDataDir, join } from '@tauri-apps/api/path'
@@ -11,15 +10,6 @@ import { inTauri } from './configStore'
 import { migrateStoryData } from './storyMigration'
 import { nameOf } from '../engine/persona'
 import type { MoodEventCandidate } from '../engine/moodState'
-
-export interface StoryGag {
-  id: string
-  text: string
-  lastSeen: number
-  hits: number
-  /** 最近一次被放进创作提示词的时间；用于冷却轮换，0 = 从未注入 */
-  lastInjectedAt: number
-}
 
 export interface StoryThread {
   id: string
@@ -44,7 +34,6 @@ export interface StoryArc {
 
 export interface StoryData {
   version: 2
-  gags: StoryGag[]
   threads: StoryThread[]
   arcs: StoryArc[]
   /** 两角色的长期关系数值:缓慢衰减,由拖拽距离等互动缓慢漂移 */
@@ -79,14 +68,13 @@ export interface Bond {
   events?: RelationshipEvent[]
 }
 
-const MAX_GAGS = 30
 const MAX_THREADS = 15
 const MAX_ACTIVE_ARCS = 3
 /** 剧情线拍到第 4 拍自动完结(多集小剧情,不宜无限拖) */
 const MAX_ARC_STAGE = 4
 const LS_KEY = 'vc-story'
 const DEFAULT_BOND: Bond = { trust: 1, rivalry: 0, updatedAt: 0 }
-const EMPTY: StoryData = { version: 2, gags: [], threads: [], arcs: [], bond: { ...DEFAULT_BOND, updatedAt: 0 } }
+const EMPTY: StoryData = { version: 2, threads: [], arcs: [], bond: { ...DEFAULT_BOND, updatedAt: 0 } }
 
 const clampTrust = (v: number): number => Math.min(3, Math.max(-3, v))
 const clampRivalry = (v: number): number => Math.min(5, Math.max(0, v))
@@ -106,20 +94,6 @@ async function storyFile(): Promise<string> {
 
 function newId(prefix: string): string {
   return `${prefix}${Date.now()}${Math.random().toString(36).slice(2, 8)}`
-}
-
-function sanitizeGag(v: unknown): StoryGag | null {
-  const o = (v ?? {}) as Record<string, unknown>
-  const text = typeof o.text === 'string' ? o.text.trim().slice(0, 60) : ''
-  if (!text) return null
-  const now = Date.now()
-  return {
-    id: typeof o.id === 'string' && o.id ? o.id.slice(0, 40) : newId('g'),
-    text,
-    lastSeen: Number(o.lastSeen) || now,
-    hits: Math.max(0, Number(o.hits) || 0),
-    lastInjectedAt: Math.max(0, Number(o.lastInjectedAt) || 0),
-  }
 }
 
 function sanitizeThread(v: unknown): StoryThread | null {
@@ -159,10 +133,6 @@ function sanitizeArc(v: unknown): StoryArc | null {
 
 function sanitize(data: unknown): StoryData {
   const o = (data ?? {}) as Record<string, unknown>
-  const gags = (Array.isArray(o.gags) ? o.gags : [])
-    .map(sanitizeGag)
-    .filter((g): g is StoryGag => g !== null)
-    .slice(0, MAX_GAGS)
   const threads = (Array.isArray(o.threads) ? o.threads : [])
     .map(sanitizeThread)
     .filter((t): t is StoryThread => t !== null)
@@ -180,7 +150,7 @@ function sanitize(data: unknown): StoryData {
       .filter((ev): ev is RelationshipEvent => !!ev && typeof ev === 'object' && typeof (ev as RelationshipEvent).kind === 'string')
       .slice(0, 20),
   }
-  return { version: 2, gags, threads, arcs, bond }
+  return { version: 2, threads, arcs, bond }
 }
 
 /** 读档入口:version 1 的旧数据先过内容迁移(老梗合并/事件线清理/完结线收尾入档)再清洗 */
@@ -249,18 +219,13 @@ export interface StoryCandidate {
   /** 逐字摘自本集台词的片段,入库前由 curator 校验确实出现在台词里 */
   evidence: string[]
   assertion: StoryAssertion
-  /** 模型判定该候选只是库存某老梗换了说法时,填那条老梗的编号 */
-  sameAsId: string | null
 }
 
 /** 模型蒸馏输出(清洗后)。政策判断在 storyCurator,存储不变量在 mergeStory */
 export interface DistilledStory {
-  newGags: StoryCandidate[]
   newThreads: StoryCandidate[]
   /** 台词里已经了结的已知事件线 id(结案后不再注入) */
   resolvedThreadIds: string[]
-  /** 台词里实际回收了的已知老梗 id(真实"被用过"计数) */
-  reusedGagIds: string[]
   /** 连续剧情推进一拍(写新钩子,stage 由存储层自增) */
   arcAdvance: ArcAdvance | null
   /** 本集冒出的值得多集延续的新剧情线(最多 1 条),closeThreadIds 为被它吸收的事件线 */
@@ -274,18 +239,13 @@ export interface DistilledStory {
 /** curator 产出、mergeStory 消费的入库补丁:候选已过证据/断言/语义去重关,
  *  这里只做存储层不变量(字数/主体/确定性去重/上限淘汰/生命周期) */
 export interface StoryPatch {
-  gags: { text: string }[]
   threads: { text: string }[]
-  /** sameAs 合并:把库存老梗的措辞更新为更规范的表述,并 hits+1 */
-  canonicalizedGags: { id: string; text: string }[]
-  reusedGagIds: string[]
   resolvedThreadIds: string[]
   arcAdvance: ArcAdvance | null
   newArc: (NewArc & { closeThreadIds: string[] }) | null
 }
 
 const STORY_TEXT_RULES = {
-  gag: { min: 8, max: 40 },
   thread: { min: 10, max: 60 },
   arcTitle: { min: 2, max: 15 },
   arcHook: { min: 10, max: 60 },
@@ -300,7 +260,7 @@ export function validateStoryText(kind: StoryTextKind, text: string): string | n
   const t = text.trim()
   if (t.length < min) return `太短(至少${min}字)`
   if (t.length > max) return `太长(至多${max}字)`
-  if (kind === 'gag' || kind === 'thread') {
+  if (kind === 'thread') {
     // 主体:甲/乙/丙或当前配置名(旧库条目是甲乙丙,新条目按配置名入库)
     const subjects = ['甲', '乙', '丙', nameOf('A'), nameOf('B'), nameOf('C')]
     if (!subjects.some((s) => t.includes(s))) return '缺少角色主体(甲/乙/丙或其配置名)'
@@ -340,17 +300,13 @@ export const SIMILAR_MERGE_THRESHOLD = 0.7
 
 /** 合并一次入库补丁:
  *  - resolvedThreadIds:台词里已了结的事件线 → 结案移除,不再注入
- *  - reusedGagIds/canonicalizedGags:真实回收 → hits+1(后者顺带把措辞更新为规范表述)
- *  - gags/threads:过字数/主体校验后入库,与库存完全或高度相似(≥0.7)时只计数不新增
+ *  - threads:过字数/主体校验后入库,与库存完全或高度相似(≥0.7)时只刷新时间不新增
  *  - arcAdvance:连续剧情推进一拍;拍到顶自动完结,刚演的拍存为 ending,完结线不再有下一拍
  *  - newArc:新剧情线(活跃线满 3 拒绝),创建同时结案被它吸收的事件线 */
 export async function mergeStory(result: StoryPatch): Promise<void> {
-  const hasNew = result.gags.length > 0 || result.threads.length > 0 || result.canonicalizedGags.length > 0
+  const hasNew = result.threads.length > 0
   const hasBookkeeping =
-    result.resolvedThreadIds.length > 0 ||
-    result.reusedGagIds.length > 0 ||
-    !!result.arcAdvance ||
-    !!result.newArc
+    result.resolvedThreadIds.length > 0 || !!result.arcAdvance || !!result.newArc
   if (!hasNew && !hasBookkeeping) return
   await withFileLock('story', async () => {
     const story = await getStory()
@@ -401,34 +357,6 @@ export async function mergeStory(result: StoryPatch): Promise<void> {
     if (result.resolvedThreadIds.length > 0) {
       story.threads = story.threads.filter((t) => !result.resolvedThreadIds.includes(t.id))
     }
-    // 真实回收计数
-    for (const id of result.reusedGagIds) {
-      const gag = story.gags.find((g) => g.id === id)
-      if (gag) {
-        gag.hits += 1
-        gag.lastSeen = now
-      }
-    }
-    // sameAs 规范化:措辞更新为更自包含的表述,同时计一次使用
-    for (const c of result.canonicalizedGags) {
-      const gag = story.gags.find((g) => g.id === c.id)
-      if (!gag || validateStoryText('gag', c.text)) continue
-      gag.text = c.text.trim()
-      gag.hits += 1
-      gag.lastSeen = now
-    }
-    for (const { text } of result.gags) {
-      if (validateStoryText('gag', text)) continue
-      const existing =
-        story.gags.find((g) => g.text === text) ??
-        story.gags.find((g) => storyTextSimilarity(g.text, text) >= SIMILAR_MERGE_THRESHOLD)
-      if (existing) {
-        existing.lastSeen = now
-        existing.hits += 1
-      } else {
-        story.gags.push({ id: newId('g'), text: text.trim(), lastSeen: now, hits: 0, lastInjectedAt: 0 })
-      }
-    }
     for (const { text } of result.threads) {
       if (validateStoryText('thread', text)) continue
       const existing =
@@ -440,11 +368,6 @@ export async function mergeStory(result: StoryPatch): Promise<void> {
         story.threads.push({ id: newId('t'), text: text.trim(), lastSeen: now, lastInjectedAt: 0 })
       }
     }
-    if (story.gags.length > MAX_GAGS) {
-      story.gags = [...story.gags]
-        .sort((a, b) => b.lastSeen - a.lastSeen || b.hits - a.hits)
-        .slice(0, MAX_GAGS)
-    }
     if (story.threads.length > MAX_THREADS) {
       story.threads = [...story.threads].sort((a, b) => b.lastSeen - a.lastSeen).slice(0, MAX_THREADS)
     }
@@ -452,11 +375,10 @@ export async function mergeStory(result: StoryPatch): Promise<void> {
   })
 }
 
-export async function removeStoryItem(kind: 'gags' | 'threads', id: string): Promise<void> {
+export async function removeStoryItem(id: string): Promise<void> {
   await withFileLock('story', async () => {
     const story = await getStory()
-    if (kind === 'gags') story.gags = story.gags.filter((x) => x.id !== id)
-    else story.threads = story.threads.filter((x) => x.id !== id)
+    story.threads = story.threads.filter((x) => x.id !== id)
     await persist(story)
   })
 }
@@ -516,13 +438,11 @@ function isTopicRelated(text: string, topicTermsSet: Set<string>): boolean {
 }
 
 export interface StoryContextSelection {
-  gags: StoryGag[]
   threads: StoryThread[]
 }
 
 /**
  * 从完整角色世界里挑本轮可注入素材：先按当前主题过滤，再按“最久没注入”轮换。
- * hits 只作低频优先的次级条件，避免越复用越霸榜的正反馈循环。
  */
 export function selectStoryItems(
   story: StoryData,
@@ -530,18 +450,9 @@ export function selectStoryItems(
   maxEach = 2,
 ): StoryContextSelection {
   const terms = topicTerms(topic)
-  const byCooldown = <T extends { lastInjectedAt: number; lastSeen: number; hits?: number }>(
-    a: T,
-    b: T,
-  ): number =>
-    a.lastInjectedAt - b.lastInjectedAt ||
-    (a.hits ?? 0) - (b.hits ?? 0) ||
-    b.lastSeen - a.lastSeen
+  const byCooldown = (a: StoryThread, b: StoryThread): number =>
+    a.lastInjectedAt - b.lastInjectedAt || b.lastSeen - a.lastSeen
   return {
-    gags: story.gags
-      .filter((item) => isTopicRelated(item.text, terms))
-      .sort(byCooldown)
-      .slice(0, maxEach),
     threads: story.threads
       .filter((item) => isTopicRelated(item.text, terms))
       .sort(byCooldown)
@@ -553,30 +464,22 @@ export function selectStoryItems(
 export async function previewStoryContext(
   topic: string,
   maxEach = 2,
-): Promise<{ gags: string[]; threads: string[]; gagIds: string[]; threadIds: string[] }> {
+): Promise<{ threads: string[]; threadIds: string[] }> {
   const story = await getStory()
   const selected = selectStoryItems(story, topic, maxEach)
   return {
-    gags: selected.gags.map((item) => item.text),
     threads: selected.threads.map((item) => item.text),
-    gagIds: selected.gags.map((item) => item.id),
     threadIds: selected.threads.map((item) => item.id),
   }
 }
 
 /** 预览过的素材真正开播时补记注入冷却(下轮换位依据) */
-export async function commitStoryInjection(gagIds: string[], threadIds: string[]): Promise<void> {
-  if (gagIds.length === 0 && threadIds.length === 0) return
+export async function commitStoryInjection(threadIds: string[]): Promise<void> {
+  if (threadIds.length === 0) return
   await withFileLock('story', async () => {
     const story = await getStory()
     const now = Date.now()
     let touched = false
-    for (const item of story.gags) {
-      if (gagIds.includes(item.id)) {
-        item.lastInjectedAt = now
-        touched = true
-      }
-    }
     for (const item of story.threads) {
       if (threadIds.includes(item.id)) {
         item.lastInjectedAt = now
@@ -591,10 +494,10 @@ export async function commitStoryInjection(gagIds: string[], threadIds: string[]
 export async function storyContext(
   topic: string,
   maxEach = 2,
-): Promise<{ gags: string[]; threads: string[] }> {
+): Promise<{ threads: string[] }> {
   const selected = await previewStoryContext(topic, maxEach)
-  await commitStoryInjection(selected.gagIds, selected.threadIds)
-  return { gags: selected.gags, threads: selected.threads }
+  await commitStoryInjection(selected.threadIds)
+  return { threads: selected.threads }
 }
 
 /** 读长期关系:按距上次更新的自然日数做缓慢衰减(每天 trust 向 0 回 0.5、rivalry 降 0.5),
@@ -657,10 +560,9 @@ export async function applyRelationshipEvent(
   })
 }
 
-/** 蒸馏/策展用的带 id 库存清单。必须给全量(老梗 30/事件线 15/活跃剧情 3,体量很小):
+/** 蒸馏/策展用的带 id 库存清单。必须给全量(事件线 15/活跃剧情 3,体量很小):
  *  语义去重要求模型看全库存,只喂热度 top-N 会让它认不出"换说法的重复" */
 export interface StoryInventory {
-  gags: { id: string; text: string }[]
   threads: { id: string; text: string }[]
   arcs: { id: string; title: string; stage: number; hook: string }[]
   /** 已完结剧情只给标题和结局摘要作背景,不得推进、不得再报成事件线 */
@@ -670,7 +572,6 @@ export interface StoryInventory {
 export async function storyInventory(): Promise<StoryInventory> {
   const story = await getStory()
   return {
-    gags: story.gags.map((g) => ({ id: g.id, text: g.text })),
     threads: story.threads.map((t) => ({ id: t.id, text: t.text })),
     arcs: story.arcs
       .filter((a) => a.status === 'active')

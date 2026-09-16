@@ -254,9 +254,9 @@ test('defaultPersonaText:内置模板里的甲乙丙就地替换为配置名', (
 
 test('validateStoryText:接受配置名主体(旧甲乙丙仍兼容)', () => {
   setCharacterNames('小红', '阿强', '妞妞')
-  assert.equal(validateStoryText('gag', '小红的冰箱是阿强的健身器材'), null)
-  assert.equal(validateStoryText('gag', '妞妞把甲乙的泡面种进花盆等它发芽'), null, '旧名系仍兼容')
-  assert.match(validateStoryText('gag', '冰箱其实是健身器材'), /主体/)
+  assert.equal(validateStoryText('thread', '小红的冰箱是阿强的健身器材'), null)
+  assert.equal(validateStoryText('thread', '妞妞把甲乙的泡面种进花盆等它发芽'), null, '旧名系仍兼容')
+  assert.match(validateStoryText('thread', '冰箱其实是被遗忘的健身器材'), /主体/)
 })
 
 test('genders 配置:非法值回默认,合法值透传,缺省各角色对齐出厂音色', async () => {

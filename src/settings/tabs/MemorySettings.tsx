@@ -537,24 +537,11 @@ export function MemorySettings() {
         card="角色世界"
         flash={flashCard}
         title="角色世界"
-        desc="两人之间的老梗/未了结事件,演出中会偶尔回收"
+        desc="两人之间的未了结事件,演出中会偶尔自然提起"
       >
-        {(storyData?.gags.length ?? 0) === 0 && (storyData?.threads.length ?? 0) === 0 && (
+        {(storyData?.threads.length ?? 0) === 0 && (
           <div className="set-note">还没有角色共同记忆 — 演出几集后会自动积累</div>
         )}
-        {storyData?.gags.map((g) => (
-          <div className="mem-fact" key={g.id}>
-            <span className="mem-cat">老梗</span>
-            <span className="mem-content">{g.text}</span>
-            <button
-              className="mem-btn"
-              title="删掉这条老梗"
-              onClick={() => void (async () => { await removeStoryItem('gags', g.id); await refreshStory() })()}
-            >
-              ✕
-            </button>
-          </div>
-        ))}
         {storyData?.threads.map((t) => (
           <div className="mem-fact" key={t.id}>
             <span className="mem-cat">未了结</span>
@@ -562,7 +549,7 @@ export function MemorySettings() {
             <button
               className="mem-btn"
               title="删掉这条事件线"
-              onClick={() => void (async () => { await removeStoryItem('threads', t.id); await refreshStory() })()}
+              onClick={() => void (async () => { await removeStoryItem(t.id); await refreshStory() })()}
             >
               ✕
             </button>
