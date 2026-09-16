@@ -197,7 +197,7 @@ export function GeneralSettings() {
         <div className="set-note">使用者的兴趣爱好在「记忆」页维护 — 日常闲聊会偶尔聊到</div>
       </SettingsCard>
       <SettingsCard card="环境与桌面" flash={flashCard} title="环境与桌面">
-        <SetLine title="桌面环境感知" hint="识别电量与前台应用类型,仅在本机分类,不上传明细">
+        <SetLine title="桌面环境感知" hint="识别电量与前台应用类型,仅在本机分类,不上传明细;感知以角色通知形式每 30 分钟统一提醒(不进对话提示词)">
           <SetSwitch
             checked={form.envSense}
             label="桌面环境感知"

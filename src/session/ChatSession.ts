@@ -41,7 +41,6 @@ import { createGroupChatRuntime, type GroupChatRuntime } from '../groupChat/runt
 import { createRoomPresenter, type RoomPresenter } from '../groupChat/presenter'
 import type { ActorId, ActorRuntimeState, Clock } from '../groupChat/types'
 import { personaText } from '../engine/persona'
-import { worldNote } from '../world'
 import { moodHintLine } from '../engine/moodState'
 import { getMoods } from '../storage/moodStore'
 import { contextAssembler } from '../context/assembler'
@@ -581,13 +580,12 @@ export function createChatSession(
       }
       const combinedRefs = [...memory.refs, ...toolRefs.filter((r) => !memory.refs.some((x) => x.id === r.id))]
       presenterOf().setBadge(chainId, combinedRefs)
-      // 世界注记:与演出通道(llmClient)共享同一冷却账本,同一条情境两边不会复读
-      const worldLine = cfg.envSense ? worldNote(cfg.envNoteCooldownMin * 60_000) : undefined
+      // 电脑感知暂停注入提示词(2026-09 裁决):感知改走通知(runtime/worldNotify);
+      // worldLine 接缝(chainExtras→prepareExtras→actorPrompt)保留,回归时接 worldNote
       const { warmLine, experienceLine, moodLine } = await lifecycleLinesOf(text)
       chainExtras.set(chainId, {
         factsLine: memory.promptFacts.length ? memory.promptFacts.join(';') : undefined,
         briefLine: briefLineOf(cfg),
-        worldLine,
         warmLine,
         experienceLine,
         moodLine,

@@ -37,7 +37,6 @@ import { moodHintLine, moodPromptBlock, type MoodEventCandidate } from './moodSt
 import { getMoods } from '../storage/moodStore'
 import { evaluateChoiceAsk } from '../dialogue/choiceGate'
 import type { TurnWho } from '../dialogue/turnWindow'
-import { worldNote } from '../world'
 import {
   clampPauseMs,
   parseGeneratedDialog,
@@ -223,7 +222,9 @@ export async function generateDialog(req: GenerateDialogRequest): Promise<Perfor
   // 相声解绑版:不使用 secret/callback 装置,校验层同步降档
   const isCrosstalk = mode === 'crosstalk'
   const relationship = isComedy ? pickRelationship(mode) : undefined
-  const envNote = cfg.envSense ? worldNote(cfg.envNoteCooldownMin * 60_000) : undefined
+  // 电脑感知暂停注入提示词(2026-09 裁决):感知改以通知形式按统一间隔告知用户
+  // (runtime/worldNotify);提示词接缝(envNote 形参)保留,回归时接 worldNote 即可
+  const envNote: string | undefined = undefined
   // 长期关系底色:随互动缓慢漂移,给当集台词定相互态度;负面底色按基调分档(见 bondNoteFor)
   const bondNote = bondNoteFor(await getBond(), isComedy)
   // 心情余波:跨集情绪惯性(上集蒸馏入库的余波 + 观众互动小步),只影响开场姿态与前几句语气

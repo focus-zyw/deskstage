@@ -8,7 +8,8 @@ import { Bubble } from './stage/Bubble'
 import { startScreenshot, applyScreenshotHotkey } from './capture'
 import { applyAppHotkeys, setHotkeyHandler } from './hotkeys'
 import { setCharacterGenders, setCharacterNames, setPersonaOverride, setCEnabled, nameOf } from './engine/persona'
-import { startWorld, onWorldEvent } from './world'
+import { startWorld, onWorldEvent, worldNote, isFullscreenApp } from './world'
+import { createWorldNotify, WORLD_NOTIFY_INTERVAL_MS } from './runtime/worldNotify'
 import {
   balanceVendorOf,
   cachedBalanceLine,
@@ -108,6 +109,7 @@ import { UtilityCards } from './ui/UtilityCard'
 import {
   DEFAULT_CONFIG,
   getConfig,
+  getConfigSnapshot,
   saveConfig,
   useConfigSnapshot,
   WEBCHAT_SITE_IDS,
@@ -919,6 +921,15 @@ function App() {
       }),
       // 工具栏按钮的热区由 ui/ControlBar 自行注册
     ]
+    // 电脑感知通知:每 30 分钟统一显示一条(多条感知合并为一句,角色气泡告知);
+    // 不进生成提示词;勿扰/演出/语音/全屏中顺延(冷却账本不消费,感知不丢)
+    const worldNotify = createWorldNotify({
+      getNote: () => worldNote(getConfigSnapshot().envNoteCooldownMin * 60_000),
+      allowed: () => getCaps().proactiveAllowed && !isFullscreenApp(),
+      say: (text) => presenterSayRef.current('A', text, { ms: 8000, action: 'talk' }),
+    })
+    worldNotify.start(WORLD_NOTIFY_INTERVAL_MS)
+    unsubs.push(() => worldNotify.stop())
     return () => unsubs.forEach((u) => u())
     // 挂载一次:命中区矩形经 getter 动态取,布局函数行为恒定
     // eslint-disable-next-line react-hooks/exhaustive-deps
