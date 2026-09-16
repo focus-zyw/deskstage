@@ -45,6 +45,8 @@ export async function webchatAsk(
   }
   signal?.addEventListener('abort', onAbort, { once: true })
   const t0 = Date.now()
+  // 详情档:网页通道的 prompt 编译结果(mergeMessages 单文本)
+  if (diagRef) diag.detailText(diagRef.turnId, { textKind: 'prompt', text: prompt })
   // 轨迹按 requestId 拉取即删(Rust 侧有界表):双模型并行互不覆盖、不留积压
   const pullTrace = () => {
     if (!diagRef) return

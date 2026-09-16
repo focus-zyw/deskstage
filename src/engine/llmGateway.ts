@@ -74,6 +74,19 @@ function promptShapeOf(messages: GatewayMessage[]): {
   return { promptChars, systemChars, userChars: promptChars - systemChars }
 }
 
+/** 编译后的 prompt 文本(详情档专用;图片段以占位符表示——图片本体任何档位不进诊断) */
+function compiledPromptOf(messages: GatewayMessage[]): string {
+  return messages
+    .map((m) => {
+      const body =
+        typeof m.content === 'string'
+          ? m.content
+          : m.content.map((p) => (p.type === 'text' ? p.text : '[图片略]')).join('\n')
+      return `[${m.role}]\n${body}`
+    })
+    .join('\n\n')
+}
+
 /** 错误分类:超时/HTTP 状态/网络层/解析/空响应/取消,供诊断与面板归纳 */
 export function classifyLlmError(e: unknown): {
   cancelled: boolean
@@ -171,6 +184,8 @@ export async function complete(options: CompletionOptions): Promise<string> {
         contextLines: d.contextLines ?? 0,
         timeoutMs,
       })
+      // 详情档:脱敏后的 prompt 编译结果(协议冲突/拼装出错/记忆污染类问题的证据)
+      diag.detailText(d.turnId, { textKind: 'prompt', text: compiledPromptOf(messages) })
     }
     // 计时从请求真正发出起算(getConfig 的缓存读不算网络延迟)
     t0 = Date.now()
@@ -315,6 +330,19 @@ export async function completeStream(
     const model = options.model?.trim() || profileEntry?.model || cfg.model
     const baseUrl = profileEntry?.baseUrl || cfg.baseUrl
     const body = JSON.stringify({ model, messages, temperature, max_tokens: maxTokens, stream: true })
+    if (d) {
+      const shape = promptShapeOf(messages)
+      diag.llmStarted(d.turnId, {
+        call: d.call,
+        transport: 'api',
+        model,
+        endpointHost: hostOf(baseUrl),
+        ...shape,
+        contextLines: d.contextLines ?? 0,
+        timeoutMs,
+      })
+      diag.detailText(d.turnId, { textKind: 'prompt', text: compiledPromptOf(messages) })
+    }
     t0 = Date.now()
     if (!inTauri) {
       const res = await fetch(`${baseUrl}/chat/completions`, {

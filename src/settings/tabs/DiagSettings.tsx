@@ -94,7 +94,7 @@ function describeEvent(ev: DiagEvent): { badge: string; text: string; ids?: stri
     case 'asr_result':
       return { badge: 'ASR', text: `${fmtMs(ev.ms)} · ${ev.chars} 字${ev.audioMs ? ` · 音频 ${fmtMs(ev.audioMs)}` : ''}${ev.errorKind ? ` · ${ev.errorKind}` : ''}` }
     case 'detail_text':
-      return { badge: '正文', text: ev.text }
+      return { badge: ev.textKind === 'prompt' ? 'prompt' : '正文', text: ev.text }
     default:
       return { badge: '?', text: '' }
   }

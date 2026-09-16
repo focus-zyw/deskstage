@@ -220,7 +220,7 @@ export type DiagEvent =
       kind: 'detail_text'
       ts: number
       level: 'detail'
-      textKind: 'input' | 'reply' | 'asr'
+      textKind: 'input' | 'reply' | 'asr' | 'prompt'
       seg?: number
       /** 已脱敏文本(或显式含原文档强制 scrub 过的原文) */
       text: string

@@ -408,13 +408,21 @@ export const diag = {
 
   /** 唯一正文通道:详情未捕获时整体关闭;开启时强制 redactText(rawText 档仍强制 scrub)。
    *  调用方传原始文本,无权自定脱敏 */
-  detailText(id: string, p: { textKind: 'input' | 'reply' | 'asr'; text: string; seg?: number }): void {
+  detailText(id: string, p: { textKind: 'input' | 'reply' | 'asr' | 'prompt'; text: string; seg?: number }): void {
     try {
       const s = ring.find((x) => x.id === id)
       if (!s || !s.hasDetail) return
-      const maxLen = p.textKind === 'reply' ? 1000 : 500
+      const maxLen = p.textKind === 'reply' ? 1000 : p.textKind === 'prompt' ? 2000 : 500
       const rawChars = p.text.length
-      const text = detail.rawText ? scrubSecrets(p.text) : redactText(p.text, maxLen)
+      let raw = p.text
+      // prompt 编译结果可达数十 KB:保头(人设/记忆行)保尾(输出协议/用户消息),掐中段——
+      // 协议冲突类 bug 的证据几乎总在头尾;掩码后不再二次截断(长度由本切片保证)
+      if (p.textKind === 'prompt' && raw.length > maxLen) {
+        raw = `${raw.slice(0, 1400)}
+…[中略,原文 ${rawChars} 字符]…
+${raw.slice(-560)}`
+      }
+      const text = detail.rawText ? scrubSecrets(raw) : redactText(raw, p.textKind === 'prompt' ? raw.length + 400 : maxLen)
       if (!text) return
       emit(id, { kind: 'detail_text', ts: Date.now(), level: 'detail', textKind: p.textKind, seg: p.seg, text, rawChars })
     } catch {

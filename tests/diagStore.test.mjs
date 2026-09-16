@@ -83,6 +83,26 @@ test('详情门控:未捕获时 detail_text 整体关闭;捕获后入库且必�
   assert.equal(detail.rawChars, '我手机 13812345678'.length)
 })
 
+test('详情档捕获 prompt 编译结果:掩码 + 保头保尾截断;默认档不入库', () => {
+  store.armDetail({ once: true })
+  const id = store.diag.beginTurn({ id: 'p1', source: 'chat', text: 'hi' })
+  const big =
+    '系统协议段,只能输出JSON。'.repeat(200) +
+    '中间段本段应被掐掉。'.repeat(100) +
+    '结尾用户消息 联系 13812345678 请遵守协议。'.repeat(30)
+  store.diag.detailText(id, { textKind: 'prompt', text: big })
+  const ev = eventsOf(id).find((e) => e.kind === 'detail_text')
+  assert.ok(ev, '详情档应入库 prompt 编译结果')
+  assert.ok(!ev.text.includes('13812345678'), '手机号必须被掩码')
+  assert.ok(ev.text.includes('[PHONE]'), '尾部的手机号应掩码为 [PHONE]')
+  assert.ok(!ev.text.includes('中间段本段应被掐掉'), '中段应被丢弃')
+  assert.ok(ev.text.includes('中略'), '超长 prompt 应掐中段')
+  assert.ok(ev.text.includes('原文 ' + big.length + ' 字符'), '截断标记记原长')
+  assert.ok(ev.text.startsWith('系统协议段'), '头部(人设/协议)保留')
+  assert.ok(ev.text.includes('请遵守协议'), '尾部(协议尾/用户消息)保留')
+  assert.equal(ev.rawChars, big.length)
+})
+
 test('once 模式:会话定稿后详情捕获自动关闭', () => {
   store.armDetail({ once: true })
   assert.equal(store.getDetailState().armed, true)
