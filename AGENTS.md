@@ -30,6 +30,16 @@
 - 提交格式:`type(scope): 标题——详细说明`(feat/fix/docs/perf/refactor;scope 取模块域,
   如 crosstalk/voice/quirks/test)。正文写清动机与权衡,一行说一件事。
 
+## 行尾(CRLF)——Windows 仓库的惯用坑
+
+- 仓库索引统一 LF(`.gitattributes` 已定 `eol=lf`),但本机 `core.autocrlf=true`、
+  历史工作区 CRLF/LF 混杂:**处理仓库文件的脚本不能假设行尾**。
+- 写 codemod/正则/一次性脚本时:行尾锚定一律 `\r?\n`,或先把文件统一 `\r\n → \n` 再处理;
+  正则字面量里的 `//` 记得转义成 `\/\/`(JS 正则会被提前终止)。
+- 判断脚本是否真正生效,看"处理后残留"而不是看它有没有报错——codemod 静默失配是常态。
+- 待工作区干净后可跑一次 `git add --renormalize .` 把存量文件统一成 LF
+  (工作区还有未提交改动时**不要跑**,会把别人的改动一起卷进提交)。
+
 ## 架构速览(目录 → 职责)
 
 - `src/engine` — LLM 客户端、提示词组装、AI 生成类功能;`src/session` — ChatSession 会话编排
