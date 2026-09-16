@@ -12,7 +12,13 @@
 // 本文件不做发言决策、不碰队列与游标——那些都在 src/groupChat;呈现契约见 chatTypes。
 import type { Speaker } from '../performer/player'
 import { pushTurn } from '../dialogue/turnWindow'
-import { appendChatTurns, type ChatMemoryRef, type ChatWho } from '../storage/chatLogStore'
+import {
+  appendChatTurns,
+  directSessionId,
+  GROUP_SESSION_ID,
+  type ChatMemoryRef,
+  type ChatWho,
+} from '../storage/chatLogStore'
 import {
   emptyTurnMemory,
   prepareTurnMemory,
@@ -85,6 +91,8 @@ export interface ChatSessionOpts {
   /** 追加/覆盖角色适配(测试用假件;缺省按绑定构造 api/webchat 适配) */
   adapters?: Partial<Record<ActorId, ActorModelAdapter>>
   legacy?: LegacyChatSession
+  /** 房间:缺省 = 群聊唯一房间(group:main);direct = 单角色单聊房间(direct:<slot>) */
+  room?: { kind: 'direct'; slot: ActorId }
 }
 
 const emptyActors = (): Record<ActorId, ActorRuntimeState> => ({
@@ -106,6 +114,11 @@ export function createChatSession(
     },
   }
   const loadConfig = opts.config ?? getConfig
+  // 房间:group:main(唯一群聊)/ direct:<slot>(每角色一个单聊房间)。
+  // 单聊 = 面板模式呈现(不弹舞台气泡/不 TTS)+ prompt 直答形态 + 仅该角色参与
+  const room = opts.room
+  const directMode = room?.kind === 'direct'
+  const roomSessionId = room ? directSessionId(room.slot) : GROUP_SESSION_ID
 
   // ---------- 共享状态 ----------
   const listeners = new Set<() => void>()
@@ -192,15 +205,16 @@ export function createChatSession(
     void cur?.adapter.dispose?.()
     const adapter =
       binding.kind === 'api'
-        ? createApiActorAdapter({ profileId: binding.profileId })
+        ? createApiActorAdapter({ profileId: binding.profileId, protocol: directMode ? 'plain' : 'schema' })
         : createWebchatActorAdapter({
             actor: slot,
             site: binding.site,
-            roomId: () => 'main',
+            roomId: () => roomSessionId,
             bindingRevision: () => {
               const b = configCache ? effectiveBinding(configCache, slot) : null
               return b && b.kind === 'web' ? `web:${b.site}` : 'off'
             },
+            protocol: directMode ? 'plain' : 'schema',
           })
     realAdapters.set(slot, { key, adapter })
     return adapter
@@ -225,16 +239,22 @@ export function createChatSession(
     if (!presenter) {
       presenter = createRoomPresenter({
         clock,
-        presentTurn: (item) =>
-          host.presentTurn({
-            speaker: item.speaker,
-            text: item.text,
-            holdMs: item.holdMs,
-            memoryRefs: item.memoryRefs,
-          }),
-        speakTracked: (who, text) =>
-          (engine.tts?.speakTracked ?? ((w, t) => speakTracked(w, t, undefined, currentChannel)))(who, text),
-        prefetch: (who, text) => engine.tts?.prefetch?.(who, text) ?? prefetchVoice(who, text),
+        // 单聊房间 = 面板模式:回复只在聊天面板内渲染,不弹舞台气泡、不朗读;
+        // 提交顺序/静止谓词机制不变(立即 ended 的句柄让 presenter 快速放行)
+        presentTurn: room
+          ? () => {}
+          : (item) =>
+              host.presentTurn({
+                speaker: item.speaker,
+                text: item.text,
+                holdMs: item.holdMs,
+                memoryRefs: item.memoryRefs,
+              }),
+        speakTracked: room
+          ? () => ({ started: Promise.resolve('silent' as const), ended: Promise.resolve(), stop: () => {} })
+          : (who, text) =>
+              (engine.tts?.speakTracked ?? ((w, t) => speakTracked(w, t, undefined, currentChannel)))(who, text),
+        prefetch: room ? () => {} : (who, text) => engine.tts?.prefetch?.(who, text) ?? prefetchVoice(who, text),
         onTurnSpeechStart: () => host.onTurnSpeechStart?.(),
         holdRuntime: () => runtimeOf().presentationHold(),
       })
@@ -249,17 +269,25 @@ export function createChatSession(
       clock,
       config: () => {
         const cfg = configCache
+        const actors = {
+          A: cfg?.groupChatActors.A ?? DEFAULT_CONFIG.groupChatActors.A,
+          B: cfg?.groupChatActors.B ?? DEFAULT_CONFIG.groupChatActors.B,
+          C: cfg?.groupChatActors.C ?? DEFAULT_CONFIG.groupChatActors.C,
+        }
+        // 单聊房间:只有房主角色参与,其余一律 disabled(游标跟尾,不参与不补答)
+        if (room) {
+          for (const id of ['A', 'B', 'C'] as const) {
+            if (id !== room.slot) actors[id] = { ...actors[id], binding: { kind: 'disabled' } }
+          }
+        }
         return {
           names: { A: cfg?.names.a || '甲', B: cfg?.names.b || '乙', C: cfg?.names.c || '丙' },
           userName: cfg?.userProfile.userName || '你',
           personaOf: (actor) => personaText(actor),
-          actors: {
-            A: cfg?.groupChatActors.A ?? DEFAULT_CONFIG.groupChatActors.A,
-            B: cfg?.groupChatActors.B ?? DEFAULT_CONFIG.groupChatActors.B,
-            C: cfg?.groupChatActors.C ?? DEFAULT_CONFIG.groupChatActors.C,
-          },
+          actors,
         }
       },
+      direct: directMode,
       adapters: {
         A: opts.adapters?.A ?? slotAdapter('A'),
         B: opts.adapters?.B ?? slotAdapter('B'),
@@ -297,7 +325,7 @@ export function createChatSession(
             text: msg.text,
             id: currentTurnId ?? undefined,
             ts: msg.createdAt,
-            sessionId: 'group:main',
+            sessionId: roomSessionId,
             roomSeq: msg.roomSeq,
             epoch: msg.epoch,
             causalRootId: msg.causalRootId,
@@ -317,7 +345,7 @@ export function createChatSession(
             id: newTurnId(),
             parentTurnId: rootTurnId,
             ts: msg.createdAt,
-            sessionId: 'group:main',
+            sessionId: roomSessionId,
             roomSeq: msg.roomSeq,
             epoch: msg.epoch,
             causalRootId: msg.causalRootId,
@@ -431,7 +459,7 @@ export function createChatSession(
         clock.setTimeout(() => host.clearUser(text), 6000)
         return 'accepted'
       }
-      if (cfg.groupChatActors.engine === 'legacy') {
+      if (cfg.groupChatActors.engine === 'legacy' && !directMode) {
         mode = 'legacy'
         return legacyOf().send(raw, opts2)
       }

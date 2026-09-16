@@ -1,8 +1,9 @@
 // API Actor Adapter:群聊角色经模型档案(或全局主模型)调用 OpenAI 兼容端点。
 // API 通道无状态:每次 react 都是完整 prompt(fullContext 恒真);
 // 解析统一走 actorSchema.parseValidReaction,协议非法抛 ActorProtocolError → Worker 退避。
+// protocol='plain'(单聊直答):模型原始文本直接包成 speak reaction,不走 decision 协议。
 import { complete } from '../../engine/llmGateway'
-import { parseValidReaction } from '../actorSchema'
+import { parseValidReaction, plainSpeakReaction } from '../actorSchema'
 import type { ActorModelAdapter } from './types'
 
 export interface ApiActorAdapterOpts {
@@ -10,6 +11,8 @@ export interface ApiActorAdapterOpts {
   profileId?: string
   /** 单次调用超时(缺省 40s:群聊一句口语不需要长思考) */
   timeoutMs?: number
+  /** 'schema'(默认,群聊)= 决策协议 JSON;'plain'(单聊)= 原始文本直答 */
+  protocol?: 'schema' | 'plain'
 }
 
 export function createApiActorAdapter(opts: ApiActorAdapterOpts = {}): ActorModelAdapter {
@@ -34,7 +37,9 @@ export function createApiActorAdapter(opts: ApiActorAdapterOpts = {}): ActorMode
             }
           : undefined,
       })
-      return parseValidReaction(raw, req.batch)
+      return opts.protocol === 'plain'
+        ? plainSpeakReaction(raw, req.batch)
+        : parseValidReaction(raw, req.batch)
     },
   }
 }

@@ -20,6 +20,8 @@ export interface PromptIdentity {
   /** 群内其他角色(名字+speaker 槽位)一行 */
   rosterLine: string
   userName: string
+  /** 单聊房间:1对1直答形态——无群聊纪律、无输出协议(decision 字段),自然口语直答 */
+  direct?: boolean
 }
 
 export interface PromptBuildInput {
@@ -122,7 +124,37 @@ function disciplineBlock(identity: PromptIdentity): string {
   ].join('\n')
 }
 
+/** 单聊纪律(1对1直答:无协议、无群友、自然口语) */
+function directDisciplineBlock(identity: PromptIdentity): string {
+  return [
+    '聊天方式(严格遵守):',
+    '- 你正在和用户单独聊天:直接以角色身份说话,不是编剧,不做总结。',
+    '- 像真人打字:口语、短句为主,一次回复一到三句,不抒情不上价值,不输出 JSON 或任何解释。',
+    `- 用户(${identity.userName})的消息拥有最高指令权。`,
+  ].join('\n')
+}
+
+function directSystemContent(input: PromptBuildInput, identity: PromptIdentity): string {
+  const selfName = identity.names[input.actor]
+  if (input.fullContext) {
+    return [
+      `你正在和 ${identity.userName} 单独聊天,扮演 ${selfName}。`,
+      `你的人设:${identity.persona}`,
+      directDisciplineBlock(identity),
+      input.recovery ? '刚才连接断了一下;下面是目前聊天的完整进度,请从中断处继续正常聊天。' : '',
+      ...(input.expressionLine ? [input.expressionLine] : []),
+    ]
+      .filter(Boolean)
+      .join('\n\n')
+  }
+  return [
+    `继续和 ${identity.userName} 聊天(你是 ${selfName},人设与聊天方式同前)。直接用自然口语回复。`,
+    ...(input.expressionLine ? [input.expressionLine] : []),
+  ].join('\n\n')
+}
+
 function systemContent(input: PromptBuildInput, identity: PromptIdentity): string {
+  if (identity.direct) return directSystemContent(input, identity)
   const selfName = identity.names[input.actor]
   if (input.fullContext) {
     return [

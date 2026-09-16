@@ -104,6 +104,8 @@ export function createActorWorker(deps: ActorWorkerDeps): ActorWorker {
   }
 
   function maySpeakHintFor(batch: ActorBatch, now: number): { maySpeak: boolean; remaining: number | null } {
+    // 单聊房间:1对1直答没有"额度/听权"概念,恒可说(权威裁决仍在 router 预算)
+    if (deps.identity().direct) return { maySpeak: true, remaining: null }
     const rootId = batch.primaryUserMessageId ?? batch.messages[0].causalRootId
     const chain = router.chainOf(rootId) ?? router.activeChain()
     if (!chain) return { maySpeak: false, remaining: null }

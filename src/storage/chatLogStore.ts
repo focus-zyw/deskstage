@@ -74,6 +74,15 @@ export function deriveLegacyId(index: number, text: string, ts: number): string 
 // 跨窗:写入发生在主窗,设置窗的模块实例感知不到——写入端 emit 'chatlog-bump',
 // 设置窗 installChatlogSync() 监听后 bump 本地 version(修既有跨窗缝隙)。
 const CHATLOG_BUMP_EVENT = 'chatlog-bump'
+
+// ---------- 房间(sessionId)约定:群聊唯一房间 + 每角色一个单聊房间 ----------
+
+export const GROUP_SESSION_ID = 'group:main'
+
+/** 单聊房间 id:direct:<slot> */
+export function directSessionId(slot: 'A' | 'B' | 'C'): string {
+  return `direct:${slot}`
+}
 const inTauriHost = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 
 /** 只有主窗(唯一写入端)才向外推送——设置窗收到 bump 后本地 bump 也会走到这里,
@@ -209,8 +218,9 @@ export async function appendChatTurns(
   }
 }
 
-/** 最近 n 条聊天消息(文件为追加式,天然按时间升序;超上限的裁剪搭读取便车,追加路径保持轻量) */
-export async function listChatTurns(limit = 500): Promise<ChatLogEntry[]> {
+/** 最近 n 条聊天消息;sessionId 给定时只返回该房间(单聊/群聊房间过滤;
+ *  无 sessionId 的旧条目/演出插话一律归群聊房间) */
+export async function listChatTurns(limit = 500, sessionId?: string): Promise<ChatLogEntry[]> {
   try {
     const file = await getLogFile()
     if (!(await exists(file))) return []
@@ -224,11 +234,43 @@ export async function listChatTurns(limit = 500): Promise<ChatLogEntry[]> {
       }
     }
     if (out.length > MAX_TURNS) void trimChatLog()
-    return out.slice(-limit)
+    const picked = sessionId ? filterTurnsBySession(out, sessionId) : out
+    return picked.slice(-limit)
   } catch (e) {
     console.warn('聊天消息读取失败', e)
     return []
   }
+}
+
+/** 房间过滤(纯函数,导出供测试):精确匹配 sessionId;
+ *  无 sessionId 的条目(legacy/演出插话/备忘提醒)视为群聊房间的一部分 */
+export function filterTurnsBySession(turns: ChatLogEntry[], sessionId: string): ChatLogEntry[] {
+  return turns.filter((e) => (e.sessionId ?? GROUP_SESSION_ID) === sessionId)
+}
+
+// ---------- 会话摘要(聊天入口面板的列表页) ----------
+
+export interface ConversationSummary {
+  sessionId: string
+  who: ChatWho
+  text: string
+  ts: number
+}
+
+/** 按 sessionId 聚合每间房最后一条(纯函数,导出供测试);按时间降序 */
+export function summarizeConversations(turns: ChatLogEntry[]): ConversationSummary[] {
+  const byId = new Map<string, ConversationSummary>()
+  for (const e of turns) {
+    const id = e.sessionId ?? GROUP_SESSION_ID
+    const prev = byId.get(id)
+    if (!prev || e.ts >= prev.ts) byId.set(id, { sessionId: id, who: e.who, text: e.text, ts: e.ts })
+  }
+  return [...byId.values()].sort((a, b) => b.ts - a.ts)
+}
+
+/** 读尾部并聚合会话摘要(列表页一次取全) */
+export async function loadConversationSummaries(limit = 500): Promise<ConversationSummary[]> {
+  return summarizeConversations(await listChatTurns(limit))
 }
 
 /** 清空聊天消息(设置页"清空聊天消息"按钮;演出历史不受影响) */

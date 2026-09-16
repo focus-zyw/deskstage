@@ -82,6 +82,8 @@ export interface GroupChatDeps {
   onUserMessage?(msg: RoomMessage, primary: ActorId | null): void
   /** 运行事件(停止/epoch/状态)诊断钩子 */
   onEvent?(e: { type: 'paused' | 'resumed' | 'epoch' | 'status' | 'stale-drop'; actor?: ActorId; detail?: string }): void
+  /** 单聊房间:1对1直答形态(prompt 去协议/去群聊纪律,maySpeak 恒真) */
+  direct?: boolean
 }
 
 /** 避免把 ActorBatch 类型泄漏到宿主 deps 的别名 */
@@ -161,6 +163,7 @@ export function createGroupChatRuntime(deps: GroupChatDeps): GroupChatRuntime {
       persona: cfg.personaOf(actor),
       rosterLine: others.map((id) => `${cfg.names[id]}(speaker "${id}")`).join('、'),
       userName: cfg.userName,
+      direct: deps.direct,
     }
   }
 

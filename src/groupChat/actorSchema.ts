@@ -92,3 +92,19 @@ export function parseValidReaction(raw: string, batch: ActorBatch): ActorReactio
   }
   return parsed
 }
+
+/** 单聊直答形态(不走 decision 协议):模型原始文本直接包成 speak reaction。
+ *  为什么内部仍是 ActorReaction:router 的预算/去重/游标机制原样复用,
+ *  只是"模型必须回显 JSON"这道协议在单聊里没有意义。空文本视为失败 → Worker 退避。
+ *  直答不设 80 字台词上限(1对1自然回复可以更长),钳 600 字防御失控输出 */
+export function plainSpeakReaction(raw: string, batch: ActorBatch): ActorReaction {
+  const text = raw.trim().slice(0, 600)
+  if (!text) throw new ActorProtocolError('empty-text', raw.slice(0, 120))
+  return {
+    protocolVersion: 1,
+    batchId: batch.id,
+    ackThrough: batch.throughSeq,
+    decision: 'speak',
+    reply: { text, replyTo: [], action: 'talk' },
+  }
+}

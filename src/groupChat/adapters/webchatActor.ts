@@ -15,7 +15,7 @@
 // · 上下文卫生:同会话连续 15 轮自动换代重建(Rust 端 reset 由本轮承担)。
 import type { WebchatSiteId } from '../../storage/configStore'
 import { askConversation, releaseConversation } from '../../engine/webchatHub'
-import { parseValidReaction } from '../actorSchema'
+import { parseValidReaction, plainSpeakReaction } from '../actorSchema'
 import type { ActorId } from '../types'
 import type { ActorModelAdapter } from './types'
 
@@ -25,12 +25,14 @@ const CONTEXT_RESET_TURNS = 15
 export interface WebchatActorAdapterOpts {
   actor: ActorId
   site: WebchatSiteId
-  /** 群标识(当前恒 'main';多房间预留) */
+  /** 房间标识(群聊 'main';单聊 'direct:<slot>')——网页会话键四段式的一段 */
   roomId(): string
   /** 绑定指纹:绑定内容变化即换新会话键(如 `api→web:deepseek`) */
   bindingRevision(): string
   /** 单次调用超时(缺省 150s:网页生成含排队与稳定窗) */
   timeoutMs?: number
+  /** 'schema'(默认,群聊)= 决策协议 JSON;'plain'(单聊)= 原始文本直答 */
+  protocol?: 'schema' | 'plain'
 }
 
 function isAbort(e: unknown): boolean {
@@ -106,7 +108,9 @@ export function createWebchatActorAdapter(opts: WebchatActorAdapterOpts): ActorM
       invalidated = false
       fresh = false
       turnCount += 1
-      return parseValidReaction(raw, req.batch)
+      return opts.protocol === 'plain'
+        ? plainSpeakReaction(raw, req.batch)
+        : parseValidReaction(raw, req.batch)
     },
 
     async dispose() {
