@@ -4604,27 +4604,66 @@ body:has(.gal-page) {
 }
 
 /* 输入行 */
-.chatp-input-row {
+/* 输入容器:边框/底色在容器上,textarea 透明内嵌,纸飞机发送钮在内部右下角 */
+.chatp-input-wrap {
+  position: relative;
   display: flex;
   align-items: flex-end;
-  gap: 8px;
+  max-width: 100%;
+  min-width: 160px;
+  padding: 4px 42px 4px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: var(--radius-input);
+  background: rgba(255, 255, 255, 0.08);
+}
+/* 内容测量尺:与输入框同字体,离屏渲染,不参与布局 */
+.chatp-sizer {
+  position: absolute;
+  visibility: hidden;
+  white-space: pre;
+  font-size: 13px;
+  font-family: inherit;
+  line-height: 1.5;
 }
 .chatp-input {
   flex: 1;
   min-width: 0;
-  height: 38px; /* 单行:与发送按钮平齐;内容放不下才自长,封顶 120px */
-  max-height: 120px;
-  padding: 8px 10px;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  border-radius: var(--radius-input);
-  background: rgba(255, 255, 255, 0.08);
+  max-height: 104px;
+  padding: 5px 0;
+  background: transparent;
+  border: none;
+  outline: none;
+  resize: none;
   color: #fff;
   font-size: 13px;
   font-family: inherit;
   line-height: 1.5;
-  outline: none;
-  resize: none;
   overflow-y: auto;
+}
+.chatp-send {
+  position: absolute;
+  right: 5px;
+  bottom: 5px;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  border: none;
+  border-radius: 50%;
+  background: rgba(124, 108, 240, 0.95);
+  color: #fff;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: background 0.15s ease;
+}
+.chatp-send:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.chatp-send:not(:disabled):hover {
+  background: rgba(124, 108, 240, 1);
 }
 .chatp-input:focus {
   border-color: rgba(124, 108, 240, 0.9);

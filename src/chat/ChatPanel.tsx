@@ -60,12 +60,21 @@ export function ChatPanel({ innerRef, pos, pinned, onPinChange, onClose, route }
   const [userName, setUserName] = useState('你')
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
+  const placeholder =
+    view.kind === 'group'
+      ? `和「${groupName}」说点什么…(Enter 发送)`
+      : view.kind === 'direct'
+        ? `和${nameOf(view.slot)}说点什么…(Enter 发送)`
+        : '聊天'
+  const speakerName = (who: string): string => (who === 'user' ? userName : nameOf(who as ActorId))
   /** 当前会话 busy(角色在生成/回应中):订阅会话快照 */
   const [busy, setBusy] = useState(false)
   const [hint, setHint] = useState('')
   const [seen, setSeen] = useState<Record<string, number>>(() => loadSeen())
   const feedRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  const rowRef = useRef<HTMLDivElement>(null)
+  const sizerRef = useRef<HTMLSpanElement>(null)
   const viewRef = useRef<View>(view)
   viewRef.current = view
 
@@ -123,13 +132,22 @@ export function ChatPanel({ innerRef, pos, pinned, onPinChange, onClose, route }
     if (el) el.scrollTop = el.scrollHeight
   }, [turns])
 
-  // 输入框自长:默认单行(与发送按钮平齐),内容放不下才长高,封顶后内部滚动
+  // 输入框宽度跟随内容:默认占位符宽(紧凑),文字放不下才拓宽,顶到发送按钮为止
+  // (拓宽上限 = 行内可用宽度;到达上限后高度自长,封顶 120px)
+  // 输入框宽度跟随内容:默认占位符宽(紧凑),文字放不下才拓宽,顶到面板右缘为止;
+  // 到达宽度上限后高度自长(封顶 104px)。发送按钮在输入框内部右下角(ChatGPT 式)
   useEffect(() => {
-    const el = inputRef.current
-    if (!el) return
-    el.style.height = 'auto'
-    el.style.height = `${Math.min(120, el.scrollHeight)}px`
-  }, [draft])
+    const sizer = sizerRef.current
+    const wrap = rowRef.current
+    const input = inputRef.current
+    if (!sizer || !wrap || !input) return
+    sizer.textContent = draft || placeholder
+    const available = Math.max(wrap.parentElement?.clientWidth ?? 432, 160)
+    const content = sizer.offsetWidth + 56 // 左 padding 10 + 右侧按钮区 44 + 边框 2
+    wrap.style.width = `${Math.max(Math.min(content, available), 160)}px`
+    input.style.height = 'auto'
+    input.style.height = `${Math.min(104, input.scrollHeight)}px`
+  }, [draft, view, placeholder])
 
   // 当前会话 busy 订阅(回应中提示;群聊 busy 不阻断继续输入)
   useEffect(() => {
@@ -172,7 +190,6 @@ export function ChatPanel({ innerRef, pos, pinned, onPinChange, onClose, route }
     setSending(false)
   }
 
-  const speakerName = (who: string): string => (who === 'user' ? userName : nameOf(who as ActorId))
 
   function renderFeed() {
     if (turns.length === 0) {
@@ -264,12 +281,13 @@ export function ChatPanel({ innerRef, pos, pinned, onPinChange, onClose, route }
           <div className="chatp-feed" ref={feedRef}>
             {renderFeed()}
           </div>
-          <div className="chatp-input-row">
+          <div className="chatp-input-wrap" ref={rowRef}>
+            <span ref={sizerRef} className="chatp-sizer" aria-hidden="true" />
             <textarea
               ref={inputRef}
               className="chatp-input"
               rows={1}
-              placeholder={`和${view.kind === 'group' ? `「${groupName}」` : nameOf(view.slot)}说点什么…(Enter 发送)`}
+              placeholder={placeholder}
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={(e) => {
@@ -280,12 +298,14 @@ export function ChatPanel({ innerRef, pos, pinned, onPinChange, onClose, route }
               }}
             />
             <button
-              className="panel-btn primary"
+              className="chatp-send"
+              title={busy ? '回应中…' : '发送'}
               disabled={sending || !draft.trim()}
-              title={busy ? '角色正在回应,可继续输入' : ''}
               onClick={() => void send()}
             >
-              {busy || sending ? '回应中…' : '发送'}
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
+                <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
+              </svg>
             </button>
           </div>
           {hint && <div className="tr-err">{hint}</div>}
