@@ -5,6 +5,17 @@ import type { ChatSession } from './ChatSession'
 import { createDirectSession, type DirectSessionOpts } from './directSession'
 
 const directRooms = new Map<ActorId, ChatSession>()
+let group: ChatSession | null = null
+
+/** 群聊会话装配(App 创建后注册;聊天面板/设置桥经此取用) */
+export function registerGroupSession(s: ChatSession): void {
+  group = s
+}
+
+export function getGroupSession(): ChatSession {
+  if (!group) throw new Error('群聊会话尚未装配')
+  return group
+}
 
 /** 单聊会话(每角色一间,惰性创建) */
 export function getDirectSession(slot: ActorId, opts?: DirectSessionOpts): ChatSession {

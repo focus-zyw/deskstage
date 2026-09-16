@@ -4471,3 +4471,162 @@ body:has(.gal-page) {
   text-align: center;
   pointer-events: none;
 }
+
+/* ---------- 聊天面板:统一聊天入口(会话列表 → 群聊/单聊会话) ---------- */
+.chatp {
+  width: 460px;
+  max-height: calc(100vh - 120px);
+  gap: 8px;
+}
+.chatp .tr-head {
+  margin-bottom: 2px;
+}
+.chatp-back {
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 15px;
+  cursor: pointer;
+  padding: 2px 8px;
+  border-radius: 6px;
+}
+.chatp-back:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+/* 会话列表 */
+.chatp-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.chatp-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.05);
+  color: #fff;
+  cursor: pointer;
+  text-align: left;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
+}
+.chatp-item:hover {
+  background: rgba(124, 108, 240, 0.18);
+  border-color: rgba(124, 108, 240, 0.5);
+}
+.chatp-avatar {
+  width: 38px;
+  height: 38px;
+  flex: none;
+  border-radius: 50%;
+  object-fit: cover;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(124, 108, 240, 0.3);
+  color: #fff;
+  font-size: 15px;
+}
+.chatp-item-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.chatp-item-name {
+  font-size: 13px;
+  font-weight: 600;
+}
+.chatp-item-preview {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.55);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chatp-dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 50%;
+  background: #ff6b6b;
+}
+
+/* 消息流 */
+.chatp-feed {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 180px;
+  max-height: 46vh;
+  overflow-y: auto;
+  padding: 4px 2px;
+}
+.chatp-empty {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.45);
+  text-align: center;
+  padding: 24px 0;
+}
+.chatp-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+.chatp-row.mine {
+  align-items: flex-end;
+}
+.chatp-who {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.5);
+}
+.chatp-text {
+  font-size: 13px;
+  line-height: 1.55;
+  color: #fff;
+  white-space: pre-wrap;
+  word-break: break-word;
+  padding: 7px 10px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.07);
+  max-width: 92%;
+}
+.chatp-row.mine .chatp-text {
+  background: rgba(124, 108, 240, 0.32);
+}
+
+/* 输入行 */
+.chatp-input-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+.chatp-input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: var(--radius-input);
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  font-size: 13px;
+  font-family: inherit;
+  line-height: 1.5;
+  outline: none;
+  resize: none;
+}
+.chatp-input:focus {
+  border-color: rgba(124, 108, 240, 0.9);
+}
+.chatp-input-row .panel-btn {
+  padding: 7px 14px;
+  font-size: 12px;
+}

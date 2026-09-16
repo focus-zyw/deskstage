@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, Suspense, lazy } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, Suspense, lazy } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { listen, emitTo } from '@tauri-apps/api/event'
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow'
@@ -65,6 +65,7 @@ import { extractTextFromClipboard } from './translation/ocr'
 const TranslationPanel = lazy(() =>
   import('./translation/TranslationPanel').then((m) => ({ default: m.TranslationPanel })),
 )
+const ChatPanel = lazy(() => import('./chat/ChatPanel').then((m) => ({ default: m.ChatPanel })))
 // 直播链(pako/B站弹幕协议/登录)只开播时才需要:按需拉取,模块缓存在此
 import type { LiveReply } from './runtime/liveDanmaku'
 type LiveModule = typeof import('./runtime/liveDanmaku')
@@ -72,13 +73,6 @@ let liveModPromise: Promise<LiveModule> | null = null
 const loadLiveModule = (): Promise<LiveModule> => (liveModPromise ??= import('./runtime/liveDanmaku'))
 import { CommandPanel } from './ui/CommandPanel'
 import { ChoicePanel } from './ui/ChoicePanel'
-import {
-  applyMention,
-  filterMentionTargets,
-  mentionContext,
-  mentionTargets,
-  type MentionTarget,
-} from './ui/mention'
 import type { Command } from './features/commands/commands'
 import {
   useRuntime,
@@ -126,6 +120,7 @@ import {
   syncBubbleCompatVars,
 } from './bubble'
 import { webchatSetSiteMode } from './engine/webchat'
+import { registerGroupSession } from './session/conversations'
 import { applyLaunchOnBoot } from './runtime/launchOnBoot'
 import { useOverlayHitRegions } from './runtime/useOverlayHitRegion'
 import { initSettingsBridgeServer } from './settings/bridgeServer'
@@ -259,6 +254,11 @@ function App() {
   }
   const cMenuActions: { id: string; label: string; run: () => void }[] = [
     {
+      id: 'chat',
+      label: '💬 和TA聊天',
+      run: () => openDirectChat('C'),
+    },
+    {
       id: 'joke',
       label: '😆 讲个笑话',
       run: () => showPoke('C', packLine('joke', cJokeLines()), 'happy', 3600),
@@ -291,7 +291,15 @@ function App() {
   ]
   /** A/B 右键菜单:工具型互动(与 C 的陪玩互动分开) */
   function abMenuActions(who: 'A' | 'B'): { id: string; label: string; run: () => void }[] {
-    return [{ id: 'balance', label: '💰 查询余额', run: () => void runBalanceQuery(who) }]
+    return [
+      { id: 'chat', label: '💬 和TA聊天', run: () => openDirectChat(who) },
+      { id: 'balance', label: '💰 查询余额', run: () => void runBalanceQuery(who) },
+    ]
+  }
+  /** 直达某角色单聊:打开聊天面板并定位到该角色的 direct 房间 */
+  function openDirectChat(slot: 'A' | 'B' | 'C') {
+    setChatRoute({ slot, nonce: Date.now() })
+    openOverlayExclusive('chat')
   }
   /** 右键「查询余额」:DeepSeek/Kimi 公开余额接口 + 当日差值记账,角色口吻播报。
    *  引导/失败都先角色开口;查询本体走 UtilityCard(后台处理中的载体) */
@@ -352,28 +360,15 @@ function App() {
     () => resolveGuestLook(bubbleTheme ?? BUILT_IN_BUBBLE_THEMES.comic),
     [bubbleTheme],
   )
-  // 聊天通道:输入框开合/草稿/应答中;用户气泡(区别于角色气泡)
+  // 聊天通道:面板开合(输入/草稿/消息流在 ChatPanel 内)
   const chatOpen = rt.overlays.includes('chat')
-  const [chatDraft, setChatDraft] = useState('')
-  const [userBubble, setUserBubble] = useState<string | null>(null)
-  // @ 补全(QQ/微信式):输入 @ 唤起候选,随已输文本过滤;面板打开时接管回车/方向键/Esc
-  const [mention, setMention] = useState<{ query: string } | null>(null)
-  const [mentionIdx, setMentionIdx] = useState(0)
-  const chatInputRef = useRef<HTMLInputElement>(null)
-  const mentionCandidates = useMemo(
-    () => mentionTargets({ A: config.names.a, B: config.names.b, C: config.names.c }),
-    [config.names.a, config.names.b, config.names.c],
-  )
-  const mentionMatches = useMemo(
-    () => filterMentionTargets(mentionCandidates, mention?.query ?? ''),
-    [mentionCandidates, mention],
-  )
-  // 关闭聊天面板时补全面板一并收起(草稿保留是原有行为)
-  useEffect(() => {
-    if (!chatOpen) setMention(null)
-  }, [chatOpen])
   // 翻译面板:开合由 runtime overlays 管;OCR 链路注入的原文(auto=截图翻译入口,填入即自动翻)
   const translationOpen = rt.overlays.includes('translation')
+  // 聊天面板:统一聊天入口(会话列表 → 群聊/单聊会话)。chatRoute 供角色右键直达单聊
+  const [chatRoute, setChatRoute] = useState<import('./chat/ChatPanel').ChatRoute | null>(null)
+  const [chatPinned, setChatPinned] = useState(false)
+  const chatPinnedRef = useRef(false)
+  chatPinnedRef.current = chatPinned
   // 翻译面板固定(📌):点外部/Esc 不收起,只能 ✕ 关闭;会话内记住偏好
   const [translationPinned, setTranslationPinned] = useState(false)
   const translationPinnedRef = useRef(false)
@@ -491,7 +486,6 @@ function App() {
       liveStopRef.current?.()
       void loadLiveModule().then((m) => m.stopLiveSession())
       clearProps()
-      setUserBubble(null)
     },
     sweepMemos: () => sweepMemos(),
     onEpisodeEnd: (info) => {
@@ -1030,9 +1024,14 @@ function App() {
       if (e.key !== 'Escape') return
       if (getCaps().recording && settingsOpen) return
       const target = getCaps().escapeTarget
-      // 翻译面板固定中:Esc 不收起它(改关它下面的面板;没有就直接忽略)
-      if (target === 'translation' && translationPinnedRef.current) {
-        const below = overlaysRef.current.filter((x) => x !== 'translation')
+      // 翻译/聊天面板固定中:Esc 不收起它(改关它下面的面板;没有就直接忽略)
+      const pinnedGuard: Record<string, React.RefObject<boolean> | undefined> = {
+        translation: translationPinnedRef,
+        chat: chatPinnedRef,
+      }
+      const guard = target ? pinnedGuard[target] : undefined
+      if (target && guard?.current === true) {
+        const below = overlaysRef.current.filter((x: string) => x !== target)
         if (below.length > 0) closeOverlay(below[below.length - 1])
         return
       }
@@ -1081,18 +1080,6 @@ function App() {
     director.replay(ep, 'manual')
   }
 
-  /** 选中 @ 候选:替换光标前的 "@过滤词" 为 "@全名␣",光标落到空格后,面板收起 */
-  function pickMention(c: MentionTarget) {
-    const input = chatInputRef.current
-    const caret = input?.selectionStart ?? chatDraft.length
-    const { text, caret: nextCaret } = applyMention(chatDraft, caret, c.name)
-    setChatDraft(text)
-    setMention(null)
-    requestAnimationFrame(() => {
-      input?.focus()
-      input?.setSelectionRange(nextCaret, nextCaret)
-    })
-  }
 
   // 落盘双轨(备忘提醒等主动插话链使用;用户聊天链的双轨在 session 内部)
   function recordTurn(who: TurnWho, text: string) {
@@ -1206,11 +1193,10 @@ function App() {
             })
             pulseOtherRef.current(speaker)
           },
-          presentUser: (text, who) => {
-            setUserBubble(text)
+          presentUser: (_text, who) => {
             if (who) setTopActor(who)
           },
-          clearUser: (text) => setUserBubble((u) => (u === text ? null : u)),
+          clearUser: () => {},
           presentFallback: ({ speaker, text }) =>
             presenterSayRef.current(speaker, text, { ms: 2200 }),
           onUserActive: () => noteUserActiveRef.current(),
@@ -1220,10 +1206,12 @@ function App() {
         { tools: (input, signal) => toolCoordinator.prepareTurn(input, signal) },
       ),
     // 两者均为 useState setter(稳定):session 终生只创建一次,其余回调经 ref 取最新
-    [setUserBubble, setTopActor, toolCoordinator],
+    [setTopActor, toolCoordinator],
   )
-  // busy 消费走外部 store:演出/抉择等待不算忙(session 与导演状态分界)
-  const chatBusy = useSyncExternalStore(chatSession.subscribe, () => chatSession.getSnapshot().busy)
+  // 群聊会话注册进会话注册表:聊天面板的群聊 tab 与设置桥共用同一间
+  useEffect(() => {
+    registerGroupSession(chatSession)
+  }, [chatSession])
 
   // 启动引导:把 chatlog 尾部注入群聊运行时——重启/刷新后角色接续同一会话
   // (复用已有窗口),不再拿空 journal 每次从零开新场;用户先发话则本次引导放弃
@@ -1327,12 +1315,6 @@ function App() {
     // chatSession 与 presenter 回调均稳定:终生安装一次
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
-
-  /** 主聊天框入口:草稿走核心通道,受理后清空草稿 */
-  async function sendUserChat() {
-    const res = await sendUserChatText(chatDraft)
-    if (res === 'accepted') setChatDraft('')
-  }
 
   /** 打开设置(tab 直达某分页):show 常驻设置窗并通知其切页;设置窗自居舞台之上 */
   async function openSettings(tab?: SettingsTab) {
@@ -1598,9 +1580,10 @@ function App() {
         // 录音中点击外部不收面板(防止丢失停止入口)
         if (rt.mode.type === 'recording' && settingsOpen) return
         if (e.target === e.currentTarget) {
-          // 翻译面板固定(📌)时不收它,其余面板照常收起
-          if (translationPinnedRef.current) closeAllOverlaysExcept('translation')
-          else closeAllOverlays()
+          // 翻译/聊天面板固定(📌)时不收它,其余面板照常收起
+          if (translationPinnedRef.current || chatPinnedRef.current) {
+            closeAllOverlaysExcept(translationPinnedRef.current ? 'translation' : 'chat')
+          } else closeAllOverlays()
         }
         // 点在C菜单外(其他角色/工具)也收起C菜单;但点在菜单项上绝不能在
         // pointerdown 就收起——原生钩子的 click 补发在 pointerup 之后,
@@ -2014,78 +1997,17 @@ function App() {
       </div>
 
       {chatOpen && (
-          <div
-            ref={chatBoxRef}
-            className="chat-box"
-            style={{ left: `${ctrlBar.xPct}%`, top: ctrlBar.top + 46 }}
-          >
-            {userBubble && <div className="user-bubble">你说:{userBubble}</div>}
-            {/* @ 补全面板:在流子元素撑高容器,原生热区矩形自动覆盖,穿透下可点选 */}
-            {mention && mentionMatches.length > 0 && (
-              <div className="mention-pop">
-                {mentionMatches.map((c: MentionTarget, i: number) => (
-                  <button
-                    key={c.id}
-                    type="button"
-                    className={`mention-item${i === mentionIdx % mentionMatches.length ? ' on' : ''}`}
-                    onMouseDown={(e) => {
-                      e.preventDefault() // 保持输入框焦点
-                      pickMention(c)
-                    }}
-                  >
-                    @{c.name}
-                    <span className="mention-key">{c.key}</span>
-                  </button>
-                ))}
-              </div>
-            )}
-            <div className="chat-row">
-              <input
-                ref={chatInputRef}
-                type="text"
-                placeholder="和角色说话…(@甲/@乙/@丙 指定谁回)"
-                value={chatDraft}
-                onChange={(e) => {
-                  const v = e.target.value
-                  setChatDraft(v)
-                  const caret = e.target.selectionStart ?? v.length
-                  setMention(mentionContext(v.slice(0, caret)))
-                  setMentionIdx(0)
-                }}
-                onKeyDown={(e) => {
-                  if (mention && mentionMatches.length > 0) {
-                    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-                      e.preventDefault()
-                      const step = e.key === 'ArrowDown' ? 1 : mentionMatches.length - 1
-                      setMentionIdx((i) => (i + step) % mentionMatches.length)
-                      return
-                    }
-                    if (e.key === 'Enter' || e.key === 'Tab') {
-                      e.preventDefault()
-                      pickMention(mentionMatches[mentionIdx % mentionMatches.length])
-                      return
-                    }
-                    if (e.key === 'Escape') {
-                      e.preventDefault()
-                      e.stopPropagation() // 只收起补全,不连带关掉聊天面板
-                      setMention(null)
-                      return
-                    }
-                  }
-                  if (e.key === 'Enter') void sendUserChat()
-                }}
-              />
-              <button
-                className="panel-btn primary"
-                disabled={phase !== 'idle' || !chatDraft.trim()}
-                title={phase !== 'idle' ? '演出/生成进行中,稍后再说' : chatBusy ? '角色正在回应,可继续输入' : ''}
-                onClick={() => void sendUserChat()}
-              >
-                {chatBusy ? '回应中…' : '发送'}
-              </button>
-            </div>
-          </div>
-        )}
+        <Suspense fallback={null}>
+          <ChatPanel
+            innerRef={chatBoxRef}
+            pos={ctrlBar}
+            pinned={chatPinned}
+            onPinChange={setChatPinned}
+            onClose={() => closeOverlay('chat')}
+            route={chatRoute}
+          />
+        </Suspense>
+      )}
 
         {choice && (
           <ChoicePanel

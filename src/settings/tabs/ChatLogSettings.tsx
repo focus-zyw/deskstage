@@ -8,7 +8,7 @@
 //  - 角色气泡悬停出现小型 ▶,从该句回放(不占整个气泡当按钮)。
 // 集管理(赞/踩/删除/收藏)仍在「演出历史」页。
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import type { ChangeEvent, KeyboardEvent } from 'react'
+import type { ChangeEvent } from 'react'
 import { emitTo, listen } from '@tauri-apps/api/event'
 import {
   createGroupChatReadController,
@@ -49,13 +49,6 @@ import { assessFact } from '../../storage/memoryPolicy'
 const MEM_SENS_LABEL: Record<string, string> = { normal: '普通', private: '私密', restricted: '高敏' }
 const SENS_LABEL_OR = (s: string | undefined): string => (s ? MEM_SENS_LABEL[s] ?? s : '')
 import type { Speaker } from '../../performer/dialogSchema'
-import {
-  applyMention,
-  filterMentionTargets,
-  mentionContext,
-  mentionTargets,
-  type MentionTarget,
-} from '../../ui/mention'
 import { useSettings } from '../useSettingsSession'
 
 
@@ -268,13 +261,6 @@ export function ChatLogSettings() {
   const [cropUrl, setCropUrl] = useState<string | null>(null)
   const viewRef = useRef<HTMLDivElement>(null)
   const dragRef = useRef<{ px: number; py: number; ox: number; oy: number } | null>(null)
-  // 群聊输入与 @ 补全(状态机同主聊天框:mention 语境 → 候选过滤 → 键盘选择)
-  const [draft, setDraft] = useState('')
-  const [mention, setMention] = useState<{ query: string } | null>(null)
-  const [mentionIdx, setMentionIdx] = useState(0)
-  const [sendHint, setSendHint] = useState('')
-  const inputRef = useRef<HTMLTextAreaElement>(null)
-
   // 聊天消息:订阅落盘版本号——append/清空各 bump 一次,这里重拉(含挂载首拉)
   const chatLogVersion = useChatLogVersion()
   useEffect(() => {
@@ -535,14 +521,6 @@ export function ChatLogSettings() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows, orderedEids])
 
-  // 输入框随内容自长(1 行起,封顶后内部滚动)
-  useEffect(() => {
-    const el = inputRef.current
-    if (!el) return
-    el.style.height = 'auto'
-    el.style.height = `${Math.min(110, el.scrollHeight)}px`
-  }, [draft])
-
   async function onClearTurns() {
     // 统一清空(评审①):文件写入与运行时重置都在主窗完成,设置窗不自写
     if (bridge.onClearChatlog) await bridge.onClearChatlog()
@@ -672,83 +650,6 @@ export function ChatLogSettings() {
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)
   })
-
-  // ---------- 发送与 @ 补全 ----------
-
-  async function sendDraft() {
-    const text = draft.trim()
-    if (!text) return
-    // 乐观受理:消息一旦交给主窗就先清输入(主窗写盘/播报照常走),
-    // 往返超时或失败再把原稿回填——绝不让"已发出的消息"滞留输入框
-    setDraft('')
-    setMention(null)
-    // 自己发言:贴底跟随(§6),不产生未读
-    applyReadEffect(readCtl().notifyOwnSend())
-    const res = await bridge.onGroupSend(text).catch(() => 'busy' as const)
-    if (res === 'accepted') return
-    setDraft((cur) => (cur.trim() ? cur : text)) // 已有新输入就不覆盖
-    setSendHint(res === 'busy' ? '角色正忙,消息已保留在输入框…' : '发送失败,消息已保留在输入框…')
-    window.setTimeout(() => setSendHint(''), 3000)
-  }
-
-  function pickMention(c: MentionTarget) {
-    const input = inputRef.current
-    const caret = input?.selectionStart ?? draft.length
-    const { text, caret: nextCaret } = applyMention(draft, caret, c.name)
-    setDraft(text)
-    setMention(null)
-    requestAnimationFrame(() => {
-      input?.focus()
-      input?.setSelectionRange(nextCaret, nextCaret)
-    })
-  }
-
-  /** @ 按钮:光标处插入 "@",补全面板随即唤起 */
-  function insertAt() {
-    const input = inputRef.current
-    const caret = input?.selectionStart ?? draft.length
-    const next = draft.slice(0, caret) + '@' + draft.slice(caret)
-    setDraft(next)
-    requestAnimationFrame(() => {
-      input?.focus()
-      input?.setSelectionRange(caret + 1, caret + 1)
-      setMention(mentionContext(next.slice(0, caret + 1)))
-      setMentionIdx(0)
-    })
-  }
-
-  function onDraftKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
-    if (e.nativeEvent.isComposing) return // 输入法组词中的 Enter/方向键不归我们管
-    if (mention && mentionMatches.length > 0) {
-      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-        e.preventDefault()
-        const step = e.key === 'ArrowDown' ? 1 : mentionMatches.length - 1
-        setMentionIdx((i) => (i + step) % mentionMatches.length)
-        return
-      }
-      if (e.key === 'Enter' || e.key === 'Tab') {
-        e.preventDefault()
-        pickMention(mentionMatches[mentionIdx % mentionMatches.length])
-        return
-      }
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        e.stopPropagation() // 只收起补全
-        setMention(null)
-        return
-      }
-    }
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault() // Enter 发送,Shift+Enter 换行
-      void sendDraft()
-    }
-  }
-
-  const mentionCandidates = useMemo(
-    () => mentionTargets({ A: names.a, B: names.b, C: names.c }),
-    [names.a, names.b, names.c],
-  )
-  const mentionMatches = mention ? filterMentionTargets(mentionCandidates, mention.query) : []
 
   const speakerName = (s: Speaker) => (s === 'A' ? names.a : s === 'B' ? names.b : names.c)
   const bgActive = group.bg && !!bgDataUrl
@@ -937,48 +838,7 @@ export function ChatLogSettings() {
           </button>
         )}
         {thinkingLine && <div className="actor-typing">{thinkingLine}</div>}
-        {sendHint && <div className="group-hint">{sendHint}</div>}
-        {mention && mentionMatches.length > 0 && (
-          <div className="group-mention">
-            {mentionMatches.map((c: MentionTarget, i: number) => (
-              <button
-                key={c.id}
-                type="button"
-                className={`mention-item${i === mentionIdx % mentionMatches.length ? ' on' : ''}`}
-                onMouseDown={(e) => {
-                  e.preventDefault() // 保持输入框焦点
-                  pickMention(c)
-                }}
-              >
-                @{c.name}
-                <span className="mention-key">{c.key}</span>
-              </button>
-            ))}
-          </div>
-        )}
-        <div className="group-input-row">
-          <button className="group-at" title="@ 角色" onClick={insertAt}>
-            @
-          </button>
-          <textarea
-            ref={inputRef}
-            className="group-textarea"
-            rows={1}
-            placeholder="在群里说点什么…(Enter 发送,Shift+Enter 换行,@ 指定谁回)"
-            value={draft}
-            onChange={(e) => {
-              const v = e.target.value
-              setDraft(v)
-              const caret = e.target.selectionStart ?? v.length
-              setMention(mentionContext(v.slice(0, caret)))
-              setMentionIdx(0)
-            }}
-            onKeyDown={onDraftKeyDown}
-          />
-          <button className="group-send" disabled={!draft.trim()} onClick={() => void sendDraft()}>
-            发送
-          </button>
-        </div>
+        <div className="group-hint">聊天请用桌面控制栏的聊天面板(💬);本页只翻看与管理记录</div>
       </div>
 
       {drawerOpen && (
