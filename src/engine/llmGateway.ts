@@ -16,6 +16,8 @@ export interface GatewayDiag {
   batchId?: string
   /** 短期会话窗口行数(llmClient 持有,gateway 层发 llm_started 时透传) */
   contextLines?: number
+  /** 调用方外层定时器的生效超时预算(常短于网关层 90s;不传 = 网关层预算即生效值) */
+  timeoutMs?: number
   attempt?: number
   queueDepth?: number
 }
@@ -182,7 +184,8 @@ export async function complete(options: CompletionOptions): Promise<string> {
         endpointHost: hostOf(baseUrl),
         ...shape,
         contextLines: d.contextLines ?? 0,
-        timeoutMs,
+        // 显示生效预算(调用方外层定时器,如 facts 6s),而非网关层 90s 底座
+        timeoutMs: d.timeoutMs ?? timeoutMs,
       })
       // 详情档:脱敏后的 prompt 编译结果(协议冲突/拼装出错/记忆污染类问题的证据)
       diag.detailText(d.turnId, { textKind: 'prompt', text: compiledPromptOf(messages) })
@@ -339,7 +342,8 @@ export async function completeStream(
         endpointHost: hostOf(baseUrl),
         ...shape,
         contextLines: d.contextLines ?? 0,
-        timeoutMs,
+        // 显示生效预算(调用方外层定时器,如 facts 6s),而非网关层 90s 底座
+        timeoutMs: d.timeoutMs ?? timeoutMs,
       })
       diag.detailText(d.turnId, { textKind: 'prompt', text: compiledPromptOf(messages) })
     }

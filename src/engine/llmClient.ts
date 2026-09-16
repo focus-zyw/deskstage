@@ -573,7 +573,7 @@ export async function generateUserChatReply(
   signal?.addEventListener('abort', onAbort, { once: true })
   noteLlmStart(diagTurnId, 'singleReply', 'api', cfg, messages, { timeoutMs: 8_000 })
   try {
-    let raw = (await chatRaw(messages, ctrl.signal, false, diagTurnId ? { turnId: diagTurnId, call: 'singleReply' } : undefined)).trim()
+    let raw = (await chatRaw(messages, ctrl.signal, false, diagTurnId ? { turnId: diagTurnId, call: 'singleReply', timeoutMs: 8_000 } : undefined)).trim()
     if (raw.startsWith('{')) {
       try {
         const obj = JSON.parse(raw) as { text?: unknown; content?: unknown }
@@ -700,7 +700,7 @@ ${rescueDiscipline()}`,
   input.signal?.addEventListener('abort', onAbort, { once: true })
   noteLlmStart(input.diagTurnId, 'turnBatch', 'api', cfg, messages, { timeoutMs: 12_000 })
   try {
-    const raw = await chatRaw(messages, ctrl.signal, true, input.diagTurnId ? { turnId: input.diagTurnId, call: 'turnBatch', contextLines: input.window.length } : undefined)
+    const raw = await chatRaw(messages, ctrl.signal, true, input.diagTurnId ? { turnId: input.diagTurnId, call: 'turnBatch', contextLines: input.window.length, timeoutMs: 12_000 } : undefined)
     return validateTurnBatch(parseDialog(raw, 1).before, input.target, { maxLines: input.groupAsk ? 3 : 2 }) ?? []
   } finally {
     clearTimeout(timer)
@@ -754,7 +754,7 @@ ${rescueDiscipline()}`,
   const timer = setTimeout(() => ctrl.abort(new DOMException('超时', 'TimeoutError')), 12_000)
   noteLlmStart(input.diagTurnId, 'interject', 'api', cfg, messages, { timeoutMs: 12_000 })
   try {
-    const raw = await chatRaw(messages, ctrl.signal, true, input.diagTurnId ? { turnId: input.diagTurnId, call: 'interject', contextLines: input.window.length } : undefined)
+    const raw = await chatRaw(messages, ctrl.signal, true, input.diagTurnId ? { turnId: input.diagTurnId, call: 'interject', contextLines: input.window.length, timeoutMs: 12_000 } : undefined)
     return validateTurnBatch(parseDialog(raw, 1).before, input.target, { maxLines: 3 }) ?? []
   } finally {
     clearTimeout(timer)
@@ -930,7 +930,7 @@ export async function extractFacts(
   const timer = setTimeout(() => ctrl.abort(new DOMException('超时', 'TimeoutError')), 6_000)
   noteLlmStart(diagTurnId, 'facts', 'api', cfg, messages, { timeoutMs: 6_000 })
   try {
-    const raw = await chatRaw(messages, ctrl.signal, true, diagTurnId ? { turnId: diagTurnId, call: 'facts' } : undefined)
+    const raw = await chatRaw(messages, ctrl.signal, true, diagTurnId ? { turnId: diagTurnId, call: 'facts', timeoutMs: 6_000 } : undefined)
     const m = raw.match(/\{[\s\S]*\}/)
     if (!m) return []
     const obj = JSON.parse(m[0]) as { facts?: unknown }
@@ -1011,7 +1011,7 @@ export async function compactWarmSession(input: WarmCompactInput, diagTurnId?: s
   const timer = setTimeout(() => ctrl.abort(new DOMException('超时', 'TimeoutError')), 6_000)
   noteLlmStart(diagTurnId, 'warmCompact', 'api', cfg, messages, { timeoutMs: 6_000 })
   try {
-    const raw = await chatRaw(messages, ctrl.signal, true, diagTurnId ? { turnId: diagTurnId, call: 'warmCompact' } : undefined)
+    const raw = await chatRaw(messages, ctrl.signal, true, diagTurnId ? { turnId: diagTurnId, call: 'warmCompact', timeoutMs: 6_000 } : undefined)
     const m = raw.match(/\{[\s\S]*\}/)
     if (!m) throw new Error('压缩摘要响应不是合法 JSON')
     const obj = JSON.parse(m[0]) as { summary?: unknown }
