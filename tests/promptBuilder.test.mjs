@@ -70,9 +70,9 @@ const tp = (title) => ({
   compatibility: { sessionRevision: 0, banHash: '', modeHash: '', plannerVersion: 1 },
 })
 
-function finalPrompt({ recentLines = [], storyContext, continueFromPrevious = false, moodNote } = {}) {
+function finalPrompt({ recentLines = [], storyContext, continueFromPrevious = false, moodNote, mode = 'daily' } = {}) {
   return buildMessages(
-    'crosstalk',
+    mode,
     tp('周报到底写给谁看'),
     recentLines,
     undefined,
@@ -111,6 +111,12 @@ test('周报主题的最终提示词不会注入无关的满减记忆', () => {
     '周报到底写给谁看',
     2,
   )
+  // 选题相关性:与"周报"相关的记忆入选(gags/threads 哪个桶都算),满减类无关记忆被排除
+  const selectedText = [...selection.gags, ...selection.threads].map((item) => item.text).join('\n')
+  assert.match(selectedText, /周报写成了连续剧预告/)
+  assert.doesNotMatch(selectedText, /满减|凑单/)
+  // 注入层:daily(非喜剧)渲染共同经历线程,不渲染 gags——无关记忆不进最终提示词;
+  // gags 的喜剧渲染能力由 renderStoryContext 直测(相声极简已不消费它)
   const prompt = finalPrompt({
     storyContext: {
       gags: selection.gags.map((item) => item.text),
@@ -118,8 +124,13 @@ test('周报主题的最终提示词不会注入无关的满减记忆', () => {
     },
   })
 
-  assert.match(prompt, /周报写成了连续剧预告/)
   assert.doesNotMatch(prompt, /满减|凑单/)
+  if (selection.gags.length > 0) {
+    assert.match(
+      renderStoryContext({ gags: selection.gags.map((item) => item.text), threads: [] }, { comedy: true }),
+      /周报写成了连续剧预告/,
+    )
+  }
 })
 
 test('冷却时间优先于 hits，近期高频老梗不会继续霸榜', () => {
@@ -269,13 +280,13 @@ test('renderStoryContext:非喜剧只带共同经历,不注入老梗与笑点素
   assert.match(comedy, /笑点素材/)
 })
 
-test('相声模式丙只占 0~2 句,保留逗哏-捧哏主轴', () => {
+test('相声极简:丙分工不注入,协议仍允许少量参与', () => {
   const prompt = buildMessages('crosstalk', tp('周报到底写给谁看'), [])
     .map((message) => message.content)
     .join('\n')
-  assert.match(prompt, /本场只占 0~2 句/)
-  assert.match(prompt, /甲乙拿丙垫梗/)
-  assert.match(prompt, /甲乙仍是逗哏-捧哏主轴/)
+  assert.doesNotMatch(prompt, /本场只占 0~2 句/, '分工规则随极简退场')
+  assert.doesNotMatch(prompt, /甲乙拿丙垫梗/, '垫梗编排随极简退场')
+  assert.match(prompt, /丙可少量参与/, '协议保留 C 少量参与的可能性')
 })
 
 test('使用者称呼纪律:注入用户名时明确禁止加"们"等后缀', () => {
@@ -288,7 +299,7 @@ test('使用者称呼纪律:注入用户名时明确禁止加"们"等后缀', ()
   assert.match(prompt, /禁止"小张们""小张你们"/)
 })
 
-test('抉择点分档:喜剧中段站队收同底,非喜剧自然停顿征询各自收束', () => {
+test('抉择点分档:相声零抉择,日常自然停顿征询各自收束', () => {
   const xtChoice = buildMessages(
     'crosstalk',
     tp('周报到底写给谁看'),
@@ -299,10 +310,8 @@ test('抉择点分档:喜剧中段站队收同底,非喜剧自然停顿征询各
     undefined,
     true, // allowChoice
   )[0].content
-  assert.match(xtChoice, /恰好在剧情冲突最激烈的中段安排一次/)
-  assert.match(xtChoice, /站队问题/)
-  assert.match(xtChoice, /两个分支结尾收同一个底包袱/)
-  assert.match(xtChoice, /对被选方向做口语反应/)
+  assert.doesNotMatch(xtChoice, /观众互动/, '极简相声不注入抉择点')
+  assert.doesNotMatch(xtChoice, /站队问题/)
 
   const dailyChoice = buildMessages(
     'daily',

@@ -201,8 +201,9 @@ export async function generateDialog(req: GenerateDialogRequest): Promise<Perfor
   // 招牌怪癖周期记账 + 空位冷启动(fire-and-forget,绝不阻塞/拖慢演出链路)
   void notePerformanceEpisode()
   const memory = await prepareTurnMemory({ query: topic, n: 8 })
-  // 每集掷骰是否包含观众抉择点(概率用户可配,默认 30%;重试保持一致)
-  const allowChoice = Math.random() < (cfg.choiceChance ?? 0.3)
+  // 每集掷骰是否包含观众抉择点(概率用户可配,默认 30%;重试保持一致)。
+  // 相声解绑/极简版不掷:抉择点与装置同属演出义务,极简相声不给模型加这份工
+  const allowChoice = mode !== 'crosstalk' && Math.random() < (cfg.choiceChance ?? 0.3)
   // 丙(C)是常驻正式角色,随 prompt 永久参与,不再走随机客串掷骰
   // 上一集的观众选择:注入一次即清除
   let lastChoice: string | null = null

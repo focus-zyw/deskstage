@@ -115,7 +115,10 @@ test('模式风格最高优先级块:相声解绑后缀在场(题材自由,装�
   assert.match(xt, /【模式风格（本集最高创作优先级）】/)
   assert.match(xt, /secret\/callback 不使用/, '相声解绑:装置退场后缀')
   assert.match(xt, /题材、人物、情境完全自由/, '题材自由宣告')
-  assert.match(xt, /若模式风格指令与本节/, 'cRule 逗弄规则带让位条款')
+  // 极简:只保留姓名/性别/speaker 映射,人设文本不进
+  assert.match(xt, /speaker 只能取括号里的值/, '极简名册行在场')
+  assert.doesNotMatch(xt, /便利店店员/, '默认人设文本不进极简相声')
+  assert.doesNotMatch(xt, /若模式风格指令与本节/, 'C 分工规则随极简退场')
   // 模式指令包裹在优先级块内(以【模式风格 开头块紧跟其内容)
   const idx = xt.indexOf('【模式风格（本集最高创作优先级）】')
   assert.ok(xt.slice(idx, idx + 200).includes('相声'), '块内紧跟模式指令本体')
@@ -204,7 +207,8 @@ test('内建回归锁:crosstalk 恒走喜剧分支,daily 固定走非喜剧闲�
   assert.match(xt, /不需要秘密反转/, '装置整体退场(用户裁决:解绑版无 secret/callback)')
   assert.match(xt, /这两个字段一律省略/, '协议同步省略 secret/callback')
   assert.match(xt, /14~22 句/)
-  assert.match(xt, /若模式风格指令与本节/, '保留逗弄让位条款')
+  assert.match(xt, /speaker 只能取括号里的值/, '极简名册:只保留姓名/性别/speaker 映射')
+  assert.doesNotMatch(xt, /便利店店员/, '极简相声无人设文本')
 
   const daily = buildMessages('daily', tp('周报到底写给谁看'), [])[0].content
   assert.doesNotMatch(daily, /资深喜剧编剧/)
@@ -217,7 +221,7 @@ test('内建回归锁:crosstalk 恒走喜剧分支,daily 固定走非喜剧闲�
 
   // 关系卡:喜剧分支传入 relationship 时注入;非喜剧连传参的关系卡也不注入
   const rel = { label: '欢喜冤家', desc: '互怼但默契' }
-  assert.match(buildMessages('crosstalk', tp('周报'), [], undefined, undefined, rel)[0].content, /关系只改变本集攻守/)
+  assert.doesNotMatch(buildMessages('crosstalk', tp('周报'), [], undefined, undefined, rel)[0].content, /关系只改变本集攻守/, '极简相声不注入关系卡')
   assert.doesNotMatch(buildMessages('daily', tp('周报'), [], undefined, undefined, rel)[0].content, /关系只改变本集攻守/)
 })
 

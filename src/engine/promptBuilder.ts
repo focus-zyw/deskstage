@@ -239,15 +239,31 @@ export function buildMessages(
   // 义务过载是"网页单发质量更高"的主因;只动 crosstalk,其他喜剧模式回归锁不动
   const isCrosstalk = mode === 'crosstalk'
   // 身份层恒定;喜剧动态(互怼/逗哏捧哏/段子舞台)只在喜剧基调下拼接
+  // 相声极简版(用户裁决):只保留角色姓名/性别与 speaker 映射——人设/行为底色/喜剧动态/
+  // 怪癖/称呼纪律块/C 分工全部不进,给模型最大自由;播放器依赖的输出协议原样保留
   const persona = fullPersona({ comedyDynamics: isComedy })
-  // 招牌怪癖注入(实验):清单 + 五句使用纪律;关闭或无怪癖时为空串,不加空段
-  const quirkBlock = renderQuirkBlock(
-    getBookSync(),
-    getConfigSnapshot().quirkSystem === true,
-    nameOf,
-    (['A', 'B', 'C'] as const).filter((id) => isCharacterEnabled(id)),
-  )
-  const personaWithQuirks = quirkBlock ? `${persona}\n\n${quirkBlock}` : persona
+  // 招牌怪癖注入(实验):清单 + 五句使用纪律;关闭或无怪癖时为空串,不加空段。
+  // 相声极简版不注入(怪癖是素材束缚,与解绑同向)
+  const quirkBlock = isCrosstalk
+    ? ''
+    : renderQuirkBlock(
+        getBookSync(),
+        getConfigSnapshot().quirkSystem === true,
+        nameOf,
+        (['A', 'B', 'C'] as const).filter((id) => isCharacterEnabled(id)),
+      )
+  const crosstalkRoster =
+    '角色（speaker 只能取括号里的值）：' +
+    (['A', 'B', 'C'] as const)
+      .filter((id) => isCharacterEnabled(id))
+      .map((id) => `${nameOf(id)}（"${id}"，${pronounOf(id) === '她' ? '女' : '男'}，代词用"${pronounOf(id)}"）`)
+      .join('、') +
+    `。模式指令里的"甲/乙/丙"就是 ${(['A', 'B', 'C'] as const).filter((id) => isCharacterEnabled(id)).map(nameOf).join('/')}；台词与说明文字一律用真名。`
+  const personaWithQuirks = isCrosstalk
+    ? crosstalkRoster
+    : quirkBlock
+    ? `${persona}\n\n${quirkBlock}`
+    : persona
 
   // 手法说教刻意做减法:结构/节拍由场景卡的 escalation 承担,避免固定套路疲劳
   // 相声话题:自动选题完全不进 prompt——锚定效应不在乎"可弃用"标注(怪癖示例同教训);
@@ -280,33 +296,33 @@ export function buildMessages(
 - escalation 是本集的节拍：前拍铺垫、后拍递进，最后一句按模式风格收尾`
 
   // 旧字段兜底:userCtx 未传时回退到 legacy userInterests
-  const legacy = userInterests?.trim()
+  const legacy = !isCrosstalk && userInterests?.trim()
     ? `\n\n使用者画像：我们的观众朋友有以下兴趣爱好：${userInterests.trim()}。聊天中可以自然地偶尔聊到这些（不要刻意每句都提）。`
     : ''
-  const profile = userCtx ? renderAudienceContext(userCtx) : legacy
-  const storyCtx = userCtx ? renderStoryContext(userCtx.story, { comedy: isComedy }) : ''
+  const profile = isCrosstalk ? '' : userCtx ? renderAudienceContext(userCtx) : legacy
+  const storyCtx = isCrosstalk ? '' : userCtx ? renderStoryContext(userCtx.story, { comedy: isComedy }) : ''
 
   const slot = currentTimeSlot()
-  const timeCtx = `\n\n现实时间：现在是${slot.label}，${slot.scene}。本集的场景和情绪可以贴合这个时间段。`
+  const timeCtx = isCrosstalk ? '' : `\n\n现实时间：现在是${slot.label}，${slot.scene}。本集的场景和情绪可以贴合这个时间段。`
 
-  const bondCtx = bondNote?.trim()
+  const bondCtx = !isCrosstalk && bondNote?.trim()
     ? `
 
 长期关系背景（影响相互态度与语气,不是本集主要矛盾）：${bondNote.trim()}。`
     : ''
 
-  const moodCtx = moodNote?.trim() ? `
+  const moodCtx = !isCrosstalk && moodNote?.trim() ? `
 
 ${moodNote.trim()}` : ''
 
-  const recap = interactionRecap?.trim()
+  const recap = !isCrosstalk && interactionRecap?.trim()
     ? `最近有过一次观众互动:${interactionRecap.trim()}。如果能自然接入本集,开场可由一名角色轻松提一句;接不上就忽略。不得责怪观众,不得展开成多人讨论。
 
 `
     : ''
 
-  // 本集关系卡是互怼攻守向局势:非喜剧模式不注入,免得把基调拽回斗嘴
-  const relCtx = relationship && isComedy
+  // 本集关系卡是互怼攻守向局势:非喜剧模式不注入,免得把基调拽回斗嘴;相声极简版同样不注入
+  const relCtx = relationship && isComedy && !isCrosstalk
     ? `
 
 
@@ -318,7 +334,7 @@ ${moodNote.trim()}` : ''
 
   // C 关闭时不注入任何 C 分工规则,输出协议收窄到 A/B
   const cOn = isCharacterEnabled('C')
-  const cRule = cOn
+  const cRule = cOn && !isCrosstalk
     ? cRuleFor({
         isComedy,
         isCrosstalk: mode === 'crosstalk',
@@ -329,7 +345,7 @@ ${moodNote.trim()}` : ''
 
   // 观众抉择点:由调用方掷骰决定(约 30% 的集数)。喜剧安排在中段冲突处站队;
   // 非喜剧只在自然停顿处征询意见,不要求汇合同一收束
-  const choiceRule = !allowChoice
+  const choiceRule = !allowChoice || isCrosstalk
     ? ''
     : isComedy
       ? '\n\n观众互动(本段必须包含,恰好在剧情冲突最激烈的中段安排一次):在 dialog 数组中插入恰好一个抉择对象:{"choice":{"prompt":"向观众提出的站队问题,15字内","options":[{"id":"<英文短id>","label":"<中文选项>"},{"id":"<英文短id2>","label":"<中文选项2>"}]}},共两个选项;choice 之后的每句台词都必须额外带 "branch":"<所支持选项id>" 字段,两个分支各 3~5 句,两个分支结尾收同一个底包袱;两个选项可以都不是好选择,喜剧效果更好。两个分支的首句都必须直接以角色身份对被选方向做口语反应(如"行,听你的就完事了！"/"好家伙,你们是真不嫌事大"),整段禁止出现"观众选择了""大家投了""投票结果"这类播报腔与统计口吻。其余集数不要输出 choice。'
@@ -346,7 +362,7 @@ ${moodNote.trim()}` : ''
 - 先写场景卡再写台词，格式：{"card":{"relationship":"关系标签","scene":"具体场景一句话","goalA":"${nameOf('A')}想要什么","goalB":"${nameOf('B')}想要什么"${cOn ? `,"roleC":"${nameOf('C')}本集的行动职责(可选,不写${nameOf('C')}就省略)"` : ''},"secret":${devices ? '"被隐瞒的关键信息(一方或双方知道)"' : '"本集的关键信息或情感内核(可选,模式不需要反转就不填)"'},"escalation":["节拍1","节拍2","节拍3"]${devices ? ',"callback":"结尾回收的本集铺垫"' : ''}},"dialog":[{"speaker":"A","text":"台词","action":"动作","target":"B","beatId":"节拍1"},...]}
 - dialog 必须逐拍实现 card.escalation；${devices ? 'secret 在结尾反转揭晓；callback 必须回收本集前面埋的线' : isCrosstalk ? '本次创作不使用 secret/callback，这两个字段一律省略' : 'secret/callback 是可选字段,只在模式风格需要时才写,不需要就省略'}
 - 每句必填 "target"（这句对谁说："A"/"B"${cOn ? '"/"C"=指定听者' : '=指定听者'}；"audience"=对观众直说；"room"=对全场）和 "beatId"（这句话实现 card.escalation 的哪一拍,逐字引用该项${devices ? '；收底回收 callback 的句子标最后一拍' : ''}）
-- speaker 只能是 ${cOn ? '"A"、"B" 或 "C"' : '"A" 或 "B"'}；${nameOf('A')}和${nameOf('B')}承担${isComedy ? '主要语言冲突' : '主要对话'}${cOn ? `,${nameOf('C')}按上面的角色分工参与` : ''};台词文本里一律用角色真名,禁止出现"甲""乙""丙"(称呼与性别纪律见上)
+- speaker 只能是 ${cOn ? '"A"、"B" 或 "C"' : '"A" 或 "B"'}；${nameOf('A')}和${nameOf('B')}承担${isComedy ? '主要语言冲突' : '主要对话'}${cOn ? (isCrosstalk ? `,${nameOf('C')}可少量参与` : `,${nameOf('C')}按上面的角色分工参与`) : ''};台词文本里一律用角色真名,禁止出现"甲""乙""丙"(称呼与性别纪律见上)
 - action 只能是这些词之一（禁止用 card 的字段名或其他词）：${ACTIONS}
 - 一段共 ${isComedy ? '14~22' : '8~16'} 句；${cOn ? '三人同场但' : ''}禁止机械轮流${cOn ? '（尤其不许固定 A→B→C 循环）' : ''}
 - 每句口语化，不超过 25 个字

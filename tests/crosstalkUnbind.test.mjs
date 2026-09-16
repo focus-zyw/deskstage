@@ -88,11 +88,38 @@ test('相声解绑:自动选题零注入,仅用户点播题材以灵感行出现
   assert.ok(manualSys.includes('用户点播了题材'), 'craft 带点播题材注记')
 })
 
-test('相声解绑:模式风格后缀换自由版,观众抉择点保留(身份层不动)', () => {
+test('相声解绑:模式风格后缀换自由版,观众抉择点亦不注入(极简)', () => {
   const sys = promptBuilder.buildMessages('crosstalk', tp('减肥这件事', 'crosstalk'), [], undefined, undefined, undefined, undefined, true)[0].content
   assert.ok(sys.includes('secret/callback 不使用'))
   assert.ok(!sys.includes('模式风格与上述默认喜剧手法(互怼/包袱/secret反转/逗弄)冲突时'))
-  assert.ok(sys.includes('观众互动'), '抉择点属于产品身份层,不解绑')
+  assert.ok(!sys.includes('观众互动'), '极简相声连抉择点也不注入(用户裁决)')
+})
+
+test('相声极简:画像/怪癖纪律/现实时间/角色世界全部不进,名册行在场', () => {
+  const sys = promptBuilder.buildMessages(
+    'crosstalk',
+    tp('减肥这件事', 'crosstalk'),
+    [],
+    '小说',
+    { profile: { userName: 'focus', likes: '小说', banTopics: '相亲' }, facts: ['用户通宵薅羊毛'] },
+    undefined,
+    '观众戳了小哀 1 次',
+    true,
+    undefined,
+    '内存快占满了',
+    '两人关系很铁',
+    '乙情绪稍紧绷',
+  )[0].content
+  assert.ok(sys.includes('speaker 只能取括号里的值'), '极简名册行在场')
+  assert.ok(!sys.includes('便利店店员') && !sys.includes('温柔捧场型'), '人设文本不进')
+  assert.ok(!sys.includes('怪癖使用纪律'), '怪癖块不进')
+  assert.ok(!sys.includes('使用者画像'), '观众画像不进')
+  assert.ok(!sys.includes('雷区'), '雷区行随画像一并退出(用户裁决)')
+  assert.ok(!sys.includes('现实时间'), '时间语境不进')
+  assert.ok(!sys.includes('长期关系背景'), '关系底色不进')
+  assert.ok(!sys.includes('本集关系状态'), '本集关系卡不进')
+  assert.ok(!sys.includes('角色分工'), 'C 分工不进')
+  assert.ok(!sys.includes('观众互动'), '抉择点不进')
 })
 
 test('回归:日常模式(非喜剧)不受解绑影响,strict 话题绑定原样', () => {
