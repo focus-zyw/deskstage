@@ -36,6 +36,13 @@ const OUTCOME_LABEL: Record<string, { text: string; tone: string }> = {
   open: { text: '进行中', tone: '#5b7fd0' },
 }
 
+/** 结果标签:spoke 在零 TTS 段的会话(单聊面板模式不朗读)实为「已回复」,语境化显示 */
+function outcomeLabelOf(outcome: string, ttsSegments: number): { text: string; tone: string } {
+  const base = OUTCOME_LABEL[outcome]
+  if (outcome === 'spoke' && ttsSegments === 0) return { text: '已回复', tone: base.tone }
+  return base
+}
+
 function fmtMs(ms: number | undefined): string {
   if (ms === undefined) return '—'
   return ms >= 1000 ? `${(ms / 1000).toFixed(2)}s` : `${ms}ms`
@@ -48,12 +55,12 @@ function fmtTime(ts: number): string {
 }
 
 /** 事件 → 一行摘要(结构信息,正文只在 detail_text 且已脱敏);ids = 可查现状的记忆 id */
-function describeEvent(ev: DiagEvent): { badge: string; text: string; ids?: string[] } {
+function describeEvent(ev: DiagEvent, ttsSegments = 0): { badge: string; text: string; ids?: string[] } {
   switch (ev.kind) {
     case 'turn_started':
       return { badge: '输入', text: `${SOURCE_LABEL[ev.source] ?? ev.source} · ${ev.inputChars} 字 · ${ev.language} · ${ev.fingerprint}${ev.voice ? ' · 语音路径' : ''}${ev.target ? ` · @${ev.target}` : ''}` }
     case 'turn_finished':
-      return { badge: '完成', text: `结果 ${OUTCOME_LABEL[ev.outcome]?.text ?? ev.outcome} · 总耗时 ${fmtMs(ev.totalMs)} · 回复 ${ev.replySentences} 句 ${ev.replyChars} 字` }
+      return { badge: '完成', text: `结果 ${outcomeLabelOf(ev.outcome, ttsSegments).text} · 总耗时 ${fmtMs(ev.totalMs)} · 回复 ${ev.replySentences} 句 ${ev.replyChars} 字` }
     case 'llm_started':
       return { badge: 'LLM ▶', text: `${ev.call} → ${ev.transport}${ev.model ? ` · ${ev.model}` : ''}${ev.endpointHost ? ` · ${ev.endpointHost}` : ''} · prompt ${ev.promptChars} 字符(system ${ev.systemChars})· 上下文 ${ev.contextLines} 行 · 约 ${ev.estTokens} token${ev.timeoutMs ? ` · 超时 ${fmtMs(ev.timeoutMs)}` : ''}` }
     case 'llm_first_token':
@@ -152,7 +159,7 @@ function Timeline(props: { session: DiagSession }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 2, marginTop: 8 }}>
       {props.session.events.map((ev, i) => {
-        const d = describeEvent(ev)
+        const d = describeEvent(ev, props.session.summary.ttsSegments)
         const tone = BADGE_TONE[d.badge.replace(/[▶■✎停]/g, '')] ?? '#7a7f8c'
         return (
           <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'baseline', fontSize: 12, lineHeight: 1.5 }}>
@@ -191,7 +198,7 @@ function Timeline(props: { session: DiagSession }) {
 function SummaryChips(props: { session: DiagSession }) {
   const s = props.session.summary
   const chips: { text: string; tone: string }[] = []
-  const outcome = OUTCOME_LABEL[s.outcome]
+  const outcome = outcomeLabelOf(s.outcome, s.ttsSegments)
   if (outcome) chips.push({ text: outcome.text, tone: outcome.tone })
   if (s.noSpeechReason) chips.push({ text: `未说话:${s.noSpeechReason}`, tone: '#c07f2d' })
   for (const f of s.fallbacks) chips.push({ text: `回退:${f.from} — ${f.reason}`, tone: '#c07f2d' })
@@ -325,7 +332,7 @@ export function DiagSettings() {
         {sessions.length === 0 && <div className="set-note">还没有诊断会话 — 和角色说句话,或播一段演出</div>}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           {sessions.map((s) => {
-            const oc = OUTCOME_LABEL[s.summary.outcome]
+            const oc = outcomeLabelOf(s.summary.outcome, s.summary.ttsSegments)
             const open = expanded === s.id
             return (
               <div key={s.id} style={{ borderBottom: '1px solid var(--set-border, #8882)', padding: '6px 2px' }}>
