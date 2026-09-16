@@ -273,8 +273,20 @@ export interface ColdMemoryConfig {
   embedProfile?: string
   /** endpoint 模式必填(如 text-embedding-3-small);local 模式选填(llama-server 单模型) */
   embedModel?: string
-  /** local 模式:llama-server 服务地址(含 /v1);空则用 COLD_LOCAL_URL_DEFAULT */
+  /** local 模式:llama-server 服务地址(含 /v1);空则用 COLD_LOCAL_URL_DEFAULT。
+   *  托管实例就绪时代理会优先走它的临时端口,此地址是手动模式与回退 */
   localUrl?: string
+  /** local 托管:应用启动时自动拉起 llama-server(需 serverPath/modelPath 齐全);
+   *  设置页也可随时手动启停。缺省 false(false 不落盘) */
+  autoStart?: boolean
+  /** local 托管:llama-server 可执行文件路径 */
+  serverPath?: string
+  /** local 托管:专用 embedding 模型 gguf 路径——对话模型没有 pooling 头,
+   *  出不了有效向量,必须配检索/嵌入模型(如 bge-small-zh-v1.5 / bge-m3 的 GGUF) */
+  modelPath?: string
+  /** local 托管:额外启动参数(如缺 pooling 头的模型补 --pooling mean);
+   *  双引号段保留内部空白,适配带空格的路径 */
+  extraArgs?: string
 }
 
 /** local 嵌入默认服务地址:llama-server 的默认端口与 OpenAI 兼容前缀 */
@@ -464,7 +476,8 @@ export const DEFAULT_CONFIG: AppConfig = {
 }
 
 /** 经历记忆嵌入配置清洗:provider 只认 'local'(缺省即 endpoint,不落盘);endpoint
- *  两键与 localUrl 收非空短串,localUrl 还须是合法 http(s) URL 否则丢弃 */
+ *  两键与 localUrl 收非空短串,localUrl 还须是合法 http(s) URL 否则丢弃;托管字段
+ *  (autoStart/serverPath/modelPath/extraArgs)收布尔与截尾短串 */
 function sanitizeColdMemory(v: unknown): ColdMemoryConfig {
   const o = (v ?? {}) as Record<string, unknown>
   let localUrl = ''
@@ -477,6 +490,13 @@ function sanitizeColdMemory(v: unknown): ColdMemoryConfig {
       /* 非法 URL 丢弃 */
     }
   }
+  const path = (key: string, cap: number): string => {
+    const raw = o[key]
+    return typeof raw === 'string' ? raw.trim().slice(0, cap) : ''
+  }
+  const serverPath = path('serverPath', 400)
+  const modelPath = path('modelPath', 400)
+  const extraArgs = path('extraArgs', 300)
   return {
     ...(o.provider === 'local' ? { provider: 'local' as const } : {}),
     ...(typeof o.embedProfile === 'string' && o.embedProfile.trim()
@@ -486,6 +506,10 @@ function sanitizeColdMemory(v: unknown): ColdMemoryConfig {
       ? { embedModel: o.embedModel.trim().slice(0, 120) }
       : {}),
     ...(localUrl ? { localUrl } : {}),
+    ...(o.autoStart === true ? { autoStart: true } : {}),
+    ...(serverPath ? { serverPath } : {}),
+    ...(modelPath ? { modelPath } : {}),
+    ...(extraArgs ? { extraArgs } : {}),
   }
 }
 

@@ -13,6 +13,7 @@ mod desktop_ops;
 mod endpoint_proxy;
 mod env;
 mod local_asr;
+mod local_embed_server;
 mod mic_capture;
 mod ocr;
 mod pointer_hook;
@@ -190,6 +191,9 @@ pub fn run() {
             local_asr::local_asr_status,
             local_asr::local_asr_download,
             local_asr::asr_transcribe_local,
+            local_embed_server::local_embed_status,
+            local_embed_server::local_embed_start,
+            local_embed_server::local_embed_stop,
             bili_http::bili_http_request,
             secrets::secret_get,
             secrets::secret_set,
@@ -215,6 +219,11 @@ pub fn run() {
             spawn_cursor_poll(app.handle().clone());
             pointer_hook::spawn(app.handle().clone());
             spawn_topmost_watchdog(app.handle().clone());
+            // 本地嵌入服务自拉起:冷记忆选了本地 llama.cpp 且开了托管(autoStart)
+            // 才动手;异步进行不阻塞启动,失败只记日志(fail-open,经历记忆停用)
+            tauri::async_runtime::spawn(local_embed_server::auto_start_if_configured(
+                app.handle().clone(),
+            ));
             // 会话闲置清扫兜底:定时关闭超时未用的网页会话标签页(正常路径由
             // webchat_release_conversation 关闭;这里只兜崩溃/中断残留)
             {
@@ -245,6 +254,8 @@ pub fn run() {
         .run(|_app, event| {
             // 退出时清掉专用 profile 的后台调试 Edge(线程里跑:powershell 枚举约 1s,别拖住退出)
             if let tauri::RunEvent::Exit = event {
+                // 托管的本地嵌入 llama-server 随应用退出(同步 kill,很快)
+                local_embed_server::shutdown();
                 std::thread::spawn(webchat::kill_profile_edge);
             }
         });

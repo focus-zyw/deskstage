@@ -103,8 +103,9 @@ fn kind_spec(kind: &str) -> Result<(&'static str, bool), String> {
 
 /// 解析端点 base。统一状态中心的内存配置优先:写路径经临时文件 rename 原子提交、
 /// 加载在进程锁内单飞,内存态永不撕裂。服务未加载(极端场景)才回退读一次文件。
-/// config.json 不含明文密钥,读它不等于读凭证。
-fn committed_or_file_config(app: &AppHandle) -> Result<Value, String> {
+/// config.json 不含明文密钥,读它不等于读凭证。本地嵌入托管模块(local_embed_server)
+/// 读配置同用此入口。
+pub(crate) fn committed_or_file_config(app: &AppHandle) -> Result<Value, String> {
     if let Some(v) = crate::config_service::committed(app) {
         return Ok(v);
     }
@@ -149,10 +150,17 @@ fn profile_base(v: &Value, profile_id: &str) -> Result<String, String> {
 }
 
 /// 解析端点 base:kind 指针为缺省路径;kind=llm 且带 profile(非缺省/'main')时
-/// 改走模型档案。地址由 Rust 从 config.json 解析,前端从头到尾接触不到完整 URL。
+/// 改走模型档案;kind=coldLocal 时应用托管的 llama-server 实例优先(临时端口,
+/// 就绪才有),配置地址是手动模式与回退。地址由 Rust 从 config.json 解析,
+/// 前端从头到尾接触不到完整 URL。
 fn configured_base(app: &AppHandle, kind: &str, profile: Option<&str>) -> Result<String, String> {
     let (pointer, _) = kind_spec(kind)?;
     let v = committed_or_file_config(app)?;
+    if kind == "coldLocal" {
+        if let Some(base) = crate::local_embed_server::current_base() {
+            return Ok(base);
+        }
+    }
     if kind == "llm" {
         if let Some(pid) = profile
             .map(str::trim)

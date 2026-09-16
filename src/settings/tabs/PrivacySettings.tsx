@@ -1,13 +1,19 @@
 // 工具与隐私:录屏排除、网页版生成实验、隐私说明。
 // 截屏快捷键的设置已挪到「快捷键」分页统一管理;本页只留捕获排除开关。
 // 网页版生成的窗口/状态轮询是本页私有的临时会话,挂载期间存活、切走即止。
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ChangeEvent } from 'react'
 import { WEBCHAT_SITES, webchatLogin, webchatProbe, webchatRestoreMain } from '../../engine/webchat'
 import { COLD_LOCAL_URL_DEFAULT, type AppConfig } from '../../storage/configStore'
 import { toolList } from '../../tools/registry'
 import { SiteLoginRow } from '../SiteLoginRow'
 import { useSettings } from '../useSettingsSession'
 import { SettingsCard, SetField, SetLine, SetSwitch } from '../SettingsPrimitives'
+import {
+  localEmbedServerStart,
+  localEmbedServerStatus,
+  localEmbedServerStop,
+  type EmbedServerState,
+} from '../../engine/localEmbedding'
 
 // 站点登录行已抽为共享组件 SiteLoginRow(AI 剧场与群聊角色绑定共用)
 
@@ -16,6 +22,80 @@ export function PrivacySettings() {
   // 网页版生成:窗口/就绪状态的一行展示文本
   const [webchatStatusText, setWebchatStatusText] = useState('')
   const webchatPollRef = useRef(0)
+  // 本地嵌入托管服务状态:本地来源分页可见期间每 2s 轮询(桌面端才有;预览为 null)
+  const [embedServer, setEmbedServer] = useState<EmbedServerState | null>(null)
+  const showLocalEmbed = form.coldMemory.provider === 'local'
+
+  useEffect(() => {
+    if (!showLocalEmbed) return
+    let alive = true
+    const tick = () => {
+      localEmbedServerStatus()
+        .then((s) => {
+          if (alive) setEmbedServer(s)
+        })
+        .catch(() => {})
+    }
+    tick()
+    const timer = window.setInterval(tick, 2000)
+    return () => {
+      alive = false
+      window.clearInterval(timer)
+    }
+  }, [showLocalEmbed])
+
+  /** 托管服务状态的一行文案 */
+  function embedServerLabel(s: EmbedServerState | null): string {
+    if (!s) return '(仅桌面端可用)'
+    switch (s.status) {
+      case 'ready':
+        return `运行中${s.port ? ` :${s.port}` : ''}`
+      case 'starting':
+        return '启动中(加载模型…)'
+      case 'failed':
+        return `失败${s.lastError ? `:${s.lastError.slice(0, 160)}` : ''}`
+      default:
+        return '已停止'
+    }
+  }
+
+  async function startEmbedServer() {
+    try {
+      setEmbedServer(await localEmbedServerStart())
+    } catch (e) {
+      setEmbedServer({ status: 'failed', lastError: String(e) })
+    }
+  }
+
+  async function stopEmbedServer() {
+    try {
+      await localEmbedServerStop()
+    } catch {
+      /* 停止失败靠轮询纠正显示 */
+    }
+    setEmbedServer(await localEmbedServerStatus().catch(() => null))
+  }
+
+  /** 托管路径字段的通用提交:输入时入队、blur 时立即落盘。返回原生 input 可直接
+   *  展开的 props(onChange 在这里适配成取 target.value) */
+  function coldPathFieldProps(key: 'serverPath' | 'modelPath' | 'extraArgs') {
+    return {
+      value: form.coldMemory[key] ?? '',
+      onChange: (e: ChangeEvent<HTMLInputElement>) => {
+        const next = { ...form.coldMemory, [key]: e.target.value }
+        setForm({ ...form, coldMemory: next })
+        saveField({ coldMemory: next }, false)
+      },
+      onBlur: () => {
+        const trimmed = form.coldMemory[key]?.trim() || undefined
+        if (trimmed !== form.coldMemory[key]) {
+          const next = { ...form.coldMemory, [key]: trimmed }
+          setForm({ ...form, coldMemory: next })
+          saveField({ coldMemory: next }, true)
+        }
+      },
+    }
+  }
 
   // 登录就绪轮询每 4 秒探测一次;切走本页/关窗即停,不留后台空转
   useEffect(() => () => window.clearInterval(webchatPollRef.current), [])
@@ -286,10 +366,73 @@ export function PrivacySettings() {
                 }}
               />
             </SetField>
+            <SetLine
+              title="托管启动 llama-server"
+              hint="应用自动拉起并看管本地服务(退出时一并关闭),启动参数固定带 --embeddings 把服务限制为只做嵌入;关 = 手动模式,自己在终端起服务、只填上方地址"
+            >
+              <SetSwitch
+                checked={form.coldMemory.autoStart === true}
+                label="托管启动 llama-server"
+                onChange={(v) => {
+                  const next = { ...form.coldMemory, autoStart: v }
+                  setForm({ ...form, coldMemory: next })
+                  saveField({ coldMemory: next }, true)
+                }}
+              />
+            </SetLine>
+            {form.coldMemory.autoStart === true && (
+              <>
+                <SetField label="llama-server 程序路径" htmlFor="cfg-cold-server-path">
+                  <input
+                    id="cfg-cold-server-path"
+                    type="text"
+                    placeholder="如 D:\tools\llama.cpp\llama-server.exe"
+                    {...coldPathFieldProps('serverPath')}
+                  />
+                </SetField>
+                <SetField
+                  label="embedding 模型文件路径"
+                  htmlFor="cfg-cold-model-path"
+                  hint="必须配专用 embedding 模型(带检索/pooling 头,如 bge 系列 GGUF);对话模型出不了有效向量"
+                >
+                  <input
+                    id="cfg-cold-model-path"
+                    type="text"
+                    placeholder="如 D:\models\bge-small-zh-v1.5-Q8_0.gguf"
+                    {...coldPathFieldProps('modelPath')}
+                  />
+                </SetField>
+                <SetField
+                  label="额外启动参数(选填)"
+                  htmlFor="cfg-cold-extra-args"
+                  hint="如模型缺 pooling 头补 --pooling mean;双引号段保留空格,适配带空格的路径"
+                >
+                  <input
+                    id="cfg-cold-extra-args"
+                    type="text"
+                    placeholder="如 --pooling mean"
+                    {...coldPathFieldProps('extraArgs')}
+                  />
+                </SetField>
+                <SetLine
+                  title={`托管状态:${embedServerLabel(embedServer)}`}
+                  hint="启动 = 重启语义(先停旧实例);失败时显示 llama-server 的报错,常为路径不对或缺 pooling 头"
+                >
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button className="panel-btn" onClick={() => void startEmbedServer()}>
+                      启动服务
+                    </button>
+                    <button className="panel-btn" onClick={() => void stopEmbedServer()}>
+                      停止
+                    </button>
+                  </div>
+                </SetLine>
+              </>
+            )}
             <div className="set-note">
-              先在本机启动 llama-server 加载 embedding 模型,例如:
+              模型请选专用 embedding 模型,不要用对话模型。体积参考:bge-small-zh-v1.5 量化约 25MB,冷记忆检索足够;
+              bge-m3 Q8 约 600MB,质量上限更高。托管关闭时自己起服务:
               <code>llama-server -m 模型.gguf --embedding --port 8080</code>。
-              模型体积参考:bge-small-zh-v1.5 量化约 25MB,冷记忆检索足够;bge-m3 Q8 约 600MB,质量上限更高。
               换嵌入模型后旧向量不可用,经历记忆会自动重开;服务没启动时经历记忆停用,聊天不受影响。
             </div>
           </>

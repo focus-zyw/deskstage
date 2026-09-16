@@ -8,6 +8,7 @@
 // fetch(开发调试用)。失败一律抛错,由上游 mem0Memory 的 fail-open 兜底——本地服务
 // 没起时经历记忆整体停用,Warm 摘要与聊天链路不受影响。
 import { COLD_LOCAL_URL_DEFAULT, inTauri } from '../storage/configStore'
+import { invoke } from '@tauri-apps/api/core'
 import { requestEndpoint } from './endpointProxy'
 
 /** 本地嵌入所需设置(是 ColdMemoryConfig 的子集,便于测试注入) */
@@ -75,3 +76,33 @@ export function createLocalEmbedding(deps: LocalEmbeddingDeps = {}): LocalEmbedd
 
 /** 生产单例:冷记忆接线使用 */
 export const localEmbedding = createLocalEmbedding()
+
+// ---------- 托管 llama-server(Rust local_embed_server)控制 ----------
+
+/** 与 Rust EmbedServerStatus 对齐 */
+export interface EmbedServerState {
+  /** stopped / starting / ready / failed */
+  status: 'stopped' | 'starting' | 'ready' | 'failed'
+  /** 托管实例端口(临时空闲端口;未拉起为 null) */
+  port?: number | null
+  /** 最近一次失败的 stderr 截尾(llama-server 原始报错) */
+  lastError?: string | null
+}
+
+/** 托管服务状态;非桌面环境返回 null(浏览器预览无托管) */
+export async function localEmbedServerStatus(): Promise<EmbedServerState | null> {
+  if (!inTauri) return null
+  return await invoke<EmbedServerState>('local_embed_status')
+}
+
+/** 手动拉起(重启语义:先停旧实例);失败抛错,文案带 llama-server 的 stderr 截尾 */
+export async function localEmbedServerStart(): Promise<EmbedServerState> {
+  if (!inTauri) throw new Error('托管启动仅桌面端可用')
+  return await invoke<EmbedServerState>('local_embed_start')
+}
+
+/** 停止托管实例(应用退出时 Rust 侧也会兜底清理) */
+export async function localEmbedServerStop(): Promise<void> {
+  if (!inTauri) return
+  await invoke('local_embed_stop')
+}
