@@ -221,3 +221,16 @@ test('bootstrap 按房间过滤:单聊上下文不含群聊消息', async () => 
   )
   await session.whenIdle()
 })
+
+test('apiActor plain 模式必须关闭 JSON 模式(守卫)', async () => {
+  const { readFile } = await import('node:fs/promises')
+  const src = await readFile(
+    new URL('../src/groupChat/adapters/apiActor.ts', import.meta.url),
+    'utf8',
+  )
+  assert.match(
+    src,
+    /jsonMode:\s*opts\.protocol !== 'plain'/,
+    'response_format json_object 会逼模型自造 JSON,plain 直答必须关闭',
+  )
+})

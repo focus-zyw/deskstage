@@ -22,7 +22,9 @@ export function createApiActorAdapter(opts: ApiActorAdapterOpts = {}): ActorMode
       const raw = await complete({
         messages: req.messages,
         profile: opts.profileId,
-        jsonMode: true,
+        // 单聊直答(plain)必须关 JSON 模式:response_format 会逼模型编出
+        // {"type":"json_object",...} 之类的自造 JSON,而不是自然语言回复
+        jsonMode: opts.protocol !== 'plain',
         temperature: 1.0,
         timeoutMs: opts.timeoutMs ?? 40_000,
         signal,
