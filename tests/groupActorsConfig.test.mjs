@@ -56,15 +56,14 @@ test('Key 映射:键按档案白名单过滤,非字符串值拒收', () => {
   assert.deepEqual(keys, { good: 'sk-abc' })
 })
 
-test('绑定收敛:web 站点白名单 / api profileId 非法回落主模型 / 未知 kind → disabled', () => {
+test('绑定收敛:web 绑定回落主模型 / api profileId 非法回落主模型 / 未知 kind → disabled', () => {
   const sanitize = (v) => configStore.sanitizeGroupChatActors(v)
+  // web 绑定随网页模型支持迁出主线:老配置里的 web 绑定一律回落主模型
   assert.deepEqual(sanitize({ A: { binding: { kind: 'web', site: 'doubao' } } }).A.binding, {
-    kind: 'web',
-    site: 'doubao',
+    kind: 'api',
   })
   assert.deepEqual(sanitize({ A: { binding: { kind: 'web', site: 'nope' } } }).A.binding, {
-    kind: 'web',
-    site: 'deepseek',
+    kind: 'api',
   })
   // 'main'/非法 profileId → 缺省(主模型),保留字不进持久配置
   assert.deepEqual(sanitize({ A: { binding: { kind: 'api', profileId: 'main' } } }).A.binding, {

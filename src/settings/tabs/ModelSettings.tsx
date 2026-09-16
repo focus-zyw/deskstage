@@ -1,16 +1,13 @@
 // AI 模型:主模型(厂商/Key/端点/模型名)、提取文字(OCR 视觉模型)、
-// 群聊模型档案与角色绑定(自由群聊 Actor 系统,每角色可绑独立 API 模型/网页站点)。
+// 群聊模型档案与角色绑定(自由群聊 Actor 系统,每角色可绑独立 API 模型)。
 import { VENDORS, CUSTOM_VENDOR_ID } from '../../engine/vendors'
-import { WEBCHAT_SITES } from '../../engine/webchat'
-import { isWebchatSite, type GroupActorConfig, type GroupModelBinding } from '../../storage/configStore'
-import { SiteLoginRow } from '../SiteLoginRow'
+import { type GroupActorConfig, type GroupModelBinding } from '../../storage/configStore'
 import { useSettings, vendorKeyOf } from '../useSettingsSession'
 import { SettingsCard, SetField, SetLine } from '../SettingsPrimitives'
 
 /** 绑定 → 下拉值(api 缺省 profileId = 主模型) */
 function bindingValue(b: GroupModelBinding): string {
   if (b.kind === 'api') return b.profileId ? `api:${b.profileId}` : 'api:main'
-  if (b.kind === 'web') return `web:${b.site}`
   return 'off'
 }
 
@@ -18,10 +15,6 @@ function bindingFromValue(v: string): GroupModelBinding {
   if (v.startsWith('api:')) {
     const pid = v.slice(4)
     return pid ? { kind: 'api', profileId: pid } : { kind: 'api' }
-  }
-  if (v.startsWith('web:')) {
-    const site = v.slice(4)
-    return isWebchatSite(site) ? { kind: 'web', site } : { kind: 'disabled' }
   }
   return { kind: 'disabled' }
 }
@@ -276,17 +269,9 @@ export function ModelSettings() {
                     {p.label}
                   </option>
                 ))}
-                {WEBCHAT_SITES.map((s) => (
-                  <option key={s.id} value={`web:${s.id}`}>
-                    {s.label}(网页)
-                  </option>
-                ))}
                 <option value="off">不参与</option>
               </select>
             </SetField>
-            {cfg.binding.kind === 'web' && (
-              <SiteLoginRow label={`${name}的网页登录`} site={cfg.binding.site} />
-            )}
             <SetLine title={`${name}的活跃度`} hint="安静=少接话;热闹=更爱聊(都会自动收敛,不会无限聊下去)">
               <div className="seg-group">
                 {(

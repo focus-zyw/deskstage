@@ -305,7 +305,6 @@ export const PROFILE_ID_RE = /^[a-zA-Z0-9_-]{1,48}$/
 /** 群聊角色模型绑定:api 缺省/'main' = 全局主模型;web = 网页站点;disabled 不参与 */
 export type GroupModelBinding =
   | { kind: 'api'; profileId?: string }
-  | { kind: 'web'; site: WebchatSiteId }
   | { kind: 'disabled' }
 
 export type GroupAutonomy = 'quiet' | 'natural' | 'lively'
@@ -633,7 +632,8 @@ function sanitizeGroupActor(v: unknown): GroupActorConfig {
       typeof b.profileId === 'string' && isUsableProfileId(b.profileId) ? b.profileId : undefined
     binding = pid ? { kind: 'api', profileId: pid } : { kind: 'api' }
   } else if (b.kind === 'web') {
-    binding = { kind: 'web', site: isWebchatSite(b.site) ? b.site : 'deepseek' }
+    // 网页模型支持迁出主线:老配置的 web 绑定回落主模型
+    binding = { kind: 'api' }
   } else {
     binding = { kind: 'disabled' }
   }

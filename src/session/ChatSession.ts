@@ -36,7 +36,6 @@ import { expressionDirector, type ExpressionTrace } from '../expression'
 import { speakTracked, prefetchVoice } from '../engine/tts'
 import { diag } from '../diag/store'
 import { createApiActorAdapter } from '../groupChat/adapters/apiActor'
-import { createWebchatActorAdapter } from '../groupChat/adapters/webchatActor'
 import type { ActorModelAdapter } from '../groupChat/adapters/types'
 import { createGroupChatRuntime, type GroupChatRuntime } from '../groupChat/runtime'
 import { createRoomPresenter, type RoomPresenter } from '../groupChat/presenter'
@@ -197,25 +196,16 @@ export function createChatSession(
     const binding = effectiveBinding(cfg, slot)
     if (binding.kind === 'disabled') return undefined
     const key =
-      binding.kind === 'api' ? `api:${binding.profileId ?? 'main'}` : `web:${binding.site}`
+      `api:${binding.profileId ?? 'main'}`
     const cur = realAdapters.get(slot)
     if (cur && cur.key === key) return cur.adapter
     // 换绑:立即释放旧适配器持有的网页会话(旧键标签页当场回收,
     // 不必等 Rust 侧 30 分钟闲置清扫);在飞 ask 由 release 的 key_lock 排队收尾
     void cur?.adapter.dispose?.()
-    const adapter =
-      binding.kind === 'api'
-        ? createApiActorAdapter({ profileId: binding.profileId, protocol: directMode ? 'plain' : 'schema' })
-        : createWebchatActorAdapter({
-            actor: slot,
-            site: binding.site,
-            roomId: () => roomSessionId,
-            bindingRevision: () => {
-              const b = configCache ? effectiveBinding(configCache, slot) : null
-              return b && b.kind === 'web' ? `web:${b.site}` : 'off'
-            },
-            protocol: directMode ? 'plain' : 'schema',
-          })
+    const adapter = createApiActorAdapter({
+      profileId: binding.kind === 'api' ? binding.profileId : undefined,
+      protocol: directMode ? 'plain' : 'schema',
+    })
     realAdapters.set(slot, { key, adapter })
     return adapter
   }
