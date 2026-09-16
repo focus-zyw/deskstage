@@ -191,16 +191,38 @@ export function ChatPanel({ innerRef, pos, pinned, onPinChange, onClose, route }
   }
 
 
+  /** 消息分组:同一人连续消息并入一组(组首才出头像/名字,组内紧凑堆叠) */
   function renderFeed() {
     if (turns.length === 0) {
       return <div className="chatp-empty">还没有消息,打个招呼吧</div>
     }
-    return turns.map((t, i) => {
-      const mine = t.who === 'user'
+    const groups: Array<{ who: string; entries: ChatLogEntry[] }> = []
+    for (const t of turns) {
+      const last = groups[groups.length - 1]
+      if (last && last.who === t.who) last.entries.push(t)
+      else groups.push({ who: t.who, entries: [t] })
+    }
+    return groups.map((g, gi) => {
+      const mine = g.who === 'user'
+      const slot = g.who as ActorId
+      const name = speakerName(g.who)
       return (
-        <div key={`${t.ts}-${i}`} className={`chatp-row${mine ? ' mine' : ''}`}>
-          <span className="chatp-who">{speakerName(t.who)}</span>
-          <span className="chatp-text">{t.text}</span>
+        <div key={`${g.entries[0].ts}-${gi}`} className={`chatp-group${mine ? ' mine' : ''}`}>
+          {!mine && (
+            <div className="chatp-ghead">
+              {avatars[slot] ? (
+                <img className="chatp-gavatar" src={avatars[slot]} alt="" />
+              ) : (
+                <span className="chatp-gavatar">{name.slice(0, 1)}</span>
+              )}
+              <span className="chatp-gname">{name}</span>
+            </div>
+          )}
+          {g.entries.map((t, i) => (
+            <div key={`${t.ts}-${i}`} className="chatp-bubble">
+              {t.text}
+            </div>
+          ))}
         </div>
       )
     })
@@ -225,7 +247,16 @@ export function ChatPanel({ innerRef, pos, pinned, onPinChange, onClose, route }
             ←
           </button>
         )}
-        <span className="tr-title">{view.kind === 'direct' ? nameOf(view.slot) : view.kind === 'group' ? groupName : '聊天'}</span>
+        {view.kind === 'direct' &&
+          (avatars[view.slot] ? (
+            <img className="chatp-havatar" src={avatars[view.slot]} alt="" />
+          ) : (
+            <span className="chatp-havatar">{nameOf(view.slot).slice(0, 1)}</span>
+          ))}
+        {view.kind === 'group' && <span className="chatp-havatar">👥</span>}
+        <span className="tr-title">
+          {view.kind === 'direct' ? nameOf(view.slot) : view.kind === 'group' ? groupName : '聊天'}
+        </span>
         <button
           className={`tr-pin${pinned ? ' on' : ''}`}
           title={pinned ? '取消固定(点外部/Esc 会收起)' : '固定面板(点外部/Esc 不收起)'}

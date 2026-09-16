@@ -4473,13 +4473,32 @@ body:has(.gal-page) {
 }
 
 /* ---------- 聊天面板:统一聊天入口(会话列表 → 群聊/单聊会话) ---------- */
+/* 轻量聊天浮层:背景做实(0.94,不用 backdrop-filter——叠视频会破坏硬件合成),
+ * 分组节奏(组内 4px/组间 14px)、气泡限宽、细滚动条 */
 .chatp {
   width: 460px;
-  max-height: calc(100vh - 120px);
+  max-height: calc(100vh - 110px);
   gap: 8px;
+  padding: 0 10px 10px;
+  background: rgba(17, 17, 27, 0.94);
 }
 .chatp .tr-head {
-  margin-bottom: 2px;
+  min-height: 46px;
+  align-items: center;
+  margin: 0 -2px;
+}
+.chatp-havatar {
+  width: 28px;
+  height: 28px;
+  flex: none;
+  border-radius: 50%;
+  object-fit: cover;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(124, 108, 240, 0.3);
+  color: #fff;
+  font-size: 13px;
 }
 .chatp-back {
   border: none;
@@ -4500,6 +4519,7 @@ body:has(.gal-page) {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  padding-bottom: 2px;
 }
 .chatp-item {
   display: flex;
@@ -4559,15 +4579,29 @@ body:has(.gal-page) {
   background: #ff6b6b;
 }
 
-/* 消息流 */
+/* 消息流:细滚动条融入暗色 UI */
 .chatp-feed {
   display: flex;
   flex-direction: column;
-  gap: 8px;
   min-height: 180px;
   max-height: 46vh;
   overflow-y: auto;
-  padding: 4px 2px;
+  padding: 8px 6px 8px 2px;
+  background: rgba(15, 15, 24, 0.55);
+  border-radius: 10px;
+}
+.chatp-feed::-webkit-scrollbar {
+  width: 5px;
+}
+.chatp-feed::-webkit-scrollbar-track {
+  background: transparent;
+}
+.chatp-feed::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+}
+.chatp-feed::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.28);
 }
 .chatp-empty {
   font-size: 12px;
@@ -4575,45 +4609,74 @@ body:has(.gal-page) {
   text-align: center;
   padding: 24px 0;
 }
-.chatp-row {
+
+/* 消息分组:同人连续 = 一组;组内气泡 4px,组间 14px;用户侧右对齐 */
+.chatp-group {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 2px;
+  gap: 4px;
+  margin-bottom: 14px;
 }
-.chatp-row.mine {
+.chatp-group.mine {
   align-items: flex-end;
 }
-.chatp-who {
+.chatp-group:last-child {
+  margin-bottom: 4px;
+}
+.chatp-ghead {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.chatp-gavatar {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  object-fit: cover;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(124, 108, 240, 0.3);
+  color: #fff;
+  font-size: 11px;
+}
+.chatp-gname {
   font-size: 11px;
   color: rgba(255, 255, 255, 0.5);
 }
-.chatp-text {
-  font-size: 13px;
-  line-height: 1.55;
+
+/* 气泡:限宽 + 紧凑;AI 深灰带轻边缘,用户紫色(不提亮,避免按钮感) */
+.chatp-bubble {
+  width: fit-content;
+  max-width: 72%;
+  padding: 8px 11px;
+  border-radius: 12px;
+  font-size: 14px;
+  line-height: 1.45;
   color: #fff;
   white-space: pre-wrap;
   word-break: break-word;
-  padding: 7px 10px;
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.07);
-  max-width: 92%;
+  background: #272733;
+  border: 1px solid rgba(255, 255, 255, 0.025);
 }
-.chatp-row.mine .chatp-text {
-  background: rgba(124, 108, 240, 0.32);
+.chatp-group.mine .chatp-bubble {
+  background: #4d4386;
+  border-color: transparent;
 }
 
-/* 输入行 */
-/* 输入容器:边框/底色在容器上,textarea 透明内嵌,纸飞机发送钮在内部右下角 */
+/* 输入区:容器包 textarea + 内嵌纸飞机钮;底部留白 8px */
 .chatp-input-wrap {
   position: relative;
   display: flex;
   align-items: flex-end;
+  width: 100%;
   max-width: 100%;
-  min-width: 160px;
-  padding: 4px 42px 4px 10px;
+  min-height: 42px;
+  max-height: 112px;
+  padding: 6px 44px 6px 12px;
   border: 1px solid rgba(255, 255, 255, 0.18);
-  border-radius: var(--radius-input);
+  border-radius: 10px;
   background: rgba(255, 255, 255, 0.08);
 }
 /* 内容测量尺:与输入框同字体,离屏渲染,不参与布局 */
@@ -4621,29 +4684,32 @@ body:has(.gal-page) {
   position: absolute;
   visibility: hidden;
   white-space: pre;
-  font-size: 13px;
+  font-size: 14px;
   font-family: inherit;
-  line-height: 1.5;
+  line-height: 1.45;
 }
 .chatp-input {
   flex: 1;
   min-width: 0;
-  max-height: 104px;
-  padding: 5px 0;
+  max-height: 100px;
+  padding: 4px 0;
   background: transparent;
   border: none;
   outline: none;
   resize: none;
   color: #fff;
-  font-size: 13px;
+  font-size: 14px;
   font-family: inherit;
-  line-height: 1.5;
+  line-height: 1.45;
   overflow-y: auto;
+}
+.chatp-input::placeholder {
+  color: rgba(255, 255, 255, 0.4);
 }
 .chatp-send {
   position: absolute;
-  right: 5px;
-  bottom: 5px;
+  right: 6px;
+  bottom: 6px;
   width: 28px;
   height: 28px;
   flex: none;
@@ -4659,16 +4725,13 @@ body:has(.gal-page) {
   transition: background 0.15s ease;
 }
 .chatp-send:disabled {
-  opacity: 0.35;
+  background: #56506e;
+  opacity: 0.7;
   cursor: default;
 }
 .chatp-send:not(:disabled):hover {
   background: rgba(124, 108, 240, 1);
 }
-.chatp-input:focus {
-  border-color: rgba(124, 108, 240, 0.9);
-}
-.chatp-input-row .panel-btn {
-  padding: 7px 14px;
-  font-size: 12px;
+.chatp .tr-privacy {
+  padding: 0 2px 2px;
 }
