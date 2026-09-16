@@ -109,11 +109,12 @@ test('buildMessages:protocol/cRule 用真名,模式指令的甲乙丙由映射�
   assert.doesNotMatch(daily, /把我咖啡变成冰的/)
 })
 
-test('模式风格最高优先级块:冲突让位条款在场(自定义风格不被默认协议压制)', () => {
+test('模式风格最高优先级块:相声解绑后缀在场(题材自由,装置退场)', () => {
   setCharacterNames('甲', '乙', '丙')
   const xt = buildMessages('crosstalk', tp('周报到底写给谁看'), [])[0].content
   assert.match(xt, /【模式风格（本集最高创作优先级）】/)
-  assert.match(xt, /一律以模式风格为准/)
+  assert.match(xt, /secret\/callback 不使用/, '相声解绑:装置退场后缀')
+  assert.match(xt, /题材、人物、情境完全自由/, '题材自由宣告')
   assert.match(xt, /若模式风格指令与本节/, 'cRule 逗弄规则带让位条款')
   // 模式指令包裹在优先级块内(以【模式风格 开头块紧跟其内容)
   const idx = xt.indexOf('【模式风格（本集最高创作优先级）】')
@@ -199,9 +200,9 @@ test('内建回归锁:crosstalk 恒走喜剧分支,daily 固定走非喜剧闲�
 
   const xt = buildMessages('crosstalk', tp('周报到底写给谁看'), [])[0].content
   assert.match(xt, /资深喜剧编剧/, '相声开场仍是喜剧编剧')
-  assert.match(xt, /这是喜剧/)
-  assert.match(xt, /secret 在结尾反转揭晓/)
-  assert.match(xt, /callback 必须回收/)
+  assert.match(xt, /这是相声/, '解绑版 craft 基调')
+  assert.match(xt, /不需要秘密反转/, '装置整体退场(用户裁决:解绑版无 secret/callback)')
+  assert.match(xt, /这两个字段一律省略/, '协议同步省略 secret/callback')
   assert.match(xt, /14~22 句/)
   assert.match(xt, /若模式风格指令与本节/, '保留逗弄让位条款')
 

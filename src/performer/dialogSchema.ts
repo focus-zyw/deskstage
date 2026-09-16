@@ -314,7 +314,7 @@ function speakerStreakWarning(lines: DialogLine[]): string | null {
 export function validatePerformanceScript(
   script: PerformanceScript,
   minLines = 4,
-  opts: { comedy?: boolean } = {},
+  opts: { comedy?: boolean; crosstalk?: boolean } = {},
 ): ScriptValidation {
   const fatal: string[] = []
   const warnings: string[] = []
@@ -323,8 +323,9 @@ export function validatePerformanceScript(
     fatal.push(`正片台词不足 ${minLines} 句(实际 ${lines.length} 句)`)
   }
   // 喜剧模式规则层:卡在但 secret/callback 缺失 → fatal(可被定点修复补字段);
-  // 卡整体缺失仍容忍(卡可缺,照常播)。非喜剧模式不检查
-  if (opts.comedy && script.card) {
+  // 卡整体缺失仍容忍(卡可缺,照常播)。非喜剧模式不检查;
+  // 相声解绑版(crosstalk)不使用装置,同样不检查
+  if (opts.comedy && !opts.crosstalk && script.card) {
     if (!script.card.secret) fatal.push('喜剧模式场景卡缺 secret(反转底牌)')
     if (!script.card.callback) fatal.push('喜剧模式场景卡缺 callback(结尾回收线)')
   }

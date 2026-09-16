@@ -231,6 +231,8 @@ export async function generateDialog(req: GenerateDialogRequest): Promise<Perfor
   // 本集临时关系:随机局势决定攻守姿态,场景卡据此构建(重试沿用同一关系,保持一致)。
   // 非喜剧模式不注入互怼向关系卡,免得把基调拽回斗嘴
   const isComedy = isComedyMode(mode)
+  // 相声解绑版:不使用 secret/callback 装置,校验层同步降档
+  const isCrosstalk = mode === 'crosstalk'
   const relationship = isComedy ? pickRelationship(mode) : undefined
   const envNote = cfg.envSense ? worldNote(cfg.envNoteCooldownMin * 60_000) : undefined
   // 长期关系底色:随互动缓慢漂移,给当集台词定相互态度;负面底色按基调分档(见 bondNoteFor)
@@ -245,7 +247,7 @@ export async function generateDialog(req: GenerateDialogRequest): Promise<Perfor
   // 任何失败(未登录/超时/解析失败)都静默回退走下方 API 通道。
   // 校验+采纳收尾:两条生成路径共用(fatal 抛错由各自的失败路径处理)
   const finish = (script: PerformanceScript): PerformanceScript => {
-    const v = validatePerformanceScript(script, 4, { comedy: isComedy })
+    const v = validatePerformanceScript(script, 4, { comedy: isComedy, crosstalk: isCrosstalk })
     if (v.fatal.length > 0) throw new Error(`剧本结构不合格:${v.fatal.join(';')}`)
     if (v.warnings.length > 0) console.warn('[剧本校验]', v.warnings)
     if (adoption) script.adoption = adoption
@@ -281,7 +283,7 @@ export async function generateDialog(req: GenerateDialogRequest): Promise<Perfor
       let choiceRejected: unknown
       let script = parseDialog(raw, 4, { onChoiceRejected: (v) => { choiceRejected = v } })
       // 结构不合格先做一次定点修复(最小改动,不整体重写);拿不回可播放结构才吃掉重试/走兜底
-      let v = validatePerformanceScript(script, 4, { comedy: isComedy })
+      let v = validatePerformanceScript(script, 4, { comedy: isComedy, crosstalk: isCrosstalk })
       // 抉择点闸门:掷中但没写/写坏 choice 也算议题,并入同一次定点修复;
       // 软性约束——救不回就按无抉择播出(warn 留痕),不因此抛错把好剧本推去兜底
       const choiceIssues = evaluateChoiceAsk({ allowChoice, script, rejectedRaw: choiceRejected })
@@ -290,8 +292,8 @@ export async function generateDialog(req: GenerateDialogRequest): Promise<Perfor
         repairedOnce = true
         try {
           console.warn('[剧本校验] 定点修复:', repairIssues)
-          script = await repairPerformanceScript(script, repairIssues, signal, { comedy: isComedy })
-          v = validatePerformanceScript(script, 4, { comedy: isComedy })
+          script = await repairPerformanceScript(script, repairIssues, signal, { comedy: isComedy, crosstalk: isCrosstalk })
+          v = validatePerformanceScript(script, 4, { comedy: isComedy, crosstalk: isCrosstalk })
           if (allowChoice && !script.choice) {
             console.warn('[抉择点] 修复后仍无 choice,本集按无抉择播出')
           }
@@ -330,13 +332,15 @@ export async function repairPerformanceScript(
   script: PerformanceScript,
   issues: string[],
   signal?: AbortSignal,
-  opts: { comedy?: boolean } = {},
+  opts: { comedy?: boolean; crosstalk?: boolean } = {},
 ): Promise<PerformanceScript> {
   const dialog = [
     ...script.before,
     ...Object.entries(script.after).flatMap(([id, ls]) => ls.map((l) => ({ ...l, branch: id }))),
   ]
-  const secretRule = opts.comedy
+  const secretRule = opts.crosstalk
+    ? '本集是相声解绑版：secret/callback 不使用，不要补这两个字段。'
+    : opts.comedy
     ? '喜剧模式场景卡必须含 secret 与 callback,缺了就按原有剧情补上。'
     : '本集非喜剧基调:secret/callback 可省略,不要为了补字段虚构反转。'
   const messages = [

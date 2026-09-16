@@ -413,7 +413,8 @@ test('心情余波注入:位于长期关系之后,空缺时不出现占位文字
 
 test('话题计划渲染:positions 输出两种立场,thirdParty 输出第三参与者,sensitivity 输出约束行', () => {
   const base = tp('做饭的两种流派')
-  const all = (plan) => buildMessages('crosstalk', plan, []).map((m) => m.content).join('\n')
+  // 相声解绑后话题在 crosstalk 里降级为灵感行,完整话题计划渲染走 daily(非相声)验证
+  const all = (plan) => buildMessages('daily', plan, []).map((m) => m.content).join('\n')
   // positions 有值 → 渲染两种立场(未绑定角色,可交换);personal → 不得默认映射观众本人
   const withPositions = all({
     ...base,
