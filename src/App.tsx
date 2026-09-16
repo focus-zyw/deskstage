@@ -31,6 +31,7 @@ import {
 // 三者都按需拉取,不进启动首屏的关键路径
 const CaptureOverlay = lazy(() => import('./CaptureOverlay').then((m) => ({ default: m.CaptureOverlay })))
 import { SPRITE_SETS, preloadSprites } from './stage/spriteSets'
+import { ensureSpriteOverridesLoaded } from './storage/spriteOverrideStore'
 import { ResidentActor } from './stage/resident/ResidentActor'
 import { preloadResident } from './stage/resident/residentManifest'
 import type { Speaker } from './performer/player'
@@ -855,6 +856,7 @@ function App() {
   useEffect(() => {
     void initPointerManager()
     preloadSprites(Object.values(SPRITE_SETS)) // 预热立绘,演出中切换动作零延迟
+    void ensureSpriteOverridesLoaded() // 角色工坊覆盖预载:加载完成经订阅触发换装
     preloadResident() // 预热 C 的 WebM 片段,首次切换零等待
     preloadProps() // 预热道具 SVG,首次礼物/工具流程不闪
     void ensureMoodLoaded() // 情绪档预载:presenter 待机染色要同步读

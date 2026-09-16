@@ -6,6 +6,7 @@ export type SettingsTab =
   | 'general'
   | 'model'
   | 'persona'
+  | 'workshop'
   | 'modes'
   | 'topics'
   | 'bubble'
@@ -68,6 +69,17 @@ export const SETTINGS_NAV: { group: string; items: { id: SettingsTab; label: str
           <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
             <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
             <circle cx="12" cy="7" r="4" />
+          </svg>
+        ),
+      },
+      {
+        id: 'workshop',
+        label: '角色工坊',
+        icon: (
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="3" y="3" width="18" height="18" rx="2" />
+            <circle cx="8.5" cy="8.5" r="1.5" />
+            <path d="M21 15l-5-5L5 21" />
           </svg>
         ),
       },
@@ -233,6 +245,7 @@ export const TAB_GROUP: Record<SettingsTab, string> = {
   general: '偏好设置',
   model: '偏好设置',
   persona: '偏好设置',
+  workshop: '偏好设置',
   modes: '偏好设置',
   topics: '偏好设置',
   bubble: '偏好设置',
@@ -295,6 +308,11 @@ export const SETTINGS_SEARCH_INDEX: { tab: SettingsTab; card: string; label: str
   { tab: 'persona', card: '角色人设', label: '角色B的人设', keywords: '人设 性格 职业 背景' },
   { tab: 'persona', card: '角色人设', label: '角色C的人设', keywords: '人设 性格 小管家 字面 执行' },
   { tab: 'persona', card: '角色人设', label: '还原默认人设', keywords: '重置 出厂 内置' },
+  // 角色工坊
+  { tab: 'workshop', card: '角色工坊', label: '替换 A/B 立绘素材', keywords: '工坊 立绘 素材 贴图 换装 图片 替换 上传 透明 png 形象 角色 外观' },
+  { tab: 'workshop', card: '立绘预览', label: '立绘预览', keywords: '工坊 立绘 预览 动作 变体' },
+  { tab: 'workshop', card: '动作立绘', label: '动作立绘替换/还原', keywords: '工坊 动作 idle talk 表情 替换 还原 默认' },
+  { tab: 'workshop', card: '待机/说话变体', label: '待机/说话变体替换', keywords: '工坊 变体 待机 说话 替换' },
   // 模式工坊
   { tab: 'modes', card: 'AI 创建模式', label: 'AI 创建模式', keywords: '自定义 新模式 玩法 点播 生成 模式工坊' },
   { tab: 'topics', card: '默认点播方式', label: '默认持续时间/联想距离/严格围绕', keywords: '演出话题 本次 默认 持续 时间 联想 距离 严格 围绕 点播' },
@@ -342,7 +360,7 @@ export const SETTINGS_SEARCH_INDEX: { tab: SettingsTab; card: string; label: str
   { tab: 'privacy', card: '网页版生成', label: '主演出改用网页模型生成', keywords: '实验 网页 deepseek 豆包 chatgpt gemini 千问 通义' },
   { tab: 'privacy', card: '网页版生成', label: '网页模型站点', keywords: 'deepseek 豆包 chatgpt gemini 千问 通义 站点' },
   { tab: 'privacy', card: '网页版生成', label: '网页窗口登录', keywords: 'edge 登录 窗口' },
-  { tab: 'privacy', card: '上下文生命周期', label: '经历记忆嵌入来源', keywords: '经历记忆 嵌入 embedding 本地 llama.cpp llama-server gguf 向量 记忆 托管 自动启动' },
+  { tab: 'privacy', card: '上下文生命周期', label: '经历记忆嵌入来源', keywords: '经历记忆 嵌入 embedding 本地 llama.cpp llama-server gguf 向量 记忆 托管 自动启动 按需拉起 无感知' },
   { tab: 'privacy', card: '隐私与数据', label: '隐私与数据说明', keywords: '本机 上传 隐私 安全' },
   // 记忆
   { tab: 'memory', card: '使用者画像', label: '你的称呼', keywords: '画像 称呼 名字' },

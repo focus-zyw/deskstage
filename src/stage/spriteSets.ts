@@ -186,7 +186,61 @@ export const SPRITE_SETS: Record<'A' | 'B', SpriteSet> = {
   },
 }
 
+// ---------- 用户自定义立绘覆盖(角色工坊) ----------
+// spriteFileSrc 是全部立绘 URL 的唯一拼装点(渲染双槽/IdleDirector 变体/预热都走它):
+// 覆盖缓存命中 → 返回 data URL;未命中/未加载/已清除 → 静态路径自然回落,
+// CharacterSprite 现有兜底链(动作→idle→胶囊)原样生效。变更经版本号广播,
+// 渲染层订阅重绘,decode 门控 + 交叉淡入天然平滑切换。
+const spriteOverrides = new Map<string, string>() // key = `${dir}/${file}`
+let overridesVersion = 0
+const overridesListeners = new Set<() => void>()
+
+function bumpSpriteOverrides(): void {
+  overridesVersion += 1
+  for (const l of overridesListeners) l()
+}
+
+/** 立绘覆盖变更订阅(useSyncExternalStore 用) */
+export function subscribeSpriteOverrides(fn: () => void): () => void {
+  overridesListeners.add(fn)
+  return () => overridesListeners.delete(fn)
+}
+
+export function spriteOverridesVersion(): number {
+  return overridesVersion
+}
+
+/** 该角色全部可覆盖的贴图文件名(动作图 + 变体图),工坊与 store 校验用 */
+export function spriteFileWhitelist(set: SpriteSet): Set<string> {
+  const files = new Set<string>()
+  for (const action of set.actions) {
+    files.add(`${action}.png`)
+    for (const v of set.variants?.[action] ?? []) files.add(v.file)
+  }
+  return files
+}
+
+/** 整表替换某目录的覆盖(启动加载用;map 里没有的文件 = 无覆盖) */
+export function applySpriteOverrides(dir: string, map: Record<string, string>): void {
+  const prefix = `${dir}/`
+  for (const key of [...spriteOverrides.keys()]) {
+    if (key.startsWith(prefix)) spriteOverrides.delete(key)
+  }
+  for (const [file, dataUrl] of Object.entries(map)) spriteOverrides.set(prefix + file, dataUrl)
+  bumpSpriteOverrides()
+}
+
+/** 单条覆盖更新(保存/清除;dataUrl = null 表示清除) */
+export function applySpriteOverride(dir: string, file: string, dataUrl: string | null): void {
+  const key = `${dir}/${file}`
+  if (dataUrl === null) spriteOverrides.delete(key)
+  else spriteOverrides.set(key, dataUrl)
+  bumpSpriteOverrides()
+}
+
 export function spriteFileSrc(set: SpriteSet, file: string): string {
+  const hit = spriteOverrides.get(`${set.dir}/${file}`)
+  if (hit) return hit
   return `${import.meta.env.BASE_URL}${set.dir}/${file}`
 }
 

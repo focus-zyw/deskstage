@@ -20,6 +20,7 @@ import { useConfigSnapshot } from '../storage/configStore'
 const GeneralSettings = lazy(() => import('./tabs/GeneralSettings').then((m) => ({ default: m.GeneralSettings })))
 const ModelSettings = lazy(() => import('./tabs/ModelSettings').then((m) => ({ default: m.ModelSettings })))
 const PersonaSettings = lazy(() => import('./tabs/PersonaSettings').then((m) => ({ default: m.PersonaSettings })))
+const WorkshopSettings = lazy(() => import('./tabs/WorkshopSettings').then((m) => ({ default: m.WorkshopSettings })))
 const CustomModesSettings = lazy(() => import('./tabs/CustomModesSettings').then((m) => ({ default: m.CustomModesSettings })))
 const BubbleSettings = lazy(() => import('./tabs/BubbleSettings').then((m) => ({ default: m.BubbleSettings })))
 const VoiceSettings = lazy(() => import('./tabs/VoiceSettings').then((m) => ({ default: m.VoiceSettings })))
@@ -51,6 +52,7 @@ const TAB_CONTENT: Record<SettingsTab, React.LazyExoticComponent<() => React.JSX
   general: GeneralSettings,
   model: ModelSettings,
   persona: PersonaSettings,
+  workshop: WorkshopSettings,
   modes: CustomModesSettings,
   topics: lazy(() => import('./tabs/TopicSettings').then((m) => ({ default: m.TopicSettings }))),
   bubble: BubbleSettings,

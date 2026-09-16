@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { CSSProperties, Ref } from 'react'
-import { spriteFileSrc, type SpriteSet } from './spriteSets'
+import { spriteFileSrc, subscribeSpriteOverrides, spriteOverridesVersion, type SpriteSet } from './spriteSets'
 import { SWITCH_MS, motionForAction, type TransitionMode } from './spriteMotion'
 import { IdleDirector } from './idleDirector'
 import { immediateSpriteVariants, SpriteVariantPicker } from './spriteVariants'
@@ -97,6 +97,8 @@ export function CharacterSprite({
   reacting,
   ref,
 }: CharacterSpriteProps) {
+  // 角色工坊覆盖变更(预载完成/上传/还原)触发重绘;decode 门控让换图走交叉淡入
+  useSyncExternalStore(subscribeSpriteOverrides, spriteOverridesVersion)
   // shake/jump 等无独立贴图的动作复用 idle 图，表现由 CSS 动画承担
   const artAction = sprite.actions.includes(action) ? action : 'idle'
   const baseFile = `${artAction}.png`
