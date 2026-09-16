@@ -147,6 +147,9 @@ export function createActorWorker(deps: ActorWorkerDeps): ActorWorker {
       factsLine?: string
       briefLine?: string
       worldLine?: string
+      warmLine?: string
+      experienceLine?: string
+      moodLine?: string
       toolNotes?: Record<string, string>
       gags?: Array<{ id: string; text: string }>
       diagTurnId?: string
@@ -188,6 +191,9 @@ export function createActorWorker(deps: ActorWorkerDeps): ActorWorker {
       factsLine: extras.factsLine,
       briefLine: extras.briefLine,
       worldLine: extras.worldLine,
+      warmLine: extras.warmLine,
+      experienceLine: extras.experienceLine,
+      moodLine: extras.moodLine,
       toolNotes: extras.toolNotes,
       expressionLine: expressionPlan?.instruction,
       fullContext,

@@ -13,10 +13,13 @@ import { getConfig } from '../storage/configStore'
 import { speak, speakTracked, prefetchVoice } from '../engine/tts'
 import { streamVoiceReply } from '../engine/llmClient'
 import { diag } from '../diag/store'
+import { contextAssembler } from '../context/assembler'
+import { contextLifecycle } from '../context/lifecycle'
 import {
   chatLineHoldMs,
   GROUP_ASK_RE,
   newTurnId,
+  type ChatContextLines,
   type SendOptions,
   type ChatHostDeps,
   type ChatEngineDeps,
@@ -109,6 +112,22 @@ export function createLegacyChatSession(
 
   function resolveIdle(): void {
     if (!busy) while (idleWaiters.length) idleWaiters.shift()!()
+  }
+
+  /** 上下文生命周期注入行(Warm 摘要/Mem0 经历;开关关闭或失败返回 undefined) */
+  async function contextLinesOf(text: string): Promise<ChatContextLines | undefined> {
+    try {
+      const cfg = await getConfig()
+      if (!cfg.contextLifecycle) return undefined
+      const [warm, experience] = await Promise.all([
+        contextAssembler.warmLine(text).catch(() => undefined),
+        contextAssembler.experienceLine(text).catch(() => undefined),
+      ])
+      if (!warm && !experience) return undefined
+      return { warm, experience }
+    } catch {
+      return undefined
+    }
   }
 
   /** @角色解析:名字/甲乙丙/A B C;无 @ 时在甲乙间轮换(丙需显式点名) */
@@ -207,6 +226,15 @@ export function createLegacyChatSession(
       host.presentUser(text, who)
       host.onUserActive()
       deps.recordTurn('user', text, { entryId: turnId, ts: acceptedAt })
+      // 上下文生命周期记账(观察 chatlog;开关关闭时为 no-op;失败不影响聊天)
+      void (async () => {
+        try {
+          if (!(await getConfig()).contextLifecycle) return
+          await contextLifecycle.observeTurn({ id: turnId, who: 'user', text, ts: acceptedAt })
+        } catch {
+          /* 记账失败不影响聊天 */
+        }
+      })()
       // 应答全程不阻塞受理返回:调用方发完即清输入,应答靠落盘订阅实时冒出
       void (async () => {
         const sleep = (ms: number) => new Promise<void>((r) => deps.clock.setTimeout(r, ms))
@@ -235,6 +263,8 @@ export function createLegacyChatSession(
         })
         const withTrace = (await deps.includeTrace?.().catch(() => false)) ?? false
         const turnTrace = withTrace ? traceOf(memory) : undefined
+        // 上下文生命周期注入行(Warm 摘要/Mem0 经历;开关关闭时 undefined)
+        const contextLines = await contextLinesOf(text)
         let turnRefsCombined: ChatMemoryRef[] = [...memory.refs]
         let firstShown = false // 记忆徽标只在首句气泡出现
         let firstRecorded = false
@@ -342,7 +372,7 @@ export function createLegacyChatSession(
           const batchFallback = async (): Promise<DialogLine[]> => {
             let batch: DialogLine[] | null = null
             try {
-              batch = await deps.turnBatch({ userText: text, target: who, groupAsk, signal: abort.signal, toolNote, memory, diagTurnId: turnId })
+              batch = await deps.turnBatch({ userText: text, target: who, groupAsk, signal: abort.signal, toolNote, memory, contextLines, diagTurnId: turnId })
             } catch (e) {
               if (cancelled() || (e as Error)?.name === 'AbortError') throw e
               diag.fallback(turnId, {
@@ -355,7 +385,7 @@ export function createLegacyChatSession(
             if (!batch || batch.length === 0) {
               diag.fallback(turnId, { call: 'singleReply', from: 'turnBatch', reason: '整批为空 → 单句回落' })
               batch = [
-                { speaker: who, text: await deps.singleReply(who, text, abort.signal, toolNote, memory, turnId), action: 'talk' },
+                { speaker: who, text: await deps.singleReply(who, text, abort.signal, toolNote, memory, turnId, contextLines), action: 'talk' },
               ]
             }
             return batch

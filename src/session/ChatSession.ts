@@ -38,6 +38,10 @@ import { createRoomPresenter, type RoomPresenter } from '../groupChat/presenter'
 import type { ActorId, ActorRuntimeState, Clock } from '../groupChat/types'
 import { personaText } from '../engine/persona'
 import { worldNote } from '../world'
+import { moodHintLine } from '../engine/moodState'
+import { getMoods } from '../storage/moodStore'
+import { contextAssembler } from '../context/assembler'
+import { contextLifecycle } from '../context/lifecycle'
 import { createLegacyChatSession, type LegacyChatSession } from './legacyChat'
 import {
   GROUP_ASK_RE,
@@ -118,6 +122,12 @@ export function createChatSession(
       briefLine?: string
       /** 世界注记(每用户回合算一次;世界模型渲染好的情境事实) */
       worldLine?: string
+      /** Warm 滚动摘要+历史集摘要(上下文生命周期开启时) */
+      warmLine?: string
+      /** Mem0 经历检索行(上下文生命周期开启时) */
+      experienceLine?: string
+      /** 心情余波单行(上下文生命周期开启时;补齐群聊链路的 hot 心情注入) */
+      moodLine?: string
       toolNote?: string
       memoryRefs?: ChatMemoryRef[]
       /** 只读预选的真实旧梗候选(表达导演回收旧梗的唯一来源) */
@@ -271,6 +281,9 @@ export function createChatSession(
           factsLine: extra.factsLine,
           briefLine: extra.briefLine,
           worldLine: extra.worldLine,
+          warmLine: extra.warmLine,
+          experienceLine: extra.experienceLine,
+          moodLine: extra.moodLine,
           toolNotes: extra.toolNote ? { [rootId]: extra.toolNote } : undefined,
           gags: extra.gags,
           diagTurnId: chainTurn.get(rootId),
@@ -392,6 +405,32 @@ export function createChatSession(
       })
   }
 
+  /** 心情余波单行(hot 层;上下文生命周期开启时补齐群聊链路的心情注入) */
+  async function moodLineOf(): Promise<string | undefined> {
+    try {
+      return moodHintLine(await getMoods(), ['A', 'B', 'C']) || undefined
+    } catch {
+      return undefined
+    }
+  }
+
+  /** 上下文生命周期注入行(Warm 摘要/Mem0 经历/心情;开关关闭时全 undefined) */
+  async function lifecycleLinesOf(text: string): Promise<{ warmLine?: string; experienceLine?: string; moodLine?: string }> {
+    if (configCache?.contextLifecycle !== true) return {}
+    const [warmLine, experienceLine, moodLine] = await Promise.all([
+      contextAssembler.warmLine(text).catch(() => undefined),
+      contextAssembler.experienceLine(text).catch(() => undefined),
+      moodLineOf(),
+    ])
+    return { warmLine, experienceLine, moodLine }
+  }
+
+  /** 落盘后挂生命周期记账(观察 chatlog;失败不影响聊天;开关关闭 no-op) */
+  function observeTurnSafe(turnId: string | null, text: string, ts: number): void {
+    if (configCache?.contextLifecycle !== true) return
+    void contextLifecycle.observeTurn({ id: turnId ?? '', who: 'user', text, ts }).catch(() => {})
+  }
+
   return {
     async send(raw: string, opts2: SendOptions = {}): Promise<SendResult> {
       const text = raw.trim()
@@ -405,6 +444,7 @@ export function createChatSession(
         host.onUserActive()
         pushTurn({ who: 'user', text })
         void appendChatTurns([{ who: 'user', text, ts: Date.now() }])
+        observeTurnSafe(null, text, Date.now())
         clock.setTimeout(() => host.clearUser(text), 6000)
         return 'accepted'
       }
@@ -497,10 +537,14 @@ export function createChatSession(
       presenterOf().setBadge(chainId, combinedRefs)
       // 世界注记:与演出通道(llmClient)共享同一冷却账本,同一条情境两边不会复读
       const worldLine = cfg.envSense ? worldNote(cfg.envNoteCooldownMin * 60_000) : undefined
+      const { warmLine, experienceLine, moodLine } = await lifecycleLinesOf(text)
       chainExtras.set(chainId, {
         factsLine: memory.promptFacts.length ? memory.promptFacts.join(';') : undefined,
         briefLine: briefLineOf(cfg),
         worldLine,
+        warmLine,
+        experienceLine,
+        moodLine,
         toolNote,
         memoryRefs: combinedRefs,
         gags: gagCandidatesOf(text),
@@ -510,6 +554,7 @@ export function createChatSession(
         if (oldest) chainExtras.delete(oldest)
       }
       backgroundFacts(text, turnId)
+      observeTurnSafe(turnId, text, Date.now())
       turn.wake()
       clock.setTimeout(() => host.clearUser(text), 400)
       // 整轮零回复兜底(全员失败/全部 listen 且无 主回应人兜底):静止后给用户一句
@@ -552,6 +597,9 @@ export function createChatSession(
       chainExtras.clear()
       currentTurnId = null
       pendingBootstrap = null
+      // 网页会话换代(与注释承诺一致):release 旧键标签页 + generation+1,
+      // 旧站点线程绝不污染清空后的新会话;下一轮按 rebuildPrompt 全量重建
+      for (const slot of ['A', 'B', 'C'] as const) realAdapters.get(slot)?.adapter.invalidate?.()
       if (mode === 'actors' && runtime) {
         presenterOf().cancel()
         runtime.reset()

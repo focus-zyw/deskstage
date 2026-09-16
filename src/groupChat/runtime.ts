@@ -57,6 +57,12 @@ export interface GroupChatDeps {
     briefLine?: string
     /** 世界注记(每用户回合一次;世界模型渲染好的情境事实) */
     worldLine?: string
+    /** Warm 滚动摘要+历史集摘要(上下文生命周期;开关关闭时缺省) */
+    warmLine?: string
+    /** Mem0 经历检索行(上下文生命周期;开关关闭时缺省) */
+    experienceLine?: string
+    /** 心情余波单行(hot 层;群聊链路此前不注心情) */
+    moodLine?: string
     toolNotes?: Record<string, string>
     /** 只读预选的真实旧梗候选(表达导演用;宿主从 story.json 预选) */
     gags?: Array<{ id: string; text: string }>

@@ -280,6 +280,18 @@ export interface AppConfig {
   /** 招牌怪癖(实验):为角色生成并保持怪癖(红5/蓝5),注入演出作为背景素材;
    *  灰度默认关,关闭时不生成不注入,存量数据保留 */
   quirkSystem: boolean
+  /** 上下文生命周期(实验):Warm 滚动摘要/集摘要(Pi compaction)+ Mem0 经历记忆
+   *  检索注入 + 群聊心情行;灰度默认关,关闭时聊天链路 prompt 与旧版完全一致 */
+  contextLifecycle: boolean
+  /** 经历记忆(Mem0)的嵌入配置:embedProfile 指向 modelProfiles 的档案(Rust 解析
+   *  地址与 Key),embedModel 是嵌入模型名;两者齐全才启用,缺任一整体停用(fail-open) */
+  coldMemory: ColdMemoryConfig
+}
+
+/** 经历记忆(Mem0)嵌入配置 */
+export interface ColdMemoryConfig {
+  embedProfile?: string
+  embedModel?: string
 }
 
 /** AI 剧场配置 */
@@ -472,6 +484,21 @@ export const DEFAULT_CONFIG: AppConfig = {
   },
   expressionV2: false,
   quirkSystem: false,
+  contextLifecycle: false,
+  coldMemory: {},
+}
+
+/** 经历记忆嵌入配置清洗:两键都收非空短串,其余丢弃(缺任一键 = 整体停用) */
+function sanitizeColdMemory(v: unknown): ColdMemoryConfig {
+  const o = (v ?? {}) as Record<string, unknown>
+  return {
+    ...(typeof o.embedProfile === 'string' && o.embedProfile.trim()
+      ? { embedProfile: o.embedProfile.trim().slice(0, 64) }
+      : {}),
+    ...(typeof o.embedModel === 'string' && o.embedModel.trim()
+      ? { embedModel: o.embedModel.trim().slice(0, 120) }
+      : {}),
+  }
 }
 
 /** 角色工具系统偏好 */
@@ -1148,6 +1175,8 @@ const FIELD_SANITIZERS: { [K in keyof AppConfig]: (v: unknown, all: Record<strin
   groupChatActors: sanitizeGroupChatActors,
   expressionV2: (v) => v === true,
   quirkSystem: (v) => v === true,
+  contextLifecycle: (v) => v === true,
+  coldMemory: sanitizeColdMemory,
   bubbleStyle: sanitizeBubbleStyle,
   memoryDisplay: (v) => (v === 'subtle' || v === 'debug' ? v : 'off'),
 }

@@ -1,4 +1,7 @@
 allowBuilds:
+  # mem0ai 依赖 better-sqlite3,但运行时 disableHistory + 自定义向量库,原生模块
+  # 永不执行(见 src/cold/mem0Memory.ts)——禁止构建,省一次无意义的原生编译
+  better-sqlite3: false
   esbuild: true
 onlyBuiltDependencies:
   - esbuild

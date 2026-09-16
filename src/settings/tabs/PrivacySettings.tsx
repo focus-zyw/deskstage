@@ -234,6 +234,64 @@ export function PrivacySettings() {
           怪癖在 设置 → 角色人设 页管理(锁定/清除/手动补一条);生成走 API 通道,失败静默。关闭后怪白数据保留,只是不再生成与注入。
         </div>
       </SettingsCard>
+      <SettingsCard card="上下文生命周期" flash={flashCard} title="上下文生命周期" desc="实验">
+        <SetLine
+          title="启用上下文生命周期"
+          hint="聊过的内容出窗后自动压成滚动摘要(Warm),会话结束定格为集摘要(14 天后遗忘),重要经历经 Mem0 进长期记忆;并在群聊里补注心情余波。实验功能,默认关"
+        >
+          <SetSwitch
+            checked={form.contextLifecycle}
+            label="启用上下文生命周期"
+            onChange={(v) => {
+              setForm({ ...form, contextLifecycle: v })
+              saveField({ contextLifecycle: v }, true)
+            }}
+          />
+        </SetLine>
+        <SetField label="经历记忆嵌入档案" htmlFor="cfg-cold-profile">
+          <select
+            id="cfg-cold-profile"
+            value={form.coldMemory.embedProfile ?? ''}
+            onChange={(e) => {
+              const next = { ...form.coldMemory, embedProfile: e.target.value || undefined }
+              setForm({ ...form, coldMemory: next })
+              saveField({ coldMemory: next }, true)
+            }}
+          >
+            <option value="">(不启用经历记忆)</option>
+            {Object.entries(form.modelProfiles ?? {}).map(([id, p]) => (
+              <option key={id} value={id}>
+                {p.label || id}
+              </option>
+            ))}
+          </select>
+        </SetField>
+        <SetField label="嵌入模型名" htmlFor="cfg-cold-model">
+          <input
+            id="cfg-cold-model"
+            type="text"
+            placeholder="如 text-embedding-3-small"
+            value={form.coldMemory.embedModel ?? ''}
+            onChange={(e) => {
+              const next = { ...form.coldMemory, embedModel: e.target.value }
+              setForm({ ...form, coldMemory: next })
+              saveField({ coldMemory: next }, true)
+            }}
+            onBlur={() => {
+              const model = form.coldMemory.embedModel?.trim() || undefined
+              if (model !== form.coldMemory.embedModel) {
+                const next = { ...form.coldMemory, embedModel: model }
+                setForm({ ...form, coldMemory: next })
+                saveField({ coldMemory: next }, true)
+              }
+            }}
+          />
+        </SetField>
+        <div className="set-note">
+          经历记忆(Mem0)需要所选档案的端点支持 /embeddings 接口;配置不完整或调用失败时经历记忆自动停用,
+          滚动摘要照常工作。所有记忆都在记忆库页可见可删,聊天原文永远只在聊天记录里。
+        </div>
+      </SettingsCard>
       <SettingsCard card="角色工具" flash={flashCard} title="角色工具" desc="角色按对话自主使用">
         {toolList().map((t) => {
           const m = t.manifest

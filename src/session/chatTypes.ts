@@ -5,6 +5,9 @@ import type { SpeechHandle } from '../engine/tts'
 import type { ChatMemoryRef } from '../storage/chatLogStore'
 import type { TurnMemoryContext } from '../storage/memoryStore'
 import type { DiagRef } from '../diag/store'
+import type { ChatContextLines } from '../engine/llmClient'
+
+export type { ChatContextLines }
 
 /** 发送选项:语音路径的气泡随首帧上屏与句级节奏;ASR 结果摘要进诊断 */
 export interface SendOptions {
@@ -72,6 +75,8 @@ export interface ChatEngineDeps {
     toolNote?: string
     /** 回合记忆上下文(显式传入;实现不得再自读 memoryStore——"注入即所见") */
     memory?: TurnMemoryContext
+    /** 上下文生命周期注入行(Warm 摘要/Mem0 经历;开关关闭时缺省) */
+    contextLines?: ChatContextLines
     /** 诊断会话 id(可选):传入后本次生成的请求进诊断环 */
     diagTurnId?: string
   }): Promise<DialogLine[]>
@@ -82,6 +87,7 @@ export interface ChatEngineDeps {
     toolNote?: string,
     memory?: TurnMemoryContext,
     diagTurnId?: string,
+    contextLines?: ChatContextLines,
   ): Promise<string>
   /** 角色工具协调(可选):用户回合先过工具系统——本句话要不要截图/识字/查记忆。
    *  返回的 note 由协调器渲染好(截断+不可信包裹),这里只透传给生成函数;

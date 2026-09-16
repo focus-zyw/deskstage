@@ -561,6 +561,8 @@ export async function generateUserChatReply(
   memory?: TurnMemoryContext,
   /** 诊断会话 id(可选) */
   diagTurnId?: string,
+  /** 上下文生命周期注入行(Warm 摘要/Mem0 经历;开关关闭时缺省) */
+  contextLines?: ChatContextLines,
 ): Promise<string> {
   const cfg = await getConfig()
   const factList = memory ? memory.promptFacts : (await prepareTurnMemory({ query: userText, n: 3 })).promptFacts
@@ -573,7 +575,7 @@ export async function generateUserChatReply(
       role: 'system',
       content: `桌面双人情景剧互动。你是${persona}。${chatMoodLine ? `${chatMoodLine}。` : ''}观众朋友直接对你说了一句话,用你的口吻回一句。要求:15~25 字,口语化,像真说话;不要引号,不要 JSON。${brief ? `\n${brief}` : ''}\n${soloRescueDiscipline()}`,
     },
-    { role: 'user', content: `${userText}${toolNote ? `\n\n${toolNote}` : ''}` },
+    { role: 'user', content: `${[contextLines?.warm, contextLines?.experience].filter(Boolean).map((l) => `${l}\n`).join('')}${userText}${toolNote ? `\n\n${toolNote}` : ''}` },
   ]
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(new DOMException('超时', 'TimeoutError')), 8_000)
@@ -659,6 +661,8 @@ export async function generateTurnBatch(input: {
   toolNote?: string
   /** 回合记忆上下文(显式传入;缺省才自取) */
   memory?: TurnMemoryContext
+  /** 上下文生命周期注入行(Warm 摘要/Mem0 经历;开关关闭时缺省) */
+  contextLines?: ChatContextLines
   /** 诊断会话 id(可选):ChatSession 传入后本请求进诊断环 */
   diagTurnId?: string
 }): Promise<DialogLine[]> {
@@ -692,7 +696,13 @@ ${rescueDiscipline()}`,
     },
     {
       role: 'user',
-      content: `${windowText ? `最近对话:\n${windowText}\n\n` : ''}观众说:${input.userText}${input.toolNote ? `\n\n${input.toolNote}` : ''}`,
+      content: `${windowText ? `最近对话:\n${windowText}\n\n` : ''}${[
+        input.contextLines?.warm,
+        input.contextLines?.experience,
+      ]
+        .filter(Boolean)
+        .map((l) => `${l}\n`)
+        .join('')}观众说:${input.userText}${input.toolNote ? `\n\n${input.toolNote}` : ''}`,
     },
   ]
   const ctrl = new AbortController()
@@ -970,6 +980,54 @@ export async function extractFacts(
           },
         ]
       })
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/**
+ * Warm 滚动压缩(Pi compaction 语义):把"上次摘要 + 新滑出上下文窗口的聊天记录"
+ * 合并成一份新的滚动摘要(增量,自身即累进器)。单次调用、jsonMode、6 秒超时不重试;
+ * 失败抛出由调用方 fail-open(pending 原样保留,下次重试),输出不合法同样视为失败。
+ */
+/** 上下文生命周期注入行(Warm 摘要 + Mem0 经历;聊天链路 prompt 的可选附加块) */
+export interface ChatContextLines {
+  warm?: string
+  experience?: string
+}
+export interface WarmCompactInput {
+  previousSummary: string
+  /** 被折叠的聊天记录(旧在前);who = 'user' | 'A' | 'B' | 'C' */
+  turns: Array<{ who: string; text: string }>
+}
+
+export async function compactWarmSession(input: WarmCompactInput, diagTurnId?: string): Promise<string> {
+  const cfg = await getConfig()
+  const transcript = input.turns
+    .map((t) => `[${t.who}] ${t.text}`)
+    .join('\n')
+    .slice(0, 800)
+  const messages: { role: string; content: string }[] = [
+    {
+      role: 'system',
+      content:
+        '你在为桌面角色维护当前聊天会话的滚动摘要。把"上次摘要"与"新滑出上下文窗口的聊天记录"合并成一份不超过150字的中文叙事摘要:保留聊过的话题、用户的处境与情绪、角色值得记住的反应,以及没聊完的话题(未尽事项必须带上)。用户一律称"用户"。不要评论、不要建议,只输出一个 JSON 对象:{"summary":"..."}。',
+    },
+    {
+      role: 'user',
+      content: `上次摘要:${input.previousSummary.trim() || '(还没有)'}\n新滑出的聊天记录(旧在前):\n${transcript}`,
+    },
+  ]
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(new DOMException('超时', 'TimeoutError')), 6_000)
+  noteLlmStart(diagTurnId, 'warmCompact', 'api', cfg, messages, { timeoutMs: 6_000 })
+  try {
+    const raw = await chatRaw(messages, ctrl.signal, true, diagTurnId ? { turnId: diagTurnId, call: 'warmCompact' } : undefined)
+    const m = raw.match(/\{[\s\S]*\}/)
+    if (!m) throw new Error('压缩摘要响应不是合法 JSON')
+    const obj = JSON.parse(m[0]) as { summary?: unknown }
+    if (typeof obj.summary !== 'string' || !obj.summary.trim()) throw new Error('压缩摘要为空')
+    return obj.summary.trim().slice(0, 300)
   } finally {
     clearTimeout(timer)
   }

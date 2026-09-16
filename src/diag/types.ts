@@ -28,6 +28,7 @@ export type LlmCallKind =
   | 'pokeLine'
   | 'dailyPack'
   | 'facts'
+  | 'warmCompact'
   | 'memo'
   | 'distill'
   | 'cues'
