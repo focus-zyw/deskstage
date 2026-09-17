@@ -58,7 +58,7 @@ function makeWorld(over = {}) {
     registry: over.registry ?? {},
     planner: over.planner ?? { decide: async () => ({ kind: 'none' }) },
     settings: async () => over.settings ?? {},
-    facts: async () => over.facts ?? { isLive: false, phase: 'idle' },
+    facts: async () => over.facts ?? { phase: 'idle' },
     host: {
       confirm: (req) => {
         calls.confirm.push(req)

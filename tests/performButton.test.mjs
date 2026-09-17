@@ -19,13 +19,6 @@ test('idle + 普通模式:开始一段(generate)', () => {
   })
 })
 
-test('idle-live:开播(generate)', () => {
-  const v = performanceButton('idle-live')
-  assert.equal(v.label, '开播')
-  assert.equal(v.kind, 'generate')
-  assert.equal(v.disabled, false)
-})
-
 test('generating:取消生成(stop,不禁用)——生成中必须能停止', () => {
   const v = performanceButton('generating')
   assert.equal(v.label, '取消生成')
@@ -40,13 +33,6 @@ test('performing 与 choosing:停止演出(stop)', () => {
     assert.equal(v.kind, 'stop')
     assert.equal(v.disabled, false)
   }
-})
-
-test('streaming:下播(stop)', () => {
-  const v = performanceButton('streaming')
-  assert.equal(v.label, '下播')
-  assert.equal(v.kind, 'stop')
-  assert.equal(v.disabled, false)
 })
 
 test('locked(截屏/录音占用):禁用', () => {

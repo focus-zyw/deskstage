@@ -4,7 +4,7 @@
 // · 决策协议是供应商无关的普通 JSON——API 模型与网页模型(webchat CDP)都能输出,
 //   function calling 日后只作为 ToolPlanner 的内部 Adapter,不上升为全项目协议;
 // · 工具调用永不进入 {card, dialog, choice} 剧本——剧本会落盘/重放/收藏,
-//   截屏、发弹幕这类真实世界副作用重放一次就是一次事故;舞台动作(action)可以重放,
+//   截屏这类真实世界副作用重放一次就是一次事故;舞台动作(action)可以重放,
 //   工具调用不行,两者在类型上就分开。
 //
 // 模型只负责"建议调用什么",永远不决定"是否安全":决策协议没有 reasoning/权限
@@ -34,9 +34,7 @@ export interface ToolResult {
 
 /** 门槛过滤的舞台事实快照(纯数据,每回合算一次) */
 export interface ToolPlanningContext {
-  /** 直播中(发弹幕类工具只有此时可候选) */
-  isLive: boolean
-  /** 演出阶段:'idle' | 'performing' | 'generating' | 'streaming'…(与 App phase 同源) */
+  /** 演出阶段:'idle' | 'performing' | 'generating'…(与 App phase 同源) */
   phase: string
 }
 
@@ -76,7 +74,7 @@ export interface ToolContext {
  *  Registry 是安全事实源:模型报上来的工具名与参数都要过这里的 validate 清洗 */
 export interface CharacterTool {
   manifest: ToolManifest
-  /** 当前可否执行(直播未连/未配 Key 等运行时前提;开关在 policy 层,不在这判) */
+  /** 当前可否执行(未配 Key 等运行时前提;开关在 policy 层,不在这判) */
   available(ctx: ToolContext): Promise<boolean> | boolean
   /** 白名单式清洗:未知键丢弃、类型校验、超长截断;不合法返回原因(不猜意图) */
   validate(input: unknown): { ok: true; value: Record<string, unknown> } | { ok: false; reason: string }

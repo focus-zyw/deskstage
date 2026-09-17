@@ -35,11 +35,17 @@ export interface ComposeResult {
 
 const LABELS = { description: '角色描述', personality: '性格', scenario: '场景背景' } as const
 
-/** 单条超支时的截断:保留完整字符,结尾加省略号并计 warning */
+/** 单条超支时的截断:优先回退到段落/行边界(避免半句切断),
+ *  单段落超长才按字符硬切;结尾加省略号并计 warning */
 function trimToFit(text: string, budget: number, warn: string, warnings: string[]): string {
-  const cut = text.slice(0, Math.max(budget - 1, 0)) + '…'
+  const cap = Math.max(budget - 1, 0)
+  let cut = text.slice(0, cap)
+  const para = cut.lastIndexOf('\n\n')
+  const line = cut.lastIndexOf('\n')
+  const at = para >= cap * 0.5 ? para : line >= cap * 0.5 ? line : -1
+  if (at > 0) cut = cut.slice(0, at)
   warnings.push(warn)
-  return cut
+  return cut.trimEnd() + '\n…'
 }
 
 export function composePersona(card: RawCard, ctx: { user: string }): ComposeResult {

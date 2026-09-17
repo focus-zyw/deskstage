@@ -105,3 +105,16 @@ test('容量上限 50:满了新增报错,更新不占新位', async () => {
   await store.saveCharacter({ id: some.id, name: '改个名不占位' }) // 更新照常
   assert.equal((await store.listCharacters()).length, 50)
 })
+
+test('版本广播:save/delete/seed 都 bump,订阅者收到通知', async () => {
+  await store.resetCharacters()
+  let notified = 0
+  const unsub = store.subscribeCharacters(() => notified++)
+  const v0 = store.charactersVersion()
+  const c = await store.saveCharacter({ name: '广播测试' })
+  assert.equal(store.charactersVersion(), v0 + 1)
+  await store.deleteCharacter(c.id)
+  assert.ok(store.charactersVersion() >= v0 + 2)
+  assert.ok(notified >= 2)
+  unsub()
+})

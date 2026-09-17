@@ -104,8 +104,27 @@ async function readFile(): Promise<CharactersData> {
   return { version: 1, characters: [] }
 }
 
+let version = 0
+const listeners = new Set<() => void>()
+
+function bumpVersion(): void {
+  version += 1
+  for (const l of listeners) l()
+}
+
+/** 角色库变更订阅(useSyncExternalStore 用):新增/删除/编辑/种子都会 bump */
+export function subscribeCharacters(fn: () => void): () => void {
+  listeners.add(fn)
+  return () => listeners.delete(fn)
+}
+
+export function charactersVersion(): number {
+  return version
+}
+
 async function writeFile(data: CharactersData): Promise<void> {
   cache = data
+  bumpVersion()
   if (!inTauri) {
     try {
       localStorage.setItem(LS_KEY, JSON.stringify(data))

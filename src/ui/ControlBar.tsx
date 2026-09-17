@@ -117,7 +117,7 @@ export function ControlBar({
 
   const perf = performanceButton(performanceState)
   // 非 idle 一律锁模式选择:演出中切换会让"显示模式"与"实际在播"错位
-  const modeLocked = performanceState !== 'idle' && performanceState !== 'idle-live'
+  const modeLocked = performanceState !== 'idle'
 
   // 悬停高亮:只关心栏内区域(角色/面板的悬停归 App 管)
   useEffect(() => {

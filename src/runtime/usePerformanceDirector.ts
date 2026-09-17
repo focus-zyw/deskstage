@@ -81,9 +81,7 @@ export interface PerformanceDirectorDeps {
   presenter: Pick<ActorPresenter, 'say' | 'showTalk' | 'hush' | 'endLine' | 'settle' | 'reset' | 'setPose'>
   /** 此刻是否空闲(异步回调里判断是否仍空闲的守卫) */
   isIdle(): boolean
-  /** 点播 'live' 模式时转交主播模式(连接弹幕源) */
-  onLive(): void
-  /** 停止时的外围清场:下播、道具清空、用户气泡等 */
+  /** 停止时的外围清场:道具清空、用户气泡等 */
   teardown(): void
   /** 新生成的集自然播完并由 DialogueDirector 提交(历史+蒸馏)后的 UI 刷新(可选) */
   onEpisodeCommitted?(report: CurateReport): void
@@ -594,11 +592,6 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
    *  规划(plan 零副作用)→ 生成 → 采纳(adopt CAS)→ 开播 → 后台预生成下一轮。
    *  arg = 一次性话题字符串(命令面板"来一段关于X的相声")或完整点播请求 */
   async function play(m: Mode, arg?: string | PlayRequest) {
-    // 主播模式不走剧本链路:开播 = 连弹幕源 + 事件驱动单句回复
-    if (m === 'live') {
-      deps.onLive()
-      return
-    }
     // API Key 与网页模型至少配一个:都没有才不进生成流程,气泡引导去设置
     // (只开网页模型不填 Key 是合法形态:主演出走网页,失败回落内置剧本)
     const cfg = await getConfig()

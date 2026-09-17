@@ -56,8 +56,21 @@ const SYSTEM_STYLE =
 const SYSTEM_LORE =
   '你是角色卡本地化专家。输入是世界书条目数组:把每条 content 忠实译成简体中文(不增不减),并为每条的 keys 生成 1~3 个中文别名(音译/意译,便于中文关键词检索)。只输出一个 JSON 对象:{"entries":[{"i":条目序号,"content":"中文正文","aliases":["中文别名"]}]},不要任何其他文字。'
 
+/** 偶发失败(限流/超时/抖动)自动重试一次:翻译类调用幂等,重试无副作用 */
+async function withRetryOnce<T>(fn: () => Promise<T>, waitMs = 2_000): Promise<T> {
+  try {
+    return await fn()
+  } catch (e) {
+    if ((e as Error)?.name === 'AbortError') throw e
+    await new Promise((r) => setTimeout(r, waitMs))
+    return await fn()
+  }
+}
+
 async function callJson(deps: LocalizeDeps, system: string, user: string, maxTokens: number): Promise<unknown> {
-  const raw = await (deps.complete ?? defaultComplete)({ messages: [{ role: 'system', content: system }, { role: 'user', content: user }], maxTokens })
+  const raw = await withRetryOnce(() =>
+    (deps.complete ?? defaultComplete)({ messages: [{ role: 'system', content: system }, { role: 'user', content: user }], maxTokens }),
+  )
   const m = raw.match(/\{[\s\S]*\}/)
   if (!m) throw new Error('本地化响应不是合法 JSON')
   return JSON.parse(m[0])

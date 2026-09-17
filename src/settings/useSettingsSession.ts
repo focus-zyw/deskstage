@@ -1,7 +1,7 @@
 // 设置会话:设置窗口打开期间的唯一数据源——表单草稿、即存管线(防抖落盘+副作用)、
-// 厂商 key 草稿、语音配置、克隆音色列表、B站扫码登录。
+// 厂商 key 草稿、语音配置、克隆音色列表。
 // 窗口挂载(mount)即加载磁盘配置回填表单;各数据页(记忆/备忘/历史)由对应 tab 自己加载。
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { createSettingsSaveQueue } from './saveQueue'
 import { createContext, useContext } from 'react'
 import {
@@ -15,8 +15,6 @@ import { defaultPersonaText } from '../engine/persona'
 import { listCustomVoices, type ClonedVoice } from '../engine/tts'
 import type { VoiceConfig } from '../storage/configStore'
 import { CUSTOM_VENDOR_ID, vendorIdOfBaseUrl } from '../engine/vendors'
-import { startQrLogin, type QrLoginHandle, type QrPhase } from '../live/biliLogin'
-import QRCode from 'qrcode'
 import type { Episode } from '../storage/historyStore'
 import type { Rarity } from '../features/support/pool'
 import type { SettingsTab } from './settingsCatalog'
@@ -24,14 +22,6 @@ import type { SettingsTab } from './settingsCatalog'
 /** apiKeys 的存储键:预设厂商用 id,自定义端点按 baseUrl 区分(与 configStore 注释约定一致) */
 export function vendorKeyOf(id: string, baseUrl: string): string {
   return id === CUSTOM_VENDOR_ID ? `custom:${baseUrl.trim()}` : id
-}
-
-export interface QrLoginState {
-  phase: QrPhase | 'generating'
-  /** 二维码轮次号:每次过期刷新递增,UI 凭它丢弃旧轮迟到的渲染结果 */
-  round: number
-  qrDataUrl?: string
-  hint?: string
 }
 
 /** 跨模块行为:设置窗口只通过这些回调触碰应用其余部分(回放/布局复位/备忘隐私插话/支持答谢) */
@@ -73,9 +63,6 @@ export interface SettingsSessionApi {
   /** 账号下的克隆音色(打开设置时拉取),供音色下拉选择 */
   clonedVoices: ClonedVoice[]
   setClonedVoices: React.Dispatch<React.SetStateAction<ClonedVoice[]>>
-  qrLogin: QrLoginState | null
-  beginQrLogin(): void
-  cancelQrLogin(): void
   bridge: SettingsBridge
   /** 搜索跳转的目标卡片(2.2s 高亮);由窗口注入,卡片用它做 flash 定位 */
   flashCard: string | null
@@ -105,11 +92,6 @@ export function useSettingsSession(): SettingsSessionState {
   // 角色语音配置(开关 + 双角色音色,改即落盘)
   const [voice, setVoice] = useState(DEFAULT_CONFIG.voice)
   const [clonedVoices, setClonedVoices] = useState<ClonedVoice[]>([])
-  // B站扫码登录(免手贴 cookie):句柄与展示状态
-  const qrHandleRef = useRef<QrLoginHandle | null>(null)
-  const [qrLogin, setQrLogin] = useState<QrLoginState | null>(null)
-  // 二维码轮次号:丢弃旧轮迟到的渲染结果,防止新一轮被旧图覆盖
-  const qrRoundRef = useRef(0)
   // 视频工坊的素材来源:收藏页"导入视频工坊"带过来的整集(跨 tab 载荷,窗口关闭即销毁)
 
   // 即存管线:字段变更 → saveField(队列合并) → commitSettings(落盘+副作用)
@@ -143,11 +125,6 @@ export function useSettingsSession(): SettingsSessionState {
           .catch((e) => console.warn('克隆音色列表拉取失败(静默)', e))
       }
     })()
-    // 卸载 = 窗口关闭:停掉扫码轮询,防止后台空转
-    return () => {
-      qrHandleRef.current?.cancel()
-      qrHandleRef.current = null
-    }
   }, [])
 
   /** 落盘一批字段。统一状态中心:直接 invoke Rust(config_set,进程锁串行化),
@@ -179,59 +156,6 @@ export function useSettingsSession(): SettingsSessionState {
     void saveQueue.save(partial, immediate)
   }
 
-  function beginQrLogin() {
-    qrHandleRef.current?.cancel()
-    setQrLogin({ phase: 'generating', round: qrRoundRef.current, hint: '正在生成二维码…' })
-    qrHandleRef.current = startQrLogin({
-      onQr: (round, url) => {
-        // 旧轮迟到的渲染结果不覆盖新一轮
-        if (round < qrRoundRef.current) return
-        qrRoundRef.current = round
-        // 渲染失败必须可见:吞掉 rejection 会永远停在"生成中";176px/4模块白边为稳妥扫码尺寸
-        QRCode.toDataURL(url, { width: 220, margin: 1 })
-          .then((dataUrl) => {
-            setQrLogin((s) => (s && s.round === round ? { ...s, phase: 'waiting', qrDataUrl: dataUrl } : s))
-          })
-          .catch((e) => {
-            setQrLogin((s) =>
-              s && s.round === round
-                ? { ...s, phase: 'error', hint: `二维码渲染失败:${String(e?.message ?? e).slice(0, 80)}` }
-                : s,
-            )
-          })
-      },
-      onPhase: (p, message) => {
-        // 过期刷新开始即隐藏旧码,防止用户扫到临界失效图;error/ok 文案由 onPhase/message 带出
-        if (p === 'expired') {
-          setQrLogin((s) => (s ? { ...s, phase: p, qrDataUrl: undefined, hint: message } : s))
-          return
-        }
-        setQrLogin((s) => (s ? { ...s, phase: p, hint: message } : s))
-      },
-      onSuccess: ({ cookie, uid }) => {
-        // 从配置源取最新 live(闭包里的 form 可能过期),合并后落盘并同步表单
-        void (async () => {
-          const current = await getConfig()
-          const live = { ...current.live, cookie }
-          setForm((f) => ({ ...f, live }))
-          saveField({ live })
-        })()
-        // 保留当前轮次号:UI 的旧轮结果丢弃守卫在 ok 态同样生效
-        setQrLogin((s) => ({
-          phase: 'ok',
-          round: s?.round ?? qrRoundRef.current,
-          hint: `登录成功(UID ${uid}),Cookie 已回填并保存`,
-        }))
-      },
-    })
-  }
-
-  function cancelQrLogin() {
-    qrHandleRef.current?.cancel()
-    qrHandleRef.current = null
-    setQrLogin(null)
-  }
-
   return {
     form,
     setForm,
@@ -246,8 +170,5 @@ export function useSettingsSession(): SettingsSessionState {
     setVoice,
     clonedVoices,
     setClonedVoices,
-    qrLogin,
-    beginQrLogin,
-    cancelQrLogin,
   }
 }

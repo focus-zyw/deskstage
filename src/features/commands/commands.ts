@@ -42,10 +42,9 @@ export async function nlRoute(input: string, commands: Command[]): Promise<NlRou
     return { kind: 'memo', text: extractMemoText(q) || q, due: parseChineseTime(q) }
   }
 
-  // 2) 演出类:"来一段关于加班的相声";主播模式单独认"开播/读弹幕"。
-  //    触发词来自各模式自带的 triggers(数据驱动):模式工坊新加的自定义模式自动可点播
-  if (/开(个)?直播|开播|读弹幕|弹幕互动/.test(q)) return { kind: 'perform', mode: 'live' }
-  const performable = allModes().filter((m) => m.id !== 'live' && (m.triggers?.length ?? 0) > 0)
+  // 2) 演出类:"来一段关于加班的相声"。触发词来自各模式自带的 triggers(数据驱动):
+  //    模式工坊新加的自定义模式自动可点播
+  const performable = allModes().filter((m) => (m.triggers?.length ?? 0) > 0)
   const alt = performable.flatMap((m) => m.triggers ?? []).map(escapeRegExp).join('|')
   const perform = alt ? q.match(new RegExp(`(?:来|说|演|放|讲)?一?段(.{0,12}?)(${alt})`)) : null
   if (perform) {

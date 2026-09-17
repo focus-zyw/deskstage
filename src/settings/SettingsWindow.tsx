@@ -24,7 +24,6 @@ const WorkshopSettings = lazy(() => import('./tabs/WorkshopSettings').then((m) =
 const CustomModesSettings = lazy(() => import('./tabs/CustomModesSettings').then((m) => ({ default: m.CustomModesSettings })))
 const BubbleSettings = lazy(() => import('./tabs/BubbleSettings').then((m) => ({ default: m.BubbleSettings })))
 const VoiceSettings = lazy(() => import('./tabs/VoiceSettings').then((m) => ({ default: m.VoiceSettings })))
-const LiveSettings = lazy(() => import('./tabs/LiveSettings').then((m) => ({ default: m.LiveSettings })))
 const HotkeysSettings = lazy(() => import('./tabs/HotkeysSettings').then((m) => ({ default: m.HotkeysSettings })))
 const PrivacySettings = lazy(() => import('./tabs/PrivacySettings').then((m) => ({ default: m.PrivacySettings })))
 const MemorySettings = lazy(() => import('./tabs/MemorySettings').then((m) => ({ default: m.MemorySettings })))
@@ -57,7 +56,6 @@ const TAB_CONTENT: Record<SettingsTab, React.LazyExoticComponent<() => React.JSX
   topics: lazy(() => import('./tabs/TopicSettings').then((m) => ({ default: m.TopicSettings }))),
   bubble: BubbleSettings,
   voice: VoiceSettings,
-  live: LiveSettings,
   hotkeys: HotkeysSettings,
   privacy: PrivacySettings,
   memory: MemorySettings,

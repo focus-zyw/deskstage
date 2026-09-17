@@ -62,7 +62,7 @@ export function createToolCoordinator(deps: ToolCoordinatorDeps): ToolCoordinato
     tool: CharacterTool,
     input: unknown,
     ctxSignal: AbortSignal | undefined,
-    facts: { isLive: boolean; phase: string },
+    facts: { phase: string },
   ): Promise<ToolResult> {
     const ctrl = new AbortController()
     let fireTimeout: () => void = () => {}
@@ -114,7 +114,7 @@ export function createToolCoordinator(deps: ToolCoordinatorDeps): ToolCoordinato
     input: unknown,
     source: 'user' | 'planner',
     signal: AbortSignal | undefined,
-    facts: { isLive: boolean; phase: string },
+    facts: { phase: string },
   ): Promise<{ result: ToolResult; observation: GatedObservation }> {
     const verdict = decidePolicy(await deps.settings(), tool.manifest)
     const started = Date.now()

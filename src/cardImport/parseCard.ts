@@ -101,6 +101,13 @@ function decodeBase64Json(b64: string): string {
 }
 
 const asText = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
+
+/** 剥掉包裹整段的 markdown 代码围栏(```plaintext\n…\n```):酒馆卡常把设定
+ *  整块包进围栏,原样烘焙会把 ``` 与语言标记带进人设。只剥首尾一层,内部保留 */
+function stripCodeFence(text: string): string {
+  const m = text.match(/^```[\w-]*\s*\n([\s\S]*?)\n?```$/)
+  return (m ? m[1] : text).trim()
+}
 const asBool = (v: unknown): boolean => v === true
 
 function normalizeLoreEntry(raw: unknown): CardLoreEntry | null {
@@ -147,13 +154,14 @@ function normalizeCard(json: unknown): RawCard | null {
   return {
     spec: spec === 'chara_card_v3' ? 'chara_card_v3' : spec === 'chara_card_v2' ? 'chara_card_v2' : 'v1',
     name,
-    description: asText(d.description),
-    personality: asText(d.personality),
-    scenario: asText(d.scenario),
-    firstMes: asText(d.first_mes),
-    mesExample: asText(d.mes_example),
+    // 正文类字段统一剥代码围栏(卡作者常把设定整块包进 ``` 围栏)
+    description: stripCodeFence(asText(d.description)),
+    personality: stripCodeFence(asText(d.personality)),
+    scenario: stripCodeFence(asText(d.scenario)),
+    firstMes: stripCodeFence(asText(d.first_mes)),
+    mesExample: stripCodeFence(asText(d.mes_example)),
     alternateGreetings: Array.isArray(d.alternate_greetings)
-      ? d.alternate_greetings.filter((g): g is string => typeof g === 'string' && g.trim().length > 0).map((g) => g.trim())
+      ? d.alternate_greetings.filter((g): g is string => typeof g === 'string' && g.trim().length > 0).map((g) => stripCodeFence(g.trim()))
       : [],
     creatorNotes: asText(d.creator_notes),
     creator: asText(d.creator),

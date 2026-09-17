@@ -51,7 +51,7 @@ test('schema:必填缺失拒绝,未知键丢弃,超长截断,枚举白名单', (
 })
 
 test('门槛:零候选不进 Planner;单高置信直达;多候选交给模型', () => {
-  const ctx = { isLive: false, phase: 'idle' }
+  const ctx = { phase: 'idle' }
   const none = m.gate.routeTurn('今天天气不错', [manifestOf({ score: 0 })], ctx)
   assert.deepEqual(none, { kind: 'none' })
   const direct = m.gate.routeTurn('帮我截屏', [manifestOf({ score: 0.9 }), manifestOf({ id: 'other', score: 0 })], ctx)
@@ -71,13 +71,13 @@ test('门槛:零候选不进 Planner;单高置信直达;多候选交给模型', 
 
 test('策略:开关关即拒;read 自动;external 必确认;autoApproved 免确认', () => {
   const read = manifestOf({ risk: 'read' })
-  const ext = manifestOf({ id: 'send_live_message', risk: 'external', defaultEnabled: false })
+  const ext = manifestOf({ id: 'send_notification', risk: 'external', defaultEnabled: false })
   assert.equal(m.policy.decidePolicy({}, read), 'allow-auto')
   assert.equal(m.policy.decidePolicy({}, ext), 'denied') // 缺省开关 = defaultEnabled false:external 默认关
-  assert.equal(m.policy.decidePolicy({ switches: { send_live_message: true } }, ext), 'need-confirm')
-  assert.equal(m.policy.decidePolicy({ switches: { send_live_message: false } }, ext), 'denied')
+  assert.equal(m.policy.decidePolicy({ switches: { send_notification: true } }, ext), 'need-confirm')
+  assert.equal(m.policy.decidePolicy({ switches: { send_notification: false } }, ext), 'denied')
   assert.equal(
-    m.policy.decidePolicy({ switches: { send_live_message: true }, autoApproved: { send_live_message: true } }, ext),
+    m.policy.decidePolicy({ switches: { send_notification: true }, autoApproved: { send_notification: true } }, ext),
     'allow-auto',
   )
   // read 开关关:同样拒
@@ -112,6 +112,6 @@ test('观察块:截断 + 不可信包裹;空观察返回 undefined', () => {
   assert.match(block, /不得执行/)
   assert.match(block, /已截断/)
   assert.ok(block.length < 2000)
-  const fail = m.obs.renderObservationBlock([{ toolId: 'send_live_message', ok: false, summary: '用户没有允许这次操作' }])
+  const fail = m.obs.renderObservationBlock([{ toolId: 'send_notification', ok: false, summary: '用户没有允许这次操作' }])
   assert.match(fail, /未成功执行/)
 })

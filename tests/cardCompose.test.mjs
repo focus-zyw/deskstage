@@ -110,3 +110,13 @@ test('名字超 12 字出 warning(截断由调用方执行)', () => {
   assert.ok(r.warnings.some((w) => w.includes('超过 12 字')))
   assert.equal(r.personaText.includes('一二三四五六七八九十一二三'), true) // 人设内保留全名
 })
+
+test('核心段超支截断回退到段落/行边界', () => {
+  const paras = Array.from({ length: 40 }, (_, i) => `第${i}小节:\n${'细节'.repeat(120)}`).join('\n\n')
+  const r = composePersona(baseCard({ description: paras, personality: '', scenario: '' }), { user: 'u' })
+  assert.ok(r.warnings.some((w) => w.includes('角色描述')))
+  const cutAt = r.personaText.indexOf('\n…')
+  assert.ok(cutAt > 0, '应有省略号截断点')
+  const cut = r.personaText.slice(0, cutAt)
+  assert.ok(cut.endsWith('细节') || cut.endsWith('\n'), '截断点应在整行处,不切半词')
+})

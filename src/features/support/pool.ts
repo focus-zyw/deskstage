@@ -64,7 +64,7 @@ export function prizeById(id: string): SupportPrize | undefined {
   return THANKS_POOL.find((p) => p.id === id)
 }
 
-/** 称呼清洗:去空白截断,空称呼回退通用叫法(与 giftReactions.cleanName 同策略) */
+/** 称呼清洗:去空白截断,空称呼回退通用叫法 */
 export function cleanSupportName(raw: string): string {
   const name = raw.replace(/\s+/g, ' ').trim().slice(0, 12)
   return name || '老板'

@@ -15,15 +15,10 @@ const API_TIMEOUT_MS = 20_000
 const WEBCHAT_TIMEOUT_MS = 90_000
 const DECISION_TEMPERATURE = 0
 
-export function buildDecisionPrompt(
-  candidates: ToolManifest[],
-  userText: string,
-  context: ToolPlanningContext,
-): string {
+export function buildDecisionPrompt(candidates: ToolManifest[], userText: string): string {
   const lines = candidates.map((c, i) => `${i + 1}. ${c.id}:${c.description}(参数:${describeSchema(c.inputSchema)})`)
   return [
     '根据用户消息,从候选工具中选择零个或一个。只能输出一个 JSON 对象,不要输出任何其他文字。',
-    context.isLive ? '(当前正在直播)' : '',
     '候选工具:',
     ...lines,
     '输出只能是以下三种之一:',
@@ -67,8 +62,8 @@ export function createJsonPromptPlanner(deps: ToolPlannerDeps): ToolPlanner {
   }
 
   return {
-    async decide({ userText, candidates, context }, signal): Promise<ToolDecision> {
-      const prompt = buildDecisionPrompt(candidates, userText, context)
+    async decide({ userText, candidates }, signal): Promise<ToolDecision> {
+      const prompt = buildDecisionPrompt(candidates, userText)
       const raw = await ask(prompt, signal)
       const ids = new Set(candidates.map((c) => c.id))
       const decision = parseToolDecision(raw, ids)

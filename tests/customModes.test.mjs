@@ -107,7 +107,7 @@ test('存储合并:自定义模式进 allModes/modeOf,未知 id 仍回退日常'
   const ids = allModes().map((m) => m.id)
   assert.ok(ids.includes('custom_debate'))
   assert.ok(ids.includes('daily'))
-  assert.deepEqual(ids.slice(0, 3), ['daily', 'crosstalk', 'live']) // 内置顺序在前
+  assert.deepEqual(ids.slice(0, 2), ['daily', 'crosstalk']) // 内置顺序在前
 
   // upsert + 删除
   await saveCustomMode({ ...validMode, label: '抬杠', gap: 300 })
@@ -138,13 +138,11 @@ test('自然语言路由:触发词来自模式数据,"来一段关于X的辩论"
   assert.equal(route.mode, 'custom_debate')
   assert.equal(route.topic, '加班')
 
-  // 内置触发词不回归:日常/闲聊→daily,段子→crosstalk,开播→live
+  // 内置触发词不回归:日常/闲聊→daily,段子→crosstalk
   const daily = await nlRoute('来一段日常', [])
   assert.equal(daily.mode, 'daily')
   const crosstalk = await nlRoute('来一段关于加班的段子', [])
   assert.equal(crosstalk.mode, 'crosstalk')
-  const live = await nlRoute('开播', [])
-  assert.equal(live.mode, 'live')
   delete globalThis.localStorage
 })
 

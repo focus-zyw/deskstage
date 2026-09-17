@@ -37,7 +37,6 @@ const SECRET_PATTERNS: { re: RegExp; label: string }[] = [
   { re: /\b(?:api[-_]?key|apikey|access[-_]?token|secret|authorization)"?\s*[:=]\s*"?[^\s"',;[\]]{6,}/gi, label: '[CREDENTIAL]' },
   { re: /\bsk-[A-Za-z0-9_-]{8,}/g, label: '[API_KEY]' },
   { re: /\bCookie\s*:\s*[^\n\r;]{6,}/gi, label: '[COOKIE]' },
-  { re: /\b(?:sessdata|bili_jct|dedeuserid)\s*[:=]\s*[^\s"',;[\]]{4,}/gi, label: '[COOKIE]' },
 ]
 
 /** URL 查询参数里的凭证:整段 query 抹掉比逐个参数猜更稳 */

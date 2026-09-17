@@ -11,7 +11,6 @@ import { readClipboardTool } from './adapters/readClipboard'
 import { recognizeTextTool } from './adapters/recognizeText'
 import { runAppTool } from './adapters/runApp'
 import { searchMemoryTool } from './adapters/searchMemory'
-import { sendLiveMessageTool } from './adapters/sendLiveMessage'
 import { sendNotificationTool } from './adapters/sendNotification'
 import { setVolumeTool } from './adapters/setVolume'
 import { windowActionTool } from './adapters/windowAction'
@@ -20,7 +19,6 @@ export const TOOLS = {
   capture_screen: captureScreenTool,
   recognize_text: recognizeTextTool,
   search_memory: searchMemoryTool,
-  send_live_message: sendLiveMessageTool,
   read_clipboard: readClipboardTool,
   list_desktop_files: listDesktopFilesTool,
   open_target: openTargetTool,

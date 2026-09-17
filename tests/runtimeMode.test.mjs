@@ -90,10 +90,3 @@ test('caps 派生:主动行为闸门 = 空闲 && 无面板 && 非勿扰', () => 
   assert.equal(rm.getCaps().proactiveAllowed, false)
   assert.equal(rm.getCaps().canPoke, true) // 演出中可戳走 interrupt
 })
-
-test('streaming 占演出态:生成/聊天全不可用', () => {
-  rm.beginStreaming()
-  assert.equal(rm.getCaps().streaming, true)
-  assert.equal(rm.getCaps().canStartPerformance, false)
-  assert.equal(rm.getCaps().canChat, false)
-})

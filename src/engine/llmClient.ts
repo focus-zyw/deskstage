@@ -9,7 +9,6 @@ import { scrubSecrets } from '../diag/redact'
 import {
   getMemory,
   prepareTurnMemory,
-  topFacts,
   tasteSummary,
   type FactCandidate,
   type FactCategory,
@@ -30,9 +29,9 @@ import {
 } from '../storage/storyStore'
 import { peekRecap, takeRecap } from '../storage/interactionStore'
 import { pickRelationship } from '../performer/modes/relationships'
-import { isComedyMode, liveMode } from '../performer/modes'
+import { isComedyMode } from '../performer/modes'
 import { currentTimeSlot } from './timeAware'
-import { duoShortPersona, nameOf, namingDiscipline, pronounOf, soloShortPersona } from './persona'
+import { duoShortPersona, nameOf, namingDiscipline, soloShortPersona } from './persona'
 import { moodHintLine, moodPromptBlock, type MoodEventCandidate } from './moodState'
 import { getMoods } from '../storage/moodStore'
 import { evaluateChoiceAsk } from '../dialogue/choiceGate'
@@ -759,143 +758,6 @@ ${rescueDiscipline()}`,
   } finally {
     clearTimeout(timer)
   }
-}
-
-// ---------- 主播模式:弹幕 → 单句回复的 AI 决策 ----------
-
-export interface LiveDanmakuBrief {
-  username: string
-  content: string
-}
-
-export interface LivePetAction {
-  /** 被选中的弹幕下标(调用方批次内);-1 = 全部不回 */
-  pick: number
-  reply: string
-  speaker: Speaker
-  action: string
-}
-
-/**
- * 弹幕回复决策:攒批弹幕一次调用,挑一条最值得回的,由甲/乙/丙回一句。
- * 弹幕点名丙(@丙/C 的名字)时丙优先回答;未点名时丙只在低概率下补充。
- * 与 generateDialog 的两遍标注剧本不同,这里是轻量单次调用(10s 超时,弹幕过期不等人);
- * JSON 解析失败/字段不合规抛错,调用方按"这批不回"静默处理。
- */
-export async function generateLiveReply(
-  batch: LiveDanmakuBrief[],
-  recentReplies: string[],
-  signal?: AbortSignal,
-  /** 诊断会话 id(可选) */
-  diagTurnId?: string,
-): Promise<LivePetAction> {
-  const cfg = await getConfig()
-  const mem = await getMemory()
-  const p: UserProfile = cfg.userProfile
-  const brief = renderViewerBrief(p, topFacts(mem, 3))
-  const liveMoodLine = moodHintLine(await getMoods(), ['A', 'B', 'C'])
-
-  const danmakuList = batch.map((d, i) => `${i}. ${d.username}:${d.content}`).join('\n')
-  // 直播基调:live 不锁死 comedy——改 live.ts 的 tone 声明即可切换弹幕回复整体风格
-  const liveTone = liveMode.tone?.trim()
-  const liveIsComedy = !liveTone || liveTone === 'comedy'
-  const toneLine = liveIsComedy ? '' : `本直播间整体基调:${liveTone},回复的语气、用词与收尾方式都按这个基调走。`
-  const styleLine = liveIsComedy
-    ? '语气跟各自人设走,优先友好捧场和接梗,偶尔斗嘴点缀即可,别句句抬杠'
-    : `语气跟各自人设走,并服从直播间基调(${liveTone});不要套用互怼/抬杠的默认写法`
-  const messages: { role: string; content: string }[] = [
-    {
-      role: 'system',
-      content: `桌面情景剧正在"直播读弹幕"。两位主角:${duoShortPersona()}。常驻第三角色:${soloShortPersona('C')}(speaker "C",话少,弹幕没点名${pronounOf('C')}就不抢话)。${toneLine}${liveMoodLine ? `${liveMoodLine}。` : ''}下面是最新一批直播间弹幕。挑一条最值得回的(优先问角色的、有趣的、能接梗的;刷屏/无意义/人身攻击的直接不回),由三人中的一位用各自口吻回一句——弹幕点名了${nameOf('C')}(@${nameOf('C')}/C)就由${nameOf('C')}回答,否则优先${nameOf('A')}和${nameOf('B')},${nameOf('C')}只在内容确实与${pronounOf('C')}的小管家职责相关时才接。要求:15~40字,口语化像真说话,称呼遵守上面的称呼与性别纪律;${styleLine};不要复读弹幕原文。
-只输出一个 JSON 对象:{"pick":<弹幕序号>,"reply":"<回复,不回则空串>","speaker":"A"或"B"或"C","action":"<动作词>"}
-action 只能是这些词之一:${[...VALID_ACTIONS].join('|')}。${brief ? `\n${brief}` : ''}${recentReplies.length ? `\n最近已说过(不要重复,保持话题推进):${recentReplies.join(' / ')}` : ''}
-${soloRescueDiscipline()}`,
-    },
-    { role: 'user', content: danmakuList },
-  ]
-  const raw = await complete({
-    messages,
-    temperature: 0.9,
-    maxTokens: 400,
-    jsonMode: true,
-    timeoutMs: 10_000,
-    signal,
-    diag: diagTurnId ? { turnId: diagTurnId, call: 'liveSingle' } : undefined,
-  })
-  const m = raw.match(/\{[\s\S]*\}/)
-  if (!m) throw new Error('弹幕决策未返回 JSON')
-  const obj = JSON.parse(m[0]) as Record<string, unknown>
-  const reply = typeof obj.reply === 'string' ? obj.reply.trim().slice(0, 60) : ''
-  const pick = Number(obj.pick)
-  const speaker: Speaker = obj.speaker === 'B' || obj.speaker === 'C' ? obj.speaker : 'A'
-  const action = typeof obj.action === 'string' && VALID_ACTIONS.has(obj.action) ? obj.action : 'talk'
-  // 不回:模型明确给空回复;下标越界时保留回复但标记为无目标(上游不记弹幕历史)
-  if (!reply) return { pick: -1, reply: '', speaker, action }
-  const validPick = Number.isInteger(pick) && pick >= 0 && pick < batch.length ? pick : -1
-  return { pick: validPick, reply, speaker, action }
-}
-
-/** 攒批回复的单条形状(与 LivePetAction 同形) */
-export type LiveBatchReply = LivePetAction
-
-/** 网页模型攒批回复:一次慢调用回多条弹幕(网页模型单次几十秒,攒批摊薄延迟)。
- *  挑批内最值得回的 3~5 条各回一句;网页端无 jsonMode,格式服从靠协议文字+容错解析;
- *  任何失败/全部无效抛错,由调用方回退 API 单条版。deps.webchatAsk 可注入供测试 */
-export async function generateLiveReplyBatch(
-  batch: LiveDanmakuBrief[],
-  recentReplies: string[],
-  deps: { webchatAsk: typeof webchatAsk } = { webchatAsk },
-  /** 诊断会话 id(可选):弹幕会话的网页生成进诊断环 */
-  diagTurnId?: string,
-): Promise<LiveBatchReply[]> {
-  const cfg = await getConfig()
-  const memory = await prepareTurnMemory({ query: batch.map((d) => d.content).join(' '), n: 3 })
-  const p: UserProfile = cfg.userProfile
-  const brief = renderViewerBrief(p, memory.promptFacts)
-  const liveMoodLine = moodHintLine(await getMoods(), ['A', 'B', 'C'])
-
-  const danmakuList = batch.map((d, i) => `${i}. ${d.username}:${d.content}`).join('\n')
-  const liveTone = liveMode.tone?.trim()
-  const liveIsComedy = !liveTone || liveTone === 'comedy'
-  const toneLine = liveIsComedy ? '' : `本直播间整体基调:${liveTone},回复的语气、用词与收尾方式都按这个基调走。`
-  const styleLine = liveIsComedy
-    ? '语气跟各自人设走,优先友好捧场和接梗,偶尔斗嘴点缀即可,别句句抬杠'
-    : `语气跟各自人设走,并服从直播间基调(${liveTone});不要套用互怼/抬杠的默认写法`
-  const system = `桌面情景剧正在"直播读弹幕"。两位主角:${duoShortPersona()}。常驻第三角色:${soloShortPersona('C')}(speaker "C",话少,弹幕没点名${pronounOf('C')}就不抢话)。${toneLine}${liveMoodLine ? `${liveMoodLine}。` : ''}下面这批直播间弹幕里,挑出最值得回的 3~5 条(优先问角色的、有趣的、能接梗的;刷屏/无意义/人身攻击的直接不回;值得回的不足 3 条就只回值得的那些),每条由一位合适的角色用各自口吻回一句——弹幕点名了${nameOf('C')}(@${nameOf('C')}/C)的那条必须由${nameOf('C')}回答,否则优先${nameOf('A')}和${nameOf('B')},${nameOf('C')}只在内容确实与${pronounOf('C')}的小管家职责相关时才接。要求:每句 15~40 字,口语化像真说话,称呼遵守称呼与性别纪律;${styleLine};不要复读弹幕原文;不同回复之间不要互相重复。
-只输出一个 JSON 对象:{"replies":[{"pick":<弹幕序号>,"reply":"<回复>","speaker":"A"或"B"或"C","action":"<动作词>"},...]}
-action 只能是这些词之一:${[...VALID_ACTIONS].join('|')}。${brief ? `\n${brief}` : ''}${recentReplies.length ? `\n最近已说过(不要重复,保持话题推进):${recentReplies.join(' / ')}` : ''}
-${soloRescueDiscipline()}`
-
-  const prompt = `${system}\n\n${danmakuList}`
-  noteLlmStart(diagTurnId, 'liveBatch', 'webchat', cfg, [{ role: 'system', content: system }, { role: 'user', content: danmakuList }], { timeoutMs: 180_000 })
-  const raw = await deps.webchatAsk(prompt, undefined, 180_000, diagTurnId ? { turnId: diagTurnId, call: 'liveBatch' } : undefined)
-  const replies = sanitizeLiveReplyBatch(raw, batch.length)
-  if (replies.length === 0) throw new Error('网页攒批回复全部无效')
-  return replies
-}
-
-/** 容错解析攒批回复:逐项校验(pick 越界/speaker 非法/action 非法/空 reply 丢弃该条,
- *  pick 去重保首个,上限 5),解析不出 JSON 或一条不剩时抛错由调用方回退 API */
-export function sanitizeLiveReplyBatch(raw: string, batchLength: number): LiveBatchReply[] {
-  const m = raw.match(/\{[\s\S]*\}/)
-  if (!m) throw new Error('网页攒批回复未返回 JSON')
-  const arr = (JSON.parse(m[0]) as { replies?: unknown }).replies
-  if (!Array.isArray(arr)) throw new Error('网页攒批回复缺 replies 数组')
-  const out: LiveBatchReply[] = []
-  const seen = new Set<number>()
-  for (const item of arr) {
-    if (out.length >= 5) break
-    const o = (item ?? {}) as Record<string, unknown>
-    const reply = typeof o.reply === 'string' ? o.reply.trim().slice(0, 60) : ''
-    if (!reply) continue
-    const pick = Number(o.pick)
-    if (!Number.isInteger(pick) || pick < 0 || pick >= batchLength || seen.has(pick)) continue
-    const speaker: Speaker = o.speaker === 'B' || o.speaker === 'C' ? o.speaker : 'A'
-    const action = typeof o.action === 'string' && VALID_ACTIONS.has(o.action) ? o.action : 'talk'
-    seen.add(pick)
-    out.push({ pick, reply, speaker, action })
-  }
-  return out
 }
 
 /**

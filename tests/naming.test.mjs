@@ -194,7 +194,6 @@ test('内建回归锁:crosstalk 恒走喜剧分支,daily 固定走非喜剧闲�
   const { MODES } = await import('../src/performer/modes/index.ts')
   assert.equal(MODES.crosstalk.tone, 'comedy')
   assert.equal(MODES.daily.tone, '日常闲聊', '日常是非喜剧闲聊,不再套用互怼喜剧骨架')
-  assert.equal(MODES.live.tone, undefined, 'live 不锁死,弹幕回复按其 tone 声明走')
 
   const xt = buildMessages('crosstalk', tp('周报到底写给谁看'), [])[0].content
   assert.match(xt, /角色互动、情景喜剧/, '互动版开场(不再是喜剧编剧单开)')
@@ -235,14 +234,6 @@ test('sanitizeCustomMode:tone 透传(非 comedy 保留,comedy/空归 undefined)'
   assert.equal(sanitizeCustomMode({ ...base, tone: 'comedy' }).tone, undefined)
   assert.equal(sanitizeCustomMode({ ...base, tone: '' }).tone, undefined)
   assert.equal(sanitizeCustomMode(base).tone, undefined)
-})
-
-test('弹幕回复基调:live 非喜剧时措辞按 tone 走(直接断言 liveMode 声明与 prompt 生成素材)', async () => {
-  // live 未锁死:改 live.ts 的 tone 声明即切换直播风格
-  const { liveMode } = await import('../src/performer/modes/index.ts')
-  assert.equal(liveMode.tone, undefined)
-  const liveIsComedy = !liveMode.tone?.trim() || liveMode.tone.trim() === 'comedy'
-  assert.ok(liveIsComedy, '当前 live 未声明非 comedy,弹幕回复走现有捧场接梗文案')
 })
 
 test('defaultPersonaText:内置模板里的甲乙丙就地替换为配置名', () => {

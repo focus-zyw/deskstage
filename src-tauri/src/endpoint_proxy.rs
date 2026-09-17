@@ -15,8 +15,7 @@
 //   · 日志不含 Authorization/Cookie(错误文案只带 URL 路径与状态码)
 //   · 取消:endpoint_cancel 经 oneshot 中断,连着请求一起 drop(连接即断)
 //
-// 固定 https 厂商(videoGen/商用 TTS/B站接口)不走本代理:它们受静态 scope
-// 管辖,白名单收得拢;B站通道见 bili_http.rs(同样逐跳校验重定向)。
+// 固定 https 厂商(videoGen/商用 TTS)不走本代理:它们受静态 scope 管辖,白名单收得拢。
 
 use std::collections::HashMap;
 use std::sync::Mutex;

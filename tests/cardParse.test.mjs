@@ -142,3 +142,18 @@ test('pngTextChunks:zTXt inflate 还原与结构损坏容错', () => {
   // 截断:只剩签名不炸,返回空
   assert.deepEqual(pngTextChunks(SIG), [])
 })
+
+test('正文字段剥 markdown 代码围栏(卡作者常整段包 ``` 围栏)', () => {
+  const NL = String.fromCharCode(10)
+  const desc = ['```plaintext', '---', '', '**Full Name**: Chloe', '---', '```'].join(NL)
+  const r = parseCharacterCard({ jsonText: JSON.stringify({ name: 'Chloe', description: desc, first_mes: '```\n嗨```' }) })
+  assert.ok(r.ok)
+  assert.equal(r.card.description.startsWith('```'), false)
+  assert.ok(r.card.description.includes('**Full Name**: Chloe'))
+  assert.equal(r.card.firstMes, '嗨')
+  // 非围栏正文原样保留;内部围栏不剥
+  const r2 = parseCharacterCard({ jsonText: JSON.stringify({ name: 'X', description: '正常\n\n正文', mes_example: 'a\n```py\ncode\n```\nb' }) })
+  assert.ok(r2.ok)
+  assert.equal(r2.card.description, '正常\n\n正文')
+  assert.ok(r2.card.mesExample.includes('```py'))
+})

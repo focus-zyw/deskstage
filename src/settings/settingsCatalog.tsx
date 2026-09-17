@@ -11,7 +11,6 @@ export type SettingsTab =
   | 'topics'
   | 'bubble'
   | 'voice'
-  | 'live'
   | 'hotkeys'
   | 'privacy'
   | 'memory'
@@ -123,16 +122,6 @@ export const SETTINGS_NAV: { group: string; items: { id: SettingsTab; label: str
             <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z" />
             <path d="M19 11v1a7 7 0 0 1-14 0v-1" />
             <line x1="12" y1="19" x2="12" y2="22" />
-          </svg>
-        ),
-      },
-      {
-        id: 'live',
-        label: '直播设置',
-        icon: (
-          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
-            <circle cx="12" cy="12" r="2" />
-            <path d="M16.24 7.76a6 6 0 0 1 0 8.49M7.76 16.25a6 6 0 0 1 0-8.49M19.07 4.93a10 10 0 0 1 0 14.14M4.93 19.07a10 10 0 0 1 0-14.14" />
           </svg>
         ),
       },
@@ -250,7 +239,6 @@ export const TAB_GROUP: Record<SettingsTab, string> = {
   topics: '偏好设置',
   bubble: '偏好设置',
   voice: '偏好设置',
-  live: '偏好设置',
   hotkeys: '偏好设置',
   privacy: '偏好设置',
   memory: '数据管理',
@@ -322,7 +310,7 @@ export const SETTINGS_SEARCH_INDEX: { tab: SettingsTab; card: string; label: str
   { tab: 'topics', card: '角色适配', label: '角色适配说明', keywords: '话题 角色 适配 人设 职业 C 小管家' },
   { tab: 'modes', card: '编辑模式', label: '模式草稿编辑', keywords: '编辑 修改 模式 触发词 兜底剧本' },
   { tab: 'modes', card: '自定义模式', label: '自定义模式列表', keywords: '自定义 删除 模式 列表' },
-  { tab: 'modes', card: '内置模式', label: '内置模式', keywords: '内置 相声 日常 主播 模式' },
+  { tab: 'modes', card: '内置模式', label: '内置模式', keywords: '内置 相声 日常 模式' },
   // 角色语音
   { tab: 'voice', card: '语音与供应商', label: '角色语音开关', keywords: '朗读 配音 开关' },
   { tab: 'voice', card: '语音与供应商', label: '语音供应商', keywords: '硅基流动 minimax cosyvoice gpt-sovits sovits 本地' },
@@ -344,11 +332,6 @@ export const SETTINGS_SEARCH_INDEX: { tab: SettingsTab; card: string; label: str
   { tab: 'voice', card: '音色与表现', label: '角色C音色', keywords: '第三人 画外音 常驻 小管家' },
   { tab: 'voice', card: '音色与表现', label: '克隆音色', keywords: '克隆 录音 样本' },
   { tab: 'voice', card: '音色与表现', label: '试听', keywords: '预览 试听' },
-  // 直播设置
-  { tab: 'live', card: '直播间', label: '直播平台', keywords: 'bilibili B站 抖音' },
-  { tab: 'live', card: '直播间', label: '直播间号', keywords: '房间号 开播 弹幕' },
-  { tab: 'live', card: 'B站登录', label: 'B站 Cookie', keywords: 'sessdata 登录 凭证 舰长 打码' },
-  { tab: 'live', card: 'B站登录', label: '扫码登录B站', keywords: '二维码 扫码 登录' },
   // 快捷键
   { tab: 'hotkeys', card: '演出控制', label: '生成快捷键', keywords: '快捷键 热键 生成 点播 播放 演出' },
   { tab: 'hotkeys', card: '演出控制', label: '停止快捷键', keywords: '快捷键 热键 停止 停下 打断' },

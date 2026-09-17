@@ -10,7 +10,6 @@ export type RuntimeMode =
   | { type: 'idle' }
   | { type: 'generating' } // LLM 生成中(点播等待)
   | { type: 'performing'; episodeId: number } // 演出中(含短聊/回放)
-  | { type: 'streaming' } // 主播模式:直播弹幕互动中(独占,弹幕即互动源)
   | { type: 'choosing'; choiceId: string } // 中途选边等待
   | { type: 'capturing' } // 框选截图中(动作由松手后的工具条决定)
   | { type: 'recording' } // 音色克隆录音中
@@ -57,8 +56,6 @@ function computeCaps(): RuntimeCaps {
     modeType: s.mode.type,
     idle,
     performing: s.mode.type === 'performing',
-    // 主播模式占演出态:生成/聊天/点播全不可用,弹幕回复是唯一互动源
-    streaming: s.mode.type === 'streaming',
     capturing: s.mode.type === 'capturing',
     recording: s.mode.type === 'recording',
     // 语音会话独占演出态:聊天/点播/主动行为全让位;细分 phase 直订 voiceSession
@@ -106,7 +103,6 @@ export interface RuntimeCaps {
   modeType: RuntimeMode['type']
   idle: boolean
   performing: boolean
-  streaming: boolean
   capturing: boolean
   recording: boolean
   /** 实时语音对话进行中(细分 listening/thinking/speaking 在 voiceSession 快照) */
@@ -136,11 +132,6 @@ let episodeSeq = 0
 export function beginPerforming(): void {
   episodeSeq += 1
   set({ mode: { type: 'performing', episodeId: episodeSeq } })
-}
-
-/** 进入主播模式(直播弹幕互动);下播走 setMode(idle),不做恢复语义 */
-export function beginStreaming(): void {
-  set({ mode: { type: 'streaming' } })
 }
 
 /** 进入框选截图:记住底下正在做的事,结束后恢复(演出在遮罩下继续播,不能丢) */

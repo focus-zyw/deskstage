@@ -52,7 +52,6 @@ export type ExpressionChannel =
   | 'group-chat'
   | 'legacy-chat'
   | 'interjection'
-  | 'live'
   | 'idle'
   | 'performance'
 

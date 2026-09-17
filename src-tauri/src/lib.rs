@@ -6,7 +6,6 @@ use tauri::Emitter;
 
 mod asr;
 mod audio_capture;
-mod bili_http;
 mod bridge;
 mod capture;
 mod config_service;
@@ -197,7 +196,6 @@ pub fn run() {
             local_embed_server::local_embed_status,
             local_embed_server::local_embed_start,
             local_embed_server::local_embed_stop,
-            bili_http::bili_http_request,
             secrets::secret_get,
             secrets::secret_set,
             secrets::secret_delete,

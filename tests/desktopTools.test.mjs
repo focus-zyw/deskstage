@@ -23,7 +23,7 @@ test('阶段2工具已注册:默认开关方向正确(read 剪贴板默认关,�
 })
 
 test('门槛路由:用户明说剪贴板/桌面才成为候选,闲聊零候选', () => {
-  const ctx = { isLive: false, phase: 'idle' }
+  const ctx = { phase: 'idle' }
   const tools = Object.values(m.registry.TOOLS)
   const clip = tools.filter((t) => t.manifest.match('看看我剪贴板里复制的东西', ctx) >= 0.35)
   assert.ok(clip.some((t) => t.manifest.id === 'read_clipboard'))
@@ -128,7 +128,7 @@ test('send_notification 校验:body 必填,title 截断', () => {
 })
 
 test('阶段3门槛路由:打开/音量/窗口/媒体/通知各归其位,闲聊零候选', () => {
-  const ctx = { isLive: false, phase: 'idle' }
+  const ctx = { phase: 'idle' }
   const tools = Object.values(m.registry.TOOLS)
   const has = (text, id) => tools.filter((t) => t.manifest.match(text, ctx) >= 0.35).some((t) => t.manifest.id === id)
   assert.ok(has('帮我打开B站的首页', 'open_target'))

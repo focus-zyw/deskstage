@@ -11,7 +11,7 @@ before(async () => {
 })
 
 
-test('stripSecrets 移除六个密钥字段,非密钥字段保留', () => {
+test('stripSecrets 移除五个密钥字段,非密钥字段保留', () => {
   const cfg = {
     apiKey: 'sk-main',
     apiKeys: { deepseek: 'sk-a' },
@@ -22,7 +22,6 @@ test('stripSecrets 移除六个密钥字段,非密钥字段保留', () => {
       minimax: { apiKey: 'sk-mm', groupId: 'g' },
     },
     ocr: { apiKey: 'sk-ocr', model: 'glm-4.6v-flash' },
-    live: { cookie: 'SESSDATA=xx', roomId: '1' },
   }
   const out = configStore.stripSecrets(structuredClone(cfg))
   assert.equal(out.apiKey, undefined)
@@ -34,8 +33,6 @@ test('stripSecrets 移除六个密钥字段,非密钥字段保留', () => {
   assert.equal(out.voice.minimax.groupId, 'g')
   assert.equal(out.ocr.apiKey, undefined)
   assert.equal(out.ocr.model, 'glm-4.6v-flash')
-  assert.equal(out.live.cookie, undefined)
-  assert.equal(out.live.roomId, '1')
 })
 
 test('stripSecrets 深拷贝:入参对象不被改动', () => {
@@ -48,8 +45,8 @@ test('stripSecrets 深拷贝:入参对象不被改动', () => {
 })
 
 test('sanitize 层保留历史明文(迁移失败时的兜底读取路径)', () => {
-  const legacy = { apiKey: 'sk-legacy', live: { cookie: 'SESSDATA=old' } }
+  const legacy = { apiKey: 'sk-legacy', ocr: { apiKey: 'sk-ocr-old' } }
   const cfg = configStore.sanitizeConfig(legacy)
   assert.equal(cfg.apiKey, 'sk-legacy')
-  assert.equal(cfg.live.cookie, 'SESSDATA=old')
+  assert.equal(cfg.ocr.apiKey, 'sk-ocr-old')
 })

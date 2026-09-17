@@ -1,6 +1,6 @@
 // 角色人设:角色库统一管理(名字/性别/人设)、A/B/C 槽位绑定与酒馆角色卡导入。
 // 内置甲/乙/丙入库为内置条目:persona 留空跟随内置模板,编辑人设即固化(custom)。
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useSyncExternalStore } from 'react'
 import { defaultPersonaText } from '../../engine/persona'
 import { quantizeMood, type MoodTable } from '../../engine/moodState'
 import { getMoods, resetMoods } from '../../storage/moodStore'
@@ -12,6 +12,8 @@ import {
   ensureSeeded,
   listCharacters,
   saveCharacter,
+  subscribeCharacters,
+  charactersVersion,
   type CharacterDef,
 } from '../../storage/charactersStore'
 import { buildBindingPatch, occupiedByElse, slotsBoundTo, type SlotKey } from '../../characters/bind'
@@ -66,15 +68,14 @@ function MoodCard() {
 /** 酒馆角色卡导入卡:选 PNG/JSON → 解析预览 → 选槽位 → 分区烘焙写入人设。
  *  映射:描述/性格/场景 → 核心人设;mes_example 前 3 组 + first_mes → 表达风格参考;
  *  世界书仅常驻条目 → 长期背景设定;其余(非 constant lore/开场白备选/原始 JSON)留档不进 prompt。
- *  C 槽不支持导入:小管家有写死的人格与固定台词,导入卡会互相打架 */
+ *  导入只入库不绑定槽位——是否登场由用户在角色管理卡手动绑定决定 */
 function ImportCardCard() {
-  const { form, setForm, saveField, flashCard } = useSettings()
-  const names = useConfigSnapshot().names
+  const { form, flashCard } = useSettings()
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState('')
   const [error, setError] = useState('')
   const [localizeOn, setLocalizeOn] = useState(true)
-  const [pending, setPending] = useState<{ slot: 'a' | 'b'; personaText: string; name: string; fullName: string; warnings: string[]; localized: boolean; card: { spec: string; creator?: string; characterVersion?: string } } | null>(null)
+  const [pending, setPending] = useState<{ personaText: string; name: string; fullName: string; warnings: string[]; localized: boolean; card: { spec: string; creator?: string; characterVersion?: string } } | null>(null)
 
   async function onPickFile(file: File | null) {
     setError('')
@@ -92,7 +93,7 @@ function ImportCardCard() {
         setError(preview.error ?? '解析失败')
         return
       }
-      setPending({ slot: 'a', personaText: preview.personaText!, name: preview.name!, fullName: preview.fullName!, warnings: preview.warnings ?? [], localized: preview.localized === true, card: preview.card! })
+      setPending({ personaText: preview.personaText!, name: preview.name!, fullName: preview.fullName!, warnings: preview.warnings ?? [], localized: preview.localized === true, card: preview.card! })
     } catch (e) {
       setError(`读取文件失败:${String((e as Error)?.message ?? e).slice(0, 100)}`)
     } finally {
@@ -104,29 +105,22 @@ function ImportCardCard() {
     if (!pending) return
     setPending(null)
     try {
-      // 导入即入库:角色进角色库,槽位经投影绑定(bind 是"谁在槽上"的事实指针)
+      // 导入 = 纯入库:只进角色库,不碰槽位配置;想让它上场,到上方
+      // 「角色管理」的槽位下拉手动绑定(绑定才投影为人设)。
+      // 同名卡重导 = 更新原条目(本地化偶发失败后重导即可补中文,不产生重复角色)
+      const existing = (await listCharacters()).find(
+        (c) => c.source === 'card' && c.name === pending.name,
+      )
       const ch = await saveCharacter({
+        id: existing?.id,
         name: pending.name,
-        gender: '女', // 卡规格无性别字段,默认女,导入后请自行调整
+        gender: existing?.gender ?? '女', // 卡规格无性别字段,默认女;重导保留已改性别
         persona: pending.personaText,
         source: 'card',
         card: pending.card,
       })
-      const patch = buildBindingPatch(
-        pending.slot,
-        { id: ch.id, name: ch.name, gender: ch.gender, persona: ch.persona },
-        {
-          names: form.names,
-          genders: form.genders,
-          persona: form.persona,
-          personaSource: form.personaSource,
-          slotBindings: form.slotBindings,
-        },
-      )
-      setForm({ ...form, ...patch })
-      saveField(patch, true)
       const localizedNote = pending.localized ? ';非中文内容已本地化为中文' : ''
-      setNote(`已导入「${pending.fullName}」到角色${pending.slot.toUpperCase()}并入库:人设分区烘焙完成${localizedNote},性别请在上方自行调整`)
+      setNote(`「${ch.name}」已入库(${ch.persona.length} 字人设${localizedNote})。到上方角色管理的槽位下拉绑定后才会登场;性别默认女,可在编辑里调整`)
     } catch (e) {
       setError(`入库失败:${String((e as Error)?.message ?? e).slice(0, 100)}`)
     }
@@ -164,16 +158,6 @@ function ImportCardCard() {
           <SetLine title={`解析成功:${pending.fullName}`} hint={`烘焙后人设 ${pending.personaText.length} 字${pending.localized ? ';已本地化为中文' : ''}`}>
             <span className="set-note">{pending.warnings.length ? pending.warnings.join(';') : '无截断,全部字段装入'}</span>
           </SetLine>
-          <SetField label="导入到哪个角色" htmlFor="cfg-card-slot">
-            <select
-              id="cfg-card-slot"
-              value={pending.slot}
-              onChange={(e) => setPending({ ...pending, slot: e.target.value as 'a' | 'b' })}
-            >
-              <option value="a">角色A({names.a})</option>
-              <option value="b">角色B({names.b})</option>
-            </select>
-          </SetField>
           <div className="set-actions">
             <button className="panel-btn" disabled={busy} onClick={() => void confirmImport()}>
               确认导入
@@ -181,7 +165,8 @@ function ImportCardCard() {
           </div>
           <div className="set-note">
             描述/性格/场景→核心人设;对话示例(前 3 组)与开场白→表达风格参考;世界书仅常驻条目→长期背景设定;
-            其余数据(关键词条目/开场白备选/原始卡)已留档备用,不进入对话。导入后请到「AI 模型」页确认该角色的模型绑定。
+            其余数据(关键词条目/开场白备选/原始卡)已留档备用,不进入对话。导入仅入库不自动上场——
+            到上方「角色管理」把角色绑定到 A/B/C 槽位才会登场;C 槽固定小管家台词仍在,请知悉。
           </div>
         </>
       )}
@@ -207,8 +192,13 @@ function CharacterManagerCard() {
     setRoster(await listCharacters())
   }
 
+  // 角色库版本变化(导入卡入库/编辑/删除等任何写入)自动重拉列表——
+  // 导入卡与角色管理是两个组件,靠 store 版本广播保持同页同步
+  const charVersion = useSyncExternalStore(subscribeCharacters, charactersVersion)
+
   // 打开本页:种内置角色(甲/乙/丙入库,老用户自定义无损固化)+ 绑定指针补种
-  // (三槽都空 = 尚未初始化,一次 saveField 把三槽投影到各自内置条目)
+  // (三槽都空 = 尚未初始化,一次 saveField 把三槽投影到各自内置条目;
+  //  种库/投影会 bump 版本触发上方重拉,bind 补种有 null 守卫不会重复写)
   useEffect(() => {
     void (async () => {
       const cfg = await getConfig()
@@ -241,7 +231,7 @@ function CharacterManagerCard() {
       // 打开页只执行一次:session 的 setForm/saveField 身份稳定,依赖数组保持 []
     })()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [charVersion])
 
   /** 绑定/解绑某槽:投影五字段原子保存 */
   function applyBinding(slot: SlotKey, char: { id: string; name: string; gender: '女' | '男'; persona: string } | null) {

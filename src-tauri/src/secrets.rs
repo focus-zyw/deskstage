@@ -17,14 +17,13 @@ use tauri::Manager;
 const SERVICE: &str = "dev.virtualcharacter.app";
 
 /// 封闭的 SecretId 白名单(凭据库"账户名"),前端传别的 id 一律拒绝
-const SECRET_IDS: [&str; 8] = [
+const SECRET_IDS: [&str; 7] = [
     "llm:apiKey",
     "llm:apiKeys",
     "tts:voice",
     "tts:minimax",
     "asr:siliconflow",
     "ocr:apiKey",
-    "live:cookie",
     "llm:profileKeys",
 ];
 
@@ -46,7 +45,6 @@ pub const SECRET_PATHS: &[(&[&str], &str, bool)] = &[
     (&["voice", "minimax", "apiKey"], "tts:minimax", false),
     (&["voice", "asr", "apiKey"], "asr:siliconflow", false),
     (&["ocr", "apiKey"], "ocr:apiKey", false),
-    (&["live", "cookie"], "live:cookie", false),
     (&["modelProfileKeys"], "llm:profileKeys", true),
 ];
 
@@ -251,8 +249,7 @@ mod tests {
             "apiKeys": {"deepseek": "sk-a"},
             "voice": {"apiKey": "sk-tts", "minimax": {"apiKey": "sk-mm", "groupId": "g"},
                       "asr": {"apiKey": "sk-asr"}},
-            "ocr": {"apiKey": "sk-ocr"},
-            "live": {"cookie": "SESSDATA=xx"}
+            "ocr": {"apiKey": "sk-ocr"}
         });
         let out = extract_secrets(&cfg);
         let ids: Vec<&str> = out.iter().map(|(id, _)| id.as_str()).collect();
@@ -264,8 +261,7 @@ mod tests {
                 "tts:voice",
                 "tts:minimax",
                 "asr:siliconflow",
-                            "ocr:apiKey",
-                "live:cookie"
+                "ocr:apiKey"
             ]
         );
         // map 型整组一条(紧凑 JSON);groupId 等非密钥字段不单独出条
@@ -276,8 +272,7 @@ mod tests {
     fn extract_skips_empty_and_missing_fields() {
         let cfg = json!({
             "apiKey": "  ",
-            "voice": {"minimax": {"apiKey": ""}},
-            "live": {}
+            "voice": {"minimax": {"apiKey": ""}}
         });
         assert!(extract_secrets(&cfg).is_empty());
     }
@@ -291,8 +286,7 @@ mod tests {
             "voice": {"apiKey": "sk", "provider": "siliconflow",
                       "minimax": {"apiKey": "sk", "groupId": "g"},
                       "asr": {"apiKey": "sk", "model": "FunAudioLLM/SenseVoiceSmall"}},
-            "ocr": {"apiKey": "sk", "model": "glm-4.6v-flash"},
-            "live": {"cookie": "SESSDATA=xx", "roomId": "1"}
+            "ocr": {"apiKey": "sk", "model": "glm-4.6v-flash"}
         });
         strip_secrets(&mut cfg);
         let obj = cfg.as_object().unwrap();
@@ -306,8 +300,6 @@ mod tests {
         assert!(obj["voice"]["asr"].get("apiKey").is_none());
         assert!(obj["ocr"].get("apiKey").is_none());
         assert_eq!(obj["ocr"]["model"], "glm-4.6v-flash");
-        assert!(obj["live"].get("cookie").is_none());
-        assert_eq!(obj["live"]["roomId"], "1");
     }
 
     #[test]

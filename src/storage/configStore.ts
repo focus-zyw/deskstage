@@ -249,8 +249,6 @@ export interface AppConfig {
   translation: TranslationConfig
   /** 提取文字:AI 视觉模型优先 + 本地 OCR 兜底 */
   ocr: OcrConfig
-  /** 主播模式:直播弹幕互动 */
-  live: LiveConfig
   /** 开机自启动(Windows 写 HKCU Run 注册表键);默认关。
    *  配置是唯一事实来源:应用启动时按此值与系统注册状态对账 */
   launchOnBoot: boolean
@@ -381,18 +379,6 @@ export interface OcrConfig {
   engine: 'auto' | 'local' | 'ai'
 }
 
-/** 主播模式(直播弹幕互动):平台 + 直播间号 + 登录凭证。
- *  roomId 留空 = 点"开播"时气泡引导去设置;platform v1 只有 bilibili 可用(douyin 为桩)。
- *  cookie 选填:B站任意已登录账号的 SESSDATA(或完整 Cookie 串),不带则观众名被打码
- *  (如"张***"),带了解锁真实用户名与舰长等级;建议用小号。
- *  giftReactionsEnabled = 礼物互动(道具动效与感谢语,一个开关管两者);缺省视为开(老配置平滑升级) */
-export interface LiveConfig {
-  platform: 'bilibili' | 'douyin'
-  roomId: string
-  cookie: string
-  giftReactionsEnabled?: boolean
-}
-
 // 默认值（首启写入）。想换端点：改 appData/data/config.json 后重启。
 // apiKey 默认空,在设置面板填写;勿将真实 key 提交进仓库
 export const DEFAULT_CONFIG: AppConfig = {
@@ -479,7 +465,6 @@ export const DEFAULT_CONFIG: AppConfig = {
     model: 'glm-4.6v-flash',
     engine: 'auto',
   },
-  live: { platform: 'bilibili', roomId: '', cookie: '', giftReactionsEnabled: true },
   launchOnBoot: false,
   bubbleStyle: 'comic',
   memoryDisplay: 'off',
@@ -918,9 +903,9 @@ function sanitizeScreenshot(v: unknown): ScreenshotConfig {
 /** 应用动作的全局快捷键(global-shortcut 格式,如 Ctrl+Alt+G);空串 = 未设置。
  *  默认全空,不抢占任何系统按键;与截屏快捷键(screenshot.hotkey)独立演进 */
 export interface HotkeysConfig {
-  /** 生成:按分段选择器当前模式点播一段演出(live 模式不响应,防误开播) */
+  /** 生成:按分段选择器当前模式点播一段演出 */
   generate: string
-  /** 停止:结束当前演出或下播 */
+  /** 停止:结束当前演出 */
   stop: string
   /** 随机回放一段历史(收藏加权) */
   replayRandom: string
@@ -1111,19 +1096,6 @@ function sanitizeOcr(v: unknown): OcrConfig {
   }
 }
 
-/** 清洗直播配置:platform 只认白名单值(抖音为桩,v1 恒回 bilibili);
- *  roomId 纯数字校验;cookie 截断防膨胀 */
-function sanitizeLive(v: unknown): LiveConfig {
-  const c = (v ?? {}) as Record<string, unknown>
-  const roomId = typeof c.roomId === 'string' ? c.roomId.trim().slice(0, 32) : ''
-  return {
-    platform: c.platform === 'douyin' ? 'douyin' : 'bilibili',
-    roomId: /^\d*$/.test(roomId) ? roomId : '',
-    cookie: typeof c.cookie === 'string' ? c.cookie.trim().slice(0, 600) : '',
-    giftReactionsEnabled: c.giftReactionsEnabled !== false,
-  }
-}
-
 /** 清洗影子大脑配置:mode 枚举钳制,数值范围钳制(端口 0 或 1024~65535) */
 function sanitizeShadowBrain(v: unknown): ShadowBrainConfig {
   const o = (v ?? {}) as Record<string, unknown>
@@ -1190,7 +1162,6 @@ const FIELD_SANITIZERS: { [K in keyof AppConfig]: (v: unknown, all: Record<strin
   proactivity: (v) => (v === 'quiet' || v === 'lively' ? v : 'balanced'),
   translation: sanitizeTranslation,
   ocr: sanitizeOcr,
-  live: sanitizeLive,
   launchOnBoot: (v) => v === true,
   wizardDone: (v) => v === true,
   tools: sanitizeToolPrefs,
@@ -1244,7 +1215,6 @@ const SECRET_FIELDS: { path: string[]; id: SecretId; map?: boolean }[] = [
   { path: ['voice', 'minimax', 'apiKey'], id: 'tts:minimax' },
   { path: ['voice', 'asr', 'apiKey'], id: 'asr:siliconflow' },
   { path: ['ocr', 'apiKey'], id: 'ocr:apiKey' },
-  { path: ['live', 'cookie'], id: 'live:cookie' },
   { path: ['modelProfileKeys'], id: 'llm:profileKeys', map: true },
 ]
 

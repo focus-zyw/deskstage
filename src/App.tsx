@@ -28,8 +28,7 @@ import {
   onHoverChange,
   setPanelsOpen,
 } from './input/pointerManager'
-// 截屏浮层与翻译面板只在对应会话里出现,直播链(含 pako/B站协议)只在开播时用:
-// 三者都按需拉取,不进启动首屏的关键路径
+// 截屏浮层与翻译面板只在对应会话里出现:按需拉取,不进启动首屏的关键路径
 const CaptureOverlay = lazy(() => import('./CaptureOverlay').then((m) => ({ default: m.CaptureOverlay })))
 import { SPRITE_SETS, preloadSprites } from './stage/spriteSets'
 import { ensureSpriteOverridesLoaded } from './storage/spriteOverrideStore'
@@ -70,11 +69,6 @@ const TranslationPanel = lazy(() =>
   import('./translation/TranslationPanel').then((m) => ({ default: m.TranslationPanel })),
 )
 const ChatPanel = lazy(() => import('./chat/ChatPanel').then((m) => ({ default: m.ChatPanel })))
-// 直播链(pako/B站弹幕协议/登录)只开播时才需要:按需拉取,模块缓存在此
-import type { LiveReply } from './runtime/liveDanmaku'
-type LiveModule = typeof import('./runtime/liveDanmaku')
-let liveModPromise: Promise<LiveModule> | null = null
-const loadLiveModule = (): Promise<LiveModule> => (liveModPromise ??= import('./runtime/liveDanmaku'))
 import { CommandPanel } from './ui/CommandPanel'
 import { ChoicePanel } from './ui/ChoicePanel'
 import type { Command } from './features/commands/commands'
@@ -82,7 +76,6 @@ import {
   useRuntime,
   getCaps,
   getRuntime,
-  beginStreaming,
   beginCapture,
   endCapture,
   beginVoice,
@@ -202,7 +195,7 @@ function App() {
       ? 'generating'
       : rt.mode.type === 'choosing'
         ? 'choosing'
-        : rt.mode.type === 'performing' || rt.mode.type === 'streaming'
+        : rt.mode.type === 'performing'
           ? 'performing'
           : 'idle'
   // 模式菜单当前选中模式；主按钮按它点播
@@ -213,21 +206,17 @@ function App() {
   useEffect(() => {
     if (!allModeList.some((m) => m.id === mode)) setMode('daily')
   }, [allModeList, mode])
-  // Dock 主按钮语义态:由 RuntimeMode + 当前模式显式推导(映射表见 ui/performButton.ts)
+  // Dock 主按钮语义态:由 RuntimeMode 显式推导(映射表见 ui/performButton.ts)
   const performanceState: PerformanceState =
     rt.mode.type === 'idle'
-      ? mode === 'live'
-        ? 'idle-live'
-        : 'idle'
+      ? 'idle'
       : rt.mode.type === 'generating'
         ? 'generating'
         : rt.mode.type === 'performing'
           ? 'performing'
           : rt.mode.type === 'choosing'
             ? 'choosing'
-            : rt.mode.type === 'streaming'
-              ? 'streaming'
-              : 'locked'
+            : 'locked'
   // 模式菜单(dock 下拉):开态进 overlays 栈,享受互斥/Esc/点外部收起
   const modeMenuOpen = rt.overlays.includes('mode-menu')
   const modeMenuRef = useRef<HTMLDivElement>(null)
@@ -477,7 +466,7 @@ function App() {
     },
   })
 
-  // 角色呈现器:气泡/动作/说话态的唯一归属(演出回调、插话、聊天、直播统一走它)
+  // 角色呈现器:气泡/动作/说话态的唯一归属(演出回调、插话、聊天统一走它)
   const {
     bubble, action, delivery, speaking, pulseFor, reacting, loudBubble,
     showTalk, hush, endLine, pulse, settle, setPose, pose: presenterPose,
@@ -492,11 +481,8 @@ function App() {
   const director = usePerformanceDirector({
     presenter: { say: presenterSay, showTalk, hush, endLine, settle, reset: resetStage, setPose },
     isIdle: () => phaseRef.current === 'idle',
-    onLive: () => startStreaming(),
     noteAmbient: (lines) => noteAmbientRef.current(lines),
     teardown: () => {
-      liveStopRef.current?.()
-      void loadLiveModule().then((m) => m.stopLiveSession())
       clearProps()
     },
     sweepMemos: () => sweepMemos(),
@@ -607,8 +593,6 @@ function App() {
   useEffect(() => {
     setHotkeyHandler('generate', () => {
       const m = modeRef.current
-      // live 模式不响应生成键:全局快捷键无差别触发,误开播比不响应更糟
-      if (m === 'live') return
       if (!getCaps().canStartPerformance) return
       performNow(m)
     })
@@ -691,7 +675,6 @@ function App() {
       if (utilPropSeen.current.get(t.id) === t.status) continue
       utilPropSeen.current.set(t.id, t.status)
       if (t.kind === 'capture-translate' && t.status === 'done') continue // 翻译还在跑,接力给面板
-      if (t.kind === 'live') continue // 直播是常驻状态卡,不挂道具
       if (t.actor === 'C') continue // 工具系统指派 C 时她只有工作姿势(props 桥只认 A/B)
       const prop = t.status === 'running' ? 'magnifier' : t.status === 'error' ? 'question' : 'success'
       showProp(t.actor, prop, { key: 'utility', durationMs: t.status === 'running' ? 0 : undefined })
@@ -750,78 +733,6 @@ function App() {
     if (other) pulse(other)
   }
 
-  // ---------- 主播模式:直播弹幕互动 ----------
-
-  /** 弹幕回复呈现:复用聊天通道的气泡+动作+TTS 节奏(stream 通道) */
-  function presentLiveReply(r: LiveReply) {
-    setTopActor(r.speaker) // 呈现者置顶:气泡与道具不被另一角色压住
-    presenterSay(r.speaker, r.text, { action: r.action || 'talk', ms: 2200 + r.text.length * 160, speaking: true })
-    pulseOther(r.speaker)
-    speak(r.speaker, r.text, undefined, 'stream')
-  }
-
-  /** 下播句柄:导演 stop() 时结束会话并让直播任务卡落定 */
-  const liveStopRef = useRef<(() => void) | null>(null)
-
-  /** 开播:前置校验(直播间号/平台)→ 清场 → streaming 态 → 连接弹幕源 + 启动管线。
-   *  API Key 不再拦截:礼物互动完全免 AI,无 Key 照常收礼物;只有弹幕 AI 回复不可用 */
-  function startStreaming() {
-    void (async () => {
-      try {
-        const cfg = await getConfig()
-        const hasApiKey = Boolean(cfg.apiKey.trim())
-        if (!cfg.live.roomId.trim()) {
-          presenterSay('A', '先到 设置 → 直播设置 里填直播间号~', { action: 'surprise', ms: 3200 })
-          return
-        }
-        if (cfg.live.platform === 'douyin') {
-          presenterSay('A', '抖音弹幕还在路上,先用B站吧~', { ms: 3000 })
-          return
-        }
-
-        // 进入即提示:开播流程已启动(此前失败全程静默,无法定位卡点)
-        presenterSay('A', '正在连接直播间…', { ms: 2500 })
-
-        // 清场(与点播同段):中止生成/演出/语音
-        director.abortPending()
-
-        beginStreaming()
-      // 无 Key 提示一句:礼物互动照常,弹幕 AI 回复不可用(管线侧同步静默禁用)
-      if (!hasApiKey) {
-        showPoke('A', '还没填 API Key,读弹幕回复先关掉,礼物互动照常~', 'talk', 3200)
-      }
-      // 连接状态走常驻任务卡(exec 挂起到下播才落定,done 卡 6s 后自动消失)
-      void runUtilityTask('live', '直播', 'A', (report) => {
-        return new Promise<string>((resolve) => {
-          liveStopRef.current = () => {
-            liveStopRef.current = null
-            resolve('直播已结束')
-          }
-          void loadLiveModule().then(({ startLiveSession }) =>
-            startLiveSession(cfg.live.platform, cfg.live.roomId, {
-              onReply: presentLiveReply,
-              onStatus: (s) => {
-                report(
-                  s.state === 'live'
-                    ? '已连接,读弹幕中'
-                    : s.state === 'connecting'
-                      ? `连接中${s.detail ? `(${s.detail})` : ''}`
-                      : s.state === 'error'
-                        ? `异常:${s.detail ?? ''}(自动重连)`
-                        : (s.detail ?? s.state),
-                )
-              },
-            }),
-          )
-        })
-      })
-      } catch (e) {
-        // 开播任何一步失败都在气泡里可见,不再静默
-        presenterSay('A', `开播失败:${String((e as Error)?.message ?? e).slice(0, 60)}`, { action: 'surprise', ms: 5000 })
-      }
-    })()
-  }
-
   /** 命令面板:跳到备忘页手填(时间没解析出来时的兜底入口) */
   function openMemoSettings() {
     openSettings('memo')
@@ -839,15 +750,12 @@ function App() {
     { id: 'toggle-chars', label: charHidden ? '显示角色' : '隐藏角色', keywords: ['隐藏角色', '显示角色'], run: () => setCharsHidden(!charHidden) },
     // 点播命令从模式注册表生成:内置+自定义(模式工坊)自动进命令面板与 LLM 兜底路由
     ...allModeList
-      .filter((m) => m.id !== 'live')
       .map((m) => ({
         id: m.id,
         label: `来一段${m.label}`,
         keywords: [...new Set([...(m.triggers ?? []), m.label])],
         run: () => performNow(m.id),
       })),
-    { id: 'live', label: '开播(直播弹幕互动,设置里填直播间号)', keywords: ['开播', '直播', '弹幕'], run: () => performNow('live') },
-    { id: 'live-stop', label: '下播(结束直播弹幕互动)', keywords: ['下播'], run: () => director.stop() },
     { id: 'voice', label: voicePhase === 'off' ? '开启语音对话(和角色说话)' : '关闭语音对话', keywords: ['语音', '语音对话', '麦克风', '说话'], run: () => toggleVoiceSession() },
   ]
 
@@ -1178,7 +1086,7 @@ function App() {
         registry: TOOLS,
         planner: createJsonPromptPlanner(defaultPlannerDeps(() => webchatPrefRef.current)),
         settings: async () => (await getConfig()).tools,
-        facts: async () => ({ isLive: modeRef.current === 'live', phase: phaseRef.current }),
+        facts: async () => ({ phase: phaseRef.current }),
         host: {
           confirm: (req) =>
             new Promise<boolean>((resolve) => {
@@ -1217,7 +1125,7 @@ function App() {
           },
         },
       }),
-    // 动态事实(阶段/直播态/开关)全部经 ref 与 getConfig 读取:协调器终生一次
+    // 动态事实(阶段/开关)全部经 ref 与 getConfig 读取:协调器终生一次
     [],
   )
 
@@ -1341,7 +1249,7 @@ function App() {
         prepare: () => {
           const caps = getCaps()
           if (caps.capturing) return false // 框选中不打断截图
-          if (caps.performing || caps.streaming) directorRef.current.stop()
+          if (caps.performing) directorRef.current.stop()
           return true
         },
         enter: () => beginVoice(),

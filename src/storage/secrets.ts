@@ -1,4 +1,4 @@
-// 凭据库桥:API Key / B站 Cookie 等敏感值只进系统凭据库(Windows Credential Manager),
+// 凭据库桥:API Key 等敏感值只进系统凭据库(Windows Credential Manager),
 // 配置文件与 localStorage 永不落明文——读写两端都由 configStore 的
 // SECRET_FIELDS 表统一改道,调用方(engine/settings)继续读 AppConfig 原字段。
 //
@@ -14,9 +14,7 @@ export type SecretId =
   | 'tts:voice'
   | 'tts:minimax'
   | 'asr:siliconflow'
-  | 'video:apiKeys'
   | 'ocr:apiKey'
-  | 'live:cookie'
   | 'llm:profileKeys'
 
 const LS_PREFIX = 'vc-secret:'
