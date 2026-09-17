@@ -7,6 +7,7 @@ use tauri::Emitter;
 mod asr;
 mod audio_capture;
 mod bili_http;
+mod bridge;
 mod capture;
 mod config_service;
 mod desktop_ops;
@@ -147,6 +148,8 @@ pub fn run() {
         .manage(endpoint_proxy::ProxyState::default())
         .manage(mic_capture::MicState::default())
         .manage(config_service::ConfigState::default())
+        // 影子大脑桥:release 下命令壳返回错误、监听器不存在(见 bridge.rs 模块注释)
+        .manage(bridge::BridgeState::default())
         .invoke_handler(tauri::generate_handler![
             set_noactivate,
             report_csp_violation,
@@ -206,7 +209,13 @@ pub fn run() {
             config_service::data_get_with_revision,
             config_service::data_set_if_revision,
             endpoint_proxy::endpoint_request,
-            endpoint_proxy::endpoint_cancel
+            endpoint_proxy::endpoint_cancel,
+            bridge::bridge_start,
+            bridge::bridge_stop,
+            bridge::bridge_push_input,
+            bridge::bridge_offer_request,
+            bridge::bridge_speak_reply,
+            bridge::bridge_status
         ])
         .setup(|app| {
             if cfg!(debug_assertions) {

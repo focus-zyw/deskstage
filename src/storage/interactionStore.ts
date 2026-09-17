@@ -153,3 +153,8 @@ export async function dismissCooldownMultiplier(kind: DismissableKind): Promise<
   if (stats[key] >= DISMISS_THRESHOLD) return 2
   return 1
 }
+
+/** 只读快照(影子大脑现场快照用):不做任何写入与清零 */
+export async function readStats(): Promise<InteractionStats> {
+  return readAll()
+}

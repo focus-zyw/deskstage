@@ -152,6 +152,19 @@ export function isWebchatSite(v: unknown): v is WebchatSiteId {
   return typeof v === 'string' && (WEBCHAT_SITE_IDS as readonly string[]).includes(v)
 }
 
+/** 影子大脑配置(mode 是总闸:off = 桥不启动) */
+export interface ShadowBrainConfig {
+  enabled: boolean
+  /** off 关闭;shadow 影子对照(决策只落盘);takeover 接管(候选触发前问外部大脑) */
+  mode: 'off' | 'shadow' | 'takeover'
+  /** 桥端口(0 = 随机);实际端口/token 持久化在 data/bridge.json 供 Agent 发现 */
+  port: number
+  /** 归档心跳:非决策时刻按此间隔采样记 "listen" 账(ms) */
+  heartbeatMs: number
+  /** 接管预算:外部大脑超时不回即回落本地(ms) */
+  takeoverBudgetMs: number
+}
+
 export interface AppConfig {
   apiKey: string
   /** 各厂商分别记忆的 API Key:键 = 预设厂商 id,自定义端点 = `custom:{baseUrl}`;
@@ -163,6 +176,10 @@ export interface AppConfig {
    *  仅预设智谱/DeepSeek 主端点生效(host 判定);自定义档案/中转端点不支持,
    *  工具不注入(静默关闭)。设计见 docs/联网搜索设计方案.md */
   webSearch: boolean
+  /** 影子大脑(Shadow Brain,仅 dev 构建生效):本地桥让外部编码 Agent 读运行现场
+   *  快照、提交决策——shadow 影子对照(落盘不执行)/ takeover 接管(超时回落本地)。
+   *  设计见 docs/影子大脑桥接设计方案.md */
+  shadowBrain: ShadowBrainConfig
   /** 使用者画像:手填的"角色认识你"信息,注入所有对话 prompt */
   userProfile: UserProfile
   /** 角色语音 */
@@ -384,6 +401,8 @@ export const DEFAULT_CONFIG: AppConfig = {
   baseUrl: 'https://api.deepseek.com/v1',
   model: 'deepseek-chat',
   webSearch: false,
+  // 影子大脑默认关(开发期工具;启用后端口/token 写 data/bridge.json)
+  shadowBrain: { enabled: false, mode: 'off', port: 0, heartbeatMs: 300_000, takeoverBudgetMs: 6_000 },
   voice: {
     enabled: true,
     provider: 'siliconflow',
@@ -1105,6 +1124,23 @@ function sanitizeLive(v: unknown): LiveConfig {
   }
 }
 
+/** 清洗影子大脑配置:mode 枚举钳制,数值范围钳制(端口 0 或 1024~65535) */
+function sanitizeShadowBrain(v: unknown): ShadowBrainConfig {
+  const o = (v ?? {}) as Record<string, unknown>
+  const num = (x: unknown, min: number, max: number, fallback: number): number => {
+    const n = Number(x)
+    return Number.isFinite(n) ? Math.min(max, Math.max(min, Math.round(n))) : fallback
+  }
+  const port = num(o.port, 0, 65535, DEFAULT_CONFIG.shadowBrain.port)
+  return {
+    enabled: o.enabled === true,
+    mode: o.mode === 'shadow' || o.mode === 'takeover' ? o.mode : 'off',
+    port: port === 0 || port >= 1024 ? port : 0,
+    heartbeatMs: num(o.heartbeatMs, 60_000, 3_600_000, DEFAULT_CONFIG.shadowBrain.heartbeatMs),
+    takeoverBudgetMs: num(o.takeoverBudgetMs, 1000, 30_000, DEFAULT_CONFIG.shadowBrain.takeoverBudgetMs),
+  }
+}
+
 /** 清洗气泡风格:内置白名单 ∪ 气泡工坊自建主题 id;其他值(手改配置写错)回 comic */
 function sanitizeBubbleStyle(v: unknown): AppConfig['bubbleStyle'] {
   return v === 'glass' || v === 'comic'
@@ -1164,6 +1200,7 @@ const FIELD_SANITIZERS: { [K in keyof AppConfig]: (v: unknown, all: Record<strin
   expressionV2: (v) => v === true,
   contextLifecycle: (v) => v === true,
   webSearch: (v) => v === true,
+  shadowBrain: sanitizeShadowBrain,
   coldMemory: sanitizeColdMemory,
   slotBindings: sanitizeSlotBindings,
   bubbleStyle: sanitizeBubbleStyle,

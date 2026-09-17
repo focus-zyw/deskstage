@@ -113,9 +113,11 @@ import {
   getConfig,
   getConfigSnapshot,
   saveConfig,
+  subscribeConfig,
   useConfigSnapshot,
   WEBCHAT_SITE_IDS,
 } from './storage/configStore'
+import { syncBrainBridge } from './brain/bridgeLink'
 import { useBubbleThemesV2 } from './storage/bubbleThemesStore'
 import {
   BUILT_IN_BUBBLE_THEMES,
@@ -892,6 +894,8 @@ function App() {
       // 世界感知:按配置低频轮询本机状态(前台应用/电量/媒体/系统负载等)
       // 环境感知或久坐提醒任一开启都需要轮询(久坐依赖键鼠空闲传感器,与环境感知解耦)
       if (c.envSense || c.breakReminder.enabled) startWorld()
+      // 影子大脑桥:按配置启停本地监听(仅 dev 构建有效,正式版整体缺席)
+      void syncBrainBridge()
       // 开机自启动:按配置对账系统注册状态(默认关;手改配置文件后重启同样生效)
       void applyLaunchOnBoot(c.launchOnBoot)
     })
@@ -929,6 +933,12 @@ function App() {
       }),
       // 工具栏按钮的热区由 ui/ControlBar 自行注册
     ]
+    // 影子大脑:设置里开关/换档后启停桥,不重启应用(配置变化即对账)
+    unsubs.push(
+      subscribeConfig(() => {
+        void syncBrainBridge()
+      }),
+    )
     // 电脑感知通知:每 30 分钟统一显示一条(多条感知合并为一句,角色气泡告知);
     // 不进生成提示词;勿扰/演出/语音/全屏中顺延(冷却账本不消费,感知不丢)
     const worldNotify = createWorldNotify({

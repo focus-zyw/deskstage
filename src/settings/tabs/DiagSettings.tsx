@@ -4,6 +4,9 @@
 //   · 会话回放:列表 → 派生结论 + 逐事件时间轴(耗时瀑布);
 //   · 导出(预览清单 + 默认不含正文)与清空。
 import { useEffect, useState } from 'react'
+import { invoke } from '@tauri-apps/api/core'
+import { appDataDir, join } from '@tauri-apps/api/path'
+import { exists, readTextFile } from '@tauri-apps/plugin-fs'
 import { SettingsCard } from '../SettingsPrimitives'
 import {
   useDiagData,
@@ -16,7 +19,8 @@ import { buildDiagExportJson } from '../../diag/store'
 import { redactText } from '../../diag/redact'
 import type { DiagEvent, DiagSession } from '../../diag/types'
 import { getMemory } from '../../storage/memoryStore'
-import { inTauri } from '../../storage/configStore'
+import { inTauri, saveConfig, useConfigSnapshot } from '../../storage/configStore'
+import { countShadowRecords, clearShadowArchive } from '../../brain/shadowStore'
 import { writeDiagExportFile } from '../../diag/exportFile'
 
 const SOURCE_LABEL: Record<string, string> = {
@@ -222,6 +226,150 @@ function SummaryChips(props: { session: DiagSession }) {
   )
 }
 
+/** bridge.json(桥发现文件)内容:Agent 侧据此获知端口与 token */
+interface BridgeDiscovery {
+  token?: string
+  port?: number
+}
+
+interface BridgeStatus {
+  running?: boolean
+  port?: number
+  inputs?: number
+  counts?: { decisions?: number; speaks?: number; offers?: number; pushes?: number }
+}
+
+const MODE_OPTIONS: { value: 'off' | 'shadow' | 'takeover'; label: string; hint: string }[] = [
+  { value: 'off', label: '关闭', hint: '桥不启动' },
+  { value: 'shadow', label: '影子对照', hint: '外部决策只落盘不执行' },
+  { value: 'takeover', label: '接管', hint: '候选触发前问外部大脑,超时回落本地' },
+]
+
+/** 影子大脑卡:仅 dev 构建显示(release 无桥,配置字段无害)。
+ *  外部编码 Agent 经 127.0.0.1 桥读运行现场、提交决策,影子对照调主动发言参数。
+ *  设计与 Agent 接入指引见 docs/影子大脑桥接设计方案.md */
+function ShadowBrainCard() {
+  const shadowBrain = useConfigSnapshot().shadowBrain
+  const dev = import.meta.env.DEV && inTauri
+  const [status, setStatus] = useState<BridgeStatus | null>(null)
+  const [archive, setArchive] = useState<{ inputs: number; decisions: number } | null>(null)
+  const [token, setToken] = useState<string | null>(null)
+  const [msg, setMsg] = useState('')
+
+  useEffect(() => {
+    if (!dev) return
+    const refresh = () => {
+      void invoke<BridgeStatus>('bridge_status')
+        .then(setStatus)
+        .catch(() => setStatus(null))
+      void countShadowRecords().then(setArchive)
+    }
+    refresh()
+    const t = window.setInterval(refresh, 30_000)
+    return () => window.clearInterval(t)
+  }, [dev])
+
+  // token 从桥发现文件读(端口/token 的持久事实源);桥没开过就是 null
+  useEffect(() => {
+    if (!dev || !shadowBrain.enabled) return
+    void (async () => {
+      try {
+        const file = await join(await appDataDir(), 'data', 'bridge.json')
+        if (await exists(file)) {
+          setToken((JSON.parse(await readTextFile(file)) as BridgeDiscovery).token ?? null)
+        }
+      } catch {
+        // 读取失败按未知处理
+      }
+    })()
+  }, [dev, shadowBrain.enabled, status?.running])
+
+  if (!dev) return null
+
+  async function setMode(mode: 'off' | 'shadow' | 'takeover'): Promise<void> {
+    await saveConfig({ shadowBrain: { ...shadowBrain, mode, enabled: mode !== 'off' } })
+  }
+
+  async function copy(text: string, what: string): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(text)
+      setMsg(`已复制${what}`)
+    } catch {
+      setMsg('复制失败(浏览器剪贴板不可用)')
+    }
+  }
+
+  const modeDesc = MODE_OPTIONS.find((m) => m.value === shadowBrain.mode)?.hint ?? ''
+  const port = status?.running ? status.port : null
+
+  return (
+    <SettingsCard
+      card="影子大脑"
+      title="影子大脑(Shadow Brain)"
+      desc={modeDesc}
+      action={
+        <>
+          {MODE_OPTIONS.map((m) => (
+            <label key={m.value} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 13, marginRight: 10 }}>
+              <input
+                type="radio"
+                name="shadow-brain-mode"
+                checked={shadowBrain.mode === m.value}
+                onChange={() => void setMode(m.value)}
+              />
+              {m.label}
+            </label>
+          ))}
+        </>
+      }
+    >
+      <div className="set-note" style={{ lineHeight: 1.7 }}>
+        仅监听 127.0.0.1 的本地桥(正式版整体剔除):外部编码 Agent 读取运行现场快照,
+        提交「该不该说话/什么表情」的决策。影子模式只落盘不执行——拿 Agent 的判断和
+        本地大脑对照,把「主动发言的感觉」变成可调的规则。
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 14, alignItems: 'center', margin: '8px 0 4px', fontSize: 13 }}>
+        <span>
+          状态:{status?.running ? `运行中 :${port}` : shadowBrain.enabled ? '启动中/未运行' : '未运行'}
+        </span>
+        {port !== null && (
+          <button className="panel-btn" onClick={() => void copy(String(port), '端口')}>
+            复制端口
+          </button>
+        )}
+        {token && (
+          <button className="panel-btn" onClick={() => void copy(token, 'token')}>
+            复制 token
+          </button>
+        )}
+        <span style={{ opacity: 0.75 }}>
+          环内输入 {status?.inputs ?? 0} · 决策 {status?.counts?.decisions ?? 0} · 指挥 {status?.counts?.speaks ?? 0}
+        </span>
+        <span style={{ opacity: 0.75 }}>
+          存档:输入 {archive?.inputs ?? 0} / 决策 {archive?.decisions ?? 0}
+        </span>
+        <button
+          className="panel-btn"
+          onClick={() => {
+            void clearShadowArchive().then(() => {
+              setMsg('已清空影子存档')
+              void countShadowRecords().then(setArchive)
+            })
+          }}
+        >
+          清空存档
+        </button>
+      </div>
+      <div className="set-note" style={{ marginTop: 4 }}>
+        接入:Agent 读 <code>appData/data/bridge.json</code> 取端口与 token,
+        <code>GET /brain/inputs</code> 拉现场、<code>POST /brain/decisions</code> 交影子决策、
+        <code>POST /brain/speak</code> 现场指挥。语料在 <code>data/shadow-brain/</code>(JSONL)。
+      </div>
+      {msg && <div style={{ fontSize: 12, opacity: 0.8, marginTop: 4 }}>{msg}</div>}
+    </SettingsCard>
+  )
+}
+
 export function DiagSettings() {
   const { sessions, detail } = useDiagData()
   const [expanded, setExpanded] = useState<string | null>(null)
@@ -362,6 +510,8 @@ export function DiagSettings() {
           })}
         </div>
       </SettingsCard>
+
+      <ShadowBrainCard />
     </>
   )
 }

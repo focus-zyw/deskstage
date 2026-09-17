@@ -12,7 +12,7 @@
     "lint": "oxlint --deny-warnings",
     "test": "node scripts/run-tests.mjs",
     "test:bubble": "node --import ./tests/_tsxSetup.mjs --test tests/bubbleEngine.test.mjs tests/bubbleThemes.test.mjs",
-    "test:fast": "node --import ./tests/_tsxSetup.mjs --test tests/bubbleEngine.test.mjs tests/bubbleThemes.test.mjs tests/configMigration.test.mjs tests/configPartial.test.mjs tests/dialogProtocol.test.mjs tests/scriptValidation.test.mjs tests/turnBatch.test.mjs tests/toolSystem.test.mjs tests/runtimeMode.test.mjs tests/hotkeys.test.mjs tests/mention.test.mjs tests/sentenceSplitter.test.mjs tests/worldModel.test.mjs tests/desktopTools.test.mjs tests/historyClear.test.mjs tests/worldNotify.test.mjs tests/moodTag.test.mjs tests/webSearch.test.mjs",
+    "test:fast": "node --import ./tests/_tsxSetup.mjs --test tests/bubbleEngine.test.mjs tests/bubbleThemes.test.mjs tests/configMigration.test.mjs tests/configPartial.test.mjs tests/dialogProtocol.test.mjs tests/scriptValidation.test.mjs tests/turnBatch.test.mjs tests/toolSystem.test.mjs tests/runtimeMode.test.mjs tests/hotkeys.test.mjs tests/mention.test.mjs tests/sentenceSplitter.test.mjs tests/worldModel.test.mjs tests/desktopTools.test.mjs tests/historyClear.test.mjs tests/worldNotify.test.mjs tests/moodTag.test.mjs tests/webSearch.test.mjs tests/brainProtocol.test.mjs",
     "test:shard": "node --import ./tests/_tsxSetup.mjs --test",
     "preview": "vite preview",
     "tauri": "tauri"

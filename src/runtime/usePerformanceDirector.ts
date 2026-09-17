@@ -62,6 +62,8 @@ import {
   type RuntimeMode,
 } from './runtimeMode'
 import { startScheduler, noteSpontaneous } from './proactiveScheduler'
+import { observeEvaluation, consultBrain, registerBrainSpeakHook } from '../brain/bridgeLink'
+import { sanitizeDialog } from '../performer/dialogSchema'
 import { speakTracked, stopSpeaking, prefetchVoice } from '../engine/tts'
 import type { ActorPresenter } from '../stage/useActorPresenter'
 
@@ -448,13 +450,16 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
     deps.noteAmbient?.(lines.map((l) => ({ who: l.speaker, text: l.text })))
   }
 
-  /** 自发短聊天:调度器闸门(空闲时长/冷却/配额/勿扰)已过,这里只做最后防御检查与执行。返回是否真的播了 */
-  async function spontaneous(): Promise<boolean> {
+  /** 自发短聊天:调度器闸门(空闲时长/冷却/配额/勿扰)已过,这里只做最后防御检查与执行。
+   *  overrideLines = 影子大脑接管裁决给定的台词(有则跳过 LLM 生成)。返回是否真的播了 */
+  async function spontaneous(overrideLines?: readonly unknown[]): Promise<boolean> {
     if (!deps.isIdle() || player.current!.playing) return false
     const cfg = await getConfig()
-    if (!cfg.apiKey.trim()) return false
+    if (!overrideLines?.length && !cfg.apiKey.trim()) return false
     try {
-      const lines = await generateShortChat('spontaneous', lastLines.current)
+      const lines = overrideLines?.length
+        ? sanitizeDialog(overrideLines)
+        : await generateShortChat('spontaneous', lastLines.current)
       if (!deps.isIdle() || player.current!.playing) return false
       if (lines.length === 0) return false
       proactiveAct.current = { kind: 'spontaneous', since: Date.now() }
@@ -465,11 +470,14 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
     }
   }
 
-  /** 久坐提醒:调度器已算好工作时长/冷却/守卫,这里只负责生成提醒并播出。返回是否提醒了 */
-  async function breakRemind(): Promise<boolean> {
+  /** 久坐提醒:调度器已算好工作时长/冷却/守卫,这里只负责生成提醒并播出。
+   *  overrideLines = 影子大脑接管裁决给定的台词。返回是否提醒了 */
+  async function breakRemind(overrideLines?: readonly unknown[]): Promise<boolean> {
     if (!deps.isIdle() || player.current!.playing) return false
     try {
-      const lines = await generateShortChat('break', lastLines.current)
+      const lines = overrideLines?.length
+        ? sanitizeDialog(overrideLines)
+        : await generateShortChat('break', lastLines.current)
       if (!deps.isIdle() || player.current!.playing || lines.length === 0) return false
       lastLines.current = lines
       playingLines.current = lines
@@ -493,10 +501,29 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
     return true
   }
 
-  // 主动行为调度器:备忘扫描/久坐/重放/自发的统一定时、优先级与配额
+  // 主动行为调度器:备忘扫描/久坐/重放/自发的统一定时、优先级与配额。
+  // observe/consult = 影子大脑挂点(桥没开时零开销:observe 直接 return,consult 返 null)
   useEffect(() => {
-    return startScheduler({ sweepMemos: deps.sweepMemos, breakRemind, autoReplay, spontaneous })
+    return startScheduler({
+      sweepMemos: deps.sweepMemos,
+      breakRemind,
+      autoReplay,
+      spontaneous,
+      observe: observeEvaluation,
+      consult: consultBrain,
+    })
     // deps 是组件内函数声明,行为恒定;首帧闭包即可(内部只依赖 ref 与模块函数)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // 影子大脑现场指挥的执行钩子:过闸(勿扰/全屏/忙碌)在桥链路,这里只管播
+  useEffect(() => {
+    registerBrainSpeakHook((lines) => {
+      if (!deps.isIdle() || player.current!.playing) return false
+      playShortChat(lines)
+      return true
+    })
+    return () => registerBrainSpeakHook(null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
