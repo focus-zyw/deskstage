@@ -47,6 +47,9 @@ function moodOpts(onMood: Props['onMood']): { presentMood: NonNullable<Props['on
 }
 
 const SLOTS: ActorId[] = ['A', 'B', 'C']
+
+/** 每房间草稿:面板关闭/卸载后仍在(模块级),重开面板原样恢复 */
+const draftsByRoom = new Map<string, string>()
 const FEED_TAIL = 50
 const SEEN_KEY = 'chat-panel-seen'
 
@@ -66,7 +69,29 @@ export function ChatPanel({ innerRef, pos, pinned, onPinChange, onClose, route, 
   const [avatars, setAvatars] = useState<Record<string, string>>({})
   const [groupName, setGroupName] = useState('我们的群')
   const [userName, setUserName] = useState('你')
-  const [draft, setDraft] = useState('')
+  const sessionIdOf = (v: View): string =>
+    v.kind === 'group' ? GROUP_SESSION_ID : v.kind === 'direct' ? directSessionId(v.slot) : ''
+  const roomId = sessionIdOf(view)
+  const [draft, setDraft] = useState(() => draftsByRoom.get(roomId) ?? '')
+  const draftRef = useRef(draft)
+  draftRef.current = draft
+  const prevRoomRef = useRef<string | null>(roomId)
+  // 切换会话:暂存当前房间草稿,载入目标房间草稿
+  useEffect(() => {
+    const prev = prevRoomRef.current
+    if (prev === roomId) return
+    if (prev) draftsByRoom.set(prev, draftRef.current)
+    prevRoomRef.current = roomId
+    setDraft(draftsByRoom.get(roomId) ?? '')
+  }, [roomId])
+  // 面板卸载(关闭):草稿入账本,重开恢复
+  useEffect(
+    () => () => {
+      const prev = prevRoomRef.current
+      if (prev) draftsByRoom.set(prev, draftRef.current)
+    },
+    [],
+  )
   const [sending, setSending] = useState(false)
   const placeholder =
     view.kind === 'group'
@@ -85,9 +110,6 @@ export function ChatPanel({ innerRef, pos, pinned, onPinChange, onClose, route, 
   const sizerRef = useRef<HTMLSpanElement>(null)
   const viewRef = useRef<View>(view)
   viewRef.current = view
-
-  const sessionIdOf = (v: View): string =>
-    v.kind === 'group' ? GROUP_SESSION_ID : v.kind === 'direct' ? directSessionId(v.slot) : ''
 
   // 配置:群名/用户名(打开面板读一次)
   useEffect(() => {
@@ -191,6 +213,7 @@ export function ChatPanel({ innerRef, pos, pinned, onPinChange, onClose, route, 
     if (!text || sending || view.kind === 'list') return
     setSending(true)
     setDraft('')
+    draftsByRoom.delete(roomId)
     const session =
       view.kind === 'group' ? getGroupSession() : getDirectSession(view.slot, moodOpts(onMood))
     const res = await session.send(text).catch(() => 'busy' as const)
