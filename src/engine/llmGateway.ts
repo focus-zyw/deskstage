@@ -11,6 +11,7 @@ import {
   extractResponsesText,
   stripThinkBlocks,
   webSearchTransportOf,
+  WEB_UNAVAILABLE_LINE,
   type WebSearchTransport,
 } from './webSearch'
 
@@ -179,10 +180,12 @@ export async function complete(options: CompletionOptions): Promise<string> {
     // Responses 走固定 4096,见 buildResponsesBody)
     const effMaxTokens =
       transport === 'zhipu-tools' ? Math.max(maxTokens, 1024) : maxTokens
-    const chatBodyOf = (withTool: boolean) =>
+    const chatBodyOf = (withTool: boolean, extraSystem?: string) =>
       JSON.stringify({
         model,
-        messages,
+        messages: extraSystem
+          ? [...messages, { role: 'system', content: extraSystem }]
+          : messages,
         temperature,
         max_tokens: effMaxTokens,
         ...(jsonMode ? { response_format: { type: 'json_object' } } : {}),
@@ -286,8 +289,16 @@ export async function complete(options: CompletionOptions): Promise<string> {
       try {
         out = await readResponses(await sendResponses(true))
       } catch (e) {
-        if (isParamReject(e)) out = await readResponses(await sendResponses(false))
-        else throw e
+        if (!isParamReject(e)) throw e
+        try {
+          // 400 = 端点不认工具参数:去工具重试一次(同路由)
+          out = await readResponses(await sendResponses(false))
+        } catch (e2) {
+          // 404 = 端点根本没有 Responses 路由(路径假设不成立):降级普通聊天,
+          // 并追加诚实提示防模型假装检索——开关打开绝不炸聊天、绝不诱导编造
+          if ((e2 as { status?: number }).status !== 404) throw e2
+          out = await readCompletion(await sendChat(chatBodyOf(false, WEB_UNAVAILABLE_LINE)))
+        }
       }
     } else {
       try {

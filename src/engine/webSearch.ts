@@ -34,6 +34,12 @@ export const WEB_SEARCH_LINE =
   '查不到就坦率说不确定,绝不编造具体数据;' +
   '不要提及"搜索/联网"等工具细节,不要罗列来源链接。'
 
+/** 联网通道 404(端点无 Responses 路由)降级普通聊天时追加的诚实提示:
+ *  规则行承诺过「能搜」,降级轮必须明说搜不了,防模型假装检索然后编造 */
+export const WEB_UNAVAILABLE_LINE =
+  '(系统提示:本轮联网搜索通道异常,本轮没有检索能力——请直接基于已有知识回答;' +
+  '不要假装正在搜索,不要编造具体数据,无法核实的就说暂时查不了)'
+
 /** DeepSeek Responses 响应 → 文本:优先 output_text,退化拼 output 数组里的
  *  message.content[].output_text(官方 Responses 形态);没有可提取内容返回空串 */
 export function extractResponsesText(data: unknown): string {
