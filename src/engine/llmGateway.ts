@@ -11,7 +11,7 @@ import {
   extractResponsesText,
   stripThinkBlocks,
   webSearchTransportOf,
-  WEB_UNAVAILABLE_LINE,
+  responsesWithDegrade,
   type WebSearchTransport,
 } from './webSearch'
 
@@ -286,20 +286,14 @@ export async function complete(options: CompletionOptions): Promise<string> {
         if (!content) throw new Error('空响应')
         return content
       }
-      try {
-        out = await readResponses(await sendResponses(true))
-      } catch (e) {
-        if (!isParamReject(e)) throw e
-        try {
-          // 400 = 端点不认工具参数:去工具重试一次(同路由)
-          out = await readResponses(await sendResponses(false))
-        } catch (e2) {
-          // 404 = 端点根本没有 Responses 路由(路径假设不成立):降级普通聊天,
-          // 并追加诚实提示防模型假装检索——开关打开绝不炸聊天、绝不诱导编造
-          if ((e2 as { status?: number }).status !== 404) throw e2
-          out = await readCompletion(await sendChat(chatBodyOf(false, WEB_UNAVAILABLE_LINE)))
-        }
-      }
+      // 参数/路由类拒绝由 responsesWithDegrade 消化(降级普通聊天+诚实提示);
+      // 这里只剩真故障(鉴权/配额/网络/降级调用本身失败),原样上抛
+      out = await responsesWithDegrade({
+        sendResponses: (withTool) => sendResponses(withTool),
+        sendChat: (extraSystem) => sendChat(chatBodyOf(false, extraSystem)),
+        readResponses,
+        readCompletion,
+      })
     } else {
       try {
         out = await readCompletion(await sendChat(body))

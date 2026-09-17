@@ -14,12 +14,38 @@ before(async () => {
   configStore = await import('../src/storage/configStore.ts')
 })
 
+// ---------- Responses 三级尝试(单聊不回复故障的回归:重试 400 也必须降级) ----------
+// 接缝契约:真实 readResponses/readCompletion 在非 2xx 时抛带 status 的错误(网关同款)
+const mkRead = (extract) => async (r) => {
+  const raw = await r.text()
+  if (r.status < 200 || r.status >= 300) {
+    const e = new Error(`API HTTP ${r.status}`)
+    e.status = r.status
+    throw e
+  }
+  return extract(JSON.parse(raw))
+}
+const res = (status, body) => ({ status, text: async () => body })
+const chatOk = (text) => ({ status: 200, text: async () => JSON.stringify({ choices: [{ message: { content: text } }] }) })
+const readChat = async (r) => {
+  const raw = await r.text()
+  if (r.status < 200 || r.status >= 300) {
+    const e = new Error(`API HTTP ${r.status}`)
+    e.status = r.status
+    throw e
+  }
+  return JSON.parse(raw).choices?.[0]?.message?.content ?? ''
+}
+
 // ---------- 传输判定 ----------
 
-test('传输判定:智谱走 chat tools,DeepSeek 走 Responses,其他一律不支持', () => {
+test('传输判定:智谱走 chat tools,DeepSeek 暂不支持(服务端忽略 web_search),其他一律不支持', () => {
   assert.equal(ws.webSearchTransportOf('https://open.bigmodel.cn/api/paas/v4'), 'zhipu-tools')
-  assert.equal(ws.webSearchTransportOf('https://api.deepseek.com/v1'), 'deepseek-responses')
-  assert.equal(ws.webSearchTransportOf('https://api.deepseek.com'), 'deepseek-responses')
+  // 2026-09-18 真机探测:DeepSeek /responses(v4-flash)对 web_search 工具恒忽略
+  // (web_search_call 恒 0,tool_choice 强制亦然,模型自述无法联网);官方文档列忽略
+  // 列表、更新日志从未提及——判为不支持,待真实上线再加回
+  assert.equal(ws.webSearchTransportOf('https://api.deepseek.com/v1'), null)
+  assert.equal(ws.webSearchTransportOf('https://api.deepseek.com'), null)
   // 子域伪造不通过:host 必须是指定域本身或其子域
   assert.equal(ws.webSearchTransportOf('https://bigmodel.cn.evil.example.com/v1'), null)
   assert.equal(ws.webSearchTransportOf('http://127.0.0.1:8080/v1'), null)
@@ -31,7 +57,7 @@ test('传输判定:智谱走 chat tools,DeepSeek 走 Responses,其他一律不�
 test('联网总闸:开关开 + 端点支持才算开;开关关/端点不支持都是关', () => {
   assert.equal(
     ws.webSearchOnOf({ webSearch: true, baseUrl: 'https://api.deepseek.com/v1' }),
-    true,
+    false,
   )
   assert.equal(ws.webSearchOnOf({ webSearch: true, baseUrl: 'http://localhost:11434/v1' }), false)
   assert.equal(
@@ -122,4 +148,93 @@ test('config 清洗:webSearch 只认布尔 true,缺省回落 false', () => {
   assert.equal(weird.webSearch, false)
   const partial = configStore.sanitizePartial({ webSearch: true })
   assert.deepEqual(partial, { webSearch: true })
+})
+
+// ---------- Responses 降级链(重试 400/404/422 也必须降级,真故障原样上抛) ----------
+
+test('Responses 正常:一次带工具调用即返回', async () => {
+  const calls = []
+  const out = await ws.responsesWithDegrade({
+    sendResponses: async () => { calls.push('responses+tool'); return res(200, JSON.stringify({ output_text: '搜到的答案' })) },
+    sendChat: async () => { calls.push('chat'); return chatOk('x') },
+    readResponses: mkRead(ws.extractResponsesText),
+    readCompletion: readChat,
+  })
+  assert.equal(out, '搜到的答案')
+  assert.deepEqual(calls, ['responses+tool'])
+})
+
+test('带工具 400 → 去工具重试成功:共两次 Responses 调用,不碰普通聊天', async () => {
+  const calls = []
+  const out = await ws.responsesWithDegrade({
+    sendResponses: async (withTool) => {
+      calls.push(withTool ? 'responses+tool' : 'responses')
+      return withTool ? res(400, '{"msg":"bad tool"}') : res(200, JSON.stringify({ output_text: '无工具回复' }))
+    },
+    sendChat: async () => { calls.push('chat'); return chatOk('x') },
+    readResponses: mkRead(ws.extractResponsesText),
+    readCompletion: readChat,
+  })
+  assert.equal(out, '无工具回复')
+  assert.deepEqual(calls, ['responses+tool', 'responses'])
+})
+
+test('故障场景回归:去工具重试仍 400(路由存在但不认此模型)→ 降级普通聊天并带诚实提示', async () => {
+  const calls = []
+  const out = await ws.responsesWithDegrade({
+    sendResponses: async () => { calls.push('responses'); return res(400, '{"msg":"invalid model"}') },
+    sendChat: async (extraSystem) => { calls.push(['chat', extraSystem]); return chatOk('普通回复') },
+    readResponses: mkRead(ws.extractResponsesText),
+    readCompletion: readChat,
+  })
+  assert.equal(out, '普通回复')
+  assert.equal(calls.length, 3)
+  assert.equal(calls[2][0], 'chat')
+  assert.ok(calls[2][1].includes('没有检索能力'), '降级轮必须收回「能搜」承诺')
+})
+
+test('路由不存在(404)→ 同样降级普通聊天', async () => {
+  const out = await ws.responsesWithDegrade({
+    sendResponses: async () => res(404, 'Not Found'),
+    sendChat: async () => chatOk('降级回复'),
+    readResponses: mkRead(ws.extractResponsesText),
+    readCompletion: readChat,
+  })
+  assert.equal(out, '降级回复')
+})
+
+test('422 校验拒绝也属于参数类:降级而非失败', async () => {
+  const out = await ws.responsesWithDegrade({
+    sendResponses: async () => res(422, 'validation'),
+    sendChat: async () => chatOk('ok'),
+    readResponses: mkRead(ws.extractResponsesText),
+    readCompletion: readChat,
+  })
+  assert.equal(out, 'ok')
+})
+
+test('非参数类错误(401 鉴权)立即抛出:不重试不降级', async () => {
+  const calls = []
+  await assert.rejects(
+    () => ws.responsesWithDegrade({
+      sendResponses: async () => { calls.push('responses'); return res(401, 'auth') },
+      sendChat: async () => { calls.push('chat'); return chatOk('x') },
+      readResponses: mkRead(ws.extractResponsesText),
+      readCompletion: readChat,
+    }),
+    /API HTTP 401/,
+  )
+  assert.deepEqual(calls, ['responses'])
+})
+
+test('降级调用自身失败(如鉴权):真故障原样上抛', async () => {
+  await assert.rejects(
+    () => ws.responsesWithDegrade({
+      sendResponses: async () => res(404, 'nf'),
+      sendChat: async () => res(401, 'auth'),
+      readResponses: mkRead(ws.extractResponsesText),
+      readCompletion: readChat,
+    }),
+    /API HTTP 401/,
+  )
 })
