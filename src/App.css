@@ -4735,3 +4735,39 @@ body:has(.gal-page) {
 .chatp .tr-privacy {
   padding: 0 2px 2px;
 }
+
+/* ---------- 面板尺寸手柄(命令面板/翻译面板等浮层共用):右下角拖拽调宽高 ---------- */
+.panel-resize {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  width: 18px;
+  height: 18px;
+  cursor: nwse-resize;
+  touch-action: none;
+  z-index: 2;
+}
+.panel-resize::before {
+  content: '';
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 7px;
+  height: 7px;
+  border-right: 2px solid rgba(255, 255, 255, 0.3);
+  border-bottom: 2px solid rgba(255, 255, 255, 0.3);
+  border-bottom-right-radius: 3px;
+}
+.panel-resize:hover::before {
+  border-color: rgba(255, 255, 255, 0.62);
+}
+.light .panel-resize::before {
+  border-color: rgba(0, 0, 0, 0.3);
+}
+.light .panel-resize:hover::before {
+  border-color: rgba(0, 0, 0, 0.55);
+}
+/* 拖拽中禁正文选中,避免移动时满屏蓝底 */
+.panel-resizing {
+  user-select: none;
+}

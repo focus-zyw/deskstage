@@ -19,6 +19,7 @@ import { getConfig } from '../storage/configStore'
 import { loadAvatars } from '../storage/avatarStore'
 import { nameOf } from '../engine/persona'
 import { PANEL_ANCHOR } from '../ui/dockLayout'
+import { usePanelSize } from '../ui/panelSize'
 import type { ActorId } from '../groupChat/types'
 
 /** 外部直达:角色右键菜单「和TA聊天」(nonce 保证重复点击也生效) */
@@ -239,11 +240,12 @@ export function ChatPanel({ innerRef, pos, pinned, onPinChange, onClose, route, 
     })
   }
 
+  const { size, gripDown, resizing } = usePanelSize('chat', { w: 420, h: 460 })
   return (
     <div
       ref={innerRef}
-      className="tr-panel chatp"
-      style={{ left: `${pos.xPct}%`, top: pos.top + PANEL_ANCHOR }}
+      className={`tr-panel chatp${resizing ? ' panel-resizing' : ''}`}
+      style={{ left: `${pos.xPct}%`, top: pos.top + PANEL_ANCHOR, ...(size ? { width: size.w, height: size.h } : {}) }}
     >
       <div className="tr-head">
         {view.kind !== 'list' && (
@@ -355,6 +357,7 @@ export function ChatPanel({ innerRef, pos, pinned, onPinChange, onClose, route, 
       )}
 
       <div className="tr-privacy">文本会发送给各角色绑定的模型;密码、密钥等敏感内容请勿聊天</div>
+      <div className="panel-resize" title="拖拽调整面板大小" onPointerDown={gripDown} />
     </div>
   )
 }

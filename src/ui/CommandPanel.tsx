@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useConfigSnapshot, type CtrlBarPos } from '../storage/configStore'
 import { PANEL_ANCHOR } from '../ui/dockLayout'
+import { usePanelSize } from '../ui/panelSize'
 import { filterCommands, nlRoute, type Command, type NlRoute } from '../features/commands/commands'
 
 interface Props {
@@ -69,11 +70,12 @@ export function CommandPanel({ innerRef, pos, commands, onClose, onAddMemo, onPe
 
   const filtered = filterCommands(query, commands)
 
+  const { size, gripDown, resizing } = usePanelSize('command', { w: 430, h: 480 })
   return (
     <div
       ref={innerRef}
-      className={`settings-panel topic-panel cmd-panel${theme === 'light' ? ' light' : ''}`}
-      style={{ left: `${pos.xPct}%`, top: pos.top + PANEL_ANCHOR }}
+      className={`settings-panel topic-panel cmd-panel${theme === 'light' ? ' light' : ''}${resizing ? ' panel-resizing' : ''}`}
+      style={{ left: `${pos.xPct}%`, top: pos.top + PANEL_ANCHOR, ...(size ? { width: size.w, height: size.h } : {}) }}
     >
       <div className="panel-head">
         <span>你想让我们做什么？</span>
@@ -144,6 +146,7 @@ export function CommandPanel({ innerRef, pos, commands, onClose, onAddMemo, onPe
         ))}
       </div>
       <div className="tr-privacy">整句话按回车由当前模型路由到命令,会消耗一次调用</div>
+      <div className="panel-resize" title="拖拽调整面板大小" onPointerDown={gripDown} />
     </div>
   )
 }

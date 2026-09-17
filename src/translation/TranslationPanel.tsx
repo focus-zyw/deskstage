@@ -12,6 +12,7 @@ import { useEffect, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { DEFAULT_CONFIG, getConfig, saveConfig, type CtrlBarPos, type TranslationConfig } from '../storage/configStore'
 import { describeLlmError } from '../engine/llmClient'
+import { usePanelSize } from '../ui/panelSize'
 import { speak, stopSpeaking } from '../engine/tts'
 import { translate, MAX_INPUT_CHARS } from './translator'
 import { LANGUAGES, STYLE_LABEL, langLabel, type TranslationResult, type TranslationStyle } from './types'
@@ -57,6 +58,8 @@ export function TranslationPanel({
 }: Props) {
   const [cfg, setCfg] = useState<TranslationConfig>(DEFAULT_CONFIG.translation)
   const [input, setInput] = useState('')
+  // 面板尺寸(右下角手柄拖拽调整,localStorage 记忆)
+  const { size, gripDown, resizing } = usePanelSize('translation', { w: 420, h: 380 })
   const [result, setResult] = useState<TranslationResult | null>(null)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
@@ -243,8 +246,8 @@ export function TranslationPanel({
   return (
     <div
       ref={innerRef}
-      className="tr-panel"
-      style={{ left: `${pos.xPct}%`, top: pos.top + PANEL_ANCHOR }}
+      className={`tr-panel${resizing ? ' panel-resizing' : ''}`}
+      style={{ left: `${pos.xPct}%`, top: pos.top + PANEL_ANCHOR, ...(size ? { width: size.w, height: size.h } : {}) }}
     >
       <div className="tr-head">
         <span className="tr-title">翻译</span>
@@ -317,9 +320,16 @@ export function TranslationPanel({
         className="tr-input"
         rows={4}
         maxLength={MAX_INPUT_CHARS}
-        placeholder="在这里输入或粘贴…(Ctrl+V,最多 6000 字)"
+        placeholder="在这里输入或粘贴…(Ctrl+V,最多 6000 字;Enter 翻译,Shift+Enter 换行)"
         value={input}
         onChange={(e) => setInput(e.target.value)}
+        onKeyDown={(e) => {
+          // Enter 直接翻译;Shift+Enter 保留换行输入
+          if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+            e.preventDefault()
+            void run()
+          }
+        }}
       />
       <div className="tr-actions">
         {busy ? (
@@ -401,6 +411,7 @@ export function TranslationPanel({
         </label>
         <span className="tr-privacy">文本会发送给当前配置的模型厂商;勿翻译密码密钥</span>
       </div>
+      <div className="panel-resize" title="拖拽调整面板大小" onPointerDown={gripDown} />
     </div>
   )
 }
