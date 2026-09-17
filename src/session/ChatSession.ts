@@ -82,6 +82,10 @@ export interface ChatSession {
   getSnapshot(): ChatSnapshot
   subscribe(listener: () => void): () => void
   whenIdle(): Promise<void>
+  /** 自发闲聊台词落记忆(docs/自发闲聊记忆闭环设计方案.md):chatlog 镜像(面板
+   *  可见 + 生命周期 warm)+ journal 环境注入(批次上下文可见,不依赖任何开关)。
+   *  只认角色槽位;单聊房间无「他们自己聊」语义,no-op */
+  noteAmbient(lines: Array<{ who: ChatWho; text: string }>): void
 }
 
 /** 测试/特殊宿主注入:配置来源、模型适配、时钟、现成旧会话 */
@@ -487,6 +491,39 @@ export function createChatSession(
     void contextLifecycle.observeTurn({ id: turnId ?? '', who: 'user', text, ts }).catch(() => {})
   }
 
+  /** 自发闲聊落记忆(docs/自发闲聊记忆闭环设计方案.md):chatlog 镜像让面板可见
+   *  + 生命周期折算进 warm;journal 环境注入让后续批次上下文可见(静止点才接受,
+   *  拒绝时 chatlog 已镜像,重启引导自然补上)。单聊房间无「他们自己聊」语义 */
+  function noteAmbient(lines: Array<{ who: ChatWho; text: string }>): void {
+    const clean = lines
+      .map((l) => ({ who: l.who, text: String(l.text ?? '').trim() }))
+      .filter((l) => (l.who === 'A' || l.who === 'B' || l.who === 'C') && l.text)
+    if (clean.length === 0 || directMode) return
+    const ts = Date.now()
+    void appendChatTurns(
+      clean.map((l) => ({
+        who: l.who,
+        text: l.text,
+        id: newTurnId(),
+        ts,
+        sessionId: GROUP_SESSION_ID,
+      })),
+    )
+    if (configCache?.contextLifecycle === true) {
+      for (const l of clean) {
+        void contextLifecycle
+          .observeTurn({ id: newTurnId(), who: l.who, text: l.text, ts })
+          .catch(() => {})
+      }
+    }
+    if (getConfigSnapshot().groupChatActors.engine === 'legacy') return
+    try {
+      runtimeOf().injectAmbient(clean.map((l) => ({ author: l.who as ActorId, text: l.text })))
+    } catch {
+      // runtime 未就绪(极少):注入放弃即可,chatlog 镜像已在,重启引导自然补上
+    }
+  }
+
   return {
     async send(raw: string, opts2: SendOptions = {}): Promise<SendResult> {
       const text = raw.trim()
@@ -738,6 +775,8 @@ export function createChatSession(
       if (mode === 'actors' && runtime) return runtime.whenQuiescent()
       return Promise.resolve()
     },
+
+    noteAmbient,
   }
 
   /** 演出插话路径的轻量 @解析(名字/甲乙丙/A B/C;无 @ 甲乙轮换语义由旧链路负责) */

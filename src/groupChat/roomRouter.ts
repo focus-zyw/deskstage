@@ -92,6 +92,11 @@ export interface RoomRouter {
     meta?: CommitMeta,
   ): Promise<CommitResult>
 
+  /** 环境消息注入(自发闲聊落 journal,docs/自发闲聊记忆闭环设计方案.md):
+   *  只在全员静止点(零未读且无在飞批次)接受——追加后全员游标推尾,台词成为
+   *  后续批次上下文(readTail)的事实源但绝不触发投递;拒绝时返回 false */
+  injectAmbient(lines: Array<{ author: ActorId; text: string }>): boolean
+
   /** 当前活跃链(最新用户消息的因果链;供 maySpeak 提示与 clarify 语义) */
   activeChain(): ConversationChainState | null
   chainOf(rootMessageId: string): ConversationChainState | null
@@ -250,6 +255,40 @@ export function createRoomRouter(opts: RoomRouterOpts): RoomRouter {
         cursorsBy[id].ackedThrough = tail
         cursorsBy[id].deliveredThrough = tail
       }
+    },
+
+    injectAmbient(lines) {
+      if (paused) return false
+      const clean = lines
+        .map((l) => ({ author: l.author, text: String(l.text ?? '').trim() }))
+        .filter((l) => (l.author === 'A' || l.author === 'B' || l.author === 'C') && l.text)
+      if (clean.length === 0) return false
+      // 安全闸:任一可用角色有未读或在飞批次(delivered > acked)时整体放弃——
+      // 游标推尾会吞掉真未读;在飞 ACK 又会无条件写回 batch.throughSeq 把游标拉回
+      for (const id of ids) {
+        if (opts.configs()[id].binding.kind === 'disabled') continue
+        if (cursorsBy[id].deliveredThrough > cursorsBy[id].ackedThrough) return false
+        if (unreadCountOf(id) > 0) return false
+      }
+      for (const l of clean) {
+        // 自根环境消息:不建因果链、不进预算,depth 0 与用户消息同级
+        const msg = journal.append({
+          author: l.author,
+          kind: 'chat',
+          text: l.text,
+          epoch,
+          causalRootId: '',
+          depth: 0,
+          replyTo: [],
+        })
+        msg.causalRootId = msg.id
+      }
+      const tail = journal.maxSeq()
+      for (const id of ids) {
+        cursorsBy[id].ackedThrough = tail
+        cursorsBy[id].deliveredThrough = tail
+      }
+      return true
     },
 
     reset() {

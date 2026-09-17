@@ -127,6 +127,9 @@ export interface GroupChatRuntime {
   /** 宿主播放管线占用闸(TTS 队列非空时持有)——静止谓词包含它 */
   presentationHold(): () => void
   journal(): RoomJournal
+  /** 环境消息注入(自发闲聊,docs/自发闲聊记忆闭环设计方案.md):转发
+   *  roomRouter.injectAmbient,静止点才接受(返回 false = 有未读/在飞/已暂停) */
+  injectAmbient(lines: Array<{ author: ActorId; text: string }>): boolean
   dispose(): Promise<void>
 }
 
@@ -409,6 +412,8 @@ export function createGroupChatRuntime(deps: GroupChatDeps): GroupChatRuntime {
     },
 
     journal: () => journal,
+
+    injectAmbient: (lines) => router.injectAmbient(lines),
 
     async dispose(): Promise<void> {
       if (disposed) return

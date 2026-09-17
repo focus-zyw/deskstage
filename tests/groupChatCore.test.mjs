@@ -465,3 +465,70 @@ test('dispose 后 sendUser 明确返回 backpressure(不伪装 accepted)', async
   await rt.dispose()
   assert.equal(await rt.sendUser('还有人吗'), 'backpressure')
 })
+
+// ---------- 环境消息注入(自发闲聊落 journal,docs/自发闲聊记忆闭环设计方案.md) ----------
+
+test('injectAmbient:静止点接受——全员游标推尾、零未读、journal 可见但不产生批次', () => {
+  const clock = makeClock()
+  const { router, journal } = makeRouter(clock)
+  assert.equal(
+    router.injectAmbient([
+      { author: 'A', text: '今天天气真好啊' },
+      { author: 'B', text: '是啊,想出去走走' },
+    ]),
+    true,
+  )
+  const ambient = journal.list().filter((m) => m.kind === 'chat')
+  assert.equal(ambient.length, 2)
+  assert.equal(ambient[0].author, 'A')
+  // 自根环境消息:不建因果链,causalRootId 指向自身
+  assert.equal(ambient[0].causalRootId, ambient[0].id)
+  assert.equal(ambient[0].depth, 0)
+  for (const id of ['A', 'B', 'C']) {
+    assert.equal(router.unreadCount(id), 0, '环境消息对所有人都不是未读')
+    assert.equal(router.nextBatchInfo(id, clock.now()).status, 'empty', '绝不触发投递')
+  }
+  // 后续批次只含新用户消息(环境消息已 ACK,绝不入批),但 journal 尾部留有原文
+  userSay(router, '在吗')
+  const info = router.nextBatchInfo('A', clock.now())
+  assert.equal(info.status, 'ready')
+  assert.deepEqual(
+    info.batch.messages.map((m) => m.text),
+    ['在吗'],
+    '环境消息已 ACK,绝不混入批次',
+  )
+  assert.ok(
+    journal.list().some((m) => m.text === '今天天气真好啊'),
+    'journal 尾部留有环境消息原文(后续批次 readTail 的事实源)',
+  )
+})
+
+test('injectAmbient:有未读或在飞批次时整体拒绝(绝不吞真未读/不被 ACK 拉回游标)', () => {
+  const clock = makeClock()
+  const { router } = makeRouter(clock)
+  userSay(router, '未读消息')
+  assert.equal(router.injectAmbient([{ author: 'A', text: '插一句' }]), false, '有未读拒绝')
+  assert.equal(router.unreadCount('B'), 1, '拒绝路径不动任何状态')
+  // 在飞批次:delivered > acked
+  const clock2 = makeClock()
+  const { router: router2, journal } = makeRouter(clock2)
+  userSay(router2, '第一条')
+  const info = router2.nextBatchInfo('A', clock2.now())
+  assert.equal(info.status, 'ready', '批次投递即 in-flight')
+  assert.equal(router2.injectAmbient([{ author: 'B', text: '插一句' }]), false, '在飞拒绝')
+  assert.equal(journal.list().filter((m) => m.author !== 'user').length, 0, '拒绝时零写入')
+})
+
+test('injectAmbient:paused/空台词拒绝;接受后重启游标对齐不受影响', () => {
+  const clock = makeClock()
+  const { router, journal } = makeRouter(clock)
+  assert.equal(router.injectAmbient([{ author: 'A', text: '   ' }]), false, '空台词拒绝')
+  assert.equal(router.injectAmbient([{ author: 'user', text: '不行' }]), false, '只认角色槽位')
+  router.pause()
+  assert.equal(router.injectAmbient([{ author: 'A', text: '暂停中' }]), false, 'paused 拒绝')
+  router.resume()
+  assert.equal(router.injectAmbient([{ author: 'B', text: '恢复后可以说' }]), true)
+  router.alignCursorsToTail()
+  assert.equal(router.unreadCount('A'), 0, '重启游标对齐后依然零未读')
+  assert.ok(journal.maxSeq() >= 1)
+})

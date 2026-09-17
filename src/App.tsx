@@ -483,11 +483,15 @@ function App() {
     say: presenterSay,
   } = useActorPresenter()
 
+  /** 闲聊落记忆转发:chatSession 在组件后段创建,经 ref 取最新(永远可用) */
+  const noteAmbientRef = useRef((_lines: Array<{ who: Speaker; text: string }>) => {})
+
   // 演出导演:生成/回放/选边/停止/主动行为演出的唯一归属(逐句呈现委托给呈现器)
   const director = usePerformanceDirector({
     presenter: { say: presenterSay, showTalk, hush, endLine, settle, reset: resetStage, setPose },
     isIdle: () => phaseRef.current === 'idle',
     onLive: () => startStreaming(),
+    noteAmbient: (lines) => noteAmbientRef.current(lines),
     teardown: () => {
       liveStopRef.current?.()
       void loadLiveModule().then((m) => m.stopLiveSession())
@@ -1114,6 +1118,9 @@ function App() {
   const presenterPoseRef = useRef(presenterPose)
   useEffect(() => {
     presenterPoseRef.current = presenterPose
+  })
+  useEffect(() => {
+    noteAmbientRef.current = (lines) => chatSession.noteAmbient(lines)
   })
   /** 单聊面板回复的情绪动作反应:面板零气泡零 TTS 不变,只让角色做个表情一拍。
    *  稳定引用(会话惰性首建时生效,重建不换) */

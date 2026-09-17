@@ -90,6 +90,9 @@ export interface PerformanceDirectorDeps {
   onEpisodeEnd?(info: { eid: string; mode: Mode; topic: string; plan?: TopicPlan }): void
   /** 到点备忘扫描(调度器每 tick 调,幂等) */
   sweepMemos(): Promise<void>
+  /** 闲聊台词落记忆(docs/自发闲聊记忆闭环设计方案.md):问候/自发闲聊播出后
+   *  由宿主镜像 chatlog 并注入 journal——后续自由聊天才「真能聊起上次的事」 */
+  noteAmbient?(lines: Array<{ who: Speaker; text: string }>): void
 }
 
 /** 点播请求:一次性话题/点卡/会话动作/跳跃距离/持续时间(缺省走导演自动决策) */
@@ -440,6 +443,9 @@ export function usePerformanceDirector(deps: PerformanceDirectorDeps) {
       player.current!.play(lines, { gap: 700 })
       if (opts.history) dialogue.commitShortChat(lines)
     }, 900)
+    // 闲聊落记忆(docs/自发闲聊记忆闭环设计方案.md):台词进 journal/chatlog,
+    // 后续自由聊天才「真能聊起上次的事」;久坐/备忘/重放不走本函数,天然不在列
+    deps.noteAmbient?.(lines.map((l) => ({ who: l.speaker, text: l.text })))
   }
 
   /** 自发短聊天:调度器闸门(空闲时长/冷却/配额/勿扰)已过,这里只做最后防御检查与执行。返回是否真的播了 */
