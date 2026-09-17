@@ -15,6 +15,8 @@ export interface CardLoreEntry {
   priority: number
   enabled: boolean
   comment?: string
+  /** 本地化生成的中文别名(keys = 原文 + 别名;留档与未来世界书检索用) */
+  aliases?: string[]
 }
 
 export interface RawCard {

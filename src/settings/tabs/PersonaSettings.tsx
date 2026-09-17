@@ -1,14 +1,22 @@
-// 角色人设:角色名字(名牌与台词称呼)、性别(代词事实源)、酒馆角色卡导入与人设全文编辑
+// 角色人设:角色库统一管理(名字/性别/人设)、A/B/C 槽位绑定与酒馆角色卡导入。
+// 内置甲/乙/丙入库为内置条目:persona 留空跟随内置模板,编辑人设即固化(custom)。
 import { useEffect, useState } from 'react'
 import { defaultPersonaText } from '../../engine/persona'
-import type { AppConfig } from '../../storage/configStore'
 import { quantizeMood, type MoodTable } from '../../engine/moodState'
 import { getMoods, resetMoods } from '../../storage/moodStore'
 import type { Speaker } from '../../performer/dialogSchema'
-import { useConfigSnapshot } from '../../storage/configStore'
+import { getConfig, useConfigSnapshot } from '../../storage/configStore'
 import { importCharacterCard } from '../../cardImport'
+import {
+  deleteCharacter,
+  ensureSeeded,
+  listCharacters,
+  saveCharacter,
+  type CharacterDef,
+} from '../../storage/charactersStore'
+import { buildBindingPatch, occupiedByElse, slotsBoundTo, type SlotKey } from '../../characters/bind'
 import { useSettings } from '../useSettingsSession'
-import { SettingsCard, SetField, SetLine } from '../SettingsPrimitives'
+import { SettingsCard, SetField, SetLine, SetSwitch } from '../SettingsPrimitives'
 
 
 /** 当前心情卡:展示三位角色的情绪余波(剧情蒸馏/被戳/掐断演出驱动),支持一键复位 */
@@ -65,7 +73,8 @@ function ImportCardCard() {
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState('')
   const [error, setError] = useState('')
-  const [pending, setPending] = useState<{ slot: 'a' | 'b'; personaText: string; name: string; fullName: string; warnings: string[] } | null>(null)
+  const [localizeOn, setLocalizeOn] = useState(true)
+  const [pending, setPending] = useState<{ slot: 'a' | 'b'; personaText: string; name: string; fullName: string; warnings: string[]; localized: boolean; card: { spec: string; creator?: string; characterVersion?: string } } | null>(null)
 
   async function onPickFile(file: File | null) {
     setError('')
@@ -78,12 +87,12 @@ function ImportCardCard() {
       const input = isJson
         ? { jsonText: await file.text() }
         : { bytes: new Uint8Array(await file.arrayBuffer()) }
-      const preview = await importCharacterCard(input, 'a', form.userProfile?.userName ?? '')
+      const preview = await importCharacterCard(input, 'a', form.userProfile?.userName ?? '', { localize: localizeOn })
       if (!preview.ok) {
         setError(preview.error ?? '解析失败')
         return
       }
-      setPending({ slot: 'a', personaText: preview.personaText!, name: preview.name!, fullName: preview.fullName!, warnings: preview.warnings ?? [] })
+      setPending({ slot: 'a', personaText: preview.personaText!, name: preview.name!, fullName: preview.fullName!, warnings: preview.warnings ?? [], localized: preview.localized === true, card: preview.card! })
     } catch (e) {
       setError(`读取文件失败:${String((e as Error)?.message ?? e).slice(0, 100)}`)
     } finally {
@@ -91,15 +100,36 @@ function ImportCardCard() {
     }
   }
 
-  function confirmImport() {
+  async function confirmImport() {
     if (!pending) return
-    const persona = { ...form.persona, [pending.slot]: pending.personaText }
-    const personaSource: AppConfig['personaSource'] = { ...form.personaSource, [pending.slot]: 'custom' }
-    const names2 = { ...form.names, [pending.slot]: pending.name }
-    setForm({ ...form, persona, personaSource, names: names2 })
-    saveField({ persona, personaSource, names: names2 }, true)
-    setNote(`已导入「${pending.fullName}」到角色${pending.slot.toUpperCase()}:人设分区烘焙完成,性别请在上方自行设置`)
     setPending(null)
+    try {
+      // 导入即入库:角色进角色库,槽位经投影绑定(bind 是"谁在槽上"的事实指针)
+      const ch = await saveCharacter({
+        name: pending.name,
+        gender: '女', // 卡规格无性别字段,默认女,导入后请自行调整
+        persona: pending.personaText,
+        source: 'card',
+        card: pending.card,
+      })
+      const patch = buildBindingPatch(
+        pending.slot,
+        { id: ch.id, name: ch.name, gender: ch.gender, persona: ch.persona },
+        {
+          names: form.names,
+          genders: form.genders,
+          persona: form.persona,
+          personaSource: form.personaSource,
+          slotBindings: form.slotBindings,
+        },
+      )
+      setForm({ ...form, ...patch })
+      saveField(patch, true)
+      const localizedNote = pending.localized ? ';非中文内容已本地化为中文' : ''
+      setNote(`已导入「${pending.fullName}」到角色${pending.slot.toUpperCase()}并入库:人设分区烘焙完成${localizedNote},性别请在上方自行调整`)
+    } catch (e) {
+      setError(`入库失败:${String((e as Error)?.message ?? e).slice(0, 100)}`)
+    }
   }
 
   return (
@@ -116,9 +146,22 @@ function ImportCardCard() {
           }}
         />
       </SetField>
+      <SetLine
+        title="非中文内容自动本地化为中文"
+        hint="检测到外语卡时调用主模型做语义本地化(设定/开场白/对话示例/世界书正文,世界书关键词保留原文+中文别名);关闭则按原文导入"
+      >
+        <SetSwitch
+          checked={localizeOn}
+          label="非中文内容自动本地化为中文"
+          onChange={(v) => {
+            setLocalizeOn(v)
+          }}
+        />
+      </SetLine>
+      {busy && <div className="set-note">解析中…(若包含外语内容,本地化可能需要数十秒)</div>}
       {pending && (
         <>
-          <SetLine title={`解析成功:${pending.fullName}`} hint={`烘焙后人设 ${pending.personaText.length} 字`}>
+          <SetLine title={`解析成功:${pending.fullName}`} hint={`烘焙后人设 ${pending.personaText.length} 字${pending.localized ? ';已本地化为中文' : ''}`}>
             <span className="set-note">{pending.warnings.length ? pending.warnings.join(';') : '无截断,全部字段装入'}</span>
           </SetLine>
           <SetField label="导入到哪个角色" htmlFor="cfg-card-slot">
@@ -132,7 +175,7 @@ function ImportCardCard() {
             </select>
           </SetField>
           <div className="set-actions">
-            <button className="panel-btn" onClick={confirmImport}>
+            <button className="panel-btn" disabled={busy} onClick={() => void confirmImport()}>
               确认导入
             </button>
           </div>
@@ -148,145 +191,256 @@ function ImportCardCard() {
   )
 }
 
-export function PersonaSettings() {
+/** 角色管理卡:角色库(新增/编辑/删除)+ A/B/C 槽位手动绑定。
+ *  角色库是事实源,绑定 = 把角色字段投影进槽位配置(bind.ts),解绑 = 投影空值
+ *  (空名回甲/乙/丙、空人设回内置、personaSource='default'),生成管线零改动 */
+function CharacterManagerCard() {
   const { form, setForm, saveField, flashCard } = useSettings()
-
-  /** 保存单槽位人设:非空文本 = custom;清空 = 恢复内置默认(default)。
-   *  来源是结构化事实,与文本一起原子保存(话题包门控按来源判断) */
-  function savePersona(slot: 'a' | 'b' | 'c', value: string) {
-    const persona = { ...form.persona, [slot]: value }
-    const personaSource: AppConfig['personaSource'] = {
-      ...form.personaSource,
-      [slot]: value.trim() ? 'custom' : 'default',
-    }
-    setForm({ ...form, persona, personaSource })
-    saveField({ persona, personaSource })
-  }
-  // 名字标签用已保存的生效名(提交后才换称呼),与名牌/台词一致
   const names = useConfigSnapshot().names
+  const [roster, setRoster] = useState<CharacterDef[]>([])
+  const [editing, setEditing] = useState<{ id?: string; name: string; gender: '女' | '男'; persona: string } | null>(null)
+  const [note, setNote] = useState('')
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
 
-  /** 改某角色性别:即存,代词纪律立即生效(建议与语音音色性别一致,听感更自然) */
-  function setGender(slot: 'a' | 'b' | 'c', v: '女' | '男') {
-    const next = { ...form.genders, [slot]: v }
-    setForm({ ...form, genders: next })
-    saveField({ genders: next }, true)
+  async function refresh() {
+    setRoster(await listCharacters())
   }
 
-  const genderRow = (slot: 'a' | 'b' | 'c', label: string) => (
-    <SetLine title={label} hint="台词的他/她严格按此;建议与角色语音音色的性别一致">
-      <div className="seg-group">
-        {(['女', '男'] as const).map((g) => (
-          <button key={g} className={`seg-btn${form.genders[slot] === g ? ' on' : ''}`} onClick={() => setGender(slot, g)}>
-            {g}
-          </button>
-        ))}
-      </div>
-    </SetLine>
-  )
+  // 打开本页:种内置角色(甲/乙/丙入库,老用户自定义无损固化)+ 绑定指针补种
+  // (三槽都空 = 尚未初始化,一次 saveField 把三槽投影到各自内置条目)
+  useEffect(() => {
+    void (async () => {
+      const cfg = await getConfig()
+      await ensureSeeded(cfg)
+      const rosterNow = await listCharacters()
+      setRoster(rosterNow)
+      const cur = await getConfig()
+      if (cur.slotBindings.a || cur.slotBindings.b || cur.slotBindings.c) return
+      const builtins = rosterNow.filter((c) => c.builtin)
+      if (builtins.length < 3) return
+      let names = { ...cur.names }
+      let genders = { ...cur.genders }
+      let persona = { ...cur.persona }
+      let personaSource = { ...cur.personaSource }
+      let sb = { ...cur.slotBindings }
+      for (const s of ['a', 'b', 'c'] as const) {
+        const char = builtins.find((c) => c.builtin === s)!
+        const patch = buildBindingPatch(s, { id: char.id, name: char.name, gender: char.gender, persona: char.persona }, {
+          names, genders, persona, personaSource, slotBindings: sb,
+        })
+        names = patch.names!
+        genders = patch.genders!
+        persona = patch.persona!
+        personaSource = patch.personaSource!
+        sb = patch.slotBindings!
+      }
+      const finalPatch = { names, genders, persona, personaSource, slotBindings: sb }
+      setForm((f) => ({ ...f, ...finalPatch }))
+      saveField(finalPatch, true)
+      // 打开页只执行一次:session 的 setForm/saveField 身份稳定,依赖数组保持 []
+    })()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  /** 绑定/解绑某槽:投影五字段原子保存 */
+  function applyBinding(slot: SlotKey, char: { id: string; name: string; gender: '女' | '男'; persona: string } | null) {
+    const patch = buildBindingPatch(slot, char, {
+      names: form.names,
+      genders: form.genders,
+      persona: form.persona,
+      personaSource: form.personaSource,
+      slotBindings: form.slotBindings,
+    })
+    setForm({ ...form, ...patch })
+    saveField(patch, true)
+  }
+
+  /** 已绑定角色的所有槽重投影(编辑保存后调用) */
+  function reproject(id: string, char: { id: string; name: string; gender: '女' | '男'; persona: string }) {
+    const slots = slotsBoundTo(form.slotBindings, id)
+    if (slots.length === 0) return
+    const merged: Record<string, unknown> = {}
+    for (const s of slots) {
+      const patch = buildBindingPatch(s, char, {
+        names: form.names,
+        genders: form.genders,
+        persona: form.persona,
+        personaSource: form.personaSource,
+        slotBindings: form.slotBindings,
+      })
+      for (const [k, v] of Object.entries(patch)) merged[k] = { ...(merged[k] as object ?? {}), ...(v as object) }
+    }
+    setForm({ ...form, ...merged } as typeof form)
+    saveField(merged as Parameters<typeof saveField>[0], true)
+  }
+
+  async function onSaveCharacter() {
+    if (!editing) return
+    setBusy(true)
+    setError('')
+    try {
+      const saved = await saveCharacter({ ...editing })
+      reproject(saved.id, { id: saved.id, name: saved.name, gender: saved.gender, persona: saved.persona })
+      setNote(`角色「${saved.name}」已保存${slotsBoundTo(form.slotBindings, saved.id).length > 0 ? ',绑定槽位同步更新' : ''}`)
+      setEditing(null)
+      await refresh()
+    } catch (e) {
+      setError(String((e as Error)?.message ?? e).slice(0, 120))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function onDelete(id: string) {
+    const char = roster.find((c) => c.id === id)
+    if (!char) return
+    const bound = slotsBoundTo(form.slotBindings, id)
+    if (!window.confirm(`删除角色「${char.name}」?${bound.length > 0 ? `其绑定的槽位(${bound.map((s) => s.toUpperCase()).join('/')})将还原默认角色。` : ''}`)) return
+    setBusy(true)
+    setError('')
+    try {
+      for (const s of bound) applyBinding(s, null) // 先解绑(投影空值还原默认)
+      await deleteCharacter(id)
+      setNote(`角色「${char.name}」已删除`)
+      await refresh()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const slotRow = (slot: SlotKey) => {
+    const boundId = form.slotBindings?.[slot] ?? null
+    const builtinName = slot === 'a' ? '甲' : slot === 'b' ? '乙' : '丙'
+    return (
+      <SetField
+        label={`角色${slot.toUpperCase()}(${names[slot]})绑定`}
+        htmlFor={`cfg-bind-${slot}`}
+        hint={slot === 'c' ? 'C 有固定小管家台词与动作,绑定后仅人设/称呼生效' : undefined}
+      >
+        <select
+          id={`cfg-bind-${slot}`}
+          value={boundId ?? ''}
+          onChange={(e) => {
+            const id = e.target.value || null
+            const char = id ? roster.find((c) => c.id === id) : null
+            applyBinding(slot, char ? { id: char.id, name: char.name, gender: char.gender, persona: char.persona } : null)
+          }}
+        >
+          <option value="">内置默认({builtinName})</option>
+          {roster.map((c) => {
+            const occ = occupiedByElse(form.slotBindings, c.id, slot)
+            return (
+              <option key={c.id} value={c.id}>
+                {c.name}
+                {occ ? `(已绑定${occ.toUpperCase()})` : ''}
+              </option>
+            )
+          })}
+        </select>
+      </SetField>
+    )
+  }
+
+  const boundLabel = (id: string): string => {
+    const slots = slotsBoundTo(form.slotBindings, id)
+    return slots.length > 0 ? `绑定:${slots.map((s) => s.toUpperCase()).join('/')}` : '未绑定'
+  }
 
   return (
-    <>
-      <SettingsCard card="角色名字" flash={flashCard} title="角色名字" desc="名牌与台词称呼">
-        <SetField label="角色A的名字" htmlFor="cfg-name-a">
-          <input
-            id="cfg-name-a"
-            value={form.names.a}
-            maxLength={12}
-            onChange={(e) => {
-              const next = { ...form.names, a: e.target.value }
-              setForm({ ...form, names: next })
-              saveField({ names: next })
-            }}
-          />
-        </SetField>
-        <SetField label="角色B的名字" htmlFor="cfg-name-b">
-          <input
-            id="cfg-name-b"
-            value={form.names.b}
-            maxLength={12}
-            onChange={(e) => {
-              const next = { ...form.names, b: e.target.value }
-              setForm({ ...form, names: next })
-              saveField({ names: next })
-            }}
-          />
-        </SetField>
-        <SetField label="角色C的名字" htmlFor="cfg-name-c" hint="常驻小管家的称呼">
-          <input
-            id="cfg-name-c"
-            value={form.names.c}
-            maxLength={12}
-            onChange={(e) => {
-              const next = { ...form.names, c: e.target.value }
-              setForm({ ...form, names: next })
-              saveField({ names: next })
-            }}
-          />
-        </SetField>
-      </SettingsCard>
-      <SettingsCard card="角色性别" flash={flashCard} title="角色性别" desc="台词他/她的唯一依据">
-        {genderRow('a', `角色A(${names.a})的性别`)}
-        {genderRow('b', `角色B(${names.b})的性别`)}
-        {genderRow('c', `角色C(${names.c})的性别`)}
-        <div className="set-note">生成时会以这里的性别注入称呼纪律,人设文本里的性别描述不覆盖此项。</div>
-      </SettingsCard>
-      <ImportCardCard />
-      <SettingsCard
-        card="角色人设"
-        flash={flashCard}
-        title="角色人设"
-        desc="自由编辑,输入后自动保存并采纳"
-      >
-        <SetField
-          label={`${names.a} 的人设`}
-          htmlFor="cfg-persona-a"
-          hint="性别/职业/性格/日常素材,自由发挥"
-        >
-          <textarea
-            id="cfg-persona-a"
-            rows={4}
-            maxLength={8000}
-            value={form.persona.a || defaultPersonaText('A')}
-            onChange={(e) => savePersona('a', e.target.value)}
-          />
-        </SetField>
-        <SetField label={`${names.b} 的人设`} htmlFor="cfg-persona-b">
-          <textarea
-            id="cfg-persona-b"
-            rows={4}
-            maxLength={8000}
-            value={form.persona.b || defaultPersonaText('B')}
-            onChange={(e) => savePersona('b', e.target.value)}
-          />
-        </SetField>
-        <SetField
-          label={`${names.c} 的人设`}
-          htmlFor="cfg-persona-c"
-          hint="常驻第三角色;她按字面理解并立刻执行"
-        >
-          <textarea
-            id="cfg-persona-c"
-            rows={4}
-            maxLength={8000}
-            value={form.persona.c || defaultPersonaText('C')}
-            onChange={(e) => savePersona('c', e.target.value)}
-          />
-        </SetField>
-        <div className="set-actions">
-          <span className="set-note">清空输入框 = 恢复该角色的内置人设</span>
-          <button
-            className="panel-btn"
-            onClick={() => {
-              const persona = { a: '', b: '', c: '' }
-              const personaSource: AppConfig['personaSource'] = { a: 'default', b: 'default', c: 'default' }
-              setForm({ ...form, persona, personaSource })
-              saveField({ persona, personaSource }, true)
-            }}
-          >
-            还原默认人设
+    <SettingsCard card="角色管理" flash={flashCard} title="角色管理" desc="角色库与 A/B/C 槽位绑定;绑定即投影为人设,解绑还原默认">
+      {slotRow('a')}
+      {slotRow('b')}
+      {slotRow('c')}
+      <div className="set-actions">
+        <span className="set-note">
+          库中 {roster.length} 个角色;酒馆卡导入会自动入库。绑定生效 = 名字/性别/人设投影到槽位,
+          语音、立绘(工坊)、怪癖仍按槽位独立配置。
+        </span>
+        <button className="panel-btn" onClick={() => setEditing({ name: '', gender: '女', persona: '' })}>
+          新增角色
+        </button>
+      </div>
+      {note && <div className="set-note">{note}</div>}
+      {error && <div className="set-note">{error}</div>}
+      {roster.map((c) => (
+        <div className="mem-fact" key={c.id}>
+          <span className="mem-cat">{c.builtin ? '内置' : c.source === 'card' ? '角色卡' : '手动'}</span>
+          <span className="mem-content">
+            {c.name}({boundLabel(c.id)}
+            {c.card ? `;来源:${c.card.spec}` : ''})
+          </span>
+          <button className="mem-btn" onClick={() => setEditing({ id: c.id, name: c.name, gender: c.gender, persona: c.persona })}>
+            编辑
           </button>
+          {!c.builtin && (
+            <button className="mem-btn" disabled={busy} onClick={() => void onDelete(c.id)}>
+              删除
+            </button>
+          )}
         </div>
-      </SettingsCard>
+      ))}
+      {editing && (
+        <div className="mem-fact" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 8 }}>
+          <SetField label="角色名(≤12 字)" htmlFor="cfg-char-name">
+            <input
+              id="cfg-char-name"
+              value={editing.name}
+              maxLength={12}
+              onChange={(e) => setEditing({ ...editing, name: e.target.value })}
+            />
+          </SetField>
+          <SetLine title="性别">
+            <div className="seg-group">
+              {(['女', '男'] as const).map((g) => (
+                <button key={g} className={`seg-btn${editing.gender === g ? ' on' : ''}`} onClick={() => setEditing({ ...editing, gender: g })}>
+                  {g}
+                </button>
+              ))}
+            </div>
+          </SetLine>
+          <SetField
+            label="人设"
+            htmlFor="cfg-char-persona"
+            hint={
+              editing.id && roster.find((c) => c.id === editing.id)?.builtin
+                ? '内置角色:留空 = 跟随内置模板(改名自动同步);输入内容即固化为自定义'
+                : undefined
+            }
+          >
+            <textarea
+              id="cfg-char-persona"
+              rows={4}
+              maxLength={8000}
+              placeholder={
+                editing.id && roster.find((c) => c.id === editing.id)?.builtin
+                  ? defaultPersonaText((roster.find((c) => c.id === editing.id)!.builtin!.toUpperCase()) as 'A' | 'B' | 'C')
+                  : undefined
+              }
+              value={editing.persona}
+              onChange={(e) => setEditing({ ...editing, persona: e.target.value })}
+            />
+          </SetField>
+          <div className="set-actions">
+            <button className="panel-btn" disabled={busy || !editing.name.trim()} onClick={() => void onSaveCharacter()}>
+              保存
+            </button>
+            <button className="panel-btn" onClick={() => setEditing(null)}>
+              取消
+            </button>
+            <span className="set-note">若该角色已绑定槽位,保存后绑定槽的人设/称呼同步更新</span>
+          </div>
+        </div>
+      )}
+    </SettingsCard>
+  )
+}
+
+export function PersonaSettings() {
+  return (
+    <>
+      <CharacterManagerCard />
+      <ImportCardCard />
       <MoodCard />
     </>
   )

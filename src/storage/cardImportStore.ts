@@ -13,6 +13,8 @@ export interface StoredLoreEntry {
   priority: number
   enabled: boolean
   comment?: string
+  /** 本地化生成的中文别名(keys 已含原文 + 别名,这里单存别名) */
+  aliases?: string[]
 }
 
 export interface CardImportRecord {
@@ -21,6 +23,8 @@ export interface CardImportRecord {
   creator?: string
   characterVersion?: string
   tags: string[]
+  /** 非中文卡已完成语义本地化 */
+  localized?: boolean
   /** 烘焙进人设的风格示例(mes 组 + first_mes,宏已替换) */
   styleExamples: string[]
   /** 已烘焙进人设的常驻条目 */
@@ -59,6 +63,9 @@ function sanitizeLoreEntry(v: unknown): StoredLoreEntry | null {
     priority: typeof e.priority === 'number' ? e.priority : 0,
     enabled: e.enabled !== false,
     ...(typeof e.comment === 'string' && e.comment.trim() ? { comment: e.comment.trim().slice(0, 60) } : {}),
+    ...(Array.isArray(e.aliases)
+      ? { aliases: e.aliases.filter((a): a is string => typeof a === 'string' && a.trim().length > 0).slice(0, 3) }
+      : {}),
   }
 }
 
@@ -76,6 +83,7 @@ function sanitizeRecord(v: unknown): CardImportRecord | null {
     ...(typeof r.creator === 'string' && r.creator ? { creator: r.creator.slice(0, 80) } : {}),
     ...(typeof r.characterVersion === 'string' && r.characterVersion ? { characterVersion: r.characterVersion.slice(0, 40) } : {}),
     tags: strs(r.tags),
+    ...(r.localized === true ? { localized: true } : {}),
     styleExamples: strs(r.styleExamples),
     bakedLore: Array.isArray(r.bakedLore)
       ? (r.bakedLore.map(sanitizeLoreEntry).filter((e): e is StoredLoreEntry => e !== null)).slice(0, 100)

@@ -264,6 +264,16 @@ export interface AppConfig {
    *  档案(两者齐全才启用),'local' 走本机 llama-server(手动启动,localUrl 即门槛,
    *  有缺省值即启用);任一来源配置不完整或调用失败整体停用(fail-open) */
   coldMemory: ColdMemoryConfig
+  /** 角色管理:各槽位绑定的角色库 id(data/characters.json;null = 内置默认甲/乙/丙)。
+   *  角色字段已投影进 names/genders/persona,此表是"谁在槽上"的事实指针 */
+  slotBindings: SlotBindingsConfig
+}
+
+/** 槽位 → 角色库 id(投影见 src/characters/bind.ts;null = 内置默认) */
+export interface SlotBindingsConfig {
+  a: string | null
+  b: string | null
+  c: string | null
 }
 
 /** 经历记忆(Mem0)嵌入配置 */
@@ -467,6 +477,15 @@ export const DEFAULT_CONFIG: AppConfig = {
   expressionV2: false,
   contextLifecycle: false,
   coldMemory: {},
+  slotBindings: { a: null, b: null, c: null },
+}
+
+/** 槽位绑定清洗:只认非空短字符串 id(角色库存在性由应用层兜底——失效 id 视为未绑定) */
+function sanitizeSlotBindings(v: unknown): SlotBindingsConfig {
+  const o = (v ?? {}) as Record<string, unknown>
+  const id = (x: unknown): string | null =>
+    typeof x === 'string' && x.trim() && x.trim().length <= 64 ? x.trim() : null
+  return { a: id(o.a), b: id(o.b), c: id(o.c) }
 }
 
 /** 经历记忆嵌入配置清洗:provider 只认 'local'(缺省即 endpoint,不落盘);endpoint
@@ -1146,6 +1165,7 @@ const FIELD_SANITIZERS: { [K in keyof AppConfig]: (v: unknown, all: Record<strin
   contextLifecycle: (v) => v === true,
   webSearch: (v) => v === true,
   coldMemory: sanitizeColdMemory,
+  slotBindings: sanitizeSlotBindings,
   bubbleStyle: sanitizeBubbleStyle,
   memoryDisplay: (v) => (v === 'subtle' || v === 'debug' ? v : 'off'),
 }
