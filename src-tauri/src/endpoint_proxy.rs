@@ -401,6 +401,10 @@ mod tests {
         // 尾斜杠归一
         let ok2 = resolve_target("http://127.0.0.1:9880/", "/tts").unwrap();
         assert_eq!(ok2.as_str(), "http://127.0.0.1:9880/tts");
+        // 点段规范化:base 带 /v1 前缀时,DeepSeek Responses 用 ../ 回到源站根
+        // (联网搜索走 /responses,参照实证可用实现;WHATWG URL 解析消解点段)
+        let root = resolve_target("https://api.deepseek.com/v1", "/../responses").unwrap();
+        assert_eq!(root.as_str(), "https://api.deepseek.com/responses");
     }
 
     #[test]
