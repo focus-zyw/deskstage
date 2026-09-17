@@ -419,3 +419,25 @@ test('AI 候选:三槽位归位;坏输出按槽位补位,不整体失败', async
     /AI 调用失败/,
   )
 })
+
+// ---------- 水平防出屏位移(docs/气泡防出屏设计方案.md) ----------
+
+test('bubbleShiftX:屏内恒 0;左/右溢出精确拉回 pad', async () => {
+  const { bubbleShiftX } = await import('../src/bubble/position.ts')
+  // 气泡 [460,740] 在 1920 宽屏内:不动
+  assert.equal(bubbleShiftX(460, 280, 1920), 0)
+  // 左溢出:气泡左缘 -60 → 右移到 pad(8)
+  assert.equal(bubbleShiftX(-60, 280, 1920), 68)
+  // 右溢出:气泡右缘 1930 > 1912(viewportW-pad) → 左移 18 拉回右缘=pad
+  assert.equal(bubbleShiftX(1650, 280, 1920), -18)
+})
+
+test('bubbleShiftX:双侧放不下取正中;退化输入返回 0', async () => {
+  const { bubbleShiftX } = await import('../src/bubble/position.ts')
+  // 500px 气泡放不进 400px 视口:居中(两侧均分溢出)
+  assert.equal(bubbleShiftX(-50, 500, 400), Math.round(8 + (400 - 16 - 500) / 2 - (-50)))
+  assert.equal(bubbleShiftX(0, 0, 1920), 0)
+  assert.equal(bubbleShiftX(100, -5, 1920), 0)
+  assert.equal(bubbleShiftX(100, 200, 0), 0)
+  assert.equal(bubbleShiftX(Number.NaN, 200, 1920), 0)
+})

@@ -5,8 +5,9 @@
 // below = 角色贴近屏幕顶部时气泡翻到下方,尾巴朝上;loud = 远距离喊话加大加粗;
 // tailSide 与立绘朝向共用同一事实源;action/delivery 只做轻量情绪装饰。
 // 超过 80 字的长句自动降字号(text-wrap/降级见 App.css .bubble-shell.long)。
-import { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { nameOf } from '../engine/persona'
+import { bubbleShiftX } from './position'
 import { resolveBubbleAppearance } from './resolve'
 import { useBubbleTheme } from './adapter'
 
@@ -84,11 +85,35 @@ export function Bubble({
     () => resolveBubbleAppearance(theme, { reducedMotion }),
     [theme, reducedMotion],
   )
+  // 水平防出屏(docs/气泡防出屏设计方案.md):主体恒对中角色,贴边时被透明窗
+  // 裁切——量自然位置(rect 已含已应用位移,经 ref 镜像反解),位移经相对定位
+  // left 落地(shell 本就是 position:relative,精确位移且不参与 flex 布局;
+  // margin 在 align-items:center 下只生效半量,不能用)。文本/翻转/喊话变宽度,
+  // 窗口 resize 变视口,都要重测
+  const shellRef = useRef<HTMLDivElement | null>(null)
+  const shiftRef = useRef(0)
+  const [shiftX, setShiftX] = useState(0)
+  useLayoutEffect(() => {
+    const measure = () => {
+      const el = shellRef.current
+      if (!el) return
+      const rect = el.getBoundingClientRect()
+      const dx = Math.round(
+        bubbleShiftX(rect.left - shiftRef.current, rect.width, window.innerWidth),
+      )
+      shiftRef.current = dx
+      setShiftX(dx)
+    }
+    measure()
+    window.addEventListener('resize', measure)
+    return () => window.removeEventListener('resize', measure)
+  }, [shown, below, loud])
   if (!shown) return null
   const inlineName = appearance.nameplateStyle === 'inline'
   const showPlate = Boolean(name) && appearance.nameplateStyle !== 'hidden' && !inlineName
   return (
     <div
+      ref={shellRef}
       className={`bubble-shell${below ? ' below' : ''}${loud ? ' loud' : ''}${shown.length > 80 ? ' long' : ''}${leaving ? ' out' : ''}`}
       data-template={appearance.templateId}
       data-material={appearance.materialId}
@@ -98,7 +123,7 @@ export function Bubble({
       data-tail-side={tailSide}
       data-speaker={speaker ?? ''}
       data-mood={mood}
-      style={appearance.cssVars as React.CSSProperties}
+      style={{ ...(appearance.cssVars as React.CSSProperties), left: shiftX }}
       aria-label={name ? `${name}说:${shown}` : undefined}
     >
       <div className="bubble-frame">
