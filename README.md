@@ -1,4 +1,4 @@
-# virtual-character · 桌面双人情景剧角色
+# DeskStage · 桌面双人情景剧角色
 
 Windows 桌面虚拟角色(桌宠)应用:两个 Q 版角色(甲·便利店店员 / 乙·程序员)常驻桌面,
 通过全屏透明穿透覆盖层与你的日常操作互不干扰。点 ▶ 就生成一集相声/闲聊,
@@ -100,6 +100,8 @@ TTS 按 `chat < performance < utility < proactive` 通道仲裁,勿扰时全静(
 **LLM 网络:** 请求统一走 `tauri-plugin-http`(Rust 侧,无 CORS),capabilities 放行预设厂商域与
 `http://*`(本地 Ollama/LM Studio 等);未放行的自定义 https 端点自动回落原生 fetch。
 戳一戳吐槽/聊天回复等纯文本调用不启用 `response_format`,端点不支持 json 模式时 400 自动降级重试。
+
+应用名称统一为 **DeskStage**；内部应用标识与系统凭据命名空间保留 `dev.virtualcharacter.app`，以兼容已有配置、角色记忆、历史记录与 API 密钥。
 
 **数据落盘** (`%APPDATA%/dev.virtualcharacter.app/data/`):
 `config.json`(应用配置)· `memory.json`(事实/口味/计数)· `story.json`(角色世界:老梗/事件线/剧情/关系)

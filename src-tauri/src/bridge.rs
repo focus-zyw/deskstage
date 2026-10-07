@@ -334,7 +334,7 @@ mod dev {
         let inputs = state.inner.inputs.lock().unwrap().len();
         let waiting = state.inner.waiter.lock().unwrap().is_some();
         json!({
-            "app": "virtual-character",
+            "app": "DeskStage",
             "bridge": "shadow-brain",
             "devBuild": true,
             "running": running,

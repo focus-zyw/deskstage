@@ -1,6 +1,6 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "virtual-character",
+  "productName": "DeskStage",
   "version": "0.2.0",
   "identifier": "dev.virtualcharacter.app",
   "build": {
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "virtual-character",
+        "title": "DeskStage",
         "width": 1920,
         "height": 1080,
         "x": 0,

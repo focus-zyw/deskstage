@@ -5,9 +5,9 @@
   "status": "pass",
   "visualReview": "pending",
   "artifact": {
-    "path": "D:\\ai-project\\virtual-character\\docs\\architecture\\virtual-character-architecture.html",
-    "sha256": "a4b8637e25115bc845bf978bd172c93c23dcff1542e2a209b48900020651ddca",
-    "bytes": 737056
+    "path": "D:\\ai-project\\virtual-character\\docs\\architecture\\DeskStage-architecture.html",
+    "sha256": "e74b4280ebbf024e11eeaea76fdfa09958b744b784d3a7db43212d5abd445f34",
+    "bytes": 737032
   },
   "state": {
     "detail": "read",
@@ -439,7 +439,7 @@
         "viewerChromeActive": true,
         "viewerChromeOk": true,
         "resolvedTheme": "light",
-        "file": "virtual-character-architecture.visual-check.1440x900.light.png"
+        "file": "DeskStage-architecture.visual-check.1440x900.light.png"
       },
       {
         "width": 1440,
@@ -471,7 +471,7 @@
         "viewerChromeActive": true,
         "viewerChromeOk": true,
         "resolvedTheme": "dark",
-        "file": "virtual-character-architecture.visual-check.1440x900.dark.png"
+        "file": "DeskStage-architecture.visual-check.1440x900.dark.png"
       },
       {
         "width": 2048,
@@ -503,7 +503,7 @@
         "viewerChromeActive": true,
         "viewerChromeOk": true,
         "resolvedTheme": "light",
-        "file": "virtual-character-architecture.visual-check.2048x1320.light.png"
+        "file": "DeskStage-architecture.visual-check.2048x1320.light.png"
       },
       {
         "width": 2048,
@@ -535,13 +535,13 @@
         "viewerChromeActive": true,
         "viewerChromeOk": true,
         "resolvedTheme": "dark",
-        "file": "virtual-character-architecture.visual-check.2048x1320.dark.png"
+        "file": "DeskStage-architecture.visual-check.2048x1320.dark.png"
       }
     ],
-    "contactSheet": "virtual-character-architecture.visual-check.html"
+    "contactSheet": "DeskStage-architecture.visual-check.html"
   },
   "sidecars": {
-    "receipt": "virtual-character-architecture.visual-check.json",
-    "contactSheet": "virtual-character-architecture.visual-check.html"
+    "receipt": "DeskStage-architecture.visual-check.json",
+    "contactSheet": "DeskStage-architecture.visual-check.html"
   }
 }
